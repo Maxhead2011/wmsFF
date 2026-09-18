@@ -84,7 +84,7 @@ export function WbPublicationChecks({ session, clientId, onSaved, connectionId, 
   const [message, setMessage] = useState('');
   async function check() {
     setBusy(true); setMessage('');
-    try { const result = await checkFbsStockPublication(session.accessToken, clientId, connectionId); await onSaved(); setMessage(`Проверено: ${result.checked}. Расхождений: ${result.mismatches}.`); }
+    try { const result = await checkFbsStockPublication(session.accessToken, clientId, connectionId); await onSaved(); setMessage(`Проверено: ${result.checked}. Расхождений: ${result.mismatches}. Без ответа WB: ${result.unconfirmed ?? 0}.`); }
     catch (e) { setMessage(e instanceof Error ? e.message : 'Проверка не удалась.'); }
     finally { setBusy(false); }
   }

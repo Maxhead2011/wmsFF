@@ -33,7 +33,7 @@ it('resets previous proof on a new run and records sent and observed amounts sep
   await record({ ...row, phase: 'PLAN', status: 'PLANNED' });
   await record({ ...row, phase: 'DECREASE', status: 'SENDING', sentAmount: 4 });
   await record({ ...row, phase: 'DECREASE', status: 'MISMATCH', observedAmount: 5 });
-  expect(db.wbStockPublicationCheck.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { connectionId_warehouseId_chrtId: { connectionId: 'connection', warehouseId: 'warehouse', chrtId: 1 } }, update: expect.objectContaining({ sentAmount: null, observedAmount: null, error: null, runId: 'run' }) }));
+  expect(db.wbStockPublicationCheck.upsert).toHaveBeenCalledWith(expect.objectContaining({ where: { connectionId_warehouseId_chrtId: { connectionId: 'connection', warehouseId: 'warehouse', chrtId: 1n } }, update: expect.objectContaining({ sentAmount: null, observedAmount: null, error: null, runId: 'run' }) }));
   expect(db.wbStockPublicationCheck.update.mock.calls[0][0].data).toMatchObject({ sentAmount: 4, status: 'SENDING' });
   expect(db.wbStockPublicationCheck.update.mock.calls[1][0].data).toMatchObject({ observedAmount: 5, status: 'MISMATCH' });
   expect(db.wbStockPublicationCheck.update.mock.calls[1][0].data).not.toHaveProperty('sentAmount');

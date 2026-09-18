@@ -6,6 +6,26 @@ type IO = {
   record: (row: WbStockProof) => Promise<void>;
 };
 
+// FIX: quarantine an unknown size across all warehouses, preserving its existing stock everywhere.
+export async function selectKnownWbStockTargets<T extends WbStockTarget>(targets: T[], read: IO['read'], record: IO['record']) {
+  const missing = new Set<number>();
+  for (const warehouse of new Set(targets.map(t => t.warehouseId))) {
+    const rows = targets.filter(t => t.warehouseId === warehouse);
+    for (let i = 0; i < rows.length; i += 1000) {
+      const batch = rows.slice(i, i + 1000);
+      const amounts = await read(warehouse, batch.map(t => t.chrtId));
+      for (const row of batch) {
+        const amount = amounts.get(row.chrtId);
+        if (amount === undefined) missing.add(row.chrtId);
+        else if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('WB вернул некорректный остаток.');
+      }
+    }
+  }
+  const unknown = targets.filter(t => missing.has(t.chrtId));
+  for (const row of unknown) await record({ ...row, phase: 'STOP', status: 'UNCONFIRMED', error: 'WB не вернул остаток размера на одном из складов. Товар пропущен на всех складах; нужна проверка привязки карточки WB.' });
+  return { known: targets.filter(t => !missing.has(t.chrtId)), unknown };
+}
+
 // FIX: all decreases, including stale warehouses, must be verified before ANY increase.
 export async function publishWbStockPlan(targets: WbStockTarget[], io: IO) {
   const keys = new Set<string>();

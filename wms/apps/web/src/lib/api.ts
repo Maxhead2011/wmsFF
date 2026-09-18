@@ -7240,7 +7240,7 @@ export function updateWbAnalysisSettings(accessToken: string, clientId: string, 
   return request<{ updatedAt: string }> (`/administration/marketplace-stock-control/${encodeURIComponent(clientId)}/analysis`, { accessToken, method: 'PUT', body: { maxShareChange, expectedUpdatedAt } });
 }
 export function checkFbsStockPublication(accessToken: string, clientId: string, connectionId: string) {
-  return request<{ checked: number; mismatches: number }>('/marketplace-connections/fbs/stocks/allocation/check', { accessToken, method: 'POST', body: { clientId, connectionId } });
+  return request<{ checked: number; mismatches: number; unconfirmed?: number }>('/marketplace-connections/fbs/stocks/allocation/check', { accessToken, method: 'POST', body: { clientId, connectionId } });
 }
 export function updateWbStockReserve(accessToken: string, clientId: string, reserve: WbStockReserve, expectedUpdatedAt: string | null) {
   return request<{ reserve: WbStockReserve; reserveUpdatedAt: string }>(`/administration/marketplace-stock-control/${encodeURIComponent(clientId)}/reserve`, { accessToken, method: 'PUT', body: { reserve, expectedUpdatedAt } });
