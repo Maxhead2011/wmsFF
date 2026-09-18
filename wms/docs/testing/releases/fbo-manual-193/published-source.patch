@@ -1,0 +1,547 @@
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -154,7 +154,7 @@
+                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
+                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
+         }
+-        return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
++        return { manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+             observedAt: new Date().toISOString(),
+             pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
+                 kiz: u.kiz, sourceBoxCode: u.sourceBoxCode, targetBoxCode: u.targetBoxCode, wholeBox: u.wholeBox, state: u.state,
+@@ -176,6 +176,9 @@
+     private async executeAction(id: string, dto: FboActionDto, user: AuthUser) {
+         if (!fboTwoStageEnabled())
+             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
++        // FIX: explicitly enabled only for our deployment; old clients and sold VMs retain their behavior.
++        if (dto.action.startsWith('MANUAL_') && process.env.WMS_FBO_MANUAL_PACKING_ENABLED !== 'true')
++            throw new BadRequestException('Ручное добавление при упаковке выключено.');
+         await this.lock.assertStockMovementsAllowed();
+         // FIX: one durable operation id and a request lock make retries and concurrent terminals safe.
+         const execute = () => {
+@@ -306,7 +309,7 @@
+                     throw new ConflictException('Сначала отберите все единицы заявки.');
+                 await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
+             }
+-            else if (dto.action === 'OPEN_BOX') {
++            else if (dto.action === 'OPEN_BOX' || dto.action === 'MANUAL_OPEN_BOX') {
+                 requirePacking();
+                 const target = await this.target(tx, r, dto.targetBoxCode);
+                 await this.requireIdleBox(tx, target.id, id);
+@@ -318,10 +321,14 @@
+                 else {
+                     if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
+                         throw new ConflictException('Для упаковки нужен пустой короб.');
+-                    if (!units.some(u => !u.wholeBox && u.state === 'PICKED'))
++                    if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => !u.wholeBox && u.state === 'PICKED'))
+                         throw new ConflictException('Все отдельные единицы уже вложены.');
+                     await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
+                 }
++            }
++            else if (dto.action === 'MANUAL_PACK_UNIT') {
++                requirePacking();
++                await this.manualPack(tx, r, dto, user, key);
+             }
+             else if (dto.action === 'PACK_UNIT') {
+                 requirePacking();
+@@ -420,6 +427,69 @@
+                     throw error;
+                 await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
+             }
++        }
++    }
++    // FIX: recover a missed physical pick and pack atomically using the exact scanned mark.
++    private async manualPack(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser, key: string) {
++        if (!dto.kiz || !dto.barcode) throw new BadRequestException('Отсканируйте ШК и КИЗ товара.');
++        const mark = await this.exactMark(tx, dto.kiz);
++        const sku = await tx.sku.findUnique({ where: { id: mark.skuId }, include: { barcodes: true } });
++        if (mark.clientId !== r.clientId || !sku || sku.clientId !== r.clientId ||
++            !sku.barcodes.some(b => b.value === dto.barcode) && !r.items.some(i => i.skuId === sku.id && i.barcode === dto.barcode))
++            throw new ConflictException('КИЗ не относится к этому товару или клиенту заявки.');
++        const target = await this.box(tx, r, dto.targetBoxCode);
++        await this.requireIdleBox(tx, target.id, r.id);
++        const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
++        if (!parcel || parcel.requestId !== r.id || parcel.closedAt || parcel.wholeBox)
++            throw new ConflictException('Сначала откройте короб для ручного добавления.');
++        const existing = await tx.fboAssemblyUnit.findUnique({ where: { activeMarkId: mark.id } });
++        if (existing && (existing.requestId !== r.id || existing.state !== 'PICKED' || existing.wholeBox))
++            throw new ConflictException(existing.requestId === r.id && existing.state === 'PACKED'
++                ? `Товар уже упакован в короб ${existing.targetBoxCode}.`
++                : 'КИЗ уже отобран в другой короб или другую сборку.');
++        let source;
++        if (existing) {
++            source = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${r.id}` } });
++            if (mark.status !== 'PACKING' || mark.boxId !== source.id)
++                throw new ConflictException('КИЗ перемещён после отбора. Нужна сверка.');
++        } else {
++            if (mark.status !== 'AVAILABLE' || !mark.boxId)
++                throw new ConflictException('КИЗ не имеет доступного складского остатка.');
++            const recordedSource = await tx.box.findUniqueOrThrow({ where: { id: mark.boxId } });
++            source = await this.box(tx, r, recordedSource.code);
++            await this.requireIdleBox(tx, source.id, r.id, true);
++        }
++        if (source.id === target.id) throw new ConflictException('Исходный короб совпадает с коробом упаковки. Нужна сверка.');
++        const movement = await this.move(tx, r, sku.id, source.id, target.id, existing ? 'PACKING' : 'AVAILABLE', 'PACKING', 1, key, user);
++        const changed = await tx.productMark.updateMany({ where: { id: mark.id, boxId: source.id, status: existing ? 'PACKING' : 'AVAILABLE' },
++            data: { boxId: target.id, status: 'PACKING', stockMovementId: movement.id } });
++        if (changed.count !== 1) throw new ConflictException('КИЗ уже перемещён другим сотрудником.');
++        const packed = { state: 'PACKED' as const, targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id };
++        if (existing) {
++            await tx.fboAssemblyUnit.update({ where: { id: existing.id }, data: packed });
++        } else {
++            const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: r.id, state: { not: 'RETURNED' } } });
++            const lines = remainingFboLines(r.items, units);
++            let line = r.items.find(i => i.skuId === sku.id && lines.some(l => l.id === i.id && l.remaining > 0)) ?? r.items.find(i => i.skuId === sku.id);
++            let addedQuantity = 0;
++            if (line) {
++                if (!lines.some(l => l.id === line!.id && l.remaining > 0)) {
++                    await tx.clientRequestItem.update({ where: { id: line.id }, data: { quantity: { increment: 1 } } });
++                    addedQuantity = 1;
++                }
++            } else {
++                line = await tx.clientRequestItem.create({ data: { requestId: r.id, skuId: sku.id, barcode: dto.barcode, name: sku.name, quantity: 1,
++                    comment: 'Добавлено вручную при упаковке FBO' }, include: { sku: { include: { barcodes: true } } } });
++                addedQuantity = 1;
++            }
++            await tx.fboAssemblyUnit.create({ data: { requestId: r.id, requestItemId: line.id, skuId: sku.id, barcode: line.barcode!,
++                markId: mark.id, activeMarkId: mark.id, kiz: mark.value, sourceBoxId: source.id, sourceBoxCode: source.code,
++                wholeBox: false, pickedByUserId: user.id, ...packed } });
++            const refreshed = await this.load(tx, r.id, user, 'write');
++            await tx.fboAssembly.update({ where: { requestId: r.id }, data: { compositionHash: composition(refreshed) } });
++            await this.releaseDisplacedRoutes(tx, source.id, source.code, [sku.id]);
++            await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_PICK_RECOVERED', entity: 'ClientRequest', entityId: r.id,
++                payload: { operationId: dto.operationId, sourceBoxCode: source.code, targetBoxCode: target.code, markId: mark.id, barcode: dto.barcode, addedQuantity } } });
+         }
+     }
+     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
+--- a/wms/apps/api/src/modules/tsd/dto/fbo-action.dto.ts
++++ b/wms/apps/api/src/modules/tsd/dto/fbo-action.dto.ts
+@@ -7,7 +7,7 @@
+     @IsInt()
+     @Min(1)
+     confirmedQuantity?: number;
+-    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
++    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'MANUAL_OPEN_BOX', 'MANUAL_PACK_UNIT', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
+     action!: string;
+     @IsString()
+     @MinLength(8)
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 192 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.192-fbo-packing-files"
++            versionCode = 193 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.193-fbo-manual-packing"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
+@@ -0,0 +1,22 @@
++package pro.logoff.wms.tsd;
++
++// FIX: announce transitions, not redraws; acceptance must come from the server.
++final class FboPackingVoice {
++    enum Cue { BOX, BARCODE, KIZ, PUT }
++    private Cue last;
++    private String acceptedId;
++    Cue step(boolean active, boolean ready, String target, String barcode) {
++        if (!active) { last = null; return null; }
++        if (!ready) return null;
++        Cue next = target.isEmpty() ? Cue.BOX : barcode.isEmpty() ? Cue.BARCODE : Cue.KIZ;
++        if (next == last) return null;
++        last = next;
++        return next;
++    }
++    Cue accepted(String operationId) {
++        if (operationId == null || operationId.equals(acceptedId)) return null;
++        acceptedId = operationId;
++        last = Cue.BARCODE; // Do not interrupt "put in box" with the next barcode prompt.
++        return Cue.PUT;
++    }
++}
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
+@@ -9,12 +9,14 @@
+ // FIX: bundled female speech works offline and never depends on a TTS engine installed on the TSD.
+ interface FboScanFeedback {
+     void play(boolean accepted);
++    default void prompt(FboPackingVoice.Cue cue) {}
+     void close();
+ 
+     final class Voice implements FboScanFeedback {
+         private SoundPool pool;
+         private final Set<Integer> loaded = new HashSet<>();
+         private int hit, miss, pending, stream;
++        private final java.util.Map<FboPackingVoice.Cue,Integer> prompts = new java.util.EnumMap<>(FboPackingVoice.Cue.class);
+         Voice(Context context) {
+             try {
+                 pool = new SoundPool.Builder().setMaxStreams(1).setAudioAttributes(
+@@ -27,9 +29,14 @@
+                 });
+                 hit = pool.load(context, R.raw.fbo_scan_hit, 1);
+                 miss = pool.load(context, R.raw.fbo_scan_miss, 1);
++                prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, R.raw.fbo_pack_box, 1));
++                prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, R.raw.fbo_pack_barcode, 1));
++                prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, R.raw.fbo_pack_kiz, 1));
++                prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, R.raw.fbo_pack_put, 1));
+             } catch (RuntimeException unavailable) { close(); }
+         }
+         public void play(boolean accepted) { playSample(accepted ? hit : miss); }
++        public void prompt(FboPackingVoice.Cue cue) { if(cue!=null) playSample(prompts.getOrDefault(cue,0)); }
+         private void playSample(int sample) {
+             if (pool == null || sample == 0) return;
+             // FIX: rapid scans replace the previous phrase, including while sounds are loading.
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
+@@ -32,6 +32,7 @@
+     private EditText quantityInput;
+     private final boolean packing;
+     private final FboScanFeedback scanFeedback;
++    private final FboPackingVoice packingVoice=new FboPackingVoice();
+     private int feedbackColor=Color.TRANSPARENT;
+     private final Handler handler=new Handler(Looper.getMainLooper());
+     private final ExecutorService executor=Executors.newSingleThreadExecutor();
+@@ -42,12 +43,12 @@
+     private EditText input;
+     private boolean busy,closed,routeStale;
+     // FIX: isolate explicit packing modes to our application; sold flavors retain their flow.
+-    private enum PackingMode { MENU, NEW_BOXES, WHOLE_BOXES }
++    private enum PackingMode { MENU, NEW_BOXES, WHOLE_BOXES, MANUAL }
+     private PackingMode packingMode=PackingMode.MENU;
+     private boolean packingChoices(){return packing&&"logoff".equals(BuildConfig.FLAVOR);}
+     private void choosePackingMode(PackingMode mode){
+         if(!ready()||!state.target.isEmpty()||!state.barcode.isEmpty())return;
+-        handler.removeCallbacks(automatic);state.source="";packingMode=mode;message="";render();
++        handler.removeCallbacks(automatic);state.source="";packingMode=mode;prefs.edit().putString(pendingKey+":mode",mode.name()).commit();message="";render();
+     }
+     private void packingCompleteButton(LinearLayout root){
+         boolean allClosed=true;for(TsdFboPlan.Box b:plan.boxes)if(!b.closed)allClosed=false;
+@@ -61,7 +62,7 @@
+     }
+     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder) {
+         this(activity,session,api,baseUrl,id,packing,back,moveRemainder,
+-            !packing&&"logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
++            "logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
+     }
+     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder,FboScanFeedback scanFeedback) {
+         this.scanFeedback=scanFeedback;
+@@ -69,8 +70,9 @@
+         this.packing=packing;
+         this.activity=activity;this.session=session;this.api=api;this.baseUrl=baseUrl;this.id=id;this.back=back;
+         prefs=activity.getSharedPreferences("fbo-pending",Context.MODE_PRIVATE);pendingKey=session.userId+":"+id;
++        if(packingChoices())try{packingMode=PackingMode.valueOf(prefs.getString(pendingKey+":mode","MENU"));}catch(Exception ignored){}
+         try{state.restoreCheckpoint(readSaved(pendingKey+":position"));}catch(Exception ignored){}
+-        try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);if(packingChoices())packingMode="PACK_BOX".equals(p.get("action"))?PackingMode.WHOLE_BOXES:PackingMode.NEW_BOXES;}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
++        try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);if(packingChoices())packingMode=p.getOrDefault("action","").startsWith("MANUAL_")?PackingMode.MANUAL:"PACK_BOX".equals(p.get("action"))?PackingMode.WHOLE_BOXES:PackingMode.NEW_BOXES;}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
+         if(fastConfirmation()&&state.pending()!=null)checkPending(0);else refresh();
+     }
+     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
+@@ -102,6 +104,10 @@
+     // FIX: packing can start with the first confirmed unit while collection stays open.
+     private String screenPhase(){return FboScanState.screenPhase(plan,packing && "logoff".equals(BuildConfig.FLAVOR));}
+     private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(screenPhase())&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
++    // FIX: preserve parallel packing and acknowledge speech only after a durable receipt.
++    private boolean packingVoiceActive(){return !closed&&packingChoices()&&(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)&&plan!=null&&"PACKING".equals(screenPhase());}
++    private void packingPrompt(FboPackingVoice.Cue cue){if(!closed&&scanFeedback!=null&&cue!=null)scanFeedback.prompt(cue);}
++    private void packingAccepted(Map<String,String> payload){if(!closed&&packingChoices()&&("PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action"))))packingPrompt(packingVoice.accepted(payload.get("operationId")));}
+     private boolean ready(){return state.pending()==null&&!busy&&!routeStale;}
+     private void render(){
+         if(closed||activity.isDestroyed())return;
+@@ -129,6 +135,7 @@
+             else if(packingChoices()&&"PACKING".equals(screenPhase())&&packingMode==PackingMode.MENU&&state.pending()==null){
+                 button(root,"Собрать новые короба",ready(),()->choosePackingMode(PackingMode.NEW_BOXES));
+                 button(root,"Отсканировать целые короба",ready(),()->choosePackingMode(PackingMode.WHOLE_BOXES));
++                if(plan.manualPackingEnabled)button(root,"Добавить товар вручную",ready(),()->choosePackingMode(PackingMode.MANUAL));
+                 packingCompleteButton(root);
+                 for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
+             }
+@@ -188,6 +195,7 @@
+         if(routeStale)text(root,"Операция подтверждена. Ожидается обновление маршрута; повторный отбор не нужен.");
+         button(root,"Обновить",state.pending()==null&&!busy,this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
+         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
++        if(plan!=null)packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
+         // FIX: scanner Enter may move focus after this render; focus the new KIZ field on the next UI turn.
+         if("logoff".equals(BuildConfig.FLAVOR)&&input!=null&&ready()&&!state.barcode.isEmpty()){
+             EditText kizInput=input;
+@@ -210,15 +218,22 @@
+                 if(packingMode==PackingMode.WHOLE_BOXES){
+                     if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
+                     else{message="Этот короб не ожидается среди целых коробов заявки.";render();}
+-                }else if(packingMode==PackingMode.NEW_BOXES){
++                }else if(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL){
+                     if(plan.wholeBoxes.contains(value)){message="Выберите «Отсканировать целые короба» для этого короба.";render();}
+-                    else{state.source="";state.target=value;send("OPEN_BOX",null);}
++                    else{state.source="";state.target=value;send(packingMode==PackingMode.MANUAL?"MANUAL_OPEN_BOX":"OPEN_BOX",null);}
+                 }
+                 return;
+             }
+             if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
+             else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";feedbackColor=Color.rgb(254,202,202);render();}
+             else{state.source="";state.target=value;send("OPEN_BOX",null);}return;
++        }
++        // FIX: manual packing accepts products outside the plan; the server validates KIZ ownership and stock.
++        if(packingChoices()&&packingMode==PackingMode.MANUAL&&"PACKING".equals(screenPhase())){
++            if(!state.barcode.isEmpty())send("MANUAL_PACK_UNIT",value);
++            else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";render();}
++            else{state.barcode=value;message="Отсканируйте КИЗ товара.";render();}
++            return;
+         }
+         if(!state.barcode.isEmpty()){send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",value);return;}
+         TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(screenPhase())?l.remaining>0:l.picked>l.packed)){line=l;break;}
+@@ -227,7 +242,7 @@
+         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
+         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
+     }
+-    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null)state.reconcile(plan,packing);busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
++    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
+     // FIX: the compact receipt clears the durable request before any route recalculation.
+     private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
+@@ -235,12 +250,12 @@
+     private void acceptReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){
+         if(closed||!validReceipt(ack,payload))return;
+         Map<String,String> position=state.checkpoint();position.put("barcode","");
+-        if("OPEN_BOX".equals(payload.get("action")))position.put("targetBoxCode",payload.get("targetBoxCode"));
++        if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))position.put("targetBoxCode",payload.get("targetBoxCode"));
+         if(!prefs.edit().remove(pendingKey).remove(pendingKey+":fast").putString(pendingKey+":position",new JSONObject(position).toString()).commit()){
+             busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
+         }
+         state.accepted();state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
+-        message=FboFeedback.accepted(payload,plan);render();
++        message=FboFeedback.accepted(payload,plan);packingAccepted(payload);render();
+         if("FINISH".equals(payload.get("action"))&&!packingChoices())download();refresh();
+     }
+     private void sendAcknowledged(Map<String,String> payload){
+@@ -250,7 +265,7 @@
+             if(res.isSuccessful()&&validReceipt(res.body(),payload)){handler.post(()->acceptReceipt(res.body(),payload));return;}
+             if(!res.isSuccessful()&&FboFeedback.definitiveRejection(res.code())&&res.code()!=404&&res.code()!=405){
+                 String detail=error(res);handler.post(()->{if(closed)return;busy=false;
+-                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit())state.rejected();
++                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}
+                     message=detail;feedbackColor=Color.rgb(254,202,202);if(res.code()==409&&state.pending()==null)refresh();else render();});return;
+             }
+         }catch(Exception e){android.util.Log.w("FboConfirmation","Acknowledgement unavailable: "+e.getClass().getSimpleName());}
+@@ -279,13 +294,13 @@
+         if(fast){sendAcknowledged(payload);return;}
+         busy=true;message="";render();executor.execute(()->{try{
+             Response<TsdFboPlan> res=api.actFbo(session.authorizationHeader(),id,payload).execute();
+-            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;
++            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;
+                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
+                 if(res.code()==409&&rejected)refresh();else render();});return;}
+             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
+                 if(!prefs.edit().remove(pendingKey).commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
+                 state.accepted();feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
+-                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
++                if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);packingAccepted(payload);if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
+         }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";render();});}});
+     }
+     // FIX: do not prefill a physical count or submit stock movements before confirmation.
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdFboPlan.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdFboPlan.java
+@@ -5,7 +5,7 @@
+     public boolean parallelPackingSupported;
+     public String requestId, title, phase;
+     public int needed, picked, packed, looseRemaining, shortage;
+-    public boolean compositionChanged;
++    public boolean compositionChanged, manualPackingEnabled;
+     public boolean fastAcknowledgementSupported;
+     public List<Line> lines;
+     public List<Route> route;
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboFastConfirmationTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboFastConfirmationTest.java
+@@ -58,6 +58,26 @@
+             finally{s.close();a.getSharedPreferences("fbo-pending",0).edit().clear().commit();}
+         }
+     }
++    // TEST: a manual unit recovered after a lost response speaks once, with no second mutation.
++    @Test public void manualPackingReceiptSpeaksAfterLostResponse()throws Exception {
++        if(!"logoff".equals(BuildConfig.FLAVOR))return;
++        try(var c=Robolectric.buildActivity(Activity.class).setup()){
++            Activity a=c.get();String user=UUID.randomUUID().toString();String key=user+":request";
++            Map<String,String> payload=Map.of("operationId","manual-saved","action","MANUAL_PACK_UNIT","barcode","EXTRA","kiz","KIZ","targetBoxCode","TARGET");
++            a.getSharedPreferences("fbo-pending",0).edit().putString(key,new org.json.JSONObject(payload).toString()).putBoolean(key+":fast",true).commit();
++            List<FboPackingVoice.Cue> spoken=new ArrayList<>();AtomicInteger writes=new AtomicInteger();
++            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(call,method,values)->{
++                if(!method.getName().equals("execute"))return null;
++                if(m.getName().equals("fboOperationStatus")){TsdFboAcknowledgement ack=new TsdFboAcknowledgement();ack.requestId="request";ack.operationId="manual-saved";ack.action="MANUAL_PACK_UNIT";ack.accepted=true;return Response.success(ack);}
++                if(m.getName().equals("getFboPlan")){TsdFboPlan p=plan();p.phase="PACKING";p.manualPackingEnabled=true;TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="TARGET";p.boxes.add(b);return Response.success(p);}
++                writes.incrementAndGet();throw new AssertionError("No second mutation after saved manual receipt");
++            }));
++            FboScanFeedback voice=new FboScanFeedback(){public void play(boolean ok){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
++            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",user,"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},voice);
++            try{idle(screen);assertNull(state(screen).pending());assertEquals(0,writes.get());assertEquals(Arrays.asList(FboPackingVoice.Cue.PUT),spoken);}
++            finally{screen.close();}
++        }
++    }
+     private void exercise(boolean loseResponse,boolean failRoute,boolean accepted)throws Exception {
+         if(!"logoff".equals(BuildConfig.FLAVOR))return;
+         try(var c=Robolectric.buildActivity(Activity.class).setup()){
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboPackingVoiceTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboPackingVoiceTest.java
+@@ -0,0 +1,25 @@
++package pro.logoff.wms.tsd;
++import org.junit.Test;
++import static org.junit.Assert.*;
++import static pro.logoff.wms.tsd.FboPackingVoice.Cue.*;
++public class FboPackingVoiceTest {
++    // TEST: redraws and pending network requests cannot claim successful packing.
++    @Test public void transitionsAndAcknowledgementsAreDistinct() {
++        FboPackingVoice v=new FboPackingVoice();
++        assertEquals(BOX,v.step(true,true,"",""));
++        assertNull(v.step(true,true,"",""));
++        assertNull(v.step(true,false,"BOX",""));
++        assertEquals(BARCODE,v.step(true,true,"BOX",""));
++        assertEquals(KIZ,v.step(true,true,"BOX","123"));
++        assertNull(v.step(true,false,"BOX","123"));
++        assertNull(v.step(true,true,"BOX","123"));
++        assertEquals(PUT,v.accepted("op1"));
++        assertNull(v.step(true,true,"BOX",""));
++        assertNull(v.accepted("op1"));
++        assertEquals(KIZ,v.step(true,true,"BOX","123"));
++        assertEquals(PUT,v.accepted("op2"));
++        assertEquals(BOX,v.step(true,true,"",""));
++        assertNull(v.step(false,true,"",""));
++        assertEquals(BOX,v.step(true,true,"",""));
++    }
++}
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboScanFeedbackTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboScanFeedbackTest.java
+@@ -15,6 +15,21 @@
+     private ShadowSoundPool pool(FboScanFeedback.Voice voice) throws Exception {
+         var field=FboScanFeedback.Voice.class.getDeclaredField("pool");field.setAccessible(true);
+         return Shadows.shadowOf((SoundPool)field.get(voice));
++    }
++    // TEST: each instruction plays its bundled offline recording, and leaving cancels pending audio.
++    @Test public void packingInstructionsUseCorrectResources() throws Exception {
++        FboScanFeedback.Voice voice=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication());
++        ShadowSoundPool sounds=pool(voice);
++        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put};
++        try {
++            for(int i=0;i<resources.length;i++){
++                voice.prompt(FboPackingVoice.Cue.values()[i]);
++                sounds.notifyResourceLoaded(resources[i],true);
++                assertEquals(1,sounds.getResourcePlaybacks(resources[i]).size());
++            }
++            voice.close();voice.prompt(FboPackingVoice.Cue.PUT);
++            assertEquals(1,sounds.getResourcePlaybacks(R.raw.fbo_pack_put).size());
++        }finally{voice.close();}
+     }
+     // TEST: no stale "hit" after a later "miss", even while offline recordings are loading.
+     @Test public void latestScanWinsDuringLoadingAndSoundsDoNotLoop() throws Exception {
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboTwoStageScreenTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboTwoStageScreenTest.java
+@@ -26,6 +26,100 @@
+ 
+ @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
+ public class FboTwoStageScreenTest {
++    private TextView findAction(View v,String title){
++        if(v instanceof android.widget.Button&&((TextView)v).getText().toString().equals(title))return (TextView)v;
++        if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){TextView found=findAction(((ViewGroup)v).getChildAt(i),title);if(found!=null)return found;}return null;
++    }
++    // TEST: real packing widgets announce box/barcode/KIZ and only confirmed acceptance.
++    @Test public void newBoxPackingSpeaksStepsAfterServerConfirmation() throws Exception {
++        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
++            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
++            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=true;line.remaining=2;line.picked=2;p.lines.add(line);
++            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
++            List<FboPackingVoice.Cue> spoken=new ArrayList<>();
++            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){fail("Picking sound in packing");}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
++            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{},feedback);
++            try {
++                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
++                screen.scannerField().setText(line.barcode);screen.submit();
++                if("logoff".equals(BuildConfig.FLAVOR))assertEquals(Arrays.asList(FboPackingVoice.Cue.BOX,FboPackingVoice.Cue.BARCODE,FboPackingVoice.Cue.KIZ),spoken);
++                screen.scannerField().setText("TEST-KIZ");screen.submit();waitIdle(screen);
++                if("logoff".equals(BuildConfig.FLAVOR))assertEquals(Arrays.asList(FboPackingVoice.Cue.BOX,FboPackingVoice.Cue.BARCODE,FboPackingVoice.Cue.KIZ,FboPackingVoice.Cue.PUT),spoken);
++                else assertTrue(spoken.isEmpty());
++            }finally{screen.close();}
++        }
++    }
++    // TEST: failed and uncertain PACK_UNIT requests never tell the operator to put the item away.
++    @Test public void packingErrorsStaySilentUntilRetryIsConfirmed() throws Exception {
++        if(!"logoff".equals(BuildConfig.FLAVOR))return;
++        for(boolean timeout:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
++            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
++            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.requiresKiz=true;line.picked=2;line.remaining=2;p.lines.add(line);
++            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
++            List<FboPackingVoice.Cue> spoken=new ArrayList<>();AtomicInteger attempts=new AtomicInteger();List<String> ids=new ArrayList<>();
++            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->
++                Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
++                    if(!method.getName().equals("execute"))return null;
++                    if(m.getName().equals("actFbo")&&"PACK_UNIT".equals(((Map<?,?>)args[2]).get("action"))){
++                        ids.add((String)((Map<?,?>)args[2]).get("operationId"));
++                        if(attempts.getAndIncrement()==0){if(timeout)throw new java.io.IOException("lost response");return Response.error(400,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{}"));}
++                    }
++                    return Response.success(p);
++                }));
++            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
++            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},feedback);
++            try {
++                waitIdle(screen);find(a.findViewById(android.R.id.content),"Собрать новые короба").performClick();
++                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
++                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("KIZ");screen.submit();waitIdle(screen);
++                assertFalse(spoken.contains(FboPackingVoice.Cue.PUT));
++                if(timeout)findAction(a.findViewById(android.R.id.content),"Повторить отправку").performClick();
++                else{screen.scannerField().setText("KIZ");screen.submit();}
++                waitIdle(screen);assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.PUT));
++                if(timeout)assertEquals(ids.get(0),ids.get(1));
++            }finally{screen.close();}
++        }
++    }
++    // TEST: manual packing accepts a product outside the plan, but never writes before its KIZ.
++    @Test public void manualPackingUsesTargetBoxAndBarcodeKizPair() throws Exception {
++        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
++            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.manualPackingEnabled=true;
++            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
++            List<Map<String,String>> commands=new ArrayList<>();List<FboPackingVoice.Cue> spoken=new ArrayList<>();
++            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
++                if(m.getName().equals("actFbo"))commands.add(new LinkedHashMap<>((Map<String,String>)args[2]));
++                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->method.getName().equals("execute")?Response.success(p):null);
++            });
++            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
++            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},feedback);
++            try {
++                waitIdle(screen);TextView manual=find(a.findViewById(android.R.id.content),"Добавить товар вручную");
++                if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(manual);return;}
++                assertNotNull(manual);manual.performClick();
++                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
++                assertEquals("MANUAL_OPEN_BOX",commands.get(0).get("action"));
++                screen.scannerField().setText("OUTSIDE-PLAN");screen.submit();assertEquals(1,commands.size());
++                screen.scannerField().setText("PHYSICAL-KIZ");screen.submit();waitIdle(screen);
++                assertEquals("MANUAL_PACK_UNIT",commands.get(1).get("action"));
++                assertEquals("TARGET",commands.get(1).get("targetBoxCode"));
++                assertEquals("OUTSIDE-PLAN",commands.get(1).get("barcode"));
++                assertEquals("PHYSICAL-KIZ",commands.get(1).get("kiz"));
++                assertFalse(commands.get(1).containsKey("sourceBoxCode"));
++                assertEquals(Arrays.asList(FboPackingVoice.Cue.BOX,FboPackingVoice.Cue.BARCODE,FboPackingVoice.Cue.KIZ,FboPackingVoice.Cue.PUT),spoken);
++            }finally{screen.close();}
++        }
++    }
++    // TEST: old servers and disabled deployments do not advertise the manual action.
++    @Test public void manualPackingMenuRequiresServerCapability() throws Exception {
++        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
++            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
++            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{});
++            try {
++                if("logoff".equals(BuildConfig.FLAVOR))find(a.findViewById(android.R.id.content),"Завершить формирование новых коробов").performClick();
++                assertNull(find(a.findViewById(android.R.id.content),"Добавить товар вручную"));
++            }finally{screen.close();}
++        }
++    }
+     // TEST: scanner Enter may finish after render and move focus; the KIZ field must reclaim it without a tap.
+     @Test public void barcodeMovesFocusToKizAfterScannerEnterCompletes() throws Exception {
+         if(!"logoff".equals(BuildConfig.FLAVOR))return;
+@@ -90,7 +184,7 @@
+                 waitIdle(s);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();s.scannerField().setText(line.barcode);s.submit();s.scannerField().setText("kiz");s.submit();waitIdle(s);
+                 assertNotNull(find(a.findViewById(android.R.id.content),"Подтверждение не получено"));assertFalse(s.scannerField().isEnabled());s.close();
+                 s=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",false,()->{});waitIdle(s);
+-                find(a.findViewById(android.R.id.content),"Повторить отправку").performClick();waitIdle(s);
++                findAction(a.findViewById(android.R.id.content),"Повторить отправку").performClick();waitIdle(s);
+                 assertEquals(2,sent.size());assertEquals(sent.get(0),sent.get(1));assertNotNull(find(a.findViewById(android.R.id.content),"Принято: 1 шт."));
+                 assertNull(find(a.findViewById(android.R.id.content),"Повторить отправку"));
+             }finally{s.close();}
