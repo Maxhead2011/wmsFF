@@ -26,6 +26,57 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: packing and final box checks expose separate progress and preserve the selected phase.
+    @Test public void monitorAndScreenSeparateUnitsFromBoxVerification() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            TsdFboPlan p=plan("CONTROL");p.picked=2;p.packed=2;
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="T";box.closed=true;box.confirmed=true;p.boxes.add(box);
+            FboTwoStageScreen s=open(controller.get(),p,true,new AtomicInteger());
+            try {Map<?,?> monitor=s.monitorPayload();assertEquals("CONTROL",monitor.get("stage"));assertEquals(1,monitor.get("total"));assertEquals(1,monitor.get("completed"));
+                View root=controller.get().findViewById(android.R.id.content);assertNotNull(find(root,"Отобрано 2 из 2"));assertNotNull(find(root,"Упаковано 2 из 2"));assertNotNull(find(root,"Проверено коробов 1 из 1"));
+            }finally{s.close();}
+        }
+    }
+    // TEST: monitor must use the active FBO screen even when stale FBS state still exists.
+    @Test public void monitorUsesFboRequestRatherThanStaleFbs() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity a=controller.get();FboTwoStageScreen s=open(a,plan("PICKING"),false,new AtomicInteger());
+            try {
+                java.lang.reflect.Field screen=MainActivity.class.getDeclaredField("screen");screen.setAccessible(true);
+                screen.set(a,Enum.valueOf((Class)screen.getType(),"FBO_TWO_STAGE"));
+                java.lang.reflect.Field fbo=MainActivity.class.getDeclaredField("fboTwoStageScreen");fbo.setAccessible(true);fbo.set(a,s);
+                java.lang.reflect.Field fbs=MainActivity.class.getDeclaredField("fbsAssembly");fbs.setAccessible(true);fbs.set(a,new TsdFbsAssemblyResponse());
+                java.lang.reflect.Method monitor=MainActivity.class.getDeclaredMethod("buildMonitorPayload");monitor.setAccessible(true);
+                Map<?,?> payload=(Map<?,?>)monitor.invoke(a);
+                assertEquals("request",payload.get("requestId"));assertEquals("PICKING",payload.get("stage"));assertEquals(2,payload.get("total"));
+            }finally{s.close();}
+        }
+    }
+    // TEST: a restarted screen can resend the exact persisted KIZ without scanning it again.
+    @Test public void lostResponseCanBeRetriedAfterRestartWithoutRescanning() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=true;line.remaining=2;p.lines.add(line);
+            List<Map<String,String>> sent=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->
+                Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
+                    if(!method.getName().equals("execute"))return null;
+                    if(m.getName().equals("actFbo")){sent.add(new LinkedHashMap<>((Map<String,String>)args[2]));if(sent.size()==1)throw new java.io.IOException("lost response");p.picked=1;}
+                    return Response.success(p);
+                }));
+            TsdSession session=new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList());
+            FboTwoStageScreen s=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",false,()->{});
+            try {
+                waitIdle(s);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();s.scannerField().setText(line.barcode);s.submit();s.scannerField().setText("kiz");s.submit();waitIdle(s);
+                assertNotNull(find(a.findViewById(android.R.id.content),"Подтверждение не получено"));assertFalse(s.scannerField().isEnabled());s.close();
+                s=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",false,()->{});waitIdle(s);
+                find(a.findViewById(android.R.id.content),"Повторить отправку").performClick();waitIdle(s);
+                assertEquals(2,sent.size());assertEquals(sent.get(0),sent.get(1));assertNotNull(find(a.findViewById(android.R.id.content),"Принято: 1 шт."));
+                assertNull(find(a.findViewById(android.R.id.content),"Повторить отправку"));
+            }finally{s.close();}
+        }
+    }
     // TEST: successful whole-box picks and rejected stale routes both remove the old source from widgets.
     @Test public void wholeBoxSuccessAndRouteConflictReconcileTheScreen() throws Exception {
         for(boolean conflict:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {

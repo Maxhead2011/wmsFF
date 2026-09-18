@@ -8724,6 +8724,12 @@ public class MainActivity extends Activity {
         if (TsdUi.enabled()) { payload.put("uiLanguage", uiLanguage); payload.put("screenshotLanguage", "ru"); }
         payload.put("reportedAt", System.currentTimeMillis());
 
+        // FIX: the active FBO screen owns its request; stale FBS/legacy plans must not overwrite it.
+        if ("logoff".equals(BuildConfig.FLAVOR) && screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
+            payload.putAll(fboTwoStageScreen.monitorPayload());
+            return payload;
+        }
+
         if (activeInventory != null) {
             payload.put("inventorySessionId", activeInventory.id);
             payload.put("inventoryType", nonEmpty(activeInventory.type, inventoryType));

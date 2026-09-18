@@ -50,10 +50,27 @@ final class FboTwoStageScreen {
         this.packing=packing;
         this.activity=activity;this.session=session;this.api=api;this.baseUrl=baseUrl;this.id=id;this.back=back;
         prefs=activity.getSharedPreferences("fbo-pending",Context.MODE_PRIVATE);pendingKey=session.userId+":"+id;
+        try{state.restoreCheckpoint(readSaved(pendingKey+":position"));}catch(Exception ignored){}
         try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
         refresh();
     }
     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
+    private Map<String,String> readSaved(String key)throws Exception {
+        String raw=prefs.getString(key,"");if(raw.isEmpty())return null;
+        JSONObject json=new JSONObject(raw);Map<String,String> saved=new LinkedHashMap<>();
+        Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();saved.put(k,json.getString(k));}return saved;
+    }
+    // FIX: report the actual FBO request even during loading or an unanswered operation.
+    Map<String,Object> monitorPayload(){
+        Map<String,Object> p=new LinkedHashMap<>();p.put("requestId",id);
+        p.put("screenLabel","ФБО · "+FboFeedback.phase(plan==null?null:plan.phase));
+        p.put("stage",plan==null?"LOADING":plan.phase);p.put("boxCode",packing?state.target:state.source);
+        p.put("barcode",state.barcode);p.put("lastAction",busy?"Отправка запроса…":state.pending()!=null?"Подтверждение не получено. Повторите отправку.":message);
+        if(plan!=null){boolean control="CONTROL".equals(plan.phase);int total=control?plan.boxes.size():plan.needed;
+            int done=control?FboFeedback.confirmed(plan):"PICKING".equals(plan.phase)||"NOT_STARTED".equals(plan.phase)?plan.picked:plan.packed;
+            p.put("total",total);p.put("completed",done);p.put("remaining",Math.max(0,total-done));}
+        return p;
+    }
     boolean canLeave(){return !busy&&state.pending()==null;}
     EditText scannerField(){return quantityInput!=null?quantityInput:input;}
     void close(){closed=true;if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);executor.shutdownNow();}
@@ -64,10 +81,13 @@ final class FboTwoStageScreen {
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
         if(closed||activity.isDestroyed())return;
+        prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
         LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);root.setBackgroundColor(Color.WHITE);
         text(root,packing?"Упаковка FBO":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
         input=null;
-        if(plan!=null){text(root,plan.title);text(root,"Нужно "+plan.needed+" · Отобрано "+plan.picked+" · Упаковано "+plan.packed);
+        if(plan!=null){text(root,plan.title);text(root,"Этап: "+FboFeedback.phase(plan.phase));
+            text(root,"Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" из "+plan.needed);
+            text(root,"Проверено коробов "+FboFeedback.confirmed(plan)+" из "+plan.boxes.size());
             if(plan.compositionChanged)text(root,"Состав заявки изменился. Нужна сверка.");
             if(plan.shortage>0)text(root,"Недостаточно доступного остатка: "+plan.shortage+" ед.");
             if(!FboScanState.phaseAllowed(packing,plan.phase))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
@@ -116,7 +136,10 @@ final class FboTwoStageScreen {
                 for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
             }
         }
-        if(state.pending()!=null)button(root,"Повторить неподтверждённый запрос",!busy,()->send("",null));
+        if(state.pending()!=null){
+            text(root,busy?"Отправка запроса…":"Подтверждение не получено. Запрос сохранён — повторное сканирование не требуется.");
+            button(root,"Повторить отправку",!busy,()->send("",null));
+        }
         button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
     }
@@ -142,19 +165,21 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";
         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
     }
-    private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
+    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null)state.reconcile(plan);busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
     private void send(String action,String kiz){send(action,kiz,null);}
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.
         if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";render();return;}
         busy=true;message="";render();executor.execute(()->{try{
             Response<TsdFboPlan> res=api.actFbo(session.authorizationHeader(),id,payload).execute();
-            if(!res.isSuccessful()||res.body()==null){boolean rejected=res.code()>=400&&res.code()<500&&res.code()!=408;String detail=error(res);handler.post(()->{if(rejected){state.rejected();prefs.edit().remove(pendingKey).commit();if("OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;
+            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected)refresh();else render();});return;}
-            TsdFboPlan next=res.body();handler.post(()->{state.accepted();prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
+            TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
+                if(!prefs.edit().remove(pendingKey).commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
+                state.accepted();feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
                 if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action")))download();render();});
-        }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";render();});}});
+        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";render();});}});
     }
     // FIX: do not prefill a physical count or submit stock movements before confirmation.
     private void confirmWholeBoxDialog(){

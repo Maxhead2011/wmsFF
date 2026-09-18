@@ -12,6 +12,15 @@ final class FboScanState {
             : "NOT_STARTED".equals(phase)||"PICKING".equals(phase);
     }
     String pallet = "", source = "", target = "", barcode = "";
+    // FIX: navigation survives reopening; pending stock commands are stored independently.
+    Map<String,String> checkpoint() {
+        Map<String,String> p=new LinkedHashMap<>();p.put("palletCode",pallet);p.put("sourceBoxCode",source);
+        p.put("targetBoxCode",target);p.put("barcode",barcode);return p;
+    }
+    void restoreCheckpoint(Map<String,String> value) {
+        if(value==null)return;pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
+        target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");
+    }
     private Map<String,String> pending;
     Map<String,String> prepare(String action, String kiz) { return prepare(action, kiz, null); }
     // FIX: persist quantity together with the operation id so a retry cannot change it.
@@ -42,6 +51,12 @@ final class FboScanState {
         if(!hasPallet)pallet="";
         if(!hasSource)source="";
         if(!hasTarget||!"PACKING".equals(plan.phase))target="";
+        if(("PICKING".equals(plan.phase)&&source.isEmpty())||("PACKING".equals(plan.phase)&&target.isEmpty()))barcode="";
+        if(!barcode.isEmpty()){
+            boolean needed=false;if(plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
+                if(barcode.equals(line.barcode)&&("PICKING".equals(plan.phase)?line.remaining>0:"PACKING".equals(plan.phase)&&line.picked>line.packed))needed=true;
+            if(!needed)barcode="";
+        }
     }
     Map<String,String> pending() { return pending == null ? null : new LinkedHashMap<>(pending); }
     void accepted() { pending=null; barcode=""; }
