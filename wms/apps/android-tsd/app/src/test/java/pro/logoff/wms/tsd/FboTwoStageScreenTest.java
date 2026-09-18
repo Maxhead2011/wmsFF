@@ -26,6 +26,96 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: real packing widgets announce box/barcode/KIZ and only confirmed acceptance.
+    @Test public void newBoxPackingSpeaksStepsAfterServerConfirmation() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=true;line.remaining=2;line.picked=2;p.lines.add(line);
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
+            List<FboPackingVoice.Cue> spoken=new ArrayList<>();
+            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){fail("Picking sound in packing");}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
+            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{},feedback);
+            try {
+                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
+                screen.scannerField().setText(line.barcode);screen.submit();
+                if("logoff".equals(BuildConfig.FLAVOR))assertEquals(Arrays.asList(FboPackingVoice.Cue.BOX,FboPackingVoice.Cue.BARCODE,FboPackingVoice.Cue.KIZ),spoken);
+                screen.scannerField().setText("TEST-KIZ");screen.submit();waitIdle(screen);
+                if("logoff".equals(BuildConfig.FLAVOR))assertEquals(Arrays.asList(FboPackingVoice.Cue.BOX,FboPackingVoice.Cue.BARCODE,FboPackingVoice.Cue.KIZ,FboPackingVoice.Cue.PUT),spoken);
+                else assertTrue(spoken.isEmpty());
+            }finally{screen.close();}
+        }
+    }
+    // TEST: failed and uncertain PACK_UNIT requests never tell the operator to put the item away.
+    @Test public void packingErrorsStaySilentUntilRetryIsConfirmed() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        for(boolean timeout:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.requiresKiz=true;line.picked=2;line.remaining=2;p.lines.add(line);
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
+            List<FboPackingVoice.Cue> spoken=new ArrayList<>();AtomicInteger attempts=new AtomicInteger();List<String> ids=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->
+                Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
+                    if(!method.getName().equals("execute"))return null;
+                    if(m.getName().equals("actFbo")&&"PACK_UNIT".equals(((Map<?,?>)args[2]).get("action"))){
+                        ids.add((String)((Map<?,?>)args[2]).get("operationId"));
+                        if(attempts.getAndIncrement()==0){if(timeout)throw new java.io.IOException("lost response");return Response.error(400,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{}"));}
+                    }
+                    return Response.success(p);
+                }));
+            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},feedback);
+            try {
+                waitIdle(screen);find(a.findViewById(android.R.id.content),"Собрать новые короба").performClick();
+                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
+                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("KIZ");screen.submit();waitIdle(screen);
+                assertFalse(spoken.contains(FboPackingVoice.Cue.PUT));
+                if(timeout)find(a.findViewById(android.R.id.content),"Повторить неподтверждённый запрос").performClick();
+                else{screen.scannerField().setText("KIZ");screen.submit();}
+                waitIdle(screen);assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.PUT));
+                if(timeout)assertEquals(ids.get(0),ids.get(1));
+            }finally{screen.close();}
+        }
+    }
+    // TEST: manual packing accepts a product outside the plan, but never writes before its KIZ.
+    @Test public void manualPackingUsesTargetBoxAndBarcodeKizPair() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.manualPackingEnabled=true;
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
+            List<Map<String,String>> commands=new ArrayList<>();List<FboPackingVoice.Cue> spoken=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
+                if(m.getName().equals("actFbo"))commands.add(new LinkedHashMap<>((Map<String,String>)args[2]));
+                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->method.getName().equals("execute")?Response.success(p):null);
+            });
+            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},feedback);
+            try {
+                waitIdle(screen);TextView manual=find(a.findViewById(android.R.id.content),"Добавить товар вручную");
+                if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(manual);return;}
+                assertNotNull(manual);manual.performClick();
+                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
+                assertEquals("MANUAL_OPEN_BOX",commands.get(0).get("action"));
+                screen.scannerField().setText("OUTSIDE-PLAN");screen.submit();assertEquals(1,commands.size());
+                screen.scannerField().setText("PHYSICAL-KIZ");screen.submit();waitIdle(screen);
+                assertEquals("MANUAL_PACK_UNIT",commands.get(1).get("action"));
+                assertEquals("TARGET",commands.get(1).get("targetBoxCode"));
+                assertEquals("OUTSIDE-PLAN",commands.get(1).get("barcode"));
+                assertEquals("PHYSICAL-KIZ",commands.get(1).get("kiz"));
+                assertFalse(commands.get(1).containsKey("sourceBoxCode"));
+                assertEquals(Arrays.asList(FboPackingVoice.Cue.BOX,FboPackingVoice.Cue.BARCODE,FboPackingVoice.Cue.KIZ,FboPackingVoice.Cue.PUT),spoken);
+            }finally{screen.close();}
+        }
+    }
+    // TEST: old servers and disabled deployments do not advertise the manual action.
+    @Test public void manualPackingMenuRequiresServerCapability() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
+            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{});
+            try {
+                if("logoff".equals(BuildConfig.FLAVOR))find(a.findViewById(android.R.id.content),"Завершить формирование новых коробов").performClick();
+                assertNull(find(a.findViewById(android.R.id.content),"Добавить товар вручную"));
+            }finally{screen.close();}
+        }
+    }
     // TEST: successful whole-box picks and rejected stale routes both remove the old source from widgets.
     @Test public void wholeBoxSuccessAndRouteConflictReconcileTheScreen() throws Exception {
         for(boolean conflict:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {

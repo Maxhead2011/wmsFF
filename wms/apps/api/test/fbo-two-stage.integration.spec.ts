@@ -70,6 +70,70 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    async function manualReady() {
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
+        await picked();
+        await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + target });
+    }
+    const manual = (kiz: string, extra: Record<string,string> = {}) => act('MANUAL_PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz, ...extra });
+    // TEST: missed picking is recovered once, composition and export totals grow atomically.
+    it('manually packs extra stock with exact source, durable retries and duplicate protection', async () => {
+        await manualReady();
+        const operationId=randomUUID();
+        const result=await manual(marks[4].value,{operationId});
+        expect(result).toMatchObject({needed:5,picked:5,packed:1,compositionChanged:false});
+        expect(await manual(marks[4].value,{operationId})).toMatchObject({needed:5,picked:5,packed:1});
+        await expect(manual(marks[4].value)).rejects.toThrow('уже упакован');
+        const unit=await p.fboAssemblyUnit.findUniqueOrThrow({where:{activeMarkId:marks[4].id}});
+        expect(unit).toMatchObject({sourceBoxId:partial,targetBoxCode:'FFL_'+target,state:'PACKED',pickedByUserId:uid,packedByUserId:uid});
+        expect((await p.stockBalance.aggregate({where:{boxId:partial,skuId:sku,status:'AVAILABLE'},_sum:{quantity:true}}))._sum.quantity).toBe(0);
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_MANUAL_PICK_RECOVERED'}})).toBe(1);
+    });
+    // TEST: packing an already picked item is not an additional debit or composition change.
+    it('manually packs an existing pick without increasing demand or debiting its source again', async () => {
+        await manualReady();
+        const before=await p.stockMovement.count({where:{boxId:partial,quantity:{lt:0}}});
+        expect(await manual(marks[2].value)).toMatchObject({needed:4,picked:4,packed:1});
+        expect(await p.stockMovement.count({where:{boxId:partial,quantity:{lt:0}}})).toBe(before);
+    });
+    // TEST: a SKU absent from the original order is recorded as a new line.
+    it('adds an outside-composition product to the request and keeps it usable', async () => {
+        await manualReady();
+        const extra=await p.productMark.create({data:{clientId:client,skuId:other,boxId:partial,status:'AVAILABLE',value:`010468099259845521ZZZZZZZZZZZZZ\u001d91EE12\u001d92${client}`}});
+        const result=await manual(extra.value,{barcode:'2051234567883'});
+        expect(result).toMatchObject({needed:5,picked:5,packed:1,compositionChanged:false});
+        expect(result.lines.find(l=>l.skuId===other)).toMatchObject({needed:1,packed:1});
+        await act('CLOSE_BOX',{targetBoxCode:'FFL_'+target});
+    });
+    // TEST: rejected scans and insufficient balances roll back every stock, mark and composition change.
+    it.each(['wrong-barcode','unknown-kiz','no-stock','shipped','closed-box'])('rejects manual packing for %s without partial writes',async(reason)=>{
+        await manualReady();
+        if(reason==='no-stock')await p.stockBalance.updateMany({where:{boxId:partial,skuId:sku,status:'AVAILABLE'},data:{quantity:0}});
+        if(reason==='shipped')await p.productMark.update({where:{id:marks[4].id},data:{status:'SHIPPING'}});
+        if(reason==='closed-box')await p.fboAssemblyBox.update({where:{requestId_boxCode:{requestId:request,boxCode:'FFL_'+target}},data:{closedAt:new Date()}});
+        const movements=await p.stockMovement.count({where:{clientId:client}});
+        await expect(manual(reason==='unknown-kiz'?'missing':marks[4].value,reason==='wrong-barcode'?{barcode:'2051234567883'}:{})).rejects.toThrow();
+        expect(await p.stockMovement.count({where:{clientId:client}})).toBe(movements);
+        expect((await p.clientRequestItem.findUniqueOrThrow({where:{id:line}})).quantity).toBe(4);
+        expect((await p.productMark.findUniqueOrThrow({where:{id:marks[4].id}})).boxId).toBe(partial);
+    });
+    // TEST: disabled deployments and finished control stages cannot mutate through this endpoint.
+    it('gates manual packing by configuration and assembly phase',async()=>{
+        await picked();
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED','false');
+        expect((await svc.plan(request,user)).manualPackingEnabled).toBe(false);
+        await expect(act('MANUAL_OPEN_BOX',{targetBoxCode:'FFL_'+target})).rejects.toThrow('выключено');
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED','true');
+        await p.fboAssembly.update({where:{requestId:request},data:{phase:'CONTROL'}});
+        await expect(act('MANUAL_OPEN_BOX',{targetBoxCode:'FFL_'+target})).rejects.toThrow('Этап изменился');
+    });
+    // TEST: competing terminals cannot count or debit the same physical mark twice.
+    it('serializes competing manual scans of the same physical item',async()=>{
+        await manualReady();
+        const results=await Promise.allSettled([manual(marks[4].value),manual(marks[4].value)]);
+        expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);
+        expect((await svc.plan(request,user))).toMatchObject({needed:5,picked:5,packed:1});
+    });
     // TEST: 1509_27 must not consume one unit of demand before an exact whole 1509_31.
     it('prefers the complete matching box over an earlier mixed box', async () => {
         await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });

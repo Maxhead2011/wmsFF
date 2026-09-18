@@ -4,7 +4,7 @@ import java.util.List;
 public class TsdFboPlan {
     public String requestId, title, phase;
     public int needed, picked, packed, looseRemaining, shortage;
-    public boolean compositionChanged;
+    public boolean compositionChanged, manualPackingEnabled;
     public List<Line> lines;
     public List<Route> route;
     public List<Box> boxes;
