@@ -3541,6 +3541,15 @@ export type FbsStocksResponse = {
 };
 
 export type FbsStockAllocationResponse = {
+  fineSettingsEnabled?: boolean;
+  reserve?: WbStockReserve;
+  publicationEnabled?: boolean;
+  analysis?: {
+    periodDays: number; generatedAt: string; from: string; orderedUnits: number; excluded: number; hasEvidence: boolean;
+    recommendedShares: Array<{ warehouseId: string; percent: number }>;
+    warnings: string[];
+    rows: Array<{ skuId: string; name: string; barcode: string; available: number; reserveQuantity: number; publishable: number; orderedUnits: number; activeDays: number; abc: string; xyz: string; sufficient: boolean; coefficientOfVariation: number | null }>;
+  } | null;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   connection: { id: string; accountName: string | null; primaryWarehouseId: string | null };
   policy: {
@@ -7219,7 +7228,15 @@ export async function fetchAdministrationOverview(accessToken: string) {
 }
 
 // FIX: client-wide control affects only outbound marketplace stock quantities.
+export type WbStockReserve = { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number };
+export function updateWbStockReserve(accessToken: string, clientId: string, reserve: WbStockReserve, expectedUpdatedAt: string | null) {
+  return request<{ reserve: WbStockReserve; reserveUpdatedAt: string }>(`/administration/marketplace-stock-control/${encodeURIComponent(clientId)}/reserve`, { accessToken, method: 'PUT', body: { reserve, expectedUpdatedAt } });
+}
+
 export type MarketplaceStockControlRow = {
+  fineSettingsEnabled?: boolean;
+  reserve?: WbStockReserve;
+  reserveUpdatedAt?: string | null;
   id: string;
   code: string;
   name: string;

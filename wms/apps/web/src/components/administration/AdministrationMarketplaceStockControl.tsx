@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { fetchMarketplaceStockControl, updateMarketplaceStockControl, type AuthSession, type MarketplaceStockControlRow } from '../../lib/api';
+import { updateWbStockReserve, type WbStockReserve, fetchMarketplaceStockControl, updateMarketplaceStockControl, type AuthSession, type MarketplaceStockControlRow } from '../../lib/api';
 
 export function canManageMarketplaceStockControl(session: AuthSession) {
   return !session.user.isDemo && !session.user.roleCodes.includes('CLIENT') && session.user.permissionCodes.includes('system:admin');
@@ -38,7 +38,7 @@ export function AdministrationMarketplaceStockControl({ session }: { session: Au
     try {
       const updated = await updateMarketplaceStockControl(session.accessToken, row, enabled);
       // FIX: display only the server-confirmed state; failed saves never flip the switch.
-      setRows((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setRows((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
       setMessage(`${updated.code} — ${updated.name}: ${updated.enabled ? 'контроль WMS включён' : 'контроль WMS выключен, остатками управляет отдел продаж'}. Изменение записано в журнал.`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось изменить настройку.');
@@ -68,7 +68,7 @@ export function AdministrationMarketplaceStockControl({ session }: { session: Au
       <table className="admin-stock-check__table">
         <thead style={{ position: 'sticky', top: 0 }}><tr><th>Клиент</th><th>Кто управляет остатками МП</th><th>Контроль через WMS</th><th>Последнее изменение</th></tr></thead>
         <tbody>{visible.map((row) => <tr key={row.id}>
-          <td><strong>{row.name}</strong><small>{row.code}</small></td>
+          <td><strong>{row.name}</strong><small>{row.code}</small>{row.fineSettingsEnabled && <WbReserveEditor key={`${row.id}:${row.reserveUpdatedAt}`} row={row} session={session} onSaved={() => void load()} />}</td>
           <td>{row.enabled ? 'WMS' : 'Отдел продаж клиента'}</td>
           <td><button type="button" role="switch" aria-checked={row.enabled} aria-label={`Контроль WMS: ${row.code} — ${row.name}`} className={row.enabled ? 'admin-button admin-button--primary' : 'admin-button admin-button--compact'} disabled={busy || !!selected} onClick={() => setSelected(row)}>{row.enabled ? 'Включён · выключить' : 'Выключен · включить'}</button></td>
           <td>{row.updatedAt ? new Date(row.updatedAt).toLocaleString('ru-RU') : 'По умолчанию'}<small>{row.updatedBy}</small></td>
@@ -77,4 +77,30 @@ export function AdministrationMarketplaceStockControl({ session }: { session: Au
       {!busy && visible.length === 0 && <p>Клиенты не найдены.</p>}
     </div>
   </section>;
+}
+
+function WbReserveEditor({ row, session, onSaved }: { row: MarketplaceStockControlRow; session: AuthSession; onSaved: () => void }) {
+  const [rule, setRule] = useState<WbStockReserve>(row.reserve ?? { mode: 'NONE', value: 0 });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [sample, setSample] = useState(10);
+  const reserved = rule.mode === 'NONE' ? 0 : rule.mode === 'UNITS' ? rule.value : Math.ceil(sample * rule.value / 100);
+  async function save() {
+    setBusy(true); setError('');
+    try { await updateWbStockReserve(session.accessToken, row.id, rule, row.reserveUpdatedAt ?? null); onSaved(); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сохранить резерв.'); }
+    finally { setBusy(false); }
+  }
+  return <details><summary>Резерв WB: {row.reserve?.mode === 'UNITS' ? `${row.reserve.value} шт.` : row.reserve?.mode === 'PERCENT' ? `${row.reserve.value}%` : 'без резерва'}</summary>
+    <p>Оставлять резерв каждой позиции перед распределением по складам WB. Фактические остатки ВМС не меняются.</p>
+    <label>Режим <select disabled={busy} value={rule.mode} onChange={e => setRule({ mode: e.target.value as WbStockReserve['mode'], value: 0 })}>
+      <option value="NONE">Весь доступный остаток</option><option value="UNITS">Резерв в штуках</option><option value="PERCENT">Резерв в процентах</option>
+    </select></label>
+    {rule.mode !== 'NONE' && <label>Величина <input type="number" min={0} max={rule.mode === 'PERCENT' ? 100 : 1000000} step={1} value={rule.value} disabled={busy} onChange={e => setRule({ ...rule, value: Number(e.target.value) })} /></label>}
+    <label>Пример: доступно <input type="number" min={0} step={1} value={sample} onChange={e => setSample(Math.max(0, Math.trunc(Number(e.target.value))))} /></label>
+    <p>На WB: {Math.max(0, sample - reserved)} шт. Процентный резерв округляется вверх.</p>
+    <button type="button" disabled={busy || !Number.isSafeInteger(rule.value) || rule.value < 0 || rule.value > (rule.mode === 'PERCENT' ? 100 : 1000000)} onClick={() => void save()}>Сохранить резерв</button>
+    <p>Сохранение не включает выгрузку. Правило применяется при следующей отправке WB; доли складов — в FBS → Распределение остатков.</p>
+    {error && <p role="alert">{error}</p>}
+  </details>;
 }

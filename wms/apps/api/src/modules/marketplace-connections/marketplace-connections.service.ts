@@ -1,3 +1,5 @@
+import { analyzeWbStockDemand } from './wb-stock-demand-analysis';
+import { fineStockSettingsEnabled, NO_WB_RESERVE, wbStockAfterReserve, type WbStockReserve } from './wb-stock-reserve';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import { FBS_WB_ACCOUNTED, isFbsWbAccounted } from '../../common/fbs-wb-accounting';
 import { AccountFbsOrderByWbDto, accountFbsOrderByWb } from './fbs-wb-accounting';
@@ -594,8 +596,9 @@ function fbsPublicationAmounts(
   enabled: boolean,
   saleLimit: number | null | undefined,
   sellable: number,
+  reserve: WbStockReserve = NO_WB_RESERVE,
 ): FbsPublicationAmounts {
-  const normalizedSellable = Math.max(0, Math.trunc(sellable));
+  const normalizedSellable = wbStockAfterReserve(sellable, reserve);
   const normalizedSaleLimit = saleLimit == null ? null : Math.max(0, Math.trunc(saleLimit));
   const requestedAmount = enabled ? (normalizedSaleLimit ?? normalizedSellable) : 0;
   const targetAmount = enabled ? Math.min(requestedAmount, normalizedSellable) : 0;
@@ -1161,6 +1164,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           publication.enabled,
           effectiveLimit,
           wmsAmount,
+          stockPlan.reserve,
         );
         const wbAmount = wbAmounts.get(ids.chrtId) ?? publication.lastWbAmount ?? 0;
         const hasExplicitManagerAmount = effectiveLimit != null;
@@ -1331,6 +1335,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         enabled,
         configuredLimit,
         quantity.sellable,
+        stockPlan.reserve,
       ).targetAmount;
       const split = allocateFbsStock(totalAmount, policy.lowStockThreshold, shares);
       for (const target of split) {
@@ -6472,7 +6477,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async listExternalFbsStockAllocation(clientId: string, connectionId: string) {
     const allocation = this.requireFbsStockAllocationService();
     const demand = await this.fbsStockAllocationDemand(clientId, connectionId, 30);
-    return allocation.list(clientId, connectionId, demand);
+    const result = await allocation.list(clientId, connectionId, demand);
+    if (!fineStockSettingsEnabled()) return result;
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: { id: connectionId, clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true } });
+    if (!connection) throw new NotFoundException('Кабинет WB не найден.');
+    const warehouseId = await this.resolveFbsExecutionWarehouseId(clientId, connection.fbsExecutionWarehouseId);
+    const primary = result.shares.find(row => row.isPrimary)?.warehouseId ?? connection.fbsWarehouseId ?? '';
+    const stockPlan = await this.calculateFbsRelabelStockPlan(clientId, warehouseId, connectionId, primary);
+    const policy = await this.prisma.fbsStockAllocationPolicy.findUnique({ where: { connectionId }, include: { overrides: true } });
+    const publications = await this.prisma.fbsStockPublication.findMany({ where: { clientId, connectionId }, orderBy: { createdAt: 'asc' } });
+    const bySku = new Map<string, typeof publications[number]>();
+    for (const publication of publications) {
+      const current = bySku.get(publication.skuId);
+      if (!current || (publication.warehouseId === primary && current.warehouseId !== primary) ||
+          (publication.warehouseId !== primary && current.warehouseId !== primary && !current.enabled && publication.enabled)) bySku.set(publication.skuId, publication);
+    }
+    const overrides = new Map(policy?.overrides.map(row => [row.skuId, row.requestedAmount]) ?? []);
+    const catalog = await this.prisma.sku.findMany({ where: { clientId, id: { in: [...stockPlan.quantities.keys()] } }, select: { id: true, name: true, internalSku: true, size: true, barcodes: { select: { value: true } } } });
+    const stock = catalog.map(sku => {
+      const publication = bySku.get(sku.id);
+      const relabel = stockPlan.meta.get(sku.id);
+      return { skuId: sku.id, name: [sku.name, sku.internalSku, sku.size].filter(Boolean).join(' · '), barcode: sku.barcodes[0]?.value ?? '', available: stockPlan.quantities.get(sku.id)?.sellable ?? 0,
+        enabled: publication?.enabled ?? true,
+        saleLimit: overrides.get(sku.id) ?? (relabel?.isTarget ? publication?.relabelManualAmount ?? publication?.saleLimit : publication?.saleLimit) };
+    });
+    const cached = this.fbsOrdersCache.get(clientId);
+    const orders = cached && cached.expiresAt > Date.now() ? cached.value : await this.loadFbsOrders(clientId);
+    const validShares = result.shares.length > 0 && result.shares.reduce((n, row) => n + row.percent, 0) === 100 && result.shares.filter(row => row.isPrimary).length === 1;
+    return { ...result, fineSettingsEnabled: true, reserve: stockPlan.reserve, publicationEnabled: await this.stockControl.isEnabled(clientId),
+      analysis: validShares ? analyzeWbStockDemand(orders.orders, connectionId, stock, result.shares, stockPlan.reserve, Date.now(), 30, result.policy.lowStockThreshold) : null };
+
   }
 
   async updateFbsStockAllocation(dto: UpdateFbsStockAllocationDto, user: AuthUser) {
@@ -6487,7 +6521,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       source,
       userId: user.id,
     });
-    if (dto.enabled && !saved.duplicate) {
+    if (dto.enabled && !saved.duplicate && (!fineStockSettingsEnabled() || await this.stockControl.isEnabled(clientId))) {
       await this.syncAllocatedFbsStocksForConnection(clientId, dto.connectionId);
     }
     return saved;
@@ -6546,8 +6580,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async fbsStockAllocationDemand(clientId: string, connectionId: string, periodDays: number) {
     const cached = this.fbsOrdersCache.get(clientId);
-    const orders = cached?.value ?? (await this.loadFbsOrders(clientId));
-    if (!cached) {
+    const fresh = cached && (!fineStockSettingsEnabled() || cached.expiresAt > Date.now());
+    const orders = fresh ? cached.value : (await this.loadFbsOrders(clientId));
+    if (!fresh) {
       this.fbsOrdersCache.set(clientId, {
         expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
         value: orders,
@@ -6561,7 +6596,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         order.marketplace !== MarketplaceType.WILDBERRIES ||
         order.category === 'cancelled' ||
         !order.warehouseId ||
-        (order.createdAt && Date.parse(order.createdAt) < cutoff)
+        (fineStockSettingsEnabled()
+          ? !order.createdAt || !Number.isFinite(Date.parse(order.createdAt)) || Date.parse(order.createdAt) < cutoff || Date.parse(order.createdAt) > Date.now()
+          : order.createdAt && Date.parse(order.createdAt) < cutoff)
       ) {
         return;
       }
@@ -6712,7 +6749,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const effectiveLimit = relabeling?.isTarget && publication.relabelManualAmount != null
       ? publication.relabelManualAmount
       : publication.saleLimit;
-    const amounts = fbsPublicationAmounts(dto.enabled, effectiveLimit, plannedQuantity.sellable);
+    const amounts = fbsPublicationAmounts(dto.enabled, effectiveLimit, plannedQuantity.sellable, stockPlan.reserve);
     const amount = amounts.targetAmount;
 
     try {
@@ -6785,7 +6822,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return {
       skuId: prepared.sku.id,
       previousAmount: prepared.previousAmount,
-      targetAmount: prepared.quantity.sellable,
+      targetAmount: prepared.publicationAmount,
       wmsAvailableAmount: prepared.quantity.available,
       wmsReservedAmount: prepared.quantity.reserved,
       checkedAt: prepared.checkedAt.toISOString(),
@@ -6796,7 +6833,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: preview and apply share one calculation, so the confirmation dialog
     // and the WB PUT can never use different WMS rules.
     const prepared = await this.prepareFbsStockReconciliation(dto, user);
-    const targetAmount = prepared.quantity.sellable;
+    const targetAmount = prepared.publicationAmount;
     if (prepared.previousAmount <= targetAmount) {
       return {
         corrected: false,
@@ -6918,6 +6955,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ids,
       executionWarehouseId,
       quantity,
+      publicationAmount: wbStockAfterReserve(quantity.sellable, stockPlan.reserve),
       previousAmount,
       checkedAt: new Date(),
     };
@@ -7053,7 +7091,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const effectiveLimit = relabeling?.isTarget && publication.relabelManualAmount != null
         ? publication.relabelManualAmount
         : publication.saleLimit;
-      const amounts = fbsPublicationAmounts(dto.enabled, effectiveLimit, wmsAmount);
+      const amounts = fbsPublicationAmounts(dto.enabled, effectiveLimit, wmsAmount, stockPlan.reserve);
       return {
         ...item,
         wmsAmount,
@@ -7223,6 +7261,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           publication.enabled,
           effectiveLimit,
           quantity?.sellable ?? 0,
+          stockPlan.reserve,
         );
         const wbAmount = wbAmounts.get(ids.chrtId) ?? publication.lastWbAmount ?? 0;
         const targetAmount = effectiveLimit != null
@@ -7524,6 +7563,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             publication.enabled,
             effectiveLimit,
             quantity.sellable,
+            stockPlan.reserve,
           )
         : null;
       const targetAmount = amounts == null
@@ -7806,6 +7846,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     connectionId: string,
     warehouseId: string,
   ) {
+    const reserve = await this.stockControl.reserve(clientId);
     // A few isolated service tests use deliberately minimal Prisma doubles.
     // In production all delegates exist; falling back to the already computed
     // base quantities keeps those narrow tests compatible.
@@ -7815,6 +7856,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       typeof this.prisma.fbsStockPublication?.findMany !== 'function'
     ) {
       return {
+        reserve,
         quantities: new Map<string, FbsStockQuantity>(),
         meta: new Map<string, FbsRelabelStockMeta>(),
       };
@@ -7954,7 +7996,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     });
 
-    return { quantities: adjusted, meta };
+    return { quantities: adjusted, meta, reserve };
   }
 
   private async fetchWildberriesStockAmounts(apiKey: string, warehouseId: string, chrtIds: number[]) {

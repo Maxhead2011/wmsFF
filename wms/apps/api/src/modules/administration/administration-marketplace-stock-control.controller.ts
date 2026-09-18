@@ -16,6 +16,11 @@ export class AdministrationMarketplaceStockControlController {
   @Get()
   list(@CurrentUser() user: AuthUser) { return this.control.list(user); }
 
+  @Put(':clientId/reserve')
+  updateReserve(@Param('clientId') clientId: string, @Body() body: { reserve?: unknown; expectedUpdatedAt?: unknown }, @CurrentUser() user: AuthUser) {
+    return this.control.updateReserve(clientId, body, user);
+  }
+
   @Put(':clientId')
   update(@Param('clientId') clientId: string, @Body() body: { enabled?: unknown; expectedEnabled?: unknown }, @CurrentUser() user: AuthUser) {
     return this.control.update(clientId, body, user);

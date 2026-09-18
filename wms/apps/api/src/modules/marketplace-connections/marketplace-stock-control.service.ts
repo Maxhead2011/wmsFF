@@ -3,6 +3,9 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 
+import { fineStockSettingsEnabled, NO_WB_RESERVE, parseWbStockReserve } from './wb-stock-reserve';
+
+const RESERVE_PREFIX = 'marketplace.wbReserve.client.';
 const PREFIX = 'marketplace.stockControl.client.';
 
 // FIX: an absent setting preserves existing clients; an invalid stored value fails closed.
@@ -13,6 +16,32 @@ export function stockControlEnabled(setting: { value: unknown } | null) {
 @Injectable()
 export class MarketplaceStockControlService {
   constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService) {}
+
+  async reserve(clientId: string) {
+    if (!fineStockSettingsEnabled()) return { ...NO_WB_RESERVE };
+    const setting = await this.prisma.systemSetting.findUnique({ where: { key: RESERVE_PREFIX + clientId } });
+    return setting ? parseWbStockReserve(setting.value) : { ...NO_WB_RESERVE };
+  }
+
+  async updateReserve(clientId: string, body: { reserve?: unknown; expectedUpdatedAt?: unknown }, user: AuthUser) {
+    this.requireAdmin(user);
+    this.scopes.requireClientAccess(user, clientId, 'write');
+    if (!fineStockSettingsEnabled()) throw new ForbiddenException('Тонкие настройки WB не включены.');
+    let value;
+    try { value = parseWbStockReserve(body.reserve); }
+    catch (error) { throw new BadRequestException((error as Error).message); }
+    if (body.expectedUpdatedAt !== null && typeof body.expectedUpdatedAt !== 'string') throw new BadRequestException('Передайте версию настройки.');
+    const key = RESERVE_PREFIX + clientId;
+    return this.prisma.$transaction(async tx => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+      if (!await tx.client.findUnique({ where: { id: clientId }, select: { id: true } })) throw new NotFoundException('Клиент не найден.');
+      const before = await tx.systemSetting.findUnique({ where: { key } });
+      if ((before?.updatedAt.toISOString() ?? null) !== body.expectedUpdatedAt) throw new ConflictException('Резерв уже изменён. Обновите список.');
+      const saved = await tx.systemSetting.upsert({ where: { key }, create: { key, value, updatedByUserId: user.id }, update: { value, updatedByUserId: user.id } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'WB_STOCK_RESERVE_UPDATED', entity: 'Client', entityId: clientId, payload: { before: before?.value ?? NO_WB_RESERVE, after: value } } });
+      return { reserve: value, reserveUpdatedAt: saved.updatedAt.toISOString() };
+    });
+  }
 
   async isEnabled(clientId: string) {
     if (!clientId) throw new BadRequestException('Не указан клиент для отправки остатков.');
@@ -44,9 +73,12 @@ export class MarketplaceStockControlService {
       include: { updatedBy: { select: { name: true } } },
     });
     const byKey = new Map(settings.map((setting) => [setting.key, setting]));
+    const reserves = fineStockSettingsEnabled() ? await this.prisma.systemSetting.findMany({ where: { key: { in: clients.map(client => RESERVE_PREFIX + client.id) } } }) : [];
+    const reservesByKey = new Map(reserves.map(setting => [setting.key, setting]));
     return clients.map((client) => {
       const setting = byKey.get(PREFIX + client.id) ?? null;
-      return { ...client, enabled: stockControlEnabled(setting), updatedAt: setting?.updatedAt ?? null, updatedBy: setting?.updatedBy?.name ?? null };
+      const reserveSetting = reservesByKey.get(RESERVE_PREFIX + client.id);
+      return { ...client, fineSettingsEnabled: fineStockSettingsEnabled(), reserve: reserveSetting ? parseWbStockReserve(reserveSetting.value) : NO_WB_RESERVE, reserveUpdatedAt: reserveSetting?.updatedAt.toISOString() ?? null, enabled: stockControlEnabled(setting), updatedAt: setting?.updatedAt ?? null, updatedBy: setting?.updatedBy?.name ?? null };
     });
   }
 

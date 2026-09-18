@@ -1,3 +1,4 @@
+import { wbStockPreview } from '../../lib/wbStockPreview';
 import { AlertTriangle, CheckCircle2, Copy, KeyRound, RefreshCw, Save, ShieldCheck, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -28,6 +29,7 @@ export function FbsStockAllocationView({
   const [threshold, setThreshold] = useState(10);
   const [status, setStatus] = useState<'idle' | 'loading' | 'saving' | 'syncing'>('idle');
   const [message, setMessage] = useState('');
+  const [stockSearch, setStockSearch] = useState('');
   const [error, setError] = useState('');
   const [keyName, setKeyName] = useState('Внешняя система учёта');
   const [generatedKey, setGeneratedKey] = useState('');
@@ -89,7 +91,7 @@ export function FbsStockAllocationView({
           isPrimary: share.isPrimary,
         })),
       });
-      setMessage('Настройки сохранены. Остатки распределены без превышения свободного остатка WMS.');
+      setMessage(data?.publicationEnabled === false ? 'Доли сохранены. Выгрузка WB выключена; остатки не отправлялись.' : 'Настройки сохранены.');
       await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось сохранить распределение.');
@@ -150,7 +152,8 @@ export function FbsStockAllocationView({
   }
 
   function applyRecommendation() {
-    setShares((current) => current.map((share) => ({ ...share, percent: share.recommendedPercent })));
+    const suggested = data?.analysis?.recommendedShares;
+    setShares((current) => current.map((share) => ({ ...share, percent: suggested?.find(row => row.warehouseId === share.warehouseId)?.percent ?? share.recommendedPercent })));
     setMessage('Рекомендация перенесена в поля. Нажмите «Сохранить», чтобы применить её.');
   }
 
@@ -179,6 +182,26 @@ export function FbsStockAllocationView({
         </div>
       ) : null}
 
+      {data?.fineSettingsEnabled && <section className="admin-card">
+        <h4>Резерв и предпросмотр WB</h4>
+        <p>Резерв: {data.reserve?.mode === 'UNITS' ? `${data.reserve.value} шт. на позицию` : data.reserve?.mode === 'PERCENT' ? `${data.reserve.value}% на позицию` : 'без резерва'}. Изменение — Администрирование → Контроль остатков на МП.</p>
+        <p>{data.publicationEnabled ? 'Отправка WB разрешена.' : 'Отправка WB для клиента выключена. Сохранённые доли не будут выгружены.'}</p>
+        {!data.analysis && <p>Сначала задайте доли в сумме 100% и основной склад, сохраните настройки и обновите раздел.</p>}
+        {data.analysis && <>
+          <p>Расчёт на {new Date(data.analysis.generatedAt).toLocaleString('ru-RU')}. {data.analysis.orderedUnits} заказанных единиц; {data.analysis.excluded} записей исключено из-за даты, склада или отсутствия привязки к товару.</p>
+          {!data.analysis.hasEvidence && <p>Недостаточно истории: сохраняем ручное распределение.</p>}
+          <details><summary>Как рассчитана рекомендация</summary>{data.analysis.warnings.map(text => <p key={text}>{text}</p>)}<p>Доли товара следуют спросу; для Y используется 75% рекомендации и 25% ручных долей, для Z — 50/50. Общая рекомендация взвешена количеством товара к продаже. После применения общие доли действуют на все позиции. Пересчёт — при открытии раздела; автоматического сохранения нет.</p></details>
+          <label>Поиск позиции <input value={stockSearch} onChange={e => setStockSearch(e.target.value)} placeholder="Название или штрихкод" /></label>
+          <p>Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Показаны первые 100 подходящих позиций из {data.analysis.rows.length}; для остальных используйте поиск.</p>
+          <div className="fbs-allocation__table-wrap"><table className="fbs-allocation__table"><thead><tr><th>Товар / ШК</th><th>Доступно</th><th>Резерв</th><th>На WB с учётом лимита</th><th>ABC–XYZ / спрос</th><th>По складам</th></tr></thead><tbody>
+            {data.analysis.rows.filter(row => `${row.name} ${row.barcode}`.toLocaleLowerCase().includes(stockSearch.toLocaleLowerCase())).slice(0, 100).map(row => <tr key={row.skuId}>
+              <td>{row.name}<br />{row.barcode}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}</td>
+              <td>{wbStockPreview(row.publishable, threshold, shares)?.map(a => `${shares.find(s => s.warehouseId === a.warehouseId)?.warehouseName ?? a.warehouseId}: ${a.amount}`).join('; ') ?? 'Проверьте доли и основной склад'}</td>
+            </tr>)}
+          </tbody></table></div>
+        </>}
+      </section>}
+
       <div className="fbs-allocation__rules">
         <label>
           <span>При остатке не более</span>
@@ -189,12 +212,12 @@ export function FbsStockAllocationView({
             value={threshold}
             onChange={(event) => setThreshold(Math.max(0, Math.trunc(Number(event.target.value) || 0)))}
           />
-          <small>весь остаток остаётся на основном складе Москва</small>
+          <small>весь остаток после резерва остаётся на выбранном основном складе</small>
         </label>
         <div>
-          <span>Рекомендация WB за {data?.recommendation.periodDays ?? 30} дней</span>
-          <strong>{data?.recommendation.basedOnOrders ?? 0} заказов в расчёте</strong>
-          <button className="secondary-button" type="button" onClick={applyRecommendation} disabled={!shares.length}>
+          <span>Рекомендация {data?.fineSettingsEnabled ? 'ABC–XYZ' : 'по заказам'} за {data?.recommendation.periodDays ?? 30} дней</span>
+          <strong>{data?.recommendation.basedOnOrders ?? 0} заказанных единиц в расчёте</strong>
+          <button className="secondary-button" type="button" onClick={applyRecommendation} disabled={!shares.length || status !== 'idle' || (data?.fineSettingsEnabled && !data.analysis?.hasEvidence)}>
             Применить рекомендацию
           </button>
         </div>
@@ -216,7 +239,7 @@ export function FbsStockAllocationView({
                     onChange={() => setShares((current) => current.map((row) => ({ ...row, isPrimary: row.warehouseId === share.warehouseId })))}
                   />
                 </td>
-                <td><span className="fbs-allocation__recommended">{share.recommendedPercent}%</span></td>
+                <td><span className="fbs-allocation__recommended">{data?.analysis?.recommendedShares.find(row => row.warehouseId === share.warehouseId)?.percent ?? share.recommendedPercent}%</span></td>
                 <td>
                   <label className="fbs-allocation__percent">
                     <input
@@ -246,7 +269,7 @@ export function FbsStockAllocationView({
         <button className="primary-button" type="button" onClick={() => void saveSettings()} disabled={status !== 'idle' || totalPercent !== 100}>
           <Save size={17} /> {status === 'saving' ? 'Сохраняю…' : 'Сохранить распределение'}
         </button>
-        <button className="secondary-button" type="button" onClick={() => void runSync()} disabled={status !== 'idle' || !data?.policy.enabled}>
+        <button className="secondary-button" type="button" onClick={() => void runSync()} disabled={status !== 'idle' || !data?.policy.enabled || data?.publicationEnabled === false}>
           <RefreshCw size={17} className={status === 'syncing' ? 'spin' : ''} /> Синхронизировать сейчас
         </button>
       </div>
