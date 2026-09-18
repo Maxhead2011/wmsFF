@@ -196,7 +196,12 @@ public class FboTwoStageScreenTest {
         });
         FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{},move,feedback);
         java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("busy");field.setAccessible(true);
-        for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s))return s;Thread.sleep(10);}
+        for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s)){
+            // TEST: existing scan checks explicitly enter the selected packing workflow.
+            if(packing&&"PACKING".equals(p.phase)&&"logoff".equals(BuildConfig.FLAVOR))
+                find(a.findViewById(android.R.id.content),p.wholeBoxes.isEmpty()?"Собрать новые короба":"Отсканировать целые короба").performClick();
+            return s;
+        }Thread.sleep(10);}
         fail("Plan did not load");return s;
     }
     private TextView find(View v,String text){
@@ -220,13 +225,13 @@ public class FboTwoStageScreenTest {
             }finally{s.close();}
         }
     }
-    // TEST: wrong entry point cannot expose a scanner, and whole boxes precede loose packing.
-    @Test public void packingCannotPickAndMustScanWholeBoxesFirst() throws Exception {
+    // TEST: wrong entry point has no scanner; whole-box mode rejects a new-box scan.
+    @Test public void packingCannotPickAndWholeModeRejectsNewBoxes() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()){
             Activity a=controller.get();AtomicInteger mutations=new AtomicInteger();FboTwoStageScreen s=open(a,plan("PICKING"),true,mutations);
             assertNull(s.scannerField());s.close();
             TsdFboPlan p=plan("PACKING");p.wholeBoxes.add("WHOLE");s=open(a,p,true,mutations);
-            try{s.scannerField().setText("NEW_BOX");s.submit();assertEquals(0,mutations.get());assertNotNull(find(a.findViewById(android.R.id.content),"Сначала отсканируйте целые короба"));}finally{s.close();}
+            try{s.scannerField().setText("NEW_BOX");s.submit();assertEquals(0,mutations.get());assertNotNull(find(a.findViewById(android.R.id.content),"logoff".equals(BuildConfig.FLAVOR)?"Этот короб не ожидается":"Сначала отсканируйте целые короба"));}finally{s.close();}
         }
     }
 }
