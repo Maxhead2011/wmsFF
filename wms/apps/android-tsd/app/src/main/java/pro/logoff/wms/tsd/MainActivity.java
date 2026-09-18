@@ -3190,6 +3190,15 @@ public class MainActivity extends Activity {
         int finalQuantity = quantity;
         final Map<String, Object> request = inventoryKizScan.payload(scannedValue,
             mandatoryFbsAuditActive ? 1 : finalQuantity, inventoryCaptureKiz);
+        if ("logoff".equals(BuildConfig.FLAVOR) && (session.hasRole("ADMIN") || session.hasRole("OWNER"))) {
+            request.put("allowScanCorrection", true);
+        }
+        submitInventoryScan(session, auditBoxId, barcode, request);
+    }
+
+    // FIX: confirmation resends the exact captured pair; editing the input cannot replace it.
+    private void submitInventoryScan(TsdSession session, String auditBoxId, String barcode, Map<String, Object> request) {
+        if (inventoryRequestBusy || activeInventoryBox == null || !auditBoxId.equals(activeInventoryBox.id)) return;
         inventoryRequestBusy = true;
         statusMessage = tr("Учитываю товар…", "Tovar hisobga olinmoqda…");
         renderInventoryCountScreen();
@@ -3212,6 +3221,21 @@ public class MainActivity extends Activity {
                 online = true;
                 inventoryRequestBusy = false;
                 if (activeInventoryBox == null || !auditBoxId.equals(activeInventoryBox.id)) return;
+                if ("SCAN_CONFLICT".equals(counted.scanState)) {
+                    statusMessage = "Этот КИЗ уже учтён с другим ШК. Проверьте фактический товар.";
+                    renderInventoryCountScreen();
+                    if (InventoryScanCorrection.allowed(BuildConfig.FLAVOR, session.hasRole("ADMIN"), session.hasRole("OWNER"), counted.replaceEvidenceToken)) {
+                        new AlertDialog.Builder(this)
+                            .setTitle("Проверить пару ШК–КИЗ")
+                            .setMessage("Было: " + nonEmpty(counted.previousSkuName, "—") + "\nСейчас: " + nonEmpty(counted.skuName, barcode)
+                                + "\nКИЗ: " + String.valueOf(request.get("kiz"))
+                                + "\nПодтверждение перенесёт одну единицу между строками. Общее количество не изменится.")
+                            .setPositiveButton("Скан верный", (dialog, which) -> submitInventoryScan(session, auditBoxId, barcode,
+                                InventoryScanCorrection.confirmed(request, counted.replaceEvidenceToken)))
+                            .setNegativeButton("Отмена", null).show();
+                    }
+                    return;
+                }
                 if ("SCAN_KIZ".equals(counted.scanState)) {
                     inventoryKizScan.awaitKiz(barcode);
                     statusMessage = tr("ШК принят. Теперь отсканируйте КИЗ.", "SHK qabul qilindi. Endi KIZni skanerlang.");

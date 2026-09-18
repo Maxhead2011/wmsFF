@@ -334,6 +334,34 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(0);
         expect(await p.stockMovement.count({ where: { clientId: client } })).toBe(0);
     });
+    // TEST: partial packing overlaps picking, retries once and cannot finish the request early.
+    it('packs picked units while collection continues without a second debit', async () => {
+        vi.stubEnv('WMS_FBO_PARALLEL_PACKING_ENABLED', 'true');
+        const assembly = new TsdAssemblyService(p as never,
+            { ...scopes, resolveClientFilter: () => client } as never, {} as never, stock, {} as never, svc);
+        const ids = async (workflow: string) => (await assembly.listActiveRequests(user, workflow)).map(r => r.id);
+        await act('START');
+        expect(await ids('fbo-pack')).not.toContain(request);
+        await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value });
+        expect(await ids('fbo-pick')).toContain(request);
+        expect(await ids('fbo-pack')).toContain(request);
+        await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target });
+        await expect(act('PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: marks[3].value })).rejects.toThrow();
+        const pack = { action: 'PACK_UNIT', operationId: randomUUID(), targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz: marks[2].value };
+        await Promise.all([svc.act(request, pack, user), act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[3].value })]);
+        await svc.act(request, pack, user);
+        await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target });
+        await expect(act('SORTED')).rejects.toThrow();
+        await expect(act('FINISH_PICK')).rejects.toThrow();
+        const plan = await svc.plan(request, user);
+        expect(plan).toMatchObject({ phase: 'PICKING', picked: 2, packed: 1, parallelPackingSupported: true });
+        expect(await p.stockMovement.aggregate({ where: { clientId: client, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } })).toMatchObject({ _sum: { quantity: -2 } });
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        await expect(act('SORTED')).rejects.toThrow();
+        await act('FINISH_PICK');
+        expect((await svc.plan(request, user)).phase).toBe('PACKING');
+    });
     async function picked() { await act('START'); await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole }); for (const m of marks.slice(2, 4))
         await act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: m.value }); await act('FINISH_PICK'); }
     async function packed() { await picked(); await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole }); await act('OPEN_BOX', { targetBoxCode: 'FFL_' + target }); for (const m of marks.slice(2, 4))

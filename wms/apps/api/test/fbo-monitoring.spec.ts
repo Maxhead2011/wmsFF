@@ -11,6 +11,16 @@ function setup(data: unknown[] = [request]) {
  return {prisma, read:(devices:any[]=[device])=>addFboMonitoring(prisma as never,devices,false)};
 }
 describe('FBO monitoring',()=>{
+ // TEST: workers in the same request have separate live workflow progress.
+ it('shows concurrent packing separately and preserves disabled behavior',async()=>{
+  const {read}=setup();const packer={...device,liveState:{...device.liveState,fboWorkflow:'PACKING'}};
+  vi.stubEnv('WMS_FBO_PARALLEL_PACKING_ENABLED','true');
+  const result=await read([device,packer]);
+  expect(result[0].progress.completed).toBe(2);expect(result[1].progress.completed).toBe(1);
+  expect(result[1].liveState.stage).toBe('PACKING');
+  vi.stubEnv('WMS_FBO_PARALLEL_PACKING_ENABLED','false');expect((await read([packer]))[0].progress.completed).toBe(2);
+ });
+
  // TEST: exercise the actual monitor response, not only its FBO projection.
  it('includes FBO progress in the monitor response from a live TSD heartbeat',async()=>{
   const {prisma}=setup();

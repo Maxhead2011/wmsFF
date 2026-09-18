@@ -56,6 +56,16 @@ export class CountInventoryItemDto {
   @IsOptional()
   @IsBoolean()
   captureKiz?: boolean;
+
+  // FIX: new TSD explicitly opts into a non-counting correction prompt.
+  @IsOptional()
+  @IsBoolean()
+  allowScanCorrection?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  replaceEvidenceToken?: string;
 }
 
 export class SetInventoryCountDto {
