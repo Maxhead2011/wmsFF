@@ -12,17 +12,19 @@ it('bounds historical billing transactions without splitting a shipment or a bil
   const db: any = { $queryRaw: vi.fn(async () => []), $transaction: vi.fn(async (fn: any) => { elapsed = 0; return fn(db); }) };
   const service: any = new MarketplaceConnectionsService(db, {} as never);
   const groups: string[][] = [];
+  const billingTransactions: number[] = [];
   service.ensureFbsProcessingChargesLocked = vi.fn(async (_client: string, orders: any[]) => {
     expect(db.$queryRaw).toHaveBeenCalled();
     elapsed += orders.length * 20000;
     if (elapsed > 60000) throw new Error('Transaction already closed: 60000 ms');
     groups.push(orders.map(o => o.id));
+    billingTransactions.push(db.$transaction.mock.calls.length);
     return new Map(orders.map(o => [o.id, { chargeId: o.id }]));
   });
   const orders = [order('a', '2026-09-10', 'same'), order('b', '2026-09-11', 'same'), order('c', '2026-09-10'), order('d', '2026-09-12')];
   expect((await service.ensureFbsProcessingCharges('client', orders)).size).toBe(4);
   expect(groups).toEqual([['a', 'b', 'c'], ['d']]);
-  expect(db.$transaction).toHaveBeenCalledTimes(2);
+  expect(new Set(billingTransactions).size).toBe(2);
   vi.stubEnv(flag, 'false');
   await expect(service.ensureFbsProcessingCharges('client', orders)).rejects.toThrow('60000 ms');
 });

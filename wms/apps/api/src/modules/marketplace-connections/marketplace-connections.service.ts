@@ -26629,27 +26629,29 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
-    if (process.env.WMS_FBS_BILLING_DAILY_TRANSACTIONS === 'true') {
-      // FIX: preserve the whole day's logistics calculation and global financial lock,
-      // without keeping the client's entire history in one transaction.
-      const byDay = new Map<string, FbsOrderSummary[]>();
-      for (const shipment of groupFbsOrdersByShipment(orders).values()) {
-        const day = fbsBillingDayKey(fbsShipmentServiceDate(shipment));
-        const group = byDay.get(day) ?? [];
-        group.push(...shipment);
-        byDay.set(day, group);
-      }
-      const result = new Map<string, NonNullable<FbsOrderSummary['billing']>>();
-      for (const day of [...byDay.keys()].sort()) {
-        const charges = await runBillingMutation(this.prisma, db =>
-          withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, byDay.get(day)!));
-        for (const [key, charge] of charges) result.set(key, charge);
-      }
-      return result;
-    }
+    if (process.env.WMS_FBS_BILLING_DAILY_TRANSACTIONS === 'true') return this.ensureFbsProcessingChargesByDay(clientId, orders);
     // FIX: lock before source-charge reads, not only when the resulting invoice is written.
     return runBillingMutation(this.prisma, (db) =>
       withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, orders));
+  }
+
+  private async ensureFbsProcessingChargesByDay(clientId: string, orders: FbsOrderSummary[]) {
+    // FIX: preserve the whole day's logistics calculation and global financial lock,
+    // without keeping the client's entire history in one transaction.
+    const byDay = new Map<string, FbsOrderSummary[]>();
+    for (const shipment of groupFbsOrdersByShipment(orders).values()) {
+      const day = fbsBillingDayKey(fbsShipmentServiceDate(shipment));
+      const group = byDay.get(day) ?? [];
+      group.push(...shipment);
+      byDay.set(day, group);
+    }
+    const result = new Map<string, NonNullable<FbsOrderSummary['billing']>>();
+    for (const day of [...byDay.keys()].sort()) {
+      const charges = await runBillingMutation(this.prisma, db =>
+        withBillingDb(this, db).ensureFbsProcessingChargesLocked(clientId, byDay.get(day)!));
+      for (const [key, charge] of charges) result.set(key, charge);
+    }
+    return result;
   }
 
   private async ensureFbsProcessingChargesLocked(clientId: string, orders: FbsOrderSummary[]) {
