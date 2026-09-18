@@ -331,6 +331,12 @@ type FbsOrdersResponse = {
 
 type FbsOrderHistoryMode = 'full' | 'cache-only';
 
+// FIX: allocation needs demand and SKU identity, never operational/billing state.
+type FbsAllocationOrder = Pick<FbsOrderSummary,
+  'id' | 'connectionId' | 'marketplace' | 'category' | 'createdAt' | 'warehouseId' | 'itemCount'> & {
+  product: { id: string } | null;
+};
+
 type FbsDeliveryRecoveryItem = {
   orderId: string;
   requestId: string | null;
@@ -630,6 +636,8 @@ function fbsPublicationAmounts(
 export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MarketplaceConnectionsService.name);
   private readonly fbsOrdersCache = new Map<string, { expiresAt: number; value: FbsOrdersResponse }>();
+  private readonly fbsAllocationOrdersCache = new Map<string, { expiresAt: number; value: { orders: FbsAllocationOrder[] } }>();
+  private readonly fbsAllocationOrdersLoading = new Map<string, Promise<{ orders: FbsAllocationOrder[] }>>();
   private readonly fbsOrdersLoads = new Map<string, Promise<FbsOrdersResponse>>();
   private readonly wildberriesFbsHistoryCache = new Map<
     string,
@@ -676,6 +684,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   pruneExpiredRuntimeCaches(now = Date.now()) {
     const caches = [
       this.fbsOrdersCache,
+      this.fbsAllocationOrdersCache,
       this.wildberriesFbsHistoryCache,
       this.wildberriesFbsStatusCache,
       this.fbsTsdRequestFallbackCache,
@@ -6567,6 +6576,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async fbsStockAllocationDemand(clientId: string, connectionId: string, periodDays: number) {
+    // FIX: keep the general orders cache complete; demand-only rows cannot populate it.
+    if (process.env.WMS_FBS_ALLOCATION_FAST_ENABLED === 'true') {
+      const snapshot = await this.fbsAllocationOrders(clientId, connectionId);
+      const now = Date.now();
+      const cutoff = now - Math.max(7, Math.min(90, periodDays)) * 86400000;
+      const result = new Map<string, number>();
+      for (const order of snapshot.orders) {
+        const date = Date.parse(order.createdAt ?? '');
+        if (order.connectionId !== connectionId || order.marketplace !== MarketplaceType.WILDBERRIES ||
+          order.category === 'cancelled' || !order.warehouseId || !Number.isFinite(date) || date < cutoff || date > now) continue;
+        result.set(order.warehouseId, (result.get(order.warehouseId) ?? 0) + Math.max(1, order.itemCount));
+      }
+      return result;
+    }
     const cached = this.fbsOrdersCache.get(clientId);
     const orders = cached?.value ?? (await this.loadFbsOrders(clientId));
     if (!cached) {
@@ -6593,6 +6616,59 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     });
     return result;
+  }
+
+  private async fbsAllocationOrders(clientId: string, connectionId: string) {
+    const key = JSON.stringify([clientId, connectionId]);
+    const cached = this.fbsAllocationOrdersCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+    const pending = this.fbsAllocationOrdersLoading.get(key);
+    if (pending) return pending;
+    // FIX: concurrent viewers share a read-only, single-account load, including its failures.
+    const load = this.loadFbsAllocationOrders(clientId, connectionId);
+    this.fbsAllocationOrdersLoading.set(key, load);
+    try {
+      const value = await load;
+      for (const [entryKey, entry] of this.fbsAllocationOrdersCache) {
+        if (entry.expiresAt <= Date.now()) this.fbsAllocationOrdersCache.delete(entryKey);
+      }
+      this.fbsAllocationOrdersCache.set(key, { expiresAt: Date.now() + 60_000, value });
+      return value;
+    } finally {
+      this.fbsAllocationOrdersLoading.delete(key);
+    }
+  }
+
+  private async loadFbsAllocationOrders(clientId: string, connectionId: string): Promise<{ orders: FbsAllocationOrder[] }> {
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: { id: connectionId, clientId, marketplace: MarketplaceType.WILDBERRIES, isActive: true },
+      include: { client: true },
+    });
+    if (!connection) throw new NotFoundException('WB connection is unavailable.');
+    const raw: WildberriesFbsOrder[] = await this.fetchWildberriesFbsOrders(connection);
+    const barcodes = uniqueStrings(raw.flatMap(order => asArray<unknown>(order.skus).map(textValue)));
+    const articles = uniqueStrings(raw.map(order => textValue(order.article)));
+    const skus = barcodes.length || articles.length ? await this.prisma.sku.findMany({
+      where: { clientId, OR: [
+        ...(barcodes.length ? [{ barcodes: { some: { value: { in: barcodes } } } }] : []),
+        ...(articles.length ? [{ article: { in: articles } }, { clientSku: { in: articles } }] : []),
+      ] },
+      select: { id: true, article: true, clientSku: true, internalSku: true, barcodes: { select: { value: true } } },
+    }) : [];
+    // Preserve the barcode-first, then article matching used by the full orders loader.
+    const byBarcode = new Map(skus.flatMap(sku => sku.barcodes.map(barcode => [barcode.value, sku.id] as const)));
+    const byArticle = new Map(skus.flatMap(sku => uniqueStrings([sku.article ?? '', sku.clientSku ?? '', sku.internalSku])
+      .map(article => [article.toLowerCase(), sku.id] as const)));
+    return { orders: raw.map(order => {
+      const skuId = asArray<unknown>(order.skus).map(textValue).map(barcode => byBarcode.get(barcode)).find(Boolean)
+        ?? byArticle.get(textValue(order.article).toLowerCase());
+      return {
+        id: textValue(order.id), connectionId: order.connectionId, marketplace: order.marketplace,
+        category: fbsOrderCategory(textValue(order.supplierStatus) || 'new', textValue(order.wbStatus) || 'waiting'),
+        createdAt: textValue(order.createdAt) || null, warehouseId: textValue(order.warehouseId) || null,
+        itemCount: Math.max(1, Math.trunc(numberValue(order.itemCount)) || 1), product: skuId ? { id: skuId } : null,
+      };
+    }) };
   }
 
   async connectFbsStockWarehouse(dto: FbsStockSyncDto, user: AuthUser) {
@@ -7775,30 +7851,33 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       reservedBySku.set(skuId, Math.max(reservedBySku.get(skuId) ?? 0, quantity));
     });
 
-    const cachedOrders = this.fbsOrdersCache.get(clientId);
-    const fbsOrders = cachedOrders?.value ?? (await this.loadFbsOrders(clientId));
-    if (!cachedOrders) {
-      this.fbsOrdersCache.set(clientId, {
-        expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
-        value: fbsOrders,
+    // FIX: unified reservations replace this legacy result; avoid its full order synchronization.
+    if (!(process.env.WMS_FBS_ALLOCATION_FAST_ENABLED === 'true' && wbOrderStockLifecycleEnabled())) {
+      const cachedOrders = this.fbsOrdersCache.get(clientId);
+      const fbsOrders = cachedOrders?.value ?? (await this.loadFbsOrders(clientId));
+      if (!cachedOrders) {
+        this.fbsOrdersCache.set(clientId, {
+          expiresAt: Date.now() + FBS_ORDERS_CACHE_TTL_MS,
+          value: fbsOrders,
+        });
+      }
+      fbsOrders.orders.forEach((order) => {
+        if (
+          order.marketplace !== MarketplaceType.WILDBERRIES ||
+          order.category !== 'active' ||
+          order.request ||
+          (connectionId && order.connectionId !== connectionId) ||
+          !order.product?.id ||
+          !skuIds.includes(order.product.id)
+        ) {
+          return;
+        }
+        reservedBySku.set(
+          order.product.id,
+          (reservedBySku.get(order.product.id) ?? 0) + Math.max(1, order.itemCount),
+        );
       });
     }
-    fbsOrders.orders.forEach((order) => {
-      if (
-        order.marketplace !== MarketplaceType.WILDBERRIES ||
-        order.category !== 'active' ||
-        order.request ||
-        (connectionId && order.connectionId !== connectionId) ||
-        !order.product?.id ||
-        !skuIds.includes(order.product.id)
-      ) {
-        return;
-      }
-      reservedBySku.set(
-        order.product.id,
-        (reservedBySku.get(order.product.id) ?? 0) + Math.max(1, order.itemCount),
-      );
-    });
 
     // FIX: publish the same free stock as WMS/Excel, across all WB accounts of this branch.
     if (wbOrderStockLifecycleEnabled()) {
