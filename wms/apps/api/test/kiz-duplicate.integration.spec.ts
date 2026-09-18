@@ -7,13 +7,16 @@ import { KizDuplicateService } from '../src/modules/print/kiz-duplicate.service'
 const url=process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
 if(url && !/^postgresql:\/\/codex_tests@127\.0\.0\.1:55469\/kiz_duplicate_tests/.test(url)) throw new Error('Dedicated local test database only');
 describe.skipIf(!url).sequential('duplicate queue on real PostgreSQL',()=>{
- const p=new PrismaClient({datasources:{db:{url}}}),service=new KizDuplicateService(p as never);
+ // FIX: skipped describe callbacks still run; initialize only for an enabled suite.
+ let p: PrismaClient;
+ let service: KizDuplicateService;
  const ids={client:randomUUID(),warehouse:randomUUID(),user:randomUUID(),sku:randomUUID(),station:randomUUID(),mark:randomUUID(),job:randomUUID()};
  const raw="0104680992597663215(bfrY!Bf.IME\u001d91EE12\u001d92AbCd/0123+xyz=";
  const user:any={id:ids.user,name:'Тест',roleCodes:['OPERATOR'],permissionCodes:['print:write'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:ids.warehouse};
  const body={id:ids.job,clientId:ids.client,stationId:ids.station,skuId:ids.sku,kiz:raw,deviceCode:'test-device'};
  let previousFlag:string|undefined;
  beforeAll(async()=>{
+  p=new PrismaClient({datasources:{db:{url}}});service=new KizDuplicateService(p as never);
   previousFlag=process.env.WMS_KIZ_DUPLICATE_ENABLED;process.env.WMS_KIZ_DUPLICATE_ENABLED='true';
   await p.warehouse.create({data:{id:ids.warehouse,code:ids.warehouse,name:'Test branch'}});
   await p.client.create({data:{id:ids.client,code:ids.client,name:'Test client'}});

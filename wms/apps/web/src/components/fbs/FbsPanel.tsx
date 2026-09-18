@@ -1460,7 +1460,8 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       setOrderActionMessage(
         `Создана заявка №${String(result.request.number).padStart(6, '0')}: ${result.linkedOrders} FBS-заказ(а/ов)${wbWarehouseLabel ? ` · ${wbWarehouseLabel}` : ''}.`,
       );
-      await loadOrders(true);
+      // FIX: the request is saved; catalogue refresh has its own loading/error state.
+      void loadOrders(true);
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось создать заявку из FBS-заказов.');
     } finally {
@@ -1508,9 +1509,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           );
         }
       }
-      await loadOrders(true);
       setOrderActionMessage(`Создано заявок WMS: ${created}. Привязано заказов: ${linked}.`);
       if (failures.length > 0) setOrderActionError(`Не созданы: ${failures.join(' ')}`);
+      // FIX: keep successful creation visible even if the follow-up refresh is delayed.
+      void loadOrders(true);
     } finally {
       setOrderAction(null);
     }

@@ -22820,7 +22820,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   ) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders, responseOverride);
+    // FIX: LOGOFF creation must not join a full history/billing refresh. Keep legacy deployments unchanged.
+    const selectedResponse = responseOverride ?? (process.env.WMS_FBS_FAST_REQUEST_CREATION_ENABLED === 'true'
+      ? await this.loadFbsOrdersUncached(clientId, undefined, {
+          historyMode: 'cache-only', billingMode: 'skip', readOnly: true, selections: dto.orders,
+        })
+      : undefined);
+    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders, selectedResponse);
     const wbWarehouseKeys = uniqueStrings(
       orders
         .filter((order) => order.marketplace === MarketplaceType.WILDBERRIES)
@@ -26065,7 +26071,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async loadFbsOrdersUncached(
     clientId: string,
     previousOrderStates?: ReadonlyMap<string, string>,
-    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip'; readOnly?: boolean } = {},
+    options: { historyMode?: FbsOrderHistoryMode; billingMode?: 'sync' | 'skip'; readOnly?: boolean;
+      selections?: Array<{ connectionId: string; id: string }> } = {},
   ): Promise<FbsOrdersResponse> {
     const [client, connections, deliveryPlan] = await Promise.all([
       this.prisma.client.findUnique({
@@ -26077,6 +26084,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId,
           marketplace: { in: [MarketplaceType.WILDBERRIES, MarketplaceType.OZON, MarketplaceType.YANDEX_MARKET] },
           isActive: true,
+          ...(options.selections ? { id: { in: uniqueStrings(options.selections.map(row => row.connectionId)) } } : {}),
         },
         orderBy: [{ accountName: 'asc' }, { createdAt: 'asc' }],
         include: {
@@ -26109,6 +26117,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       await Promise.all(
         connections.map(async (connection): Promise<WildberriesFbsOrder[]> => {
           if (connection.marketplace === MarketplaceType.WILDBERRIES) {
+            if (options.selections) {
+              return this.fetchSelectedWildberriesFbsOrders(connection,
+                new Set(options.selections.filter(row => row.connectionId === connection.id).map(row => row.id)));
+            }
             return (await this.fetchWildberriesFbsOrders(
               connection,
               options.historyMode,
@@ -26124,7 +26136,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }),
       )
     );
-    const rawOrders = rawOrderGroups.flat();
+    // FIX: downstream SKU/stock mapping is limited to the selection, including non-WB cabinets.
+    const selectedKeys = options.selections && new Set(options.selections.map(row => selectionKey(row.connectionId, row.id)));
+    const rawOrders = rawOrderGroups.flat().filter(order => !selectedKeys || selectedKeys.has(selectionKey(order.connectionId, textValue(order.id))));
 
     const selectedRawOrders = previousOrderStates
       ? rawOrders.filter((order) => {
@@ -26412,6 +26426,49 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       orders,
     };
+  }
+
+  // FIX: fresh selected statuses, no historical pagination, reshipment scan or shared refresh lock.
+  private async fetchSelectedWildberriesFbsOrders(
+    connection: MarketplaceConnectionWithClient,
+    selectedIds: ReadonlySet<string>,
+  ): Promise<WildberriesFbsOrder[]> {
+    if (!selectedIds.size) return [];
+    const selected = [...selectedIds];
+    const ids = selected.map(id => Number(id));
+    if (ids.some((id, index) => !Number.isSafeInteger(id) || id <= 0 || String(id) !== selected[index])) {
+      throw new BadRequestException('Некорректный номер выбранного заказа WB.');
+    }
+    const headers = { Authorization: connection.apiKey, 'Content-Type': 'application/json' };
+    const fresh = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/new', { method: 'GET', headers });
+    const raw = new Map<string, Record<string, unknown>>();
+    // Cached payload is metadata only; it is never evidence of the current status.
+    for (const order of this.wildberriesFbsHistoryCache.get(connection.id)?.orders ?? []) {
+      if (selectedIds.has(textValue(order.id))) raw.set(textValue(order.id), order);
+    }
+    for (const order of asArray<Record<string, unknown>>(fresh.orders)) {
+      if (selectedIds.has(textValue(order.id))) raw.set(textValue(order.id), compactWildberriesFbsOrder(order));
+    }
+    if (selected.some(id => !raw.has(id))) {
+      throw new BadRequestException('Выбранный заказ WB больше не найден среди новых заказов. Обновите список и повторите выбор.');
+    }
+    const statuses = new Map<string, { supplierStatus: string; wbStatus: string }>();
+    for (const batch of chunks(ids, 1000)) {
+      const result = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/status', {
+        method: 'POST', headers, body: JSON.stringify({ orders: batch }),
+      });
+      for (const row of asArray<Record<string, unknown>>(result.orders)) {
+        const supplierStatus = textValue(row.supplierStatus), wbStatus = textValue(row.wbStatus);
+        if (supplierStatus && wbStatus) statuses.set(textValue(row.id), { supplierStatus, wbStatus });
+      }
+    }
+    if (selected.some(id => !statuses.has(id))) {
+      throw new BadRequestException('WB не подтвердил актуальный статус выбранного заказа. Повторите проверку.');
+    }
+    return selected.map(id => ({
+      ...raw.get(id)!, ...statuses.get(id)!, connectionId: connection.id,
+      accountName: connection.accountName, marketplace: MarketplaceType.WILDBERRIES, itemCount: 1,
+    } as WildberriesFbsOrder));
   }
 
   private async fetchWildberriesFbsOrders(
