@@ -295,6 +295,40 @@ function blockedSnapshotFixture() {
   }
   return f;
 }
+it('restores Sonya administrative writeoff marks exactly once after physical confirmation', async () => {
+  // TEST: box 2506_86 contains physically scanned units excluded by admin-unpalleted-writeoff.
+  const f = blockedSnapshotFixture(), stock = structuredClone(f.balances);
+  f.marks[0].sourceDocument = 'admin-unpalleted-writeoff';
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.marks[0]).toMatchObject({ id: 'current', status: 'AVAILABLE', boxId: 'box', value: kiz });
+  expect(f.balances).toEqual(stock);
+  expect(f.db.productMark.create).not.toHaveBeenCalled();
+  expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  await expect(f.run()).resolves.toMatchObject({ ready: true });
+  const writes = f.db.productMark.updateMany.mock.calls.length;
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.db.productMark.updateMany).toHaveBeenCalledTimes(writes);
+});
+it.each(['assembly', 'shipped', 'printed', 'attempt', 'print-job', 'circulation', 'wrong-sku', 'wrong-client', 'still-bound', 'new-block', 'shipping', 'similar-source', 'flag-off'])('preserves writeoff recovery safeguards: %s', async kind => {
+  // TEST: the new administrative reason must not bypass ownership, history or sold-VM isolation.
+  const f = blockedSnapshotFixture();
+  f.marks[0].sourceDocument = 'admin-unpalleted-writeoff';
+  const model: Record<string, string> = { assembly: 'fbsTsdAssembly', shipped: 'shippedKizHistory', printed: 'fbsWebKizStickerPrint', attempt: 'fbsAssemblyAttemptHistory', 'print-job': 'fbsPrintJob', circulation: 'kizCirculationItem' };
+  if (model[kind]) f.db[model[kind]].findFirst.mockResolvedValue({ id: 'history' });
+  if (kind === 'wrong-sku') f.marks[0].skuId = 'another';
+  if (kind === 'wrong-client') f.marks[0].clientId = 'another';
+  if (kind === 'still-bound') f.marks[0].boxId = 'another';
+  if (kind === 'new-block') f.marks[0].updatedAt = startedAt;
+  if (kind === 'shipping') f.marks[0].status = 'SHIPPING';
+  if (kind === 'similar-source') f.marks[0].sourceDocument += '-unverified';
+  if (kind === 'flag-off') {
+    vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'false');
+    await f.confirm();
+  } else await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.productMark.create).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
 it('restores a scanned blocked snapshot mark on admin confirmation, without a second receipt', async () => {
   const f = blockedSnapshotFixture(), stock = structuredClone(f.balances);
   await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);

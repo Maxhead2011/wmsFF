@@ -130,8 +130,12 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
       if (mark.status === 'RESERVED' && mark.boxId === box!.id) continue;
       // FIX: legacy administrative exclusions are recoverable only from physical
       // scans, with no surviving box ownership or evidence of any order/dispatch.
+      // FIX: physical confirmation can also recover the original administrative writeoff.
+      // Keep an exact reason match and all ownership/history checks; never add stock twice.
+      const administrativeExclusion = mark.sourceDocument === 'admin-unpalleted-writeoff' ||
+        mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-');
       if (mark.status !== 'BLOCKED' || mark.boxId || !(mark.updatedAt < audit.startedAt) ||
-          !mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-')) {
+          !administrativeExclusion) {
         stop('Отсканированный КИЗ заблокирован, отобран или отгружен. Нужна проверка возврата или переклейка КИЗ.');
       }
       const prefixes = [scan.identity, ']d2' + scan.identity,
