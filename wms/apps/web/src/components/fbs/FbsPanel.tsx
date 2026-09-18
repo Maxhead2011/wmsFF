@@ -1072,13 +1072,27 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         deliveryDestination: destination,
       });
       ++loadSequence.current;
-      setOrdersState({ status: 'ready', data: result.orders, error: '' });
+      // FIX: merge the operation result; a full catalogue refresh is not part of assembly.
+      setOrdersState((current) => {
+        if (!result.ordersPartial || current.data?.client.id !== result.orders.client.id) {
+          return { status: 'ready', data: result.orders, error: '' };
+        }
+        const merged = new Map(current.data.orders.map((order) => [fbsOrderSelectionKey(order), order]));
+        for (const order of result.orders.orders) merged.set(fbsOrderSelectionKey(order), order);
+        const updatedOrders = [...merged.values()];
+        const counts = { all: updatedOrders.length, active: 0, shipped: 0, cancelled: 0, archive: 0 };
+        for (const order of updatedOrders) counts[order.category]++;
+        return { status: 'ready', error: '', data: {
+          ...current.data, orders: updatedOrders, counts, deliveryPlan: result.orders.deliveryPlan,
+        } };
+      });
       const cargoPlaceCount = result.supplies.reduce((sum, supply) => sum + supply.cargoPlaceCount, 0);
       setOrderActionMessage(
         result.deliveryPlan.requiresCargoPlaces
           ? `${result.assembled} заказ(а/ов) ${mode === 'reship' ? 'переведено в повторную отгрузку' : 'переведено в сборку'}. Создано грузомест: ${cargoPlaceCount}, количество товаров в одном месте не ограничено. Теперь скачайте ШК заказов и QR грузомест.`
           : `${result.assembled} заказ(а/ов) ${mode === 'reship' ? 'переведено в повторную отгрузку' : 'переведено в сборку'}. Поставка идёт в сортировочный центр, поэтому грузоместа WB не создавались. Теперь можно скачать ШК заказов.`,
       );
+      if (result.ordersPartial) void loadOrders(true);
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : mode === 'reship' ? 'Не удалось создать повторную отгрузку.' : 'Не удалось перевести заказы в сборку.');
     } finally {

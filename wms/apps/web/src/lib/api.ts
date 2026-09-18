@@ -3678,6 +3678,8 @@ function sanitizeFbsOrderSelectionPayload(
 }
 
 export type AssembleFbsOrdersResult = {
+  // FIX: fast assembly returns only the selected, verified orders.
+  ordersPartial?: boolean;
   assembled: number;
   reshipped: number;
   submitted?: number;

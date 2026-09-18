@@ -17680,11 +17680,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
-    const selected = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    // FIX: the "Собрать / Передаю" path validates only selected orders, before any WB mutation.
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const fast = process.env.WMS_FBS_FAST_ASSEMBLY_ENABLED === 'true';
+    const selectedResponse = fast ? await this.loadFbsOrdersUncached(clientId, undefined, {
+      historyMode: 'cache-only', billingMode: 'skip', readOnly: true, selections: dto.orders,
+    }) : undefined;
+    const selected = await this.resolveSelectedFbsOrders(clientId, dto.orders, selectedResponse);
     if (selected.orders.every((order) => order.marketplace === MarketplaceType.OZON)) {
       return this.submitOzonFbsOrders(clientId, selected.orders, user);
     }
-    return this.moveFbsOrdersToSupply(dto, user, 'assemble');
+    return this.moveFbsOrdersToSupply(dto, user, 'assemble', fast ? selected : undefined);
   }
 
   private async submitOzonFbsOrders(
@@ -19877,10 +19883,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     dto: FbsOrderSelectionDto,
     user: AuthUser,
     mode: 'assemble' | 'reship',
+    selected?: { response: FbsOrdersResponse; orders: FbsOrderSummary[] },
   ) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    const { response, orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const { response, orders } = selected ?? await this.resolveSelectedFbsOrders(clientId, dto.orders);
     const defaultDeliveryPlan = await this.loadFbsDeliveryPlan(clientId);
     const destination = dto.deliveryDestination ?? defaultDeliveryPlan.destination;
     const deliveryPlan: FbsOrdersResponse['deliveryPlan'] = {
@@ -20096,6 +20103,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     }
 
+    // FIX: composition was verified by WB above and supply/cargo facts are saved.
+    // A partial operational response must not replace the full shared catalogue or wait for billing.
+    if (selected && mode === 'assemble') {
+      const stabilizedOrders = this.preserveNewFbsSupplyAssignments(response, response, supplies);
+      for (const supply of supplies) {
+        this.wildberriesFbsStatusCache.delete(supply.connectionId);
+        const history = this.wildberriesFbsHistoryCache.get(supply.connectionId);
+        if (history) {
+          const ids = new Set(supply.orderIds);
+          this.wildberriesFbsHistoryCache.set(supply.connectionId, {
+            ...history, orders: history.orders.map(order => ids.has(textValue(order.id))
+              ? { ...order, supplyId: supply.id, supplierStatus: 'confirm' } : order),
+          });
+        }
+      }
+      return { assembled: orders.length, reshipped: 0, deliveryPlan, supplies,
+        orders: { ...stabilizedOrders, deliveryPlan }, ordersPartial: true };
+    }
     const refreshedOrders = await this.refreshFbsOrdersCache(clientId, {
       invalidateHistory: false,
     });
@@ -26465,6 +26490,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (selected.some(id => !statuses.has(id))) {
       throw new BadRequestException('WB не подтвердил актуальный статус выбранного заказа. Повторите проверку.');
     }
+    // FIX: preserve selected metadata when /orders/new drops transferred orders; never renew full-history freshness.
+    const history = this.wildberriesFbsHistoryCache.get(connection.id);
+    const metadata = new Map((history?.orders ?? []).map(order => [textValue(order.id), order]));
+    for (const [id, order] of raw) metadata.set(id, order);
+    this.wildberriesFbsHistoryCache.set(connection.id, { expiresAt: history?.expiresAt ?? 0, orders: [...metadata.values()] });
     return selected.map(id => ({
       ...raw.get(id)!, ...statuses.get(id)!, connectionId: connection.id,
       accountName: connection.accountName, marketplace: MarketplaceType.WILDBERRIES, itemCount: 1,
