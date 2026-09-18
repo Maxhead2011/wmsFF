@@ -1,3 +1,4 @@
+import { readTsdMonitorHistory } from './tsd-monitor-history';
 import { addFboMonitoring } from './fbo-monitoring';
 import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { TsdMonitorMessages } from '../tsd/tsd-monitor-messages';
@@ -449,30 +450,8 @@ export class AdministrationService {
         orderBy: { updatedAt: 'desc' },
         take: 500,
       }),
-      this.prisma.tsdOperation.findMany({
-        where: {
-          createdAt: { gte: since },
-          AND: [
-            { operationType: { not: 'monitor_command' } },
-            {
-              OR: [
-                { operationType: 'monitor_error' },
-                { status: { in: [TsdOperationStatus.REJECTED, TsdOperationStatus.NEEDS_REVIEW] } },
-              ],
-            },
-          ],
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 500,
-      }),
-      this.prisma.tsdOperation.findMany({
-        where: {
-          createdAt: { gte: since },
-          operationType: { notIn: ['monitor_heartbeat', 'monitor_command', 'monitor_message'] },
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 1000,
-      }),
+      readTsdMonitorHistory(this.prisma, 'errors', since),
+      readTsdMonitorHistory(this.prisma, 'activity', since),
       requestIds.length
         ? this.prisma.fbsTsdAssembly.findMany({
             where: { requestId: { in: requestIds } },
