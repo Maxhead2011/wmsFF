@@ -49,7 +49,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     name: 'Администрирование',
     prefixes: ['/administration', '/administration/marketplace-stock-control'],
     // FIX: include the client stock-control list and update handlers.
-    routeCount: 39, // ADDED: send/list TSD monitor messages.
+    routeCount: 42, // FIX: client reserve, SKU exclusions and recommendation limits.
     description: 'Диагностика WMS, технические работы, настройки, аудит, контроль внутренних API и включение/отключение отправки остатков на МП по клиентам.',
     logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.'],
     dependencies: ['Основная БД', 'Права system:admin'],
@@ -206,7 +206,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
       '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment'],
     // FIX: preserve delivery-options plus six reshipment handlers; aliases count once.
-    routeCount: 109, // FIX: includes the one-time WB portal command.
+    routeCount: 110, // FIX: includes read-only WB stock verification.
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Перенос из доставки через расширение: после подтверждения выдаёт одну команду кабинету WB, затем независимо проверяет поставки и новый стикер; токены кабинета остаются в браузере.', 'Учёт по статусу WB: решение менеджера после проверки WB; точная пара КИЗ–ШК списывается и сохраняется в истории отгрузок, неизвестный источник — без короба.', 'Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
