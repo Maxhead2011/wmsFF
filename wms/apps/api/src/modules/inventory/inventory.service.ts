@@ -589,12 +589,42 @@ export class InventoryService {
         });
         if (active.count !== 1) throw new ConflictException('Подсчёт короба изменился. Откройте короб повторно.');
         const evidence = await tx.auditLog.findUnique({ where: { id: evidenceId } });
+        if (!evidence && dto.replaceEvidenceToken) throw new ConflictException('Пересчёт изменился. Повторите сканирование ШК и КИЗа.');
         const existing = await tx.inventoryAuditLine.findUnique({
           where: { auditBoxId_skuId: { auditBoxId, skuId: sku.id } },
         });
         if (evidence) {
-          const payload = evidence.payload as { skuId?: string } | null;
+          const payload = evidence.payload as Prisma.JsonObject | null;
           if (payload?.skuId !== sku.id || !existing) {
+            // FIX: only an explicit OWNER/ADMIN confirmation can replace an already counted pair.
+            if (process.env.WMS_INVENTORY_SCAN_CORRECTION_ENABLED === 'true' && dto.allowScanCorrection &&
+                !user.isDemo && user.roleCodes.some(role => ['ADMIN', 'OWNER'].includes(role)) &&
+                evidence.action === 'INVENTORY_KIZ_SCAN' && evidence.entityId === auditBoxId &&
+                payload?.roundStartedAt === auditBox.startedAt.toISOString() && payload.clientId === auditBox.clientId &&
+                typeof payload.lineId === 'string' && payload.skuId !== sku.id) {
+              const previous = await tx.inventoryAuditLine.findUnique({ where: { id: payload.lineId } });
+              if (!previous || previous.auditBoxId !== auditBoxId || previous.skuId !== payload.skuId || previous.countedQuantity < 1)
+                throw new ConflictException('Прежняя строка пересчёта изменилась. Откройте короб повторно.');
+              const token = createHash('sha256').update(JSON.stringify([evidenceId, payload])).digest('hex');
+              if (!dto.replaceEvidenceToken) return { scanState: 'SCAN_CONFLICT', replaceEvidenceToken: token,
+                previousSkuName: previous.skuName + ' · ' + previous.internalSku, skuName: sku.name + ' · ' + sku.internalSku };
+              if (dto.replaceEvidenceToken !== token) throw new ConflictException('Скан уже исправлен. Повторите проверку пары ШК–КИЗ.');
+              const next = existing
+                ? await tx.inventoryAuditLine.update({ where: { id: existing.id }, data: {
+                    countedQuantity: { increment: 1 }, difference: existing.countedQuantity + 1 - existing.expectedQuantity } })
+                : await tx.inventoryAuditLine.create({ data: { auditBoxId, skuId: sku.id, skuName: sku.name,
+                    internalSku: sku.internalSku, barcode: value, expectedQuantity: 0, countedQuantity: 1, difference: 1 } });
+              await tx.inventoryAuditLine.update({ where: { id: previous.id }, data: {
+                countedQuantity: { decrement: 1 }, difference: previous.countedQuantity - 1 - previous.expectedQuantity } });
+              const correctionId = createHash('sha256').update(JSON.stringify([evidenceId, token, sku.id])).digest('hex');
+              const corrected = { ...payload, skuId: sku.id, barcode: value, kiz, lineId: next.id,
+                correctedByUserId: user.id, correctionId };
+              await tx.auditLog.create({ data: { id: correctionId, userId: user.id, action: 'INVENTORY_KIZ_SCAN_CORRECTED',
+                entity: 'InventoryAuditBox', entityId: auditBoxId, payload: {
+                  evidenceId, before: payload, after: corrected, quantityChanged: 0 } } });
+              await tx.auditLog.update({ where: { id: evidenceId }, data: { payload: corrected } });
+              return { ...next, scanState: 'COUNTED', duplicate: false };
+            }
             throw new ConflictException('Этот КИЗ уже учтён с другим товаром в текущей проверке.');
           }
           return { ...existing, scanState: 'COUNTED', duplicate: true };
