@@ -21,12 +21,17 @@ export function calculateWbFreeStock(stock: number, tasks: Demand[], requests: R
 
 export async function wbReservationQuantities(db: Prisma.TransactionClient, clientId: string, skuIds: string[], warehouseId?: string, excludeRequestId?: string) {
   if (!skuIds.length) return new Map<string, number>();
+  const fast = process.env.WMS_FBS_ALLOCATION_FAST_ENABLED === 'true';
   const skus = await db.sku.findMany({ where: { clientId, id: { in: skuIds } }, select: { id: true, barcodes: { select: { value: true } } } });
   const skuByBarcode = new Map(skus.flatMap(sku => sku.barcodes.map(barcode => [barcode.value, sku.id] as const)));
   const tasks = await db.fbsTsdAssembly.findMany({ where: { clientId, marketplace: 'WILDBERRIES',
     OR: [{ skuId: { in: skuIds } }, { sourceSkuId: { in: skuIds } }],
     ...(warehouseId ? { stockWarehouseId: warehouseId } : { stockWarehouseId: { not: null } }),
-  } });
+  }, ...(fast ? { select: {
+    // FIX: reservation arithmetic needs identity and quantity, not sticker/event payloads.
+    id: true, orderId: true, connectionId: true, requestId: true, skuId: true,
+    sourceSkuId: true, relabelConfirmedAt: true, itemCount: true, status: true,
+  } } : {}) });
   const requests = await db.clientRequest.findMany({ where: { clientId, type: 'OUTBOUND',
     status: { in: ['SUBMITTED', 'IN_REVIEW', 'APPROVED', 'IN_WORK', 'PACKED'] },
     ...(warehouseId ? { warehouseId } : {}),
@@ -44,11 +49,25 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
   const requestByOrder = new Map(links.filter(link => !['CANCELLED', 'REJECTED'].includes(link.request.status)).map(link => [`${link.connectionId}:${link.orderId}`, link.requestId]));
   const picked: Array<{ idempotencyKey: string | null; quantity: number }> = [];
   // FIX: a supply transfer can change requestId; physical evidence belongs to the exact task.
-  for (let offset = 0; offset < tasks.length; offset += 100) {
-    picked.push(...await db.stockMovement.findMany({ where: { clientId, status: StockStatus.PACKING,
-      ...(warehouseId ? { warehouseId } : {}),
-      OR: tasks.slice(offset, offset + 100).map(task => ({ idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` } })),
-    }, select: { idempotencyKey: true, quantity: true } }));
+  if (fast) {
+    // FIX: read this client's physical pick history once instead of rescanning it for every 100 tasks.
+    if (tasks.length) {
+      const taskIds = new Set(tasks.map(task => task.id));
+      const rows = await db.stockMovement.findMany({ where: { clientId, status: StockStatus.PACKING,
+        ...(warehouseId ? { warehouseId } : {}), idempotencyKey: { startsWith: 'fbs-sticker-pick:' },
+      }, select: { idempotencyKey: true, quantity: true } });
+      for (const row of rows) {
+        const parts = row.idempotencyKey?.split(':');
+        if (parts && parts.length >= 3 && taskIds.has(parts[1])) picked.push(row);
+      }
+    }
+  } else {
+    for (let offset = 0; offset < tasks.length; offset += 100) {
+      picked.push(...await db.stockMovement.findMany({ where: { clientId, status: StockStatus.PACKING,
+        ...(warehouseId ? { warehouseId } : {}),
+        OR: tasks.slice(offset, offset + 100).map(task => ({ idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` } })),
+      }, select: { idempotencyKey: true, quantity: true } }));
+    }
   }
   // FIX: ordinary WMS picks also leave AVAILABLE and must stop reserving it.
   const requestPicks = requests.length ? await db.stockMovement.groupBy({ by: ['sourceDocument', 'skuId'], where: {
