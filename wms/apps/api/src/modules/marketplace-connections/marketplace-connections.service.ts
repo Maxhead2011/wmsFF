@@ -6551,6 +6551,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const warehouseId = await this.resolveFbsExecutionWarehouseId(clientId, connection.fbsExecutionWarehouseId);
     const primary = result.shares.find(row => row.isPrimary)?.warehouseId ?? connection.fbsWarehouseId ?? '';
     const stockPlan = await this.calculateFbsRelabelStockPlan(clientId, warehouseId, connectionId, primary);
+    // FIX: return the editable reserve and its matching version together.
+    const reserveSettings = await this.stockControl.reserveSettings(clientId);
+    stockPlan.reserve = reserveSettings.reserve;
     const policy = await this.prisma.fbsStockAllocationPolicy.findUnique({ where: { connectionId }, include: { overrides: true } });
     const publications = await this.prisma.fbsStockPublication.findMany({ where: { clientId, connectionId }, orderBy: { createdAt: 'asc' } });
     const bySku = new Map<string, typeof publications[number]>();
@@ -6575,7 +6578,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const analysisSettings = await this.stockControl.analysisSettings(clientId);
     const availability = await this.prisma.wbStockAvailabilityDay.findMany({ where: { clientId, connectionId, day: { gte: new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10) } } });
     const publicationChecks = await this.prisma.wbStockPublicationCheck.findMany({ where: { clientId, connectionId }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 500 });
-    return { ...result, fineSettingsEnabled: true, reserve: stockPlan.reserve, analysisSettings, publicationChecks, publicationEnabled: await this.stockControl.isEnabled(clientId),
+    return { ...result, fineSettingsEnabled: true, ...reserveSettings, analysisSettings, publicationChecks, publicationEnabled: await this.stockControl.isEnabled(clientId),
       analysis: validShares ? analyzeWbStockDemand(orders.orders, connectionId, stock, result.shares, stockPlan.reserve, Date.now(), 30, result.policy.lowStockThreshold, { availability, maxShareChange: analysisSettings.maxShareChange }) : null };
 
   }

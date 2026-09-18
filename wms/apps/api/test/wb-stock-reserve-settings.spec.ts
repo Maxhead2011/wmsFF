@@ -1,8 +1,19 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { MarketplaceStockControlService } from '../src/modules/marketplace-connections/marketplace-stock-control.service';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
+import { Reflector } from '@nestjs/core';
+import { PermissionsGuard } from '../src/modules/auth/guards/permissions.guard';
+import { AdministrationMarketplaceStockControlController } from '../src/modules/administration/administration-marketplace-stock-control.controller';
 const admin: any = { id: 'a', name: 'Admin', roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [] };
 afterEach(() => vi.unstubAllEnvs());
+// TEST: HTTP permission metadata opens only the two intended methods.
+it('allows the client HTTP permission boundary only for reserve and SKU rules', () => {
+  const guard = new PermissionsGuard(new Reflector());
+  const controller = AdministrationMarketplaceStockControlController;
+  const context = (method: string): any => ({ getClass: () => controller, getHandler: () => (controller.prototype as any)[method], switchToHttp: () => ({ getRequest: () => ({ user: { roleCodes: ['CLIENT'], permissionCodes: ['stock:read'] } }) }) });
+  for (const method of ['updateReserve', 'updateSkuRule']) expect(guard.canActivate(context(method))).toBe(true);
+  for (const method of ['list', 'update', 'updateAnalysis']) expect(() => guard.canActivate(context(method))).toThrow();
+});
 function setup() {
   const settings = new Map<string, any>();
   const db: any = { systemSetting: {
@@ -13,6 +24,25 @@ function setup() {
   db.$transaction = async (f: any) => f(db);
   return { service: new MarketplaceStockControlService(db, new ClientScopeService()), db, settings };
 }
+// TEST: a client manager may edit only reserves/exclusions of writable assigned clients.
+it('allows a scoped client manager to save reserves and product rules, but not administration', async () => {
+  vi.stubEnv('WMS_WB_STOCK_FINE_SETTINGS', 'true');
+  const { service, db } = setup();
+  const manager: any = { ...admin, roleCodes: ['CLIENT'], permissionCodes: ['stock:read'], clientScopeMode: 'ASSIGNED', clientIds: ['c', 'readonly'], writableClientIds: ['c'] };
+  const body = { reserve: { mode: 'UNITS', value: 3 }, expectedUpdatedAt: null };
+  await expect(service.updateReserve('c', body, manager)).resolves.toMatchObject({ reserve: body.reserve });
+  await expect(service.updateFineRule('c', 's', { ...body, blocked: true }, manager)).resolves.toMatchObject({ blocked: true });
+  expect(db.auditLog.create).toHaveBeenCalledTimes(2);
+  for (const id of ['other', 'readonly']) {
+    await expect(service.updateReserve(id, body, manager)).rejects.toThrow();
+    await expect(service.updateFineRule(id, 's', { ...body, blocked: true }, manager)).rejects.toThrow();
+  }
+  await expect(service.updateFineRule('c', null, { maxShareChange: 1, expectedUpdatedAt: null }, manager)).rejects.toThrow();
+  await expect(service.update('c', { enabled: true, expectedEnabled: false }, manager)).rejects.toThrow();
+  vi.stubEnv('WMS_WB_STOCK_FINE_SETTINGS', 'false');
+  await expect(service.updateReserve('c', body, manager)).rejects.toThrow();
+  expect(db.systemSetting.upsert).toHaveBeenCalledTimes(2);
+});
 // TEST: sold/default installation must never load or apply the new reserve.
 it('preserves the legacy default and fails closed for malformed enabled settings', async () => {
   const { service, db, settings } = setup();
