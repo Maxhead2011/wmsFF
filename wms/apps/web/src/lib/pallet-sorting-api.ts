@@ -1,4 +1,5 @@
 export type SortingState = {
+  scanMode?: 'BARCODE_ONLY' | 'BARCODE_KIZ';
   id: string; version: number; sourceCode: string; stage: 'CHECKING' | 'FORMING' | 'COMPLETED';
   sources: Array<{ id: string; code: string; scanned: boolean; archived: boolean; preservedOnPallet?: boolean; retainedReason?: string }>; // FIX
   // FIX: additive state keeps older saved sorting sessions compatible.

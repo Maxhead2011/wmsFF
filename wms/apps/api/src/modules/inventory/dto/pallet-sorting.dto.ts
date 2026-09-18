@@ -1,6 +1,8 @@
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
 
 export class StartPalletSortingDto {
+  // FIX: omitted mode preserves legacy KIZ-based sorting sessions.
+  @IsOptional() @IsIn(['BARCODE_ONLY', 'BARCODE_KIZ']) scanMode?: 'BARCODE_ONLY' | 'BARCODE_KIZ';
   @IsUUID() id!: string;
   @IsString() @MaxLength(160) code!: string;
 }

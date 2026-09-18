@@ -17,6 +17,7 @@ type Target = { id: string; code: string; closed: boolean; palletCode: string; q
 // FIX: missing database boxes are evidence, not invented Box IDs or zero balances.
 type ProblemSource = { code: string; scanned: boolean; reason: 'BOX_NOT_FOUND' };
 export type PalletSortingState = {
+  scanMode?: 'BARCODE_ONLY' | 'BARCODE_KIZ';
   id: string; clientId: string; warehouseId: string; sourceCode: string; sourcePalletId: string | null;
   stage: 'CHECKING' | 'FORMING' | 'COMPLETED'; version: number;
   sources: Source[]; targets: Target[]; activeTargetId?: string | null;
@@ -85,6 +86,9 @@ export class PalletSortingService {
 
   async start(dto: StartPalletSortingDto, user: AuthUser) {
     assertSortingAdmin(user);
+    const scanMode = dto.scanMode ?? 'BARCODE_KIZ';
+    if (!['BARCODE_ONLY', 'BARCODE_KIZ'].includes(scanMode)) throw new BadRequestException('Неизвестный режим сортировки.');
+    if (scanMode === 'BARCODE_ONLY' && process.env.WMS_PALLET_SORTING_BARCODE_ONLY !== 'true') throw new ForbiddenException('Режим «Только ШК» ещё не включён.');
     const code = await this.boxCodes.normalize(dto.code);
     if (!code) throw new BadRequestException('Отсканируйте паллет-сорт или короб.');
     return this.prisma.$transaction(async tx => {
@@ -93,7 +97,7 @@ export class PalletSortingService {
       const prior = await tx.$queryRaw<Row[]>(Prisma.sql`SELECT * FROM "PalletSortingSession" WHERE "id" = ${dto.id}`);
       if (prior.length) {
         const saved = await this.load(tx, dto.id, user);
-        if (saved.sourceCode !== code || prior[0].createdByUserId !== user.id) throw new ConflictException('Номер сессии уже использован.');
+        if (saved.sourceCode !== code || prior[0].createdByUserId !== user.id || (saved.scanMode ?? 'BARCODE_KIZ') !== scanMode) throw new ConflictException('Номер сессии уже использован с другими данными или режимом.');
         return saved;
       }
       const pallet = await tx.storagePallet.findFirst({ where: { warehouseId: user.activeWarehouseId!, code: { equals: code, mode: 'insensitive' } }, include: { boxes: true } });
@@ -121,7 +125,7 @@ export class PalletSortingService {
       for (const source of sources) this.assertVisibleClient(user, source.clientId);
       await this.assertUnclaimed(tx, sources.map(b => b.id), dto.id, user.activeWarehouseId!);
       const state: PalletSortingState = { id: dto.id, clientId, warehouseId: user.activeWarehouseId!, sourceCode: code,
-        sourcePalletId: pallet?.id ?? null, stage: 'CHECKING', version: 1, targets: [], moves: [], pendingRoutes: [], problemSources,
+        sourcePalletId: pallet?.id ?? null, scanMode, stage: 'CHECKING', version: 1, targets: [], moves: [], pendingRoutes: [], problemSources,
         sources: sources.map(b => ({ id: b.id, code: b.code, scanned: !pallet, archived: false, placementId: b.storagePlacement?.palletId ?? null, clientId: b.clientId, warehouseId: b.warehouseId })) };
       // FIX: a directly scanned box has already been physically confirmed.
       if (!pallet) {
@@ -296,6 +300,23 @@ export class PalletSortingService {
     if (!target) throw new ConflictException('Сначала отсканируйте целевой короб.');
     const barcode = (dto.barcode ?? '').trim();
     if (!barcode) throw new BadRequestException('Сначала отсканируйте ШК товара.');
+    // FIX: only an explicitly identified source can be debited without a unit KIZ.
+    if (state.scanMode === 'BARCODE_ONLY') {
+      if (dto.kiz) throw new BadRequestException('Для КИЗ используйте режим «ШК + КИЗ».');
+      const code = await this.boxCodes.normalize(dto.sourceBoxCode ?? '');
+      const source = state.sources.find(box => box.code === code && box.scanned && !box.archived && !box.preservedOnPallet);
+      if (!source) throw new BadRequestException('Отсканируйте исходный короб из подтверждённых коробов сортировки.');
+      await this.assertUnclaimed(tx, [source.id, target.id], state.id, state.warehouseId);
+      await this.assertMovementAllowed(tx, [source.id, target.id], state, user);
+      const moved = await this.stock.transferSortingBarcodeUnit(tx, { fromBoxCode: source.code, toBoxCode: target.code, barcode,
+        sessionId: state.id, idempotencyKey: `sorting:${state.id}:barcode:${dto.operationId}` }, user);
+      if (moved.alreadyApplied) return;
+      await this.resetAffectedRoutes(tx, state, [source.id], user, undefined, { clientId: source.clientId ?? state.clientId, warehouseId: source.warehouseId ?? state.warehouseId });
+      state.moves.push({ identity: `scan:${dto.operationId}`, barcode, sourceBoxId: source.id, sourceBoxCode: source.code, targetBoxId: target.id });
+      target.quantity++;
+      await this.audit(tx, state, user, 'UNIT_MOVED', { scanMode: 'BARCODE_ONLY', barcode, sourceBoxId: source.id, targetBoxId: target.id, skuId: moved.skuId, movementId: moved.movementId, quantity: 1 });
+      return;
+    }
     const identity = sortingKizIdentity(dto.kiz ?? '');
     const prior = [...state.moves].reverse().find(m => m.identity === identity);
     // FIX: a previous session scan is not proof of the current location after another operation.
