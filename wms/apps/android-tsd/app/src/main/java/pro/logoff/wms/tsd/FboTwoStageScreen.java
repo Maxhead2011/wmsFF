@@ -153,6 +153,11 @@ final class FboTwoStageScreen {
         if(routeStale)text(root,"Операция подтверждена. Ожидается обновление маршрута; повторный отбор не нужен.");
         button(root,"Обновить",state.pending()==null&&!busy,this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
+        // FIX: scanner Enter may move focus after this render; focus the new KIZ field on the next UI turn.
+        if("logoff".equals(BuildConfig.FLAVOR)&&input!=null&&ready()&&!state.barcode.isEmpty()){
+            EditText kizInput=input;
+            handler.post(()->{if(!closed&&input==kizInput&&ready()&&!state.barcode.isEmpty()&&quantityDialog==null)kizInput.requestFocus();});
+        }
     }
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
         if("CONTROL".equals(plan.phase)){state.target=value;send("CONFIRM_BOX",null);return;}

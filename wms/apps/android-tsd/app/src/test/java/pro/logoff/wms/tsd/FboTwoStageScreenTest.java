@@ -26,6 +26,25 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: scanner Enter may finish after render and move focus; the KIZ field must reclaim it without a tap.
+    @Test public void barcodeMovesFocusToKizAfterScannerEnterCompletes() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();AtomicInteger writes=new AtomicInteger();TsdFboPlan p=plan("PICKING");
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=true;line.remaining=1;p.lines.add(line);
+            FboTwoStageScreen s=open(a,p,false,writes);
+            try {
+                s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();
+                Shadows.shadowOf(Looper.getMainLooper()).idle();
+                s.scannerField().setText(line.barcode);s.submit();
+                android.widget.EditText kiz=s.scannerField();
+                View confirm=find(a.findViewById(android.R.id.content),"Подтвердить скан");
+                confirm.setFocusableInTouchMode(true);confirm.requestFocus();assertFalse(kiz.hasFocus());
+                Shadows.shadowOf(Looper.getMainLooper()).idle();
+                assertTrue(kiz.hasFocus());assertEquals("",kiz.getText().toString());assertEquals(0,writes.get());
+            }finally{s.close();}
+        }
+    }
     // TEST: packing and final box checks expose separate progress and preserve the selected phase.
     @Test public void monitorAndScreenSeparateUnitsFromBoxVerification() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
