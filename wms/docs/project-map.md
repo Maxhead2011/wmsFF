@@ -115,3 +115,5 @@ rg --files apps/api/test apps/web/src apps/web/test
 Миграция `20260918050000_wb_stock_verification`: новые таблицы `WbStockPublicationCheck`, `WbStockAvailabilityDay`, без переписывания складских остатков. Перед включением флага применить миграцию и сгенерировать Prisma Client. Для отката поведения выключить флаг; таблицы можно оставить. В проданной ВМС флаг не включать без отдельного согласования.
 
 Тесты: `apps/api/test/wb-stock-*.spec.ts` (резерв, исключения, спрос/наличие, подтверждённая отправка, блокировки, автообновление), `apps/web/src/lib/wbStockPreview.spec.ts`, `api.wb-stock-fine.spec.ts`. Реальные отправки WB в тестах не выполняются.
+
+`FbsStockMonitorEvent.chrtId` использует BIGINT (миграция `20260918120000_fbs_monitor_chrt_bigint`). Мониторинг записывает идентификатор как bigint, перед probe и выдачей API/экспорта преобразует его в safe integer; NULL сохраняется. После миграции нужен новый Prisma Client и перезапуск API.

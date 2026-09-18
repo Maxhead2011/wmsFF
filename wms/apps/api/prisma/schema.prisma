@@ -2179,7 +2179,7 @@ model FbsStockMonitorEvent {
   productName                String
   article                    String?
   nmId                       String?
-  chrtId                     Int?
+  chrtId                     BigInt?
   barcode                    String?
   size                       String?
   color                      String?
