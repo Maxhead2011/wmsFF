@@ -1,5 +1,6 @@
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
+import { fbsCalculationFastEnabled, readFbsCalculationLinks } from './fbs-calculation-links';
 import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
@@ -15130,6 +15131,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
     });
 
+    // FIX: source eligibility depends on article/size, not the order number.
+    // Reuse only within this fresh client/stock snapshot; preserve source tie ordering.
+    const fastCalculation = fbsCalculationFastEnabled();
+    const choices = new Map<string, {
+      matchedMappings: typeof mappings;
+      selected: { sku: typeof sourceSkus[number]; mapping: typeof mappings[number]; available: number } | undefined;
+    }>();
     return orders.map((order) => {
       if (!order.product) {
         return order;
@@ -15151,15 +15159,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           order.article ?? '',
         ]).map(fbsArticleKey),
       );
-      const matchedMappings = mappings.filter((mapping) =>
-        targetKeys.has(fbsArticleKey(mapping.targetArticle)),
-      );
-      if (matchedMappings.length === 0) {
-        return order;
-      }
-
       const targetSize = fbsArticleKey(order.product.size ?? '');
-      const candidates = sourceSkus
+      const choiceKey = fastCalculation ? JSON.stringify([[...targetKeys].sort(), targetSize]) : '';
+      let choice = fastCalculation ? choices.get(choiceKey) : undefined;
+      if (!choice) {
+        const matchedMappings = mappings.filter((mapping) => targetKeys.has(fbsArticleKey(mapping.targetArticle)));
+        const candidates = matchedMappings.length === 0 ? [] : sourceSkus
         .flatMap((sku) => {
           const mapping = matchedMappings.find((item) =>
             fbsSkuMatchesSourceArticle(sku, item.sourceArticle),
@@ -15178,7 +15183,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             right.available - left.available ||
             left.sku.internalSku.localeCompare(right.sku.internalSku, 'ru-RU'),
         );
-      const selected = candidates[0];
+        choice = { matchedMappings, selected: candidates[0] };
+        if (fastCalculation) choices.set(choiceKey, choice);
+      }
+      const { matchedMappings, selected } = choice;
+      if (matchedMappings.length === 0) return order;
       const fallbackSourceArticle = matchedMappings[0].sourceArticle;
       if (!selected || selected.available <= 0) {
         return {
@@ -26021,6 +26030,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       orderIds.push(order.id);
       orderIdsByConnection.set(order.connectionId, orderIds);
     }
+    const syncStatuses = [FBS_REQUEST_LINK_ACTIVE, FBS_REQUEST_LINK_MOVING, FBS_REQUEST_LINK_RETURN_REQUIRED];
+    // FIX: hydrate each linked request once rather than once for every historical order.
+    if (fbsCalculationFastEnabled()) {
+      return readFbsCalculationLinks(this.prisma, clientId, orderIdsByConnection, syncStatuses);
+    }
     const findLinks = (connectionId: string, orderIds: string[]) =>
       this.prisma.fbsOrderRequestLink.findMany({
         where: {
@@ -26028,11 +26042,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           connectionId,
           orderId: { in: orderIds },
           syncStatus: {
-            in: [
-              FBS_REQUEST_LINK_ACTIVE,
-              FBS_REQUEST_LINK_MOVING,
-              FBS_REQUEST_LINK_RETURN_REQUIRED,
-            ],
+            in: syncStatuses,
           },
         },
         include: {
