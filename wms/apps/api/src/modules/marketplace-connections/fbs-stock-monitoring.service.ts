@@ -1,3 +1,4 @@
+import { wbStockCheckDto } from './wb-stock-observations';
 import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientRequestStatus, ClientRequestType, MarketplaceType, Prisma, StockStatus, type FbsStockMonitorEvent } from '@prisma/client';
@@ -489,7 +490,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
             productName: candidate.order.productName,
             article: candidate.order.article,
             nmId: candidate.nmId,
-            chrtId: candidate.chrtId,
+            chrtId: candidate.chrtId == null ? null : BigInt(candidate.chrtId),
             barcode: candidate.order.barcode || candidate.sku?.barcodes[0]?.value || null,
             size: candidate.order.size || candidate.sku?.size || null,
             color: candidate.sku?.color || null,
@@ -1025,7 +1026,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
           orderId: event.orderId,
           skuId: event.skuId,
           quantity: event.quantity,
-          chrtId: event.chrtId,
+          chrtId: event.chrtId == null ? null : wbStockCheckDto({ chrtId: event.chrtId }).chrtId,
           marketplaceWarehouseId: event.marketplaceWarehouseId,
           executionWarehouseId: event.executionWarehouseId,
         })));
@@ -1324,7 +1325,8 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
   }
 }
 
-function formatMonitorEvent(event: {
+// FIX: serialize BIGINT size IDs safely for monitoring API and exports.
+export function formatMonitorEvent(event: {
   id: string;
   eventKey: string;
   clientId: string;
@@ -1341,7 +1343,7 @@ function formatMonitorEvent(event: {
   productName: string;
   article: string | null;
   nmId: string | null;
-  chrtId: number | null;
+  chrtId: bigint | number | null;
   barcode: string | null;
   size: string | null;
   color: string | null;
@@ -1389,7 +1391,7 @@ function formatMonitorEvent(event: {
     productName: event.productName,
     article: event.article,
     nmId: event.nmId,
-    chrtId: event.chrtId,
+    chrtId: event.chrtId == null ? null : wbStockCheckDto({ chrtId: event.chrtId }).chrtId,
     barcode: event.barcode,
     size: event.size,
     color: event.color,
