@@ -295,6 +295,48 @@ function blockedSnapshotFixture() {
   }
   return f;
 }
+function shippedReturnFixture() {
+  const f = blockedSnapshotFixture();
+  vi.stubEnv('WMS_INVENTORY_SCANNED_RETURN_ENABLED', 'true');
+  Object.assign(f.marks[0], { status: 'SHIPPING', sourceDocument: 'FBS TSD, заказ 5661590033' });
+  const shipment = { id: 'shipment', assemblyId: 'old-task', clientId: 'client', skuId: 'sku', warehouseId: 'warehouse', orderId: '5661590033', shippedAt: new Date('2026-09-04') };
+  f.db.shippedKizHistory.findFirst.mockResolvedValue(shipment);
+  f.db.fboAssemblyUnit = { findFirst: vi.fn(async () => null) };
+  return { ...f, shipment };
+}
+it('receives a physically counted shipped mark once, preserving shipment history and counted quantity', async () => {
+  // TEST: FFL_LKB0104_80 contains a scanned unit recorded as shipped on September 4.
+  const f = shippedReturnFixture(), stock = structuredClone(f.balances), history = structuredClone(f.shipment);
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.marks[0]).toMatchObject({ status: 'AVAILABLE', boxId: 'box' });
+  expect(f.balances).toEqual(stock); expect(f.shipment).toEqual(history);
+  expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  expect(f.db.productMark.create).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({
+    returnedShipments: [expect.objectContaining({ markId: 'current', shipmentId: 'shipment', orderId: '5661590033', previousStatus: 'SHIPPING', quantityAlreadyCounted: true })],
+  }) }) }));
+  const writes = f.db.productMark.updateMany.mock.calls.length;
+  await f.service.resolveBox('audit', { action: 'APPLY_ACTUAL' }, f.user);
+  expect(f.db.productMark.updateMany).toHaveBeenCalledTimes(writes);
+});
+it.each(['flag-off', 'no-history', 'foreign-warehouse', 'foreign-client', 'foreign-sku', 'later-shipment', 'new-status', 'bound-box', 'active-fbs', 'active-fbo', 'read-failure'])('refuses unsafe scanned shipment returns: %s', async kind => {
+  // TEST: recovery is scoped to a proven earlier shipment and cannot steal a current pick.
+  const f = shippedReturnFixture();
+  if (kind === 'flag-off') vi.stubEnv('WMS_INVENTORY_SCANNED_RETURN_ENABLED', 'false');
+  if (kind === 'no-history') f.db.shippedKizHistory.findFirst.mockResolvedValue(null);
+  if (kind === 'foreign-warehouse') f.shipment.warehouseId = 'other';
+  if (kind === 'foreign-client') f.shipment.clientId = 'other';
+  if (kind === 'foreign-sku') f.shipment.skuId = 'other';
+  if (kind === 'later-shipment') f.shipment.shippedAt = startedAt;
+  if (kind === 'new-status') f.marks[0].updatedAt = startedAt;
+  if (kind === 'bound-box') f.marks[0].boxId = 'other';
+  if (kind === 'active-fbs') f.db.fbsTsdAssembly.findFirst.mockResolvedValue({ id: 'active' });
+  if (kind === 'active-fbo') f.db.fboAssemblyUnit.findFirst.mockResolvedValue({ id: 'active' });
+  if (kind === 'read-failure') f.db.shippedKizHistory.findFirst.mockRejectedValue(Error('db unavailable'));
+  await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
 it('restores Sonya administrative writeoff marks exactly once after physical confirmation', async () => {
   // TEST: box 2506_86 contains physically scanned units excluded by admin-unpalleted-writeoff.
   const f = blockedSnapshotFixture(), stock = structuredClone(f.balances);

@@ -119,6 +119,8 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
     ? [...new Set([box!.id, ...related.map(mark => mark.boxId).filter((id): id is string => Boolean(id))])].sort()
     : [box!.id];
   for (const boxId of lockBoxes) await tx.$queryRaw(Prisma.sql`SELECT id FROM "Box" WHERE id = ${boxId} FOR UPDATE`);
+  const returnedShipments: Array<{ markId: string; shipmentId: string; orderId: string | null;
+    previousStatus: string; shippedAt: Date; quantityAlreadyCounted: boolean }> = [];
   for (const scan of scans) {
     const matches = related.filter(mark => identity(mark.value) === scan.identity);
     if (matches.length > 1 || matches.some(mark => mark.clientId !== box!.clientId || mark.skuId !== scan.skuId))
@@ -128,6 +130,27 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
       // FIX: a physically scanned reserved unit belongs to this confirmed count.
       // Only this box's reservation may be released; another box is not implicitly approved.
       if (mark.status === 'RESERVED' && mark.boxId === box!.id) continue;
+      // FIX: an administrator-confirmed physical count receives an earlier shipped unit.
+      // Keep the old shipment immutable; the count has already credited AVAILABLE stock.
+      if (process.env.WMS_INVENTORY_SCANNED_RETURN_ENABLED === 'true' && mark.status === 'SHIPPING' &&
+          mark.boxId === null && mark.updatedAt < audit.startedAt) {
+        const prefixes = [scan.identity, ']d2' + scan.identity, ']D2' + scan.identity];
+        const where = { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) };
+        const shipment = await tx.shippedKizHistory.findFirst({ where,
+          orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }] });
+        if (!shipment || shipment.clientId !== box!.clientId || shipment.skuId !== scan.skuId ||
+            shipment.warehouseId !== box!.warehouseId || !(shipment.shippedAt < audit.startedAt))
+          stop('Возврат КИЗ: не подтверждена прежняя отгрузка этого товара из данного филиала.');
+        const [fbs, fbo] = await Promise.all([
+          tx.fbsTsdAssembly.findFirst({ where: { ...where, status: { notIn: ['COMPLETED', 'WB_ACCOUNTED', 'RELEASED'] } }, select: { id: true } }),
+          tx.fboAssemblyUnit.findFirst({ where: { OR: [{ activeMarkId: mark.id },
+            { ...where, state: { in: ['PICKED', 'PACKED'] } }] }, select: { id: true } }),
+        ]);
+        if (fbs || fbo) stop('Возврат КИЗ: товар используется активной сборкой. Сначала завершите её разбор.');
+        returnedShipments.push({ markId: mark.id, shipmentId: shipment!.id, orderId: shipment!.orderId,
+          previousStatus: mark.status, shippedAt: shipment!.shippedAt, quantityAlreadyCounted: true });
+        continue;
+      }
       // FIX: legacy administrative exclusions are recoverable only from physical
       // scans, with no surviving box ownership or evidence of any order/dispatch.
       // FIX: physical confirmation can also recover the original administrative writeoff.
@@ -215,7 +238,7 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   await tx.auditLog.create({ data: { id, userId: user.id, action: 'INVENTORY_KIZ_COMPOSITION_CONFIRMED', entity: 'InventoryAuditBox', entityId: audit.id,
     payload: JSON.parse(JSON.stringify({ auditBoxId: audit.id, roundStartedAt: audit.startedAt.toISOString(), boxId: box!.id,
       clientId: box!.clientId, warehouseId: box!.warehouseId, nonPhysicalBalances, retiredMarks: retired, previousScannedMarks: related,
-      attachedMarkIds: attached, scans, transfers, releasedReservations, releasedTaskIds,
+      attachedMarkIds: attached, scans, transfers, releasedReservations, releasedTaskIds, returnedShipments,
       archivedMarkIds, archiveReason: 'Не подтверждено при пересчёте',
       evidenceIds: evidence.map(row => row.id), quantityChanged: -transfers.length - releasedReservations.reduce((sum, row) => sum + row.quantity, 0) })) } });
 }
