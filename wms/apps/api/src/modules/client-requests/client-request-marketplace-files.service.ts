@@ -6,6 +6,9 @@ import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { assertWarehouseAccess } from './client-request-warehouse-scope';
 
+import { fboTwoStageEnabled } from '../tsd/fbo-two-stage-policy';
+import { buildFboWbExport } from './fbo-wb-export';
+
 const xlsxMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const marketplaceReadyStatuses = new Set<ClientRequestStatus>([
   ClientRequestStatus.PACKED,
@@ -24,6 +27,8 @@ export class ClientRequestMarketplaceFilesService {
 
   async getWbProductsTemplate(requestId: string, user: AuthUser) {
     const request = await this.loadReadyRequest(requestId, user);
+    const fbo = await this.fboFile(request, 'products');
+    if (fbo) return fbo;
     const totals = new Map<string, number>();
 
     request.packages.forEach((packagePlace) => {
@@ -52,6 +57,8 @@ export class ClientRequestMarketplaceFilesService {
 
   async getWbPackagingTemplate(requestId: string, user: AuthUser) {
     const request = await this.loadReadyRequest(requestId, user);
+    const fbo = await this.fboFile(request, 'packages');
+    if (fbo) return fbo;
     const rows: CellValue[][] = [['Баркод товара', 'Кол-во товаров', 'ШК короба', 'Срок годности']];
 
     request.packages
@@ -80,6 +87,15 @@ export class ClientRequestMarketplaceFilesService {
       mimeType: xlsxMimeType,
       content: buildWorkbook('TDSheet', rows, [22, 16, 24, 16]),
     };
+  }
+
+  // FIX: retain legacy/sold exports unless this request uses the enabled two-stage FBO workflow.
+  private async fboFile(request: MarketplaceRequest, kind: 'products' | 'packages') {
+    if (!fboTwoStageEnabled()) return null;
+    const assembly = await this.prisma.fboAssembly.findUnique({where:{requestId:request.id},include:{units:true,boxes:true}});
+    if (!assembly) return null;
+    const expectedUnits=request.packages.reduce((n,p)=>n+p.items.reduce((sum,i)=>sum+i.quantity,0),0);
+    return {fileName:`wb-${kind}-${request.id}.xlsx`,mimeType:xlsxMimeType,content:buildFboWbExport(assembly,expectedUnits,kind)};
   }
 
   private async loadReadyRequest(requestId: string, user: AuthUser) {

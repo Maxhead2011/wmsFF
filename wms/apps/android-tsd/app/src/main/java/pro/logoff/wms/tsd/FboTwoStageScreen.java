@@ -41,6 +41,18 @@ final class FboTwoStageScreen {
     private TsdFboPlan plan;
     private EditText input;
     private boolean busy,closed;
+    // FIX: isolate explicit packing modes to our application; sold flavors retain their flow.
+    private enum PackingMode { MENU, NEW_BOXES, WHOLE_BOXES }
+    private PackingMode packingMode=PackingMode.MENU;
+    private boolean packingChoices(){return packing&&"logoff".equals(BuildConfig.FLAVOR);}
+    private void choosePackingMode(PackingMode mode){
+        if(!ready()||!state.target.isEmpty()||!state.barcode.isEmpty())return;
+        handler.removeCallbacks(automatic);state.source="";packingMode=mode;message="";render();
+    }
+    private void packingCompleteButton(LinearLayout root){
+        boolean allClosed=true;for(TsdFboPlan.Box b:plan.boxes)if(!b.closed)allClosed=false;
+        button(root,packingChoices()?"Сканировать все короба поставки":"Короба разобраны",ready()&&plan.packed==plan.needed&&allClosed,()->send("SORTED",null));
+    }
     private String message="";
     private final Runnable automatic=this::submit;
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back) {
@@ -56,7 +68,7 @@ final class FboTwoStageScreen {
         this.packing=packing;
         this.activity=activity;this.session=session;this.api=api;this.baseUrl=baseUrl;this.id=id;this.back=back;
         prefs=activity.getSharedPreferences("fbo-pending",Context.MODE_PRIVATE);pendingKey=session.userId+":"+id;
-        try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
+        try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);if(packingChoices())packingMode="PACK_BOX".equals(p.get("action"))?PackingMode.WHOLE_BOXES:PackingMode.NEW_BOXES;}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
         refresh();
     }
     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
@@ -80,12 +92,27 @@ final class FboTwoStageScreen {
             if(plan.shortage>0)text(root,"Недостаточно доступного остатка: "+plan.shortage+" ед.");
             if(!FboScanState.phaseAllowed(packing,plan.phase))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
             else if("NOT_STARTED".equals(plan.phase))button(root,"Начать отбор",ready(),()->send("START",null));
-            else if("COMPLETED".equals(plan.phase)){text(root,"Все короба поставки подтверждены");button(root,"Скачать файл WB",ready(),this::download);}
+            else if("COMPLETED".equals(plan.phase)){text(root,"Все короба поставки подтверждены");
+                // FIX: both confirmed-shipment templates remain downloadable from the request.
+                if(packingChoices()){
+                    button(root,"Скачать состав для WB",ready(),()->download("products"));
+                    button(root,"Скачать распределение по коробам для WB",ready(),()->download("packages"));
+                }else button(root,"Скачать файл WB",ready(),this::download);
+            }
+            // FIX: a pending request remains retryable after a restart with the same operation id.
+            else if(packingChoices()&&"PACKING".equals(plan.phase)&&packingMode==PackingMode.MENU&&state.pending()==null){
+                button(root,"Собрать новые короба",ready(),()->choosePackingMode(PackingMode.NEW_BOXES));
+                button(root,"Отсканировать целые короба",ready(),()->choosePackingMode(PackingMode.WHOLE_BOXES));
+                packingCompleteButton(root);
+                for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
+            }
             else {
                 String hint="ШК товара";
                 if("CONTROL".equals(plan.phase))hint="ШК короба поставки";
                 else if("PICKING".equals(plan.phase)&&state.source.isEmpty())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
-                else if("PACKING".equals(plan.phase)&&state.target.isEmpty())hint=plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
+                else if("PACKING".equals(plan.phase)&&state.target.isEmpty())hint=packingChoices()
+                    ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":"ШК короба для упаковки")
+                    :plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
                 else if(!state.barcode.isEmpty())hint="КИЗ товара";
                 text(root,hint);input=new EditText(activity);input.setSingleLine(true);TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
@@ -115,12 +142,15 @@ final class FboTwoStageScreen {
                     if(!state.target.isEmpty()){text(root,"Открыт короб "+state.target);button(root,"Закрыть короб",ready(),()->send("CLOSE_BOX",null));}
                     for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(state.target)&&!b.closed&&b.quantity==0)button(root,"Отложить пустой короб",ready(),()->send("CANCEL_EMPTY_BOX",null));
                     if(!plan.wholeBoxes.isEmpty())text(root,"Целые короба к добавлению: "+String.join(", ",plan.wholeBoxes));
-                    boolean allClosed=true;for(TsdFboPlan.Box b:plan.boxes)if(!b.closed)allClosed=false;
-                    button(root,"Короба разобраны",ready()&&plan.packed==plan.needed&&allClosed,()->send("SORTED",null));
+                    if(packingChoices()){
+                        String finish=packingMode==PackingMode.WHOLE_BOXES?"Завершить сканирование целых коробов":"Завершить формирование новых коробов";
+                        button(root,finish,ready()&&state.target.isEmpty()&&state.barcode.isEmpty(),()->choosePackingMode(PackingMode.MENU));
+                    }else packingCompleteButton(root);
                 }else if("CONTROL".equals(plan.phase)){
                     int count=0;for(TsdFboPlan.Box b:plan.boxes)if(b.confirmed)count++;
                     text(root,"Подтверждено коробов "+count+" из "+plan.boxes.size());
-                    button(root,"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
+                    if(packingChoices())text(root,"Осталось отсканировать: "+String.join(", ",unconfirmedBoxes()));
+                    button(root,packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
                 }
                 for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
             }
@@ -140,6 +170,17 @@ final class FboTwoStageScreen {
             if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);render();return;
         }
         if("PACKING".equals(plan.phase)&&state.target.isEmpty()){
+            // FIX: mode selection is navigation only; never convert a wrong scan into the other action.
+            if(packingChoices()){
+                if(packingMode==PackingMode.WHOLE_BOXES){
+                    if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
+                    else{message="Этот короб не ожидается среди целых коробов заявки.";render();}
+                }else if(packingMode==PackingMode.NEW_BOXES){
+                    if(plan.wholeBoxes.contains(value)){message="Выберите «Отсканировать целые короба» для этого короба.";render();}
+                    else{state.source="";state.target=value;send("OPEN_BOX",null);}
+                }
+                return;
+            }
             if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
             else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";feedbackColor=Color.rgb(254,202,202);render();}
             else{state.source="";state.target=value;send("OPEN_BOX",null);}return;
@@ -162,7 +203,7 @@ final class FboTwoStageScreen {
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected)refresh();else render();});return;}
             TsdFboPlan next=res.body();handler.post(()->{state.accepted();prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
-                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action")))download();render();});
+                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
         }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";render();});}});
     }
     // FIX: do not prefill a physical count or submit stock movements before confirmation.
@@ -186,6 +227,9 @@ final class FboTwoStageScreen {
         quantityDialog.dismiss();send("PICK_BOX",null,count);
     }
     private String error(Response<?> response){try{if(response.errorBody()!=null){Object m=new JSONObject(response.errorBody().string()).opt("message");if(m!=null)return m.toString();}}catch(Exception ignored){}return "Ошибка ВМС "+response.code();}
-    private void download(){try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-packages.xlsx";
-        DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));req.addRequestHeader("Authorization",session.authorizationHeader());req.setTitle("Короба ФБО для WB");req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);req.setDestinationInExternalFilesDir(activity,Environment.DIRECTORY_DOWNLOADS,"wb-packages-"+id+"-"+System.currentTimeMillis()+".xlsx");manager.enqueue(req);message="Файл загружается. Откройте его из уведомления.";render();}catch(Exception e){message="Не удалось скачать файл: "+e.getMessage();render();}}
+    // FIX: an explicit list makes omitted boxes visible without changing confirmation counts.
+    private List<String> unconfirmedBoxes(){List<String> result=new ArrayList<>();for(TsdFboPlan.Box b:plan.boxes)if(!b.confirmed)result.add(b.code);return result;}
+    private void download(){download("packages");}
+    private void download(String kind){try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-"+kind+".xlsx";
+        DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));req.addRequestHeader("Authorization",session.authorizationHeader());req.setTitle("products".equals(kind)?"Состав ФБО для WB":"Короба ФБО для WB");req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);req.setDestinationInExternalFilesDir(activity,Environment.DIRECTORY_DOWNLOADS,"wb-"+kind+"-"+id+"-"+System.currentTimeMillis()+".xlsx");manager.enqueue(req);message="Файл загружается. Откройте его из уведомления.";render();}catch(Exception e){message="Не удалось скачать файл: "+e.getMessage();render();}}
 }

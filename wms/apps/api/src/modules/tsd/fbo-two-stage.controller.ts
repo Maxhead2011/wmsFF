@@ -26,6 +26,16 @@ export class FboTwoStageController {
     return this.fbo.act(id, dto, user);
   }
 
+  // FIX: both files are guarded by the same completed shipment check and user scope.
+  @Get('wb-products.xlsx')
+  @RequirePermissions('stock:read')
+  async products(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res({ passthrough: true }) res: Response) {
+    const file = await this.fbo.wbFile(id, user, 'products');
+    res.setHeader('Content-Type', file.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+    return new StreamableFile(file.content);
+  }
+
   @Get('wb-packages.xlsx')
   @RequirePermissions('stock:read')
   async file(@Param('id') id: string, @CurrentUser() user: AuthUser, @Res({ passthrough: true }) res: Response) {

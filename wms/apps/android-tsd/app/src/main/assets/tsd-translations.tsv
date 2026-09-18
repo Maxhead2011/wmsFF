@@ -1488,3 +1488,18 @@ FBO Ozon	FBO Ozon	FBO Ozon
 КИЗЫ	KIZLAR	KIZ CODES
 
 Короб уезжает целиком · {0} ед.	Quti to‘liq jo‘natiladi · {0} dona	The whole box ships · {0} units
+
+Собрать новые короба	Yangi qutilarni yig‘ish	Pack new boxes
+Отсканировать целые короба	Butun qutilarni skanerlash	Scan whole boxes
+Завершить формирование новых коробов	Yangi qutilarni shakllantirishni tugatish	Finish packing new boxes
+Завершить сканирование целых коробов	Butun qutilarni skanerlashni tugatish	Finish scanning whole boxes
+ШК целого короба	Butun quti shtrix-kodi	Whole box barcode
+ШК короба для упаковки	Qadoqlash qutisi shtrix-kodi	Packing box barcode
+Этот короб не ожидается среди целых коробов заявки.	Bu quti topshiriqning butun qutilari orasida kutilmayapti.	This box is not among the expected whole boxes.
+Выберите «Отсканировать целые короба» для этого короба.	Bu quti uchun «Butun qutilarni skanerlash»ni tanlang.	Choose Scan whole boxes for this box.
+
+Сканировать все короба поставки	Yetkazmaning barcha qutilarini skanerlash	Scan all shipment boxes
+Завершить проверку и сформировать файлы WB	Tekshiruvni yakunlash va WB fayllarini yaratish	Finish verification and generate WB files
+Скачать состав для WB	WB uchun tarkibni yuklab olish	Download WB shipment contents
+Скачать распределение по коробам для WB	WB uchun qutilar taqsimotini yuklab olish	Download WB box allocation
+Осталось отсканировать: {0}	Skanerlash qoldi: {0}	Remaining boxes to scan: {0}

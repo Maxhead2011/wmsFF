@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "webImage": "sha256:99f1cab14bb836ed47e0c431c6d601146381d85537ffab9a016f1ca5bbc0f9d9",
+  "metadata": {
+    "versionCode": 192,
+    "versionName": "0.1.192-fbo-packing-files",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-packing-files-192.apk",
+    "sha256": "1f3e107c282e112006e1ba5fbcb3ada648b6f932a5f2878b7baa3927953e4130",
+    "size": 3157191,
+    "releasedAt": "2026-09-18T21:45:07.196439+00:00",
+    "releaseNotes": "FBO: new boxes, whole boxes, final shipment scanning and two WB Excel files. Install over the existing app without deleting data."
+  },
+  "signatureMatches": true,
+  "signedContentsMatch": true,
+  "builderAssetsVerified": true
+}

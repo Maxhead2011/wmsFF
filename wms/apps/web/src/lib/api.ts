@@ -11025,7 +11025,8 @@ export async function actFbo(accessToken:string,id:string,body:FboAction) {
   if(!response.ok) throw Object.assign(new Error(await responseError(response)),{rejected:response.status>=400&&response.status<500&&response.status!==408});
   return await response.json() as FboPlan;
 }
-export function downloadFboWbFile(accessToken:string,id:string){return requestBlob(`/tsd/requests/${id}/fbo/wb-packages.xlsx`,accessToken);}
+// FIX: one guarded endpoint per confirmed WB template.
+export function downloadFboWbFile(accessToken:string,id:string,kind:'products'|'packages'='packages'){return requestBlob(`/tsd/requests/${id}/fbo/wb-${kind}.xlsx`,accessToken);}
 
 export async function resolveTsdFbsKizConflict(
   accessToken: string,
