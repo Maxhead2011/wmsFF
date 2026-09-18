@@ -44,17 +44,23 @@ final class FboScanState {
         for(TsdFboPlan.Route r:plan.route)if(r.pallet.equals(pallet)&&r.boxCode.equalsIgnoreCase(code.trim())){source=r.boxCode;return true;}
         return false;
     }
-    void reconcile(TsdFboPlan plan) {
+    // FIX: workflow selection never changes the persisted collection phase.
+    static String screenPhase(TsdFboPlan plan, boolean packing) {
+        return packing && plan.parallelPackingSupported && plan.picked > 0 && "PICKING".equals(plan.phase) ? "PACKING" : plan.phase;
+    }
+    void reconcile(TsdFboPlan plan) { reconcile(plan, false); }
+    void reconcile(TsdFboPlan plan, boolean packing) {
+        String phase = screenPhase(plan, packing);
         boolean hasPallet=false,hasSource=false,hasTarget=false;
         for(TsdFboPlan.Route r:plan.route){if(r.pallet.equals(pallet))hasPallet=true;if(r.pallet.equals(pallet)&&r.boxCode.equals(source))hasSource=true;}
         for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(target)&&!b.closed)hasTarget=true;
         if(!hasPallet)pallet="";
         if(!hasSource)source="";
-        if(!hasTarget||!"PACKING".equals(plan.phase))target="";
-        if(("PICKING".equals(plan.phase)&&source.isEmpty())||("PACKING".equals(plan.phase)&&target.isEmpty()))barcode="";
+        if(!hasTarget||!"PACKING".equals(phase))target="";
+        if(("PICKING".equals(phase)&&source.isEmpty())||("PACKING".equals(phase)&&target.isEmpty()))barcode="";
         if(!barcode.isEmpty()){
             boolean needed=false;if(plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
-                if(barcode.equals(line.barcode)&&("PICKING".equals(plan.phase)?line.remaining>0:"PACKING".equals(plan.phase)&&line.picked>line.packed))needed=true;
+                if(barcode.equals(line.barcode)&&("PICKING".equals(phase)?line.remaining>0:"PACKING".equals(phase)&&line.picked>line.packed))needed=true;
             if(!needed)barcode="";
         }
     }

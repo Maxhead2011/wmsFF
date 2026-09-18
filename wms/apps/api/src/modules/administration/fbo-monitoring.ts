@@ -25,7 +25,9 @@ export async function addFboMonitoring<T extends MonitorDevice>(prisma: PrismaSe
     const request = byId.get(String(state.requestId || '').trim());
     if (!request) return device;
     const assembly = request.fboAssembly;
-    const phase = assembly?.phase ?? 'NOT_STARTED';
+    // FIX: show the current worker's workflow while both operations share one request.
+    const phase = process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && assembly?.phase === 'PICKING'
+      && state.fboWorkflow === 'PACKING' && assembly.units.length > 0 ? 'PACKING' : assembly?.phase ?? 'NOT_STARTED';
     const needed = request.items.reduce((n, item) => n + item.quantity, 0);
     const picked = assembly?.units.length ?? 0;
     const packed = assembly?.units.filter(unit => unit.state === 'PACKED').length ?? 0;

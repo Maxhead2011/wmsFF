@@ -7,6 +7,18 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: packing retains the open box while collection continues; the collector keeps picking.
+    @Test public void parallelPackingKeepsTargetAndBarcodeWithoutChangingPhase(){
+        TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";p.parallelPackingSupported=true;p.picked=1;
+        p.route=Collections.emptyList();TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="target";
+        p.boxes=Collections.singletonList(box);TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="sku";line.picked=1;
+        p.lines=Collections.singletonList(line);FboScanState state=new FboScanState();state.target="target";state.barcode="sku";
+        assertEquals("PACKING",FboScanState.screenPhase(p,true));assertEquals("PICKING",FboScanState.screenPhase(p,false));
+        state.reconcile(p,true);assertEquals("target",state.target);assertEquals("sku",state.barcode);assertEquals("PICKING",p.phase);
+        line.packed=1;state.reconcile(p,true);assertEquals("",state.barcode);
+        p.parallelPackingSupported=false;assertEquals("PICKING",FboScanState.screenPhase(p,true));state.reconcile(p,true);assertEquals("",state.target);
+    }
+
     // TEST: restoring navigation does not create a stock command and rejects stale source context.
     @Test public void restoresPositionAndBarcodeOnlyWhileStillNeeded(){
         FboScanState old=new FboScanState();old.pallet="P";old.source="B";old.barcode="sku";

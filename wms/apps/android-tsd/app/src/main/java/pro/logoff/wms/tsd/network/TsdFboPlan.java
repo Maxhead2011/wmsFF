@@ -2,6 +2,7 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFboPlan {
+    public boolean parallelPackingSupported;
     public String requestId, title, phase;
     public int needed, picked, packed, looseRemaining, shortage;
     public boolean compositionChanged;

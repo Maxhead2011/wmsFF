@@ -89,7 +89,10 @@ export class TsdAssemblyService {
     const fboFilter: Prisma.ClientRequestWhereInput = !workflow ? {} : {
       fbsOrderLinks: { none: {} },
       ...(workflow === 'fbo-pack'
-        ? { fboAssembly: { is: { phase: { in: ['PACKING', 'CONTROL'] } } } }
+        ? { fboAssembly: { is: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true'
+            // FIX: include actual picked units before the SQL limit, preserving access scope.
+            ? { OR: [{ phase: { in: ['PACKING', 'CONTROL'] } }, { phase: 'PICKING', units: { some: { state: { in: ['PICKED', 'PACKED'] } } } }] }
+            : { phase: { in: ['PACKING', 'CONTROL'] } } } }
         : { OR: [{ fboAssembly: { is: null } }, { fboAssembly: { is: { phase: 'PICKING' } } }] }),
     };
     const clientFilter = this.clientScopes.resolveClientFilter(user);

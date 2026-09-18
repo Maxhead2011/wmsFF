@@ -70,11 +70,12 @@ final class FboTwoStageScreen {
     // FIX: report the actual FBO request even during loading or an unanswered operation.
     Map<String,Object> monitorPayload(){
         Map<String,Object> p=new LinkedHashMap<>();p.put("requestId",id);
-        p.put("screenLabel","ФБО · "+FboFeedback.phase(plan==null?null:plan.phase));
-        p.put("stage",plan==null?"LOADING":plan.phase);p.put("boxCode",packing?state.target:state.source);
+        p.put("screenLabel","ФБО · "+FboFeedback.phase(plan==null?null:screenPhase()));
+        p.put("fboWorkflow",packing?"PACKING":"PICKING");
+        p.put("stage",plan==null?"LOADING":screenPhase());p.put("boxCode",packing?state.target:state.source);
         p.put("barcode",state.barcode);p.put("lastAction",routeStale?message+" Обновляется маршрут.":busy?"Отправка запроса…":state.pending()!=null?"Подтверждение не получено. Повторите отправку.":message);
-        if(plan!=null){boolean control="CONTROL".equals(plan.phase);int total=control?plan.boxes.size():plan.needed;
-            int done=control?FboFeedback.confirmed(plan):"PICKING".equals(plan.phase)||"NOT_STARTED".equals(plan.phase)?plan.picked:plan.packed;
+        if(plan!=null){boolean control="CONTROL".equals(screenPhase());int total=control?plan.boxes.size():plan.needed;
+            int done=control?FboFeedback.confirmed(plan):"PICKING".equals(screenPhase())||"NOT_STARTED".equals(screenPhase())?plan.picked:plan.packed;
             p.put("total",total);p.put("completed",done);p.put("remaining",Math.max(0,total-done));}
         return p;
     }
@@ -86,7 +87,9 @@ final class FboTwoStageScreen {
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
     // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
-    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
+    // FIX: packing can start with the first confirmed unit while collection stays open.
+    private String screenPhase(){return FboScanState.screenPhase(plan,packing && "logoff".equals(BuildConfig.FLAVOR));}
+    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(screenPhase())&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
     private boolean ready(){return state.pending()==null&&!busy&&!routeStale;}
     private void render(){
         if(closed||activity.isDestroyed())return;
@@ -94,25 +97,26 @@ final class FboTwoStageScreen {
         LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);root.setBackgroundColor(Color.WHITE);
         text(root,packing?"Упаковка FBO":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
         input=null;
-        if(plan!=null){text(root,plan.title);text(root,"Этап: "+FboFeedback.phase(plan.phase));
+        if(plan!=null){text(root,plan.title);text(root,"Этап: "+FboFeedback.phase(screenPhase()));
             text(root,"Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" из "+plan.needed);
             text(root,"Проверено коробов "+FboFeedback.confirmed(plan)+" из "+plan.boxes.size());
+            if(plan.parallelPackingSupported)text(root,"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438: "+Math.max(0,plan.picked-plan.packed));
             if(plan.compositionChanged)text(root,"Состав заявки изменился. Нужна сверка.");
             if(plan.shortage>0)text(root,"Недостаточно доступного остатка: "+plan.shortage+" ед.");
-            if(!FboScanState.phaseAllowed(packing,plan.phase))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
-            else if("NOT_STARTED".equals(plan.phase))button(root,"Начать отбор",ready(),()->send("START",null));
-            else if("COMPLETED".equals(plan.phase)){text(root,"Все короба поставки подтверждены");button(root,"Скачать файл WB",ready(),this::download);}
+            if(!FboScanState.phaseAllowed(packing,screenPhase()))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
+            else if("NOT_STARTED".equals(screenPhase()))button(root,"Начать отбор",ready(),()->send("START",null));
+            else if("COMPLETED".equals(screenPhase())){text(root,"Все короба поставки подтверждены");button(root,"Скачать файл WB",ready(),this::download);}
             else {
                 String hint="ШК товара";
-                if("CONTROL".equals(plan.phase))hint="ШК короба поставки";
-                else if("PICKING".equals(plan.phase)&&state.source.isEmpty())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
-                else if("PACKING".equals(plan.phase)&&state.target.isEmpty())hint=plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
+                if("CONTROL".equals(screenPhase()))hint="ШК короба поставки";
+                else if("PICKING".equals(screenPhase())&&state.source.isEmpty())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
+                else if("PACKING".equals(screenPhase())&&state.target.isEmpty())hint=plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
                 else if(!state.barcode.isEmpty())hint="КИЗ товара";
                 text(root,hint);input=new EditText(activity);input.setSingleLine(true);TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
                 input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
                 button(root,"Подтвердить скан",ready(),this::submit);
-                if("PICKING".equals(plan.phase)){
+                if("PICKING".equals(screenPhase())){
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.name+" · "+t.barcode);
                         if(r.wholeBox&&"logoff".equals(BuildConfig.FLAVOR))card(root,"Короб уезжает целиком · "+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
@@ -131,14 +135,14 @@ final class FboTwoStageScreen {
                     }
                     if(!state.pallet.isEmpty()){text(root,"Паллет "+state.pallet);button(root,"Другой паллет",ready(),()->{state.pallet="";state.source="";state.barcode="";render();});}
                     button(root,"Завершить отбор",ready()&&plan.picked==plan.needed,()->send("FINISH_PICK",null));
-                }else if("PACKING".equals(plan.phase)){
+                }else if("PACKING".equals(screenPhase())){
                     text(root,"Осталось вложить "+(plan.needed-plan.packed));
                     if(!state.target.isEmpty()){text(root,"Открыт короб "+state.target);button(root,"Закрыть короб",ready(),()->send("CLOSE_BOX",null));}
                     for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(state.target)&&!b.closed&&b.quantity==0)button(root,"Отложить пустой короб",ready(),()->send("CANCEL_EMPTY_BOX",null));
                     if(!plan.wholeBoxes.isEmpty())text(root,"Целые короба к добавлению: "+String.join(", ",plan.wholeBoxes));
                     boolean allClosed=true;for(TsdFboPlan.Box b:plan.boxes)if(!b.closed)allClosed=false;
-                    button(root,"Короба разобраны",ready()&&plan.packed==plan.needed&&allClosed,()->send("SORTED",null));
-                }else if("CONTROL".equals(plan.phase)){
+                    button(root,"Короба разобраны",ready()&&"PACKING".equals(plan.phase)&&plan.packed==plan.needed&&allClosed,()->send("SORTED",null));
+                }else if("CONTROL".equals(screenPhase())){
                     int count=0;for(TsdFboPlan.Box b:plan.boxes)if(b.confirmed)count++;
                     text(root,"Подтверждено коробов "+count+" из "+plan.boxes.size());
                     button(root,"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
@@ -160,28 +164,28 @@ final class FboTwoStageScreen {
         }
     }
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
-        if("CONTROL".equals(plan.phase)){state.target=value;send("CONFIRM_BOX",null);return;}
+        if("CONTROL".equals(screenPhase())){state.target=value;send("CONFIRM_BOX",null);return;}
         feedbackColor=Color.rgb(254,202,202);
-        if(!FboScanState.phaseAllowed(packing,plan.phase))return;
-        if("PICKING".equals(plan.phase)&&state.source.isEmpty()){
+        if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
+        if("PICKING".equals(screenPhase())&&state.source.isEmpty()){
             boolean accepted=state.scanLocation(plan,value);
             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";
             if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);render();return;
         }
-        if("PACKING".equals(plan.phase)&&state.target.isEmpty()){
+        if("PACKING".equals(screenPhase())&&state.target.isEmpty()){
             if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
             else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";feedbackColor=Color.rgb(254,202,202);render();}
             else{state.source="";state.target=value;send("OPEN_BOX",null);}return;
         }
-        if(!state.barcode.isEmpty()){send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",value);return;}
-        TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(plan.phase)?l.remaining>0:l.picked>l.packed)){line=l;break;}
+        if(!state.barcode.isEmpty()){send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",value);return;}
+        TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(screenPhase())?l.remaining>0:l.picked>l.packed)){line=l;break;}
         if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";render();return;}
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
-        state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
+        state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
     }
-    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null)state.reconcile(plan);busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null)state.reconcile(plan,packing);busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
     // FIX: the compact receipt clears the durable request before any route recalculation.
     private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
@@ -239,7 +243,7 @@ final class FboTwoStageScreen {
             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
                 if(!prefs.edit().remove(pendingKey).commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
                 state.accepted();feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
-                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action")))download();render();});
+                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);if("FINISH".equals(payload.get("action")))download();render();});
         }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";render();});}});
     }
     // FIX: do not prefill a physical count or submit stock movements before confirmation.
