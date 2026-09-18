@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 184 // FIX: show WB sticker digits above picking completion.
-            versionName = "0.1.185-wb-sticker-caption"
+            versionCode = 188 // FIX: show WB sticker digits above picking completion.
+            versionName = "0.1.188-fbs-timeouts"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

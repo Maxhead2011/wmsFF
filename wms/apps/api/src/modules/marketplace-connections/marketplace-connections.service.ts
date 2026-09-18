@@ -5792,11 +5792,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         // API round trip: rate limits or a slow marketplace used to surface in
         // the Android client as the misleading "No connection to WMS" error.
         if (selectedRequestId) {
-          response = await this.loadFbsTsdRequestOrders(clientId);
-          this.fbsTsdRequestFallbackCache.set(clientId, {
-            expiresAt: Date.now() + FBS_TSD_REQUEST_FALLBACK_CACHE_MS,
-            value: response,
-          });
+          // FIX: a selected queue must not rebuild all other requests of this client.
+          response = process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED === 'true'
+            ? await this.loadFbsTsdRequestOrders(clientId, selectedRequestId)
+            : await this.loadFbsTsdRequestOrders(clientId);
+          // FIX: never place a request-scoped result into the client-wide fallback cache.
+          if (process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED !== 'true') {
+            this.fbsTsdRequestFallbackCache.set(clientId, {
+              expiresAt: Date.now() + FBS_TSD_REQUEST_FALLBACK_CACHE_MS,
+              value: response,
+            });
+          }
         } else if (cached && cached.expiresAt > Date.now()) {
           response = cached.value;
         } else if (requestFallback && requestFallback.expiresAt > Date.now()) {
@@ -5825,7 +5831,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             );
           }
         }
-        response = await this.mergeSyncedFbsTsdRequestOrders(clientId, response);
+        // FIX: the selected local response already contains its saved orders.
+        if (!selectedRequestId || process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED !== 'true') {
+          response = await this.mergeSyncedFbsTsdRequestOrders(clientId, response);
+        }
 
         const candidates = response.orders
           .filter(
@@ -5878,6 +5887,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             },
           });
+          // FIX: completed/return tasks cannot be assigned; skip their stock calculations.
+          if (process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED === 'true' &&
+              (existing?.status === 'COMPLETED' || existing?.status === FBS_TSD_RETURN_REQUIRED)) continue;
           if (existing?.status === FBS_TSD_RESCAN_REQUIRED_STATUS) {
             const claimed = await this.prisma.fbsTsdAssembly.updateMany({
               where: {
@@ -9645,7 +9657,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
     let response = syncedResponse;
-    if (syncedResponse.orders.length === 0) {
+    // FIX: no eligible local orders does not mean that the request lacks saved links.
+    const hasSavedRequestLinks = syncedResponse.orders.length === 0 &&
+      process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED === 'true'
+      ? await this.prisma.fbsOrderRequestLink.findFirst({
+          where: { clientId: currentTask.clientId, requestId: currentTask.requestId,
+            connectionId: currentTask.connectionId, marketplace: currentTask.marketplace },
+          select: { id: true },
+        }) : null;
+    if (syncedResponse.orders.length === 0 && !hasSavedRequestLinks) {
       const cached = this.fbsOrdersCache.get(currentTask.clientId);
       const liveResponse = cached && cached.expiresAt > Date.now()
         ? cached.value
