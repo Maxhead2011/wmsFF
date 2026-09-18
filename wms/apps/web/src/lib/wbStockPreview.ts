@@ -1,3 +1,12 @@
+// FIX: keep the preview compact; search still covers all available rows.
+export const WB_STOCK_PREVIEW_LIMIT = 30;
+
+// FIX: hide empty stock only in the preview, keeping reserved/blocked goods editable.
+export function filterWbStockPreviewRows<T extends { available: number; name: string; barcode: string }>(rows: T[], search: string): T[] {
+  const query = search.toLocaleLowerCase();
+  return rows.filter(row => row.available > 0 && `${row.name} ${row.barcode}`.toLocaleLowerCase().includes(query));
+}
+
 // FIX: preview uses the same integer/largest-remainder rules as publication.
 export function wbStockPreview(amount: number, threshold: number, shares: Array<{ warehouseId: string; percent: number; isPrimary: boolean }>) {
   if (!Number.isSafeInteger(amount) || amount < 0 || !shares.length || shares.some(s => !Number.isInteger(s.percent) || s.percent < 0 || s.percent > 100) || shares.reduce((n, s) => n + s.percent, 0) !== 100 || shares.filter(s => s.isPrimary).length !== 1) return null;
