@@ -8,6 +8,13 @@ import type { WbStockProof } from './wb-stock-safe-publication';
 type Context = { connectionId: string; rebalance: boolean; guard: () => Promise<void> };
 const context = new AsyncLocalStorage<Context>();
 
+// FIX: Prisma bigint remains internal; the WB HTTP and web contracts use exact safe integers.
+export function wbStockCheckDto<T extends { chrtId: bigint | number }>(row: T): Omit<T, 'chrtId'> & { chrtId: number } {
+  const chrtId = Number(row.chrtId);
+  if (!Number.isSafeInteger(chrtId) || chrtId <= 0) throw new Error('Некорректный идентификатор размера WB.');
+  return { ...row, chrtId };
+}
+
 export class WbStockObservations {
   constructor(private readonly db: PrismaService) {}
 
@@ -37,8 +44,9 @@ export class WbStockObservations {
         ...(row.error ? { error: row.error } : {}) };
       if (id) await this.db.wbStockPublicationCheck.update({ where: { id }, data });
       else {
-        const base = { ...data, clientId, connectionId, runId, warehouseId: row.warehouseId, skuId: row.skuId, chrtId: row.chrtId };
-        const saved = await this.db.wbStockPublicationCheck.upsert({ where: { connectionId_warehouseId_chrtId: { connectionId, warehouseId: row.warehouseId, chrtId: row.chrtId } }, create: base, update: { ...base, sentAmount: null, observedAmount: null, sentAt: null, checkedAt: null, error: null } });
+        const chrtId = BigInt(wbStockCheckDto(row).chrtId);
+        const base = { ...data, clientId, connectionId, runId, warehouseId: row.warehouseId, skuId: row.skuId, chrtId };
+        const saved = await this.db.wbStockPublicationCheck.upsert({ where: { connectionId_warehouseId_chrtId: { connectionId, warehouseId: row.warehouseId, chrtId } }, create: base, update: { ...base, sentAmount: null, observedAmount: null, sentAt: null, checkedAt: null, error: null, ...data } });
         ids.set(key, saved.id);
       }
     };

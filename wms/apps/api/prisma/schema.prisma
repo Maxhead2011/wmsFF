@@ -10,7 +10,7 @@ model WbStockPublicationCheck {
   connectionId     String
   warehouseId      String
   skuId            String?
-  chrtId           Int
+  chrtId           BigInt
   phase            String
   calculatedAmount Int
   sentAmount       Int?

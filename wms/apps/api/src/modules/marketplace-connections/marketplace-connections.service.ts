@@ -1,5 +1,5 @@
-import { WbStockObservations } from './wb-stock-observations';
-import { publishWbStockPlan } from './wb-stock-safe-publication';
+import { WbStockObservations, wbStockCheckDto } from './wb-stock-observations';
+import { publishWbStockPlan, selectKnownWbStockTargets } from './wb-stock-safe-publication';
 import { analyzeWbStockDemand } from './wb-stock-demand-analysis';
 import { fineStockSettingsEnabled, NO_WB_RESERVE, wbStockAfterReserve, reserveForSku, type WbStockReserve } from './wb-stock-reserve';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
@@ -1108,7 +1108,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         skus.set(ids.chrtId, row.skuId); byWarehouse.set(row.warehouseId, skus);
       }
       for (const [warehouse, skus] of byWarehouse) {
-        const amounts = await this.fetchWildberriesStockAmounts(connection.apiKey, warehouse, [...skus.keys()], true);
+        const amounts = await this.fetchWildberriesStockAmounts(connection.apiKey, warehouse, [...skus.keys()], true, true);
         await observations.observe(clientId, connection.id, warehouse, amounts, skus);
       }
       this.wbAvailabilitySampleHour.set(connection.id, hour);
@@ -1516,12 +1516,21 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     let synced = 0;
+    let skipped = 0;
+    let verifiedPublishedAmount: number | undefined;
     try {
       if (fineStockSettingsEnabled()) {
         const targets = [...preparedByWarehouse].flatMap(([warehouseId, rows]) => rows.map(row => ({ ...row, warehouseId })));
         if (targets.some(row => row.needsSync)) {
           const skuByChrt = new Map(targets.map(row => [row.chrtId, row.skuId]));
-          await publishWbStockPlan(targets, {
+          const record = observations.recorder(clientId, connectionId);
+          const selection = await selectKnownWbStockTargets(targets, async (warehouse, ids) => {
+            await observations.guard();
+            return this.fetchWildberriesStockAmounts(connection.apiKey, warehouse, ids, true, true);
+          }, record);
+          skipped = new Set(selection.unknown.map(row => row.chrtId)).size;
+          for (const batch of chunks(selection.unknown, 500)) await this.prisma.fbsStockPublication.updateMany({ where: { id: { in: batch.map(row => row.publicationId) } }, data: { lastError: 'WB не вернул остаток. Товар пропущен на всех складах.' } });
+          const published = await publishWbStockPlan(selection.known, {
             read: async (warehouseId, ids) => {
               await observations.guard();
               const amounts = await this.fetchWildberriesStockAmounts(connection.apiKey, warehouseId, ids, true);
@@ -1529,11 +1538,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               return amounts;
             },
             send: (warehouseId, rows) => this.putWildberriesStocksRaw(clientId, connection.apiKey, warehouseId, rows),
-            record: observations.recorder(clientId, connectionId),
+            record,
           });
           const syncedAt = new Date();
-          for (const batch of chunks(targets, 500)) await this.prisma.$transaction(batch.map(row => this.prisma.fbsStockPublication.update({ where: { id: row.publicationId }, data: { lastWmsAmount: row.wmsAmount, lastWbAmount: row.amount, lastSyncedAmount: row.amount, lastSyncedAt: syncedAt, lastError: null } })));
-          synced = targets.length;
+          for (const batch of chunks(selection.known, 500)) await this.prisma.$transaction(batch.map(row => this.prisma.fbsStockPublication.update({ where: { id: row.publicationId }, data: { lastWmsAmount: row.wmsAmount, lastWbAmount: row.amount, lastSyncedAmount: row.amount, lastSyncedAt: syncedAt, lastError: null } })));
+          synced = selection.known.length;
+          verifiedPublishedAmount = published.publishedAmount;
         }
       } else for (const [warehouseId, rows] of preparedByWarehouse) {
         const changed = rows.filter((row) => row.needsSync);
@@ -1562,7 +1572,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           synced += batch.length;
         }
       }
-      await allocation.markSync(policy.id, null);
+      await allocation.markSync(policy.id, skipped ? `Пропущено размеров WB без достоверного остатка: ${skipped}. Остальные позиции проверены.` : null);
     } catch (caught) {
       const message = marketplaceErrorText(caught);
       await allocation.markSync(policy.id, message);
@@ -1573,7 +1583,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       synced,
       products: quantities.length,
       warehouses: preparedByWarehouse.size,
-      publishedAmount: rows.reduce((sum, row) => sum + row.amount, 0),
+      publishedAmount: verifiedPublishedAmount ?? rows.reduce((sum, row) => sum + row.amount, 0),
       syncedAt: new Date().toISOString(),
     };
   }
@@ -6577,7 +6587,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const validShares = result.shares.length > 0 && result.shares.reduce((n, row) => n + row.percent, 0) === 100 && result.shares.filter(row => row.isPrimary).length === 1;
     const analysisSettings = await this.stockControl.analysisSettings(clientId);
     const availability = await this.prisma.wbStockAvailabilityDay.findMany({ where: { clientId, connectionId, day: { gte: new Date(Date.now() - 31 * 86400000).toISOString().slice(0, 10) } } });
-    const publicationChecks = await this.prisma.wbStockPublicationCheck.findMany({ where: { clientId, connectionId }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 500 });
+    const publicationChecks = (await this.prisma.wbStockPublicationCheck.findMany({ where: { clientId, connectionId }, orderBy: [{ updatedAt: 'desc' }, { id: 'asc' }], take: 500 })).map(wbStockCheckDto);
     return { ...result, fineSettingsEnabled: true, ...reserveSettings, analysisSettings, publicationChecks, publicationEnabled: await this.stockControl.isEnabled(clientId),
       analysis: validShares ? analyzeWbStockDemand(orders.orders, connectionId, stock, result.shares, stockPlan.reserve, Date.now(), 30, result.policy.lowStockThreshold, { availability, maxShareChange: analysisSettings.maxShareChange }) : null };
 
@@ -6621,16 +6631,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (!connection) throw new NotFoundException('Кабинет WB не найден.');
     const observations = new WbStockObservations(this.prisma);
     return observations.locked(connectionId, false, async () => {
-      const rows = await this.prisma.wbStockPublicationCheck.findMany({ where: { clientId, connectionId } });
+      const rows = (await this.prisma.wbStockPublicationCheck.findMany({ where: { clientId, connectionId } })).map(wbStockCheckDto);
       let checked = 0;
       let mismatches = 0;
+      let unconfirmed = 0;
       for (const warehouseId of new Set(rows.map(row => row.warehouseId))) {
         for (const batch of chunks(rows.filter(row => row.warehouseId === warehouseId), 1000)) {
           await observations.guard();
           try {
-            const amounts = await this.fetchWildberriesStockAmounts(connection.apiKey, warehouseId, batch.map(row => row.chrtId), true);
+            const amounts = await this.fetchWildberriesStockAmounts(connection.apiKey, warehouseId, batch.map(row => row.chrtId), true, true);
             await observations.observe(clientId, connectionId, warehouseId, amounts, new Map(batch.filter(row => row.skuId).map(row => [row.chrtId, row.skuId!])));
             for (const row of batch) {
+              if (!amounts.has(row.chrtId)) {
+                await this.prisma.wbStockPublicationCheck.update({ where: { id: row.id }, data: { observedAmount: null, checkedAt: new Date(), status: 'UNCONFIRMED', error: 'WB не вернул остаток размера. Отсутствие ответа не считается нулём.' } });
+                unconfirmed++;
+                continue;
+              }
               const observedAmount = amounts.get(row.chrtId)!;
               const matches = observedAmount === row.calculatedAmount;
               await this.prisma.wbStockPublicationCheck.update({ where: { id: row.id }, data: { observedAmount, checkedAt: new Date(), status: matches ? 'CONFIRMED' : 'MISMATCH', error: null } });
@@ -6642,7 +6658,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           }
         }
       }
-      return { checked, mismatches, checkedAt: new Date().toISOString() };
+      return { checked, mismatches, unconfirmed, checkedAt: new Date().toISOString() };
     });
   }
 
@@ -8109,7 +8125,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return { quantities: adjusted, meta, reserve, skuRules };
   }
 
-  private async fetchWildberriesStockAmounts(apiKey: string, warehouseId: string, chrtIds: number[], uncached = false) {
+  private async fetchWildberriesStockAmounts(apiKey: string, warehouseId: string, chrtIds: number[], uncached = false, allowMissing = false) {
     const result = new Map<number, number>();
     for (const batch of chunks(chrtIds, 1000)) {
       if (batch.length === 0) continue;
@@ -8129,7 +8145,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
       });
     }
-    if (uncached && chrtIds.some(id => !result.has(id))) throw new BadRequestException('WB не вернул остаток части товаров. Отсутствующая запись не считается нулём.');
+    if (uncached && !allowMissing && chrtIds.some(id => !result.has(id))) throw new BadRequestException('WB не вернул остаток части товаров. Отсутствующая запись не считается нулём.');
     return result;
   }
 
