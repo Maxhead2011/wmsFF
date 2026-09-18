@@ -34,6 +34,7 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
   const [message, setMessage] = useState('');
   const [scan, setScan] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [scanMode, setScanMode] = useState<'BARCODE_ONLY' | 'BARCODE_KIZ'>('BARCODE_KIZ');
   const [source, setSource] = useState('');
   const [pallet, setPallet] = useState('');
   const [preview, setPreview] = useState<{ data: SortingPreview; action: string } | null>(null);
@@ -91,9 +92,13 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
     e.preventDefault();
     if (gate.current || pending || !scan.trim()) return;
     const value = scan.trim(); setScan('');
-    if (!state) { void send('', { id: crypto.randomUUID(), code: value }); return; }
+    if (!state) { void send('', { id: crypto.randomUUID(), code: value, scanMode }); return; }
     if (state.stage === 'CHECKING') { action('SCAN_SOURCE', { code: value }); return; }
     if (!state.activeTargetId) { action('OPEN_TARGET', { code: value, palletCode: pallet }); return; }
+    if (state.scanMode === 'BARCODE_ONLY') {
+      if (!source.trim()) { setMessage('Сначала отсканируйте исходный короб.'); return; }
+      action('MOVE', { barcode: value, sourceBoxCode: source.trim() }); return;
+    }
     if (!barcode) { setBarcode(value); return; }
     action('MOVE', { barcode, kiz: value, ...(source ? { sourceBoxCode: source } : {}) });
   };
@@ -112,6 +117,8 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
     {message && <p role="status">{message}</p>}
     {pending && !busy && !preview && <div role="alert"><p>Результат запроса пока не подтверждён. Повтор безопасен: используется тот же номер операции.</p><button onClick={() => void send(pending.path, pending.body)}>Повторить тот же запрос</button></div>}
     <fieldset disabled={busy || Boolean(pending) || Boolean(preview)}>
+      {!state && <label>Режим сортировки<select value={scanMode} onChange={e => setScanMode(e.target.value as 'BARCODE_ONLY' | 'BARCODE_KIZ')}><option value="BARCODE_KIZ">ШК + КИЗ</option><option value="BARCODE_ONLY">Только ШК — один скан, одна единица</option></select></label>}
+      {state && <p>Режим: {state.scanMode === 'BARCODE_ONLY' ? 'Только ШК — один скан, одна единица' : 'ШК + КИЗ'}</p>}
       {!state && sessions.length > 0 && <div><h3>Продолжить незавершённую сортировку</h3>{sessions.map(row => <button key={row.id} onClick={() => void run(async () => acceptState(await sortingRequest<SortingState>(token, `/${row.id}`)))}>{row.sourceCode} · {row.moves.length} ед.</button>)}</div>}
       {state && <>
         <h3>{state.sourceCode} · {state.stage === 'CHECKING' ? 'Сверка коробов' : state.stage === 'FORMING' ? 'Формирование новых коробов' : 'Сортировка завершена'}</h3>
@@ -121,7 +128,7 @@ function SortingWorkspace({ session }: { session: AuthSession }) {
         <details><summary>Исходные короба ({state.sources.length})</summary><ul>{state.sources.map(box => <li key={box.id}>{box.code} — {box.retainedReason || (box.preservedOnPallet ? 'пустой бокс · сохранён на месте' : box.archived ? 'архив' : box.scanned ? 'подтверждён' : 'не отсканирован')}</li>)}</ul></details>
       </>}
       {state?.stage === 'FORMING' && !target && <label>Фактический паллет-сорт целевого короба<input value={pallet} onChange={e => setPallet(e.target.value)} placeholder="Отсканируйте паллет-сорт" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); input.current?.focus(); } }} /></label>}
-      {target && <><h3>Заполняется {target.code} · {target.quantity} ед.</h3><label>Исходный короб — если КИЗ ещё не привязан<input list="sorting-source-codes" value={source} onChange={e => setSource(e.target.value)} placeholder="Отсканируйте короб; неизвестный отметим как проблемный" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); input.current?.focus(); } }} /><datalist id="sorting-source-codes">{state!.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet).map(b => <option key={b.id} value={b.code} />)}{state!.problemSources?.filter(b => b.scanned).map(b => <option key={b.code} value={b.code}>Проблемный</option>)}</datalist></label></>}
+      {target && <><h3>Заполняется {target.code} · {target.quantity} ед.</h3><label>{state?.scanMode === 'BARCODE_ONLY' ? 'Исходный короб — обязательно' : 'Исходный короб — если КИЗ ещё не привязан'}<input list="sorting-source-codes" value={source} onChange={e => setSource(e.target.value)} placeholder="Отсканируйте короб; неизвестный отметим как проблемный" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); input.current?.focus(); } }} /><datalist id="sorting-source-codes">{state!.sources.filter(b => b.scanned && !b.archived && !b.preservedOnPallet).map(b => <option key={b.id} value={b.code} />)}{state!.problemSources?.filter(b => b.scanned).map(b => <option key={b.code} value={b.code}>Проблемный</option>)}</datalist></label></>}
       {state?.stage !== 'COMPLETED' && <form onSubmit={submitScan}><label>{hint}<input ref={input} value={scan} onChange={e => setScan(e.target.value)} autoComplete="off" aria-label={hint} /></label>{barcode && <p>ШК: {barcode} <button type="button" onClick={() => { setBarcode(''); setScan(''); }}>Отменить текущую единицу</button></p>}<button type="submit">{!state ? 'Начать сортировку' : 'Подтвердить скан'}</button></form>}
       {state?.stage === 'CHECKING' && <div className="pallet-sorting-actions">{missing.length > 0 && <button onClick={() => void inspect('ARCHIVE_MISSING')}>Расхождения по коробам: {missing.length}</button>}<button disabled={missing.length > 0} onClick={() => action('BEGIN_FORMING')}>Приступить к формированию новых коробов</button></div>}
       {state?.stage === 'FORMING' && <div className="pallet-sorting-actions"><button disabled={!target || Boolean(barcode)} onClick={() => action('CLOSE_TARGET')}>Закрыть короб</button><button disabled={Boolean(target) || Boolean(barcode)} onClick={() => void inspect('COMPLETE')}>Завершить сортировку</button></div>}

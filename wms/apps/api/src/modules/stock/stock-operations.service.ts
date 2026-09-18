@@ -1,7 +1,7 @@
 import { fbsWbAccountingEnabled } from '../../common/fbs-wb-accounting';
 import { readWbShippedUnits, withoutWbShippedItems, type WbShippedUnit } from './fbs-wb-shipped-units';
 import { WB_KIZ_SHIPMENT_PREFIX } from '../marketplace-connections/fbs-wb-kiz-shipment';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
@@ -827,6 +827,35 @@ export class StockOperationsService {
   }
 
   // ADDED: transaction-owned sorting entry point. Existing TSD transfers are unchanged.
+  // FIX: unmarked goods use existing paired MOVE entries; never invent a KIZ or receipt.
+  async transferSortingBarcodeUnit(tx: Prisma.TransactionClient, input: {
+    fromBoxCode: string; toBoxCode: string; barcode: string; idempotencyKey: string; sessionId: string;
+  }, user: AuthUser) {
+    assertSortingAdmin(user);
+    if (process.env.WMS_PALLET_SORTING_BARCODE_ONLY !== 'true') throw new ForbiddenException('Режим «Только ШК» ещё не включён.');
+    const source = await tx.box.findUnique({ where: { code: input.fromBoxCode } });
+    const target = await tx.box.findUnique({ where: { code: input.toBoxCode } });
+    if (!source || !target || source.id === target.id || source.status !== 'active' || target.status !== 'active' ||
+        source.clientId !== target.clientId || source.warehouseId !== user.activeWarehouseId || target.warehouseId !== user.activeWarehouseId) {
+      throw new BadRequestException('Нужны разные действующие короба одного клиента в выбранном филиале.');
+    }
+    this.clientScopes.requireClientAccess(user, source.clientId, 'write');
+    await tx.$queryRaw(Prisma.sql`SELECT id FROM "Box" WHERE id IN (${Prisma.join([source.id, target.id].sort())}) ORDER BY id FOR UPDATE`);
+    const products = await tx.barcode.findMany({ where: { value: input.barcode, sku: { clientId: source.clientId } }, include: { sku: true }, take: 2 });
+    if (products.length !== 1) throw new BadRequestException('ШК товара не найден или неоднозначен у клиента короба.');
+    const skuId = products[0].sku.id;
+    // FIX: a marked source/target cannot silently lose identity while its quantity changes.
+    if (await tx.productMark.findFirst({ where: { skuId, boxId: { in: [source.id, target.id] } }, select: { id: true } })) {
+      throw new BadRequestException('У товара в коробе есть привязанные КИЗы. Используйте режим «ШК + КИЗ».');
+    }
+    const result = await this.applyTransferBetweenBoxes(tx, { clientId: source.clientId, skuId, fromBoxCode: source.code, toBoxCode: target.code,
+      quantity: 1, status: StockStatus.AVAILABLE, idempotencyKey: input.idempotencyKey,
+      sourceDocument: `PALLET_SORTING:${input.sessionId}`, comment: `Сортировка без КИЗ: ${source.code} → ${target.code}; администратор ${user.id}` }, source.warehouseId!);
+    const inbound = await tx.stockMovement.findUnique({ where: { idempotencyKey: `${input.idempotencyKey}:in` }, select: { id: true } });
+    if (!inbound) throw new ConflictException('Не подтверждено движение товара. Повторите ту же операцию.');
+    return { alreadyApplied: result.status === 'ALREADY_APPLIED', sourceBoxId: source.id, targetBoxId: target.id, skuId, movementId: inbound.id };
+  }
+
   async transferSortingUnit(tx: Prisma.TransactionClient, input: {
     fromBoxCode: string; toBoxCode: string; barcode: string; kiz: string;
     idempotencyKey: string; sessionId: string;
