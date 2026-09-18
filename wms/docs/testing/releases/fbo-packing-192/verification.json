@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 192,
+  "versionName": "0.1.192-fbo-packing-files",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "deae9d801329cba1228dbe7ba476a850cff3c9d58d333229426656c7c6c60665"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 168,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "37a52e8f4e54c142f06baffafd60d3b86622e30b691173807eff4c754335be3f",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}
