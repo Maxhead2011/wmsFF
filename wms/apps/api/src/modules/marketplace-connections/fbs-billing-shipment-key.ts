@@ -30,9 +30,26 @@ export async function loadFbsDateBillingBranches<T extends Order>(
     db.billingCharge.findMany({ where: { clientId, OR: [
       { sourceKey: { in: [...chargeKeys.keys()] } },
       ...primaryPrefixes.map(p => ({ sourceKey: { startsWith: p.prefix } })),
-    ] }, select: { sourceKey: true, request: { select: { warehouseId: true } },
+    ] }, select: { sourceKey: true, metadata: true, request: { select: { warehouseId: true } },
       invoiceItems: { select: { invoice: { select: { warehouseId: true } } } } } }),
   ]);
+  // FIX: old grouped charges stored several request IDs in their immutable FBS snapshot.
+  // Resolve every saved request within the same client; partial evidence must not choose a branch.
+  const savedRequestIds = (metadata: unknown): string[] => {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return [];
+    const value = metadata as { kind?: unknown; requestIds?: unknown };
+    if (value.kind !== 'FBS' || !Array.isArray(value.requestIds) ||
+      !value.requestIds.length || value.requestIds.some(id => typeof id !== 'string' || !id.trim())) return [];
+    return [...new Set(value.requestIds as string[])];
+  };
+  const fallbackCharges = charges.filter(charge => !charge.request?.warehouseId &&
+    !charge.invoiceItems.some(item => item.invoice.warehouseId));
+  const requestIds = [...new Set(fallbackCharges.flatMap(charge => savedRequestIds(charge.metadata)))];
+  const requests = requestIds.length ? await db.clientRequest.findMany({
+    where: { clientId, id: { in: requestIds } }, select: { id: true, warehouseId: true },
+  }) : [];
+  const requestBranches = new Map(requests.map(request => [request.id, request.warehouseId]));
+  const incomplete = new Set<string>();
   const evidence = new Map<string, Set<string>>();
   const add = (key: string | undefined, ids: (string | null | undefined)[]) => {
     if (!key) return;
@@ -46,10 +63,17 @@ export async function loadFbsDateBillingBranches<T extends Order>(
       primaryPrefixes.find(p => charge.sourceKey?.startsWith(p.prefix) &&
         /^(SERVICE:.+|WHITE|GRAY|RETURN|RELABEL)$/.test(charge.sourceKey.slice(p.prefix.length)))?.key;
     add(key, [charge.request?.warehouseId, ...charge.invoiceItems.map(i => i.invoice.warehouseId)]);
+    if (key && fallbackCharges.includes(charge)) {
+      const saved = savedRequestIds(charge.metadata);
+      if (saved.length) {
+        if (saved.some(id => !requestBranches.get(id)?.trim())) incomplete.add(key);
+        add(key, saved.map(id => requestBranches.get(id)));
+      }
+    }
   }
   // FIX: even cancelled/merged documents retain their keys; never guess a branch for old money.
   for (const [key, ids] of evidence) {
-    if (ids.size !== 1) throw new BadRequestException(
+    if (ids.size !== 1 || incomplete.has(key)) throw new BadRequestException(
       `Не удалось однозначно определить филиал старого начисления FBS (${key}). Требуется проверка счёта; повторное начисление не выполнено.`,
     );
     branches.set(key, [...ids][0]);
