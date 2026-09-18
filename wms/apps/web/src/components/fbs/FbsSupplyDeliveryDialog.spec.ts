@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { FbsPanel } from './FbsPanel';
-import { deliverFbsSupplies, fetchFbsSupplyDeliveryOptions } from '../../lib/api';
+import { createFbsRequest, fetchFbsOrders, deliverFbsSupplies, fetchFbsSupplyDeliveryOptions } from '../../lib/api';
 
 // TEST: exercise the panel's actual callbacks and request payload with the project's hook harness.
 const hooks = vi.hoisted(() => ({ values: [] as any[], cursor: 0 }));
@@ -26,6 +26,7 @@ vi.mock('../../lib/rememberedClient', async () => ({
 vi.mock('../../lib/api', async () => ({
   ...await vi.importActual<typeof import('../../lib/api')>('../../lib/api'),
   fetchFbsSupplyDeliveryOptions: vi.fn(), deliverFbsSupplies: vi.fn(),
+  createFbsRequest: vi.fn(), fetchFbsOrders: vi.fn(),
 }));
 const orders = [{ connectionId: 'cabinet', id: 'order', supplyId: 'WB-GI-1' }] as any;
 const options = {
@@ -47,6 +48,20 @@ function deliveryButton() { return dialogControls().find(node => node.type === '
 async function openDialog() { await elements(render()).find(node => typeof node.props?.onDeliver === 'function').props.onDeliver(orders); }
 
 describe('FBS supply delivery confirmation', () => {
+  // TEST: a saved request is complete even while the display snapshot is still loading.
+  it.each(['single', 'groups'])('releases %s creation without waiting for the catalogue refresh', async (mode) => {
+    vi.mocked(createFbsRequest).mockResolvedValue({ request: { id: 'saved', number: 1117 }, linkedOrders: 1 } as any);
+    vi.mocked(fetchFbsOrders).mockReturnValue(new Promise(() => {}));
+    const panel = elements(render()).find(node => node.props?.onCreateRequest);
+    const selected = [{ id: '123', connectionId: 'cabinet', marketplace: 'WILDBERRIES', warehouseId: '7' }] as any;
+    let completed = false;
+    const promise = mode === 'single' ? panel.props.onCreateRequest(selected) : panel.props.onCreateMissingRequests([selected]);
+    void promise.then(() => { completed = true; });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(createFbsRequest).toHaveBeenCalledOnce();
+    expect(completed).toBe(true);
+    expect(hooks.values.some(value => typeof value === 'string' && value.startsWith('Создан'))).toBe(true);
+  });
   // TEST: the verified live UI has no repeat-assembly feature; billing must not introduce it.
   it('keeps unrelated repeat-assembly UI outside the billing release', () => {
     const panel = readFileSync(new URL('./FbsPanel.tsx', import.meta.url), 'utf8');
