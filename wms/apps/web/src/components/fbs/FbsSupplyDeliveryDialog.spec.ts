@@ -40,7 +40,10 @@ function elements(node: any): any[] {
 }
 function render() {
   hooks.cursor = 0;
-  return FbsPanel({ session: { accessToken: 'token', user: { id: 'user', clientIds: ['client'], permissionCodes: [], roleCodes: [] } } as any });
+  let tree = FbsPanel({ session: { accessToken: 'token', user: { id: 'user', clientIds: ['client'], permissionCodes: [], roleCodes: [] } } as any });
+  // TEST: deployed branch-scoped FBS uses a functional root wrapper; render its content too.
+  while (typeof tree.type === 'function') tree = tree.type(tree.props);
+  return tree;
 }
 function deliveryDialog() { return elements(render()).find(node => node.props?.state?.options?.supplies); }
 function dialogControls() { const dialog = deliveryDialog(); return elements(dialog.type(dialog.props)); }
