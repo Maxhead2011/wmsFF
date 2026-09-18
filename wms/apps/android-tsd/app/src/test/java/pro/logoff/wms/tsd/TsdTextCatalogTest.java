@@ -8,6 +8,13 @@ import java.util.*;
 import static org.junit.Assert.*;
 
 public class TsdTextCatalogTest {
+    // TEST: whole-box quantity stays intact in all three operator languages.
+    @Test public void wholeBoxInstructionPreservesQuantity() throws Exception {
+        TsdTextCatalog c=shippedCatalog();String text="Короб уезжает целиком · 35 ед.";
+        assertEquals(text,c.text(text,"ru"));
+        assertEquals("Quti to‘liq jo‘natiladi · 35 dona",c.text(text,"uz"));
+        assertEquals("The whole box ships · 35 units",c.text(text,"en"));
+    }
     private TsdTextCatalog shippedCatalog() throws Exception {
         return TsdTextCatalog.load(Files.newBufferedReader(Paths.get("src/main/assets/tsd-translations.tsv"),StandardCharsets.UTF_8),Files.newBufferedReader(Paths.get("src/main/assets/tsd-templates.tsv"),StandardCharsets.UTF_8));
     }

@@ -181,6 +181,52 @@ public class FboTwoStageScreenTest {
             a.getSharedPreferences("logoff_wms_tsd_session",0).edit().clear().commit();
         }
     }
+    // TEST: a whole-box instruction includes its total before any stock mutation; sold apps keep their UI.
+    @Test public void wholeBoxInstructionShowsQuantityOnlyForWholeBox() throws Exception {
+        for(boolean whole:new boolean[]{true,false})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();AtomicInteger mutations=new AtomicInteger();TsdFboPlan p=plan("PICKING");
+            p.route.get(0).wholeBox=whole;p.route.get(0).wholeBoxQuantity=35;
+            FboTwoStageScreen s=open(a,p,false,mutations);
+            try {
+                s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();
+                TextView notice=find(a.findViewById(android.R.id.content),"Короб уезжает целиком");
+                if(whole&&"logoff".equals(BuildConfig.FLAVOR)) {
+                    assertNotNull(notice);assertTrue(notice.getText().toString().contains("35"));
+                    assertEquals(Color.rgb(187,247,208),((ColorDrawable)notice.getBackground()).getColor());
+                } else assertNull(notice);
+                assertEquals(0,mutations.get());
+            }finally{s.close();}
+        }
+    }
+    // TEST: locations and products speak during picking; KIZ, refreshes and packing stay silent.
+    @Test public void voiceIncludesPickingLocationsAndBarcodesButNeverKiz() throws Exception {
+        for(boolean packing:new boolean[]{false,true})for(boolean requiresKiz:new boolean[]{true,false})
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();AtomicInteger mutations=new AtomicInteger();List<Boolean> spoken=new ArrayList<>();
+            AtomicInteger closed=new AtomicInteger();
+            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){spoken.add(hit);}public void close(){closed.incrementAndGet();}};
+            TsdFboPlan p=plan(packing?"PACKING":"PICKING");
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=requiresKiz;line.remaining=1;line.picked=1;p.lines.add(line);
+            if(packing){TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="TARGET";p.boxes.add(b);}
+            FboTwoStageScreen screen=open(a,p,packing,mutations,null,feedback);
+            try {
+                if(packing){screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);}
+                else {
+                    for(String code:new String[]{"WRONG_PALLET","PL_1","WRONG_BOX","BOX_1"}){screen.scannerField().setText(code);screen.submit();}
+                }
+                assertEquals(!packing&&"logoff".equals(BuildConfig.FLAVOR)?Arrays.asList(false,true,false,true):Collections.emptyList(),spoken);
+                screen.scannerField().setText("WRONG_PRODUCT");screen.submit();
+                screen.scannerField().setText(line.barcode);screen.submit();waitIdle(screen);
+                List<Boolean> expected=!packing&&"logoff".equals(BuildConfig.FLAVOR)?Arrays.asList(false,true,false,true,false,true):Collections.emptyList();
+                assertEquals(expected,spoken);
+                if(requiresKiz){screen.scannerField().setText("010123456789012321SERIAL");screen.submit();waitIdle(screen);}
+                assertEquals(expected,spoken);
+                find(a.findViewById(android.R.id.content),"Обновить").performClick();waitIdle(screen);
+                assertEquals(expected,spoken);
+            }finally{screen.close();}
+            assertEquals(1,closed.get());
+        }
+    }
     private TsdFboPlan plan(String phase) {
         TsdFboPlan p=new TsdFboPlan();p.phase=phase;p.title="Test";p.needed=2;
         p.lines=new ArrayList<>();p.route=new ArrayList<>();p.boxes=new ArrayList<>();p.wholeBoxes=new ArrayList<>();
@@ -190,13 +236,16 @@ public class FboTwoStageScreenTest {
         return open(a,p,packing,mutations,null);
     }
     private FboTwoStageScreen open(Activity a,TsdFboPlan p,boolean packing,AtomicInteger mutations,Runnable move) throws Exception {
+        return open(a,p,packing,mutations,move,null);
+    }
+    private FboTwoStageScreen open(Activity a,TsdFboPlan p,boolean packing,AtomicInteger mutations,Runnable move,FboScanFeedback feedback) throws Exception {
         WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
             if(m.getName().equals("actFbo"))mutations.incrementAndGet();
             return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
                 if(method.getName().equals("execute"))return Response.success(p);return null;
             });
         });
-        FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{},move);
+        FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{},move,feedback);
         java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("busy");field.setAccessible(true);
         for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s))return s;Thread.sleep(10);}
         fail("Plan did not load");return s;
