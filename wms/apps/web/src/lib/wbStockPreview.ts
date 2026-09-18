@@ -1,3 +1,5 @@
+import type { WbStockReserve } from './api';
+
 // FIX: keep the preview compact; search still covers all available rows.
 export const WB_STOCK_PREVIEW_LIMIT = 30;
 
@@ -16,4 +18,11 @@ export function wbStockPreview(amount: number, threshold: number, shares: Array<
   let remaining = amount - rows.reduce((n, r) => n + r.amount, 0);
   for (let i = 0; remaining > 0; i++, remaining--) order[i % order.length].amount++;
   return rows.map(({ warehouseId, amount }) => ({ warehouseId, amount }));
+}
+
+// FIX: the administrator example follows the same strict threshold as server publication.
+export function wbReservePreviewAmount(quantity: number, rule: WbStockReserve) {
+  const reserve = rule.lowStock && quantity < rule.lowStock.threshold ? rule.lowStock.reserveUnits
+    : rule.mode === 'PERCENT' ? Math.ceil(quantity * rule.value / 100) : rule.mode === 'UNITS' ? rule.value : 0;
+  return Math.max(0, quantity - reserve);
 }

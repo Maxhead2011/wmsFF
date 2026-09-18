@@ -7231,7 +7231,7 @@ export async function fetchAdministrationOverview(accessToken: string) {
 }
 
 // FIX: client-wide control affects only outbound marketplace stock quantities.
-export type WbStockReserve = { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number };
+export type WbStockReserve = { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
 // FIX: settings writes never toggle the outgoing publication gate.
 export function updateWbSkuRule(accessToken: string, clientId: string, skuId: string, body: { reserve: WbStockReserve | null; blocked: boolean; expectedUpdatedAt: string | null }) {
   return request<{ updatedAt: string }>(`/administration/marketplace-stock-control/${encodeURIComponent(clientId)}/skus/${encodeURIComponent(skuId)}`, { accessToken, method: 'PUT', body });

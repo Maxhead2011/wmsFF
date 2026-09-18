@@ -1,3 +1,5 @@
+import { isValidLowStockReserve, WbLowStockReserveFields, WbLowStockReserveSummary } from '../fbs/WbLowStockReserveFields';
+import { wbReservePreviewAmount } from '../../lib/wbStockPreview';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { updateWbStockReserve, type WbStockReserve, fetchMarketplaceStockControl, updateMarketplaceStockControl, type AuthSession, type MarketplaceStockControlRow } from '../../lib/api';
 
@@ -84,7 +86,6 @@ function WbReserveEditor({ row, session, onSaved }: { row: MarketplaceStockContr
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [sample, setSample] = useState(10);
-  const reserved = rule.mode === 'NONE' ? 0 : rule.mode === 'UNITS' ? rule.value : Math.ceil(sample * rule.value / 100);
   async function save() {
     setBusy(true); setError('');
     try { await updateWbStockReserve(session.accessToken, row.id, rule, row.reserveUpdatedAt ?? null); onSaved(); }
@@ -93,13 +94,15 @@ function WbReserveEditor({ row, session, onSaved }: { row: MarketplaceStockContr
   }
   return <details><summary>Резерв WB: {row.reserve?.mode === 'UNITS' ? `${row.reserve.value} шт.` : row.reserve?.mode === 'PERCENT' ? `${row.reserve.value}%` : 'без резерва'}</summary>
     <p>Оставлять резерв каждой позиции перед распределением по складам WB. Фактические остатки ВМС не меняются.</p>
-    <label>Режим <select disabled={busy} value={rule.mode} onChange={e => setRule({ mode: e.target.value as WbStockReserve['mode'], value: 0 })}>
+    <label>Режим <select disabled={busy} value={rule.mode} onChange={e => setRule({ ...rule, mode: e.target.value as WbStockReserve['mode'], value: 0 })}>
       <option value="NONE">Весь доступный остаток</option><option value="UNITS">Резерв в штуках</option><option value="PERCENT">Резерв в процентах</option>
     </select></label>
     {rule.mode !== 'NONE' && <label>Величина <input type="number" min={0} max={rule.mode === 'PERCENT' ? 100 : 1000000} step={1} value={rule.value} disabled={busy} onChange={e => setRule({ ...rule, value: Number(e.target.value) })} /></label>}
+    <WbLowStockReserveSummary rule={row.reserve?.lowStock} />
+    <WbLowStockReserveFields value={rule.lowStock} onChange={lowStock => setRule({ ...rule, lowStock })} disabled={busy} />
     <label>Пример: доступно <input type="number" min={0} step={1} value={sample} onChange={e => setSample(Math.max(0, Math.trunc(Number(e.target.value))))} /></label>
-    <p>На WB: {Math.max(0, sample - reserved)} шт. Процентный резерв округляется вверх.</p>
-    <button type="button" disabled={busy || !Number.isSafeInteger(rule.value) || rule.value < 0 || rule.value > (rule.mode === 'PERCENT' ? 100 : 1000000)} onClick={() => void save()}>Сохранить резерв</button>
+    <p>На WB: {wbReservePreviewAmount(sample, rule)} шт. Процентный резерв округляется вверх.</p>
+    <button type="button" disabled={busy || !isValidLowStockReserve(rule.lowStock) || !Number.isSafeInteger(rule.value) || rule.value < 0 || rule.value > (rule.mode === 'PERCENT' ? 100 : 1000000)} onClick={() => void save()}>Сохранить резерв</button>
     <p>Сохранение не включает выгрузку. Правило применяется при следующей отправке WB; доли складов — в FBS → Распределение остатков.</p>
     {error && <p role="alert">{error}</p>}
   </details>;

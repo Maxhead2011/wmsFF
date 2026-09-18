@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isValidLowStockReserve, WbLowStockReserveFields } from './WbLowStockReserveFields';
 import { checkFbsStockPublication, updateWbStockReserve, updateWbAnalysisSettings, updateWbSkuRule, type AuthSession, type FbsStockAllocationResponse, type WbStockReserve } from '../../lib/api';
 
 type Row = NonNullable<FbsStockAllocationResponse['analysis']>['rows'][number];
@@ -21,12 +22,13 @@ export function WbClientReserveEditor({ session, clientId, onSaved, data }: Cont
     finally { setBusy(false); }
   }
   return <details><summary>Изменить резерв клиента</summary>
-    <label>Резерв каждой позиции<select value={reserve.mode} disabled={busy} onChange={e => setReserve({ mode: e.target.value as WbStockReserve['mode'], value: 0 })}>
+    <label>Резерв каждой позиции<select value={reserve.mode} disabled={busy} onChange={e => setReserve({ ...reserve, mode: e.target.value as WbStockReserve['mode'], value: 0 })}>
       <option value="NONE">Без резерва</option><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option>
     </select></label>
     {reserve.mode !== 'NONE' && <label>Величина резерва<input type="number" min={0} max={reserve.mode === 'PERCENT' ? 100 : 1000000} step={1} disabled={busy} value={reserve.value} onChange={e => setReserve({ ...reserve, value: Number(e.target.value) })} /></label>}
+    <WbLowStockReserveFields value={reserve.lowStock} onChange={lowStock => setReserve({ ...reserve, lowStock })} disabled={busy} />
     <p>Резерв применяется ко всем позициям клиента перед распределением на WB. Исключения товаров имеют приоритет. Сохранение не включает выгрузку и не меняет физические остатки.</p>
-    <button type="button" disabled={busy || !Number.isSafeInteger(reserve.value) || reserve.value < 0 || reserve.value > (reserve.mode === 'PERCENT' ? 100 : 1000000)} onClick={() => void save()}>Сохранить резерв</button>
+    <button type="button" disabled={busy || !isValidLowStockReserve(reserve.lowStock) || !Number.isSafeInteger(reserve.value) || reserve.value < 0 || reserve.value > (reserve.mode === 'PERCENT' ? 100 : 1000000)} onClick={() => void save()}>Сохранить резерв</button>
     {error && <p role="alert">{error}</p>}
   </details>;
 }
@@ -34,13 +36,14 @@ export function WbClientReserveEditor({ session, clientId, onSaved, data }: Cont
 export function WbSkuRuleEditor({ session, clientId, onSaved, row }: Context & { row: Row }) {
   const [mode, setMode] = useState<WbStockReserve['mode'] | 'INHERIT'>(row.reserveOverride?.mode ?? 'INHERIT');
   const [value, setValue] = useState(row.reserveOverride?.value ?? 0);
+  const [lowStock, setLowStock] = useState<WbStockReserve['lowStock']>(row.reserveOverride?.lowStock);
   const [blocked, setBlocked] = useState(row.blocked ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function save() {
     setBusy(true); setError('');
     try {
-      await updateWbSkuRule(session.accessToken, clientId, row.skuId, { reserve: mode === 'INHERIT' ? null : { mode, value: mode === 'NONE' ? 0 : value }, blocked, expectedUpdatedAt: row.ruleUpdatedAt ?? null });
+      await updateWbSkuRule(session.accessToken, clientId, row.skuId, { reserve: mode === 'INHERIT' ? null : { mode, value: mode === 'NONE' ? 0 : value, lowStock }, blocked, expectedUpdatedAt: row.ruleUpdatedAt ?? null });
       await onSaved();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сохранить исключение.'); }
     finally { setBusy(false); }
@@ -50,8 +53,10 @@ export function WbSkuRuleEditor({ session, clientId, onSaved, row }: Context & {
       <option value="INHERIT">Как у клиента</option><option value="NONE">Без резерва</option><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option>
     </select></label>
     {(mode === 'UNITS' || mode === 'PERCENT') && <label>Величина резерва<input type="number" min={0} max={mode === 'PERCENT' ? 100 : 1000000} value={value} onChange={e => setValue(Number(e.target.value))} disabled={busy} /></label>}
+    {mode !== 'INHERIT' && <WbLowStockReserveFields value={lowStock} onChange={setLowStock} disabled={busy} />}
+    {mode === 'INHERIT' && <p>Основной резерв и правило малого остатка наследуются от клиента.</p>}
     <label><input type="checkbox" checked={blocked} onChange={e => setBlocked(e.target.checked)} disabled={busy} />Запретить публикацию товара</label>
-    <button type="button" className="secondary-button" disabled={busy} onClick={() => void save()}>Сохранить исключение</button>
+    <button type="button" className="secondary-button" disabled={busy || (mode !== 'INHERIT' && !isValidLowStockReserve(lowStock))} onClick={() => void save()}>Сохранить исключение</button>
     {error && <p role="alert">{error}</p>}
   </details>;
 }
