@@ -32,6 +32,7 @@ final class FboTwoStageScreen {
     private EditText quantityInput;
     private final boolean packing;
     private final FboScanFeedback scanFeedback;
+    private final FboPackingVoice packingVoice=new FboPackingVoice();
     private int feedbackColor=Color.TRANSPARENT;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
@@ -60,7 +61,7 @@ final class FboTwoStageScreen {
     }
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder) {
         this(activity,session,api,baseUrl,id,packing,back,moveRemainder,
-            !packing&&"logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
+            "logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
     }
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder,FboScanFeedback scanFeedback) {
         this.scanFeedback=scanFeedback;
@@ -81,6 +82,9 @@ final class FboTwoStageScreen {
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
     // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
     private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
+    // FIX: packing speech is exclusive to new boxes in our flavor.
+    private boolean packingVoiceActive(){return !closed&&packingChoices()&&packingMode==PackingMode.NEW_BOXES&&plan!=null&&"PACKING".equals(plan.phase);}
+    private void packingPrompt(FboPackingVoice.Cue cue){if(!closed&&scanFeedback!=null&&cue!=null)scanFeedback.prompt(cue);}
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
         if(closed||activity.isDestroyed())return;
@@ -158,6 +162,7 @@ final class FboTwoStageScreen {
         if(state.pending()!=null)button(root,"Повторить неподтверждённый запрос",!busy,()->send("",null));
         button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
+        packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
     }
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
         if("CONTROL".equals(plan.phase)){state.target=value;send("CONFIRM_BOX",null);return;}
@@ -203,7 +208,9 @@ final class FboTwoStageScreen {
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected)refresh();else render();});return;}
             TsdFboPlan next=res.body();handler.post(()->{state.accepted();prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
-                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
+                if("OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);
+                if(packingVoiceActive()&&"PACK_UNIT".equals(payload.get("action")))packingPrompt(packingVoice.accepted(payload.get("operationId")));
+                if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
         }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";render();});}});
     }
     // FIX: do not prefill a physical count or submit stock movements before confirmation.

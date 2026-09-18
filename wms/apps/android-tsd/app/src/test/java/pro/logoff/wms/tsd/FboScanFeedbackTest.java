@@ -16,6 +16,21 @@ public class FboScanFeedbackTest {
         var field=FboScanFeedback.Voice.class.getDeclaredField("pool");field.setAccessible(true);
         return Shadows.shadowOf((SoundPool)field.get(voice));
     }
+    // TEST: each instruction plays its bundled offline recording, and leaving cancels pending audio.
+    @Test public void packingInstructionsUseCorrectResources() throws Exception {
+        FboScanFeedback.Voice voice=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication());
+        ShadowSoundPool sounds=pool(voice);
+        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put};
+        try {
+            for(int i=0;i<resources.length;i++){
+                voice.prompt(FboPackingVoice.Cue.values()[i]);
+                sounds.notifyResourceLoaded(resources[i],true);
+                assertEquals(1,sounds.getResourcePlaybacks(resources[i]).size());
+            }
+            voice.close();voice.prompt(FboPackingVoice.Cue.PUT);
+            assertEquals(1,sounds.getResourcePlaybacks(R.raw.fbo_pack_put).size());
+        }finally{voice.close();}
+    }
     // TEST: no stale "hit" after a later "miss", even while offline recordings are loading.
     @Test public void latestScanWinsDuringLoadingAndSoundsDoNotLoop() throws Exception {
         FboScanFeedback.Voice voice=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication());
