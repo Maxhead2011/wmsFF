@@ -20,7 +20,7 @@ public class FboScanFeedbackTest {
     @Test public void packingInstructionsUseCorrectResources() throws Exception {
         FboScanFeedback.Voice voice=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication());
         ShadowSoundPool sounds=pool(voice);
-        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put};
+        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put,R.raw.fbo_pack_error};
         try {
             for(int i=0;i<resources.length;i++){
                 voice.prompt(FboPackingVoice.Cue.values()[i]);

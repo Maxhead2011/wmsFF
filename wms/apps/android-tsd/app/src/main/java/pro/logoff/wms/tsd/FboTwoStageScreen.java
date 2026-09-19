@@ -42,6 +42,8 @@ final class FboTwoStageScreen {
     private TsdFboPlan plan;
     private EditText input;
     private boolean busy,closed;
+    private boolean manualPackingScan;
+    private boolean packingErrorSpeech;
     // FIX: isolate explicit packing modes to our application; sold flavors retain their flow.
     private enum PackingMode { MENU, NEW_BOXES, WHOLE_BOXES, MANUAL }
     private PackingMode packingMode=PackingMode.MENU;
@@ -85,6 +87,18 @@ final class FboTwoStageScreen {
     // FIX: packing speech is exclusive to new boxes in our flavor.
     private boolean packingVoiceActive(){return !closed&&packingChoices()&&(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)&&plan!=null&&"PACKING".equals(plan.phase);}
     private void packingPrompt(FboPackingVoice.Cue cue){if(!closed&&scanFeedback!=null&&cue!=null)scanFeedback.prompt(cue);}
+    // FIX: cancel only the unsubmitted barcode/KIZ pair, never a committed packing operation.
+    private boolean packingScanRecovery(){return !closed&&packingChoices()&&plan!=null&&"PACKING".equals(plan.phase)&&!state.target.isEmpty()&&!state.barcode.isEmpty();}
+    private void cancelPackingScan(){
+        if(!packingScanRecovery()||!ready())return;
+        handler.removeCallbacks(automatic);state.barcode="";manualPackingScan=false;
+        message="Скан отменён. Отсканируйте ШК следующего товара.";feedbackColor=Color.TRANSPARENT;render();
+    }
+    private void manualPackingKiz(){
+        if(!packingScanRecovery()||!ready()||!plan.manualPackingEnabled)return;
+        handler.removeCallbacks(automatic);manualPackingScan=true;
+        message="Отсканируйте КИЗ для товара "+state.barcode;feedbackColor=Color.TRANSPARENT;render();
+    }
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
         if(closed||activity.isDestroyed())return;
@@ -123,6 +137,10 @@ final class FboTwoStageScreen {
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
                 input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
                 button(root,"Подтвердить скан",ready(),this::submit);
+                if(packingScanRecovery()){
+                    button(root,"Отменить скан",ready(),this::cancelPackingScan);
+                    if(plan.manualPackingEnabled)button(root,"Добавить КИЗ вручную",ready(),this::manualPackingKiz);
+                }
                 if("PICKING".equals(plan.phase)){
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.name+" · "+t.barcode);
@@ -164,6 +182,8 @@ final class FboTwoStageScreen {
         button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
         packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
+        // FIX: one error cue per rejection, after rendering so a stage prompt cannot interrupt it.
+        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices())packingPrompt(FboPackingVoice.Cue.ERROR);}
     }
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
         if("CONTROL".equals(plan.phase)){state.target=value;send("CONFIRM_BOX",null);return;}
@@ -180,27 +200,28 @@ final class FboTwoStageScreen {
             if(packingChoices()){
                 if(packingMode==PackingMode.WHOLE_BOXES){
                     if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
-                    else{message="Этот короб не ожидается среди целых коробов заявки.";render();}
+                    else{message="Этот короб не ожидается среди целых коробов заявки.";packingErrorSpeech=true;render();}
                 }else if(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL){
-                    if(plan.wholeBoxes.contains(value)){message="Выберите «Отсканировать целые короба» для этого короба.";render();}
+                    if(plan.wholeBoxes.contains(value)){message="Выберите «Отсканировать целые короба» для этого короба.";packingErrorSpeech=true;render();}
                     else{state.source="";state.target=value;send(packingMode==PackingMode.MANUAL?"MANUAL_OPEN_BOX":"OPEN_BOX",null);}
                 }
                 return;
             }
             if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
-            else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";feedbackColor=Color.rgb(254,202,202);render();}
+            else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";packingErrorSpeech=true;feedbackColor=Color.rgb(254,202,202);render();}
             else{state.source="";state.target=value;send("OPEN_BOX",null);}return;
         }
         // FIX: manual packing accepts products outside the plan; the server validates KIZ ownership and stock.
         if(packingChoices()&&packingMode==PackingMode.MANUAL&&"PACKING".equals(plan.phase)){
             if(!state.barcode.isEmpty())send("MANUAL_PACK_UNIT",value);
-            else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";render();}
+            else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";packingErrorSpeech=true;render();}
             else{state.barcode=value;message="Отсканируйте КИЗ товара.";render();}
             return;
         }
+        if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
         if(!state.barcode.isEmpty()){send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",value);return;}
         TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(plan.phase)?l.remaining>0:l.picked>l.packed)){line=l;break;}
-        if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";render();return;}
+        if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";packingErrorSpeech=true;render();return;}
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
@@ -209,17 +230,17 @@ final class FboTwoStageScreen {
     private void send(String action,String kiz){send(action,kiz,null);}
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.
-        if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";render();return;}
+        if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";packingErrorSpeech=true;render();return;}
         busy=true;message="";render();executor.execute(()->{try{
             Response<TsdFboPlan> res=api.actFbo(session.authorizationHeader(),id,payload).execute();
-            if(!res.isSuccessful()||res.body()==null){boolean rejected=res.code()>=400&&res.code()<500&&res.code()!=408;String detail=error(res);handler.post(()->{if(rejected){state.rejected();prefs.edit().remove(pendingKey).commit();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;
+            if(!res.isSuccessful()||res.body()==null){boolean rejected=res.code()>=400&&res.code()<500&&res.code()!=408;String detail=error(res);handler.post(()->{if(rejected){state.rejected();prefs.edit().remove(pendingKey).commit();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
-                if(res.code()==409&&rejected)refresh();else render();});return;}
-            TsdFboPlan next=res.body();handler.post(()->{state.accepted();prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
+                if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
+            TsdFboPlan next=res.body();handler.post(()->{state.accepted();manualPackingScan=false;prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
                 if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);
                 if(packingVoiceActive()&&("PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action"))))packingPrompt(packingVoice.accepted(payload.get("operationId")));
                 if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
-        }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";render();});}});
+        }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";packingErrorSpeech=true;render();});}});
     }
     // FIX: do not prefill a physical count or submit stock movements before confirmation.
     private void confirmWholeBoxDialog(){

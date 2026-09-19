@@ -33,6 +33,7 @@ interface FboScanFeedback {
                 prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, R.raw.fbo_pack_barcode, 1));
                 prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, R.raw.fbo_pack_kiz, 1));
                 prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, R.raw.fbo_pack_put, 1));
+                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, R.raw.fbo_pack_error, 1));
             } catch (RuntimeException unavailable) { close(); }
         }
         public void play(boolean accepted) { playSample(accepted ? hit : miss); }

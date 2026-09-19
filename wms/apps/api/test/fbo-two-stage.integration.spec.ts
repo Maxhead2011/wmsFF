@@ -134,6 +134,50 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         expect(results.filter(r=>r.status==='fulfilled')).toHaveLength(1);
         expect((await svc.plan(request,user))).toMatchObject({needed:5,picked:5,packed:1});
     });
+    // TEST: a missed physical scan claims only the unlinked remainder, once, preserving existing marks.
+    it('recovers an unknown KIZ from unlinked stock in an evidenced assembly source', async () => {
+        await manualReady();
+        await p.productMark.delete({where:{id:marks[4].id}});
+        const operationId=randomUUID();
+        const kiz='010468099259845521UNKNOWN000001';
+        // The valid physical serial is exactly 13 characters.
+        const valid=kiz;
+        const before=await p.productMark.findMany({where:{clientId:client},orderBy:{id:'asc'}});
+        expect(await manual(valid,{operationId})).toMatchObject({needed:5,picked:5,packed:1});
+        expect(await manual(valid,{operationId})).toMatchObject({needed:5,picked:5,packed:1});
+        expect(await p.productMark.findMany({where:{clientId:client,id:{in:before.map(m=>m.id)}},orderBy:{id:'asc'}})).toEqual(before);
+        expect((await p.stockBalance.aggregate({where:{boxId:partial,skuId:sku,status:'AVAILABLE'},_sum:{quantity:true}}))._sum.quantity).toBe(0);
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_MANUAL_UNLINKED_STOCK_CLAIM'}})).toBe(1);
+    });
+    // TEST: missing unlinked stock restores a receipt dated Moscow month start without taking a linked unit.
+    it('restores unknown stock at month start and consumes it at packing time exactly once',async()=>{
+        await manualReady();
+        const before=await p.stockBalance.findMany({where:{boxId:partial},orderBy:{id:'asc'}});
+        const operationId=randomUUID(), kiz='010468099259845521UNKNOWN000001';
+        const start=new Date();
+        await manual(kiz,{operationId});await manual(kiz,{operationId});
+        expect(await p.stockBalance.findMany({where:{boxId:partial},orderBy:{id:'asc'}})).toEqual(before);
+        const box=await p.box.findUniqueOrThrow({where:{code:`FBO-RECOVER-${request}`}});
+        expect((await p.stockBalance.aggregate({where:{boxId:box.id},_sum:{quantity:true}}))._sum.quantity).toBe(0);
+        const rows=await p.stockMovement.findMany({where:{boxId:box.id}});
+        expect(rows).toHaveLength(2);
+        const receipt=rows.find(m=>m.type==='RECEIPT')!;
+        const local=new Date(start.getTime()+10800000);
+        expect(receipt.createdAt.toISOString()).toBe(new Date(Date.UTC(local.getUTCFullYear(),local.getUTCMonth(),1)-10800000).toISOString());
+        expect(receipt.quantity).toBe(1);
+        const debit=rows.find(m=>m.quantity===-1)!;expect(debit.createdAt.getTime()).toBeGreaterThanOrEqual(start.getTime());
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_MANUAL_BACKDATED_RECEIPT'}})).toBe(1);
+        expect(await p.fboAssemblyUnit.count({where:{requestId:request,kiz,state:'PACKED'}})).toBe(1);
+    });
+    // TEST: closed target rolls back recovery receipt, mark and stock completely.
+    it('rolls back a reconstructed receipt when packing cannot complete',async()=>{
+        await manualReady();await p.fboAssemblyBox.updateMany({where:{requestId:request,boxCode:'FFL_'+target},data:{closedAt:new Date()}});
+        const count=await p.stockMovement.count({where:{clientId:client}});
+        await expect(manual('010468099259845521UNKNOWN000001')).rejects.toThrow();
+        expect(await p.stockMovement.count({where:{clientId:client}})).toBe(count);
+        expect(await p.productMark.count({where:{clientId:client}})).toBe(5);
+        expect(await p.box.findUnique({where:{code:`FBO-RECOVER-${request}`}})).toBeNull();
+    });
     // TEST: 1509_27 must not consume one unit of demand before an exact whole 1509_31.
     it('prefers the complete matching box over an earlier mixed box', async () => {
         await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });

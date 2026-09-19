@@ -2,7 +2,7 @@ package pro.logoff.wms.tsd;
 
 // FIX: announce transitions, not redraws; acceptance must come from the server.
 final class FboPackingVoice {
-    enum Cue { BOX, BARCODE, KIZ, PUT }
+    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR }
     private Cue last;
     private String acceptedId;
     Cue step(boolean active, boolean ready, String target, String barcode) {
@@ -16,7 +16,7 @@ final class FboPackingVoice {
     Cue accepted(String operationId) {
         if (operationId == null || operationId.equals(acceptedId)) return null;
         acceptedId = operationId;
-        last = Cue.BARCODE; // Do not interrupt "put in box" with the next barcode prompt.
+        last = Cue.BARCODE; // FIX: PUT recording includes the next barcode prompt; do not interrupt it.
         return Cue.PUT;
     }
 }
