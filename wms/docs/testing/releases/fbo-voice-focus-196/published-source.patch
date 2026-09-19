@@ -1,0 +1,135 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 195 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.195-fbo-whole-repack"
++            versionCode = 196 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.196-fbo-voice-focus"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
+@@ -2,7 +2,7 @@
+ 
+ // FIX: announce transitions, not redraws; acceptance must come from the server.
+ final class FboPackingVoice {
+-    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR }
++    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR, CLOSED }
+     private Cue last;
+     private String acceptedId;
+     Cue step(boolean active, boolean ready, String target, String barcode) {
+@@ -13,6 +13,13 @@
+         last = next;
+         return next;
+     }
++    // FIX: acknowledge a confirmed close once and avoid interrupting it on redraw.
++    Cue closed(String operationId) {
++        if (operationId == null || operationId.equals(acceptedId)) return null;
++        acceptedId = operationId;
++        last = Cue.BOX;
++        return Cue.CLOSED;
++    }
+     Cue accepted(String operationId) {
+         if (operationId == null || operationId.equals(acceptedId)) return null;
+         acceptedId = operationId;
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
+@@ -34,6 +34,7 @@
+                 prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, R.raw.fbo_pack_kiz, 1));
+                 prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, R.raw.fbo_pack_put, 1));
+                 prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, R.raw.fbo_pack_error, 1));
++                prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, R.raw.fbo_pack_closed, 1));
+             } catch (RuntimeException unavailable) { close(); }
+         }
+         public void play(boolean accepted) { playSample(accepted ? hit : miss); }
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
+@@ -319,7 +319,10 @@
+             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
+                 if(!prefs.edit().remove(pendingKey).commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
+                 state.accepted();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
+-                if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);packingAccepted(payload);if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
++                if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);packingAccepted(payload);
++                // FIX: preserve confirmed state persistence before announcing closure.
++                if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
++                if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
+         }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";packingErrorSpeech=true;render();});}});
+     }
+     // FIX: do not prefill a physical count or submit stock movements before confirmation.
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboPackingVoiceTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboPackingVoiceTest.java
+@@ -3,6 +3,18 @@
+ import static org.junit.Assert.*;
+ import static pro.logoff.wms.tsd.FboPackingVoice.Cue.*;
+ public class FboPackingVoiceTest {
++    // TEST: confirmed close speaks once, never on pending work or a repeated acknowledgement.
++    @Test public void closureWaitsForConfirmationAndSurvivesRedraw() {
++        FboPackingVoice v=new FboPackingVoice();
++        assertEquals(BARCODE,v.step(true,true,"TARGET",""));
++        assertNull(v.step(true,false,"TARGET",""));
++        assertNull(v.closed(null));
++        assertEquals(CLOSED,v.closed("close1"));
++        assertNull(v.step(true,true,"",""));
++        assertNull(v.closed("close1"));
++        assertEquals(BARCODE,v.step(true,true,"NEXT",""));
++        assertEquals(CLOSED,v.closed("close2"));
++    }
+     // TEST: redraws and pending network requests cannot claim successful packing.
+     @Test public void transitionsAndAcknowledgementsAreDistinct() {
+         FboPackingVoice v=new FboPackingVoice();
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboScanFeedbackTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboScanFeedbackTest.java
+@@ -20,7 +20,7 @@
+     @Test public void packingInstructionsUseCorrectResources() throws Exception {
+         FboScanFeedback.Voice voice=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication());
+         ShadowSoundPool sounds=pool(voice);
+-        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put,R.raw.fbo_pack_error};
++        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put,R.raw.fbo_pack_error,R.raw.fbo_pack_closed};
+         try {
+             for(int i=0;i<resources.length;i++){
+                 voice.prompt(FboPackingVoice.Cue.values()[i]);
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboTwoStageScreenTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboTwoStageScreenTest.java
+@@ -26,6 +26,26 @@
+ 
+ @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
+ public class FboTwoStageScreenTest {
++    // TEST: closing a real packing widget speaks only after the server response.
++    @Test public void closingBoxAnnouncesConfirmedClose() throws Exception {
++        if(!"logoff".equals(BuildConfig.FLAVOR))return;
++        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
++            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
++            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
++            List<FboPackingVoice.Cue> spoken=new ArrayList<>();
++            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
++            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{},feedback);
++            try {
++                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
++                assertFalse(spoken.contains(FboPackingVoice.Cue.CLOSED));
++                box.closed=true; // response supplied by the test API
++                find(a.findViewById(android.R.id.content),"Закрыть короб").performClick();waitIdle(screen);
++                assertEquals(FboPackingVoice.Cue.CLOSED,spoken.get(spoken.size()-1));
++                assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.CLOSED));
++            }finally{screen.close();}
++        }
++    }
++
+     private TextView findAction(View v,String title){
+         if(v instanceof android.widget.Button&&((TextView)v).getText().toString().equals(title))return (TextView)v;
+         if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){TextView found=findAction(((ViewGroup)v).getChildAt(i),title);if(found!=null)return found;}return null;
+--- a/wms/apps/web/src/components/client-requests/FboTwoStagePanel.tsx
++++ b/wms/apps/web/src/components/client-requests/FboTwoStagePanel.tsx
+@@ -48,7 +48,8 @@
+     if(barcode){await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode,kiz:value});return;}
+     const line=plan.lines.find(l=>l.barcode===value&&(plan.phase==='PICKING'?l.remaining>0:l.picked>l.packed));
+     if(!line){setError('Этот ШК не требуется на текущем этапе.');return;}
+-    if(line.requiresKiz){setBarcode(value);setError('');}
++    // FIX: focus the scanner after accepting a marked-product barcode.
++    if(line.requiresKiz){setBarcode(value);setError('');field.current?.focus();}
+     else await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode:value});
+   }
+   async function refresh(){if(inFlight.current||pending)return;inFlight.current=true;setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);if(!active.current)return;setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){if(active.current)setError(`Не удалось обновить статистику: ${String(e)}`);}finally{inFlight.current=false;if(active.current)setBusy(false);}}
