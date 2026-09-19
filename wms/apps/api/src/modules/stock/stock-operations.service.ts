@@ -1,3 +1,4 @@
+import { reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { createHash, randomUUID } from 'node:crypto';
@@ -3714,6 +3715,9 @@ export class StockOperationsService {
       );
     }
 
+    // FIX: retrying an already submitted shipment also repairs stranded packing.
+    if (request.status === ClientRequestStatus.DONE && operationName === 'Отгрузка') await reconcileDoneRequestPacking(tx, request.id);
+
     // FIX: shipment already recorded per WB order is excluded from subsequent whole-request operations.
     if (wbOrderStockLifecycleEnabled() && request.status !== ClientRequestStatus.DONE) {
       this.ensureRequestCanMove(request, operationName);
@@ -3959,6 +3963,8 @@ export class StockOperationsService {
       createdAt: Date;
     },
   ) {
+    // FIX: DONE closes proven packing in the same transaction as status/history.
+    if (input.statusTo === ClientRequestStatus.DONE) await reconcileDoneRequestPacking(tx, input.request.id);
     if (input.request.status === input.statusTo) {
       return;
     }
