@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 
 export const urgentWbStockSyncEnabled = () => process.env.WMS_WB_URGENT_STOCK_SYNC === 'true';
-type Scope = { clientId: string; revision?: bigint };
+type Scope = { clientId: string; snapshot?: string; capturedAt?: number; pools?: Map<number, Set<string>> };
 type UrgentContext = { skuIds: string[] | null; guard?: () => Promise<void> };
 export const urgentWbSkuIds = () => urgent.getStore()?.skuIds ?? null;
 const plans = new AsyncLocalStorage<Scope>();
@@ -14,9 +14,9 @@ export class StaleWbStockPlan extends Error {
   constructor() { super('Остатки или заказы изменились. Старый расчёт не отправлен; выполняется повторная синхронизация.'); }
 }
 
-export async function stockRevision(db: PrismaService, clientId: string): Promise<bigint> {
-  const rows = await db.$queryRaw<Array<{ revision: bigint }>>`SELECT revision FROM "WbStockSyncQueue" WHERE "clientId" = ${clientId}`;
-  return rows[0]?.revision ?? 0n;
+export async function stockRevision(db: PrismaService): Promise<string> {
+  const rows = await db.$queryRaw<Array<{ snapshot: string }>>`SELECT txid_current_snapshot()::text AS snapshot`;
+  return rows[0].snapshot;
 }
 
 // FIX: each calculation owns its revision; parallel requests never share mutable plan state.
@@ -28,19 +28,40 @@ export async function captureWbStockPlan(db: PrismaService, clientId: string) {
   if (!urgentWbStockSyncEnabled()) return;
   const scope = plans.getStore();
   if (!scope || scope.clientId !== clientId) return; // Read-only screens do not publish.
-  if (scope.revision === undefined) scope.revision = await stockRevision(db, clientId);
-  else await assertFreshWbStockPlan(db, clientId);
+  if (scope.snapshot === undefined) { scope.snapshot = await stockRevision(db); scope.capturedAt = Date.now(); }
 }
-export async function assertFreshWbStockPlan(db: PrismaService, clientId: string) {
+// FIX: capture complete relabel pools so unrelated SKU activity does not invalidate a send.
+export function registerWbStockPlan(quantities: Map<string, { chrtId: number }>, meta: Map<string, { sources?: Array<{ skuId: string }> }>) {
+  const scope = plans.getStore();
+  if (!scope) return;
+  scope.pools ??= new Map();
+  for (const [skuId, value] of quantities) {
+    const pool = expandWbStockScope([skuId], meta);
+    const existing = scope.pools.get(value.chrtId) ?? new Set<string>();
+    pool.forEach(id => existing.add(id)); scope.pools.set(value.chrtId, existing);
+  }
+}
+export async function assertFreshWbStockPlan(db: PrismaService, clientId: string, chrtIds?: number[]) {
   if (!urgentWbStockSyncEnabled()) return;
   const scope = plans.getStore();
-  if (!scope || scope.clientId !== clientId || scope.revision === undefined) throw new StaleWbStockPlan();
+  if (!scope || scope.clientId !== clientId || !scope.snapshot || Date.now() - scope.capturedAt! > 1_200_000) throw new StaleWbStockPlan();
   await urgent.getStore()?.guard?.();
-  if (scope.revision !== await stockRevision(db, clientId)) throw new StaleWbStockPlan();
+  const ids = new Set<string>();
+  // Unknown mappings fail closed by validating all events, never by ignoring a size.
+  const scoped = chrtIds?.length && chrtIds.every(id => scope.pools?.has(id));
+  if (scoped) chrtIds!.forEach(id => scope.pools!.get(id)!.forEach(sku => ids.add(sku)));
+  const rows = await db.$queryRaw<Array<{ stale: boolean }>>`SELECT EXISTS (
+    SELECT 1 FROM "WbStockSyncEvent" WHERE "clientId" = ${clientId}
+      AND txid >= txid_snapshot_xmin(${scope.snapshot}::txid_snapshot)
+      AND NOT txid_visible_in_snapshot(txid, ${scope.snapshot}::txid_snapshot)
+      AND (${!scoped} OR "allSkus" OR "skuIds" && ${[...ids]}::text[])
+  ) AS stale`;
+  if (rows[0]?.stale !== false) throw new StaleWbStockPlan();
 }
 
 export const wbStockRetryDelay = (attempt: number) => Math.min(300_000, 5_000 * 2 ** Math.min(6, Math.max(0, attempt - 1)));
-type Job = { clientId: string; revision: bigint; attempts: number; skuIds?: string[]; allSkus?: boolean };
+type Job = { clientId: string; attempts: number };
+type Event = { id: bigint; skuIds: string[]; allSkus: boolean };
 
 // FIX: a committed database event survives restart; one lease coalesces a client's changes.
 export class WbStockSyncWorker {
@@ -60,12 +81,22 @@ export class WbStockSyncWorker {
   async tick() {
     if (!urgentWbStockSyncEnabled()) return;
     const token = randomUUID();
-    const rows = await this.db.$queryRaw<Job[]>`UPDATE "WbStockSyncQueue" SET "leaseToken" = ${token}, "leaseUntil" = now() + interval '60 seconds'
-      WHERE "clientId" = (SELECT "clientId" FROM "WbStockSyncQueue" WHERE revision > "completedRevision" AND "nextAttemptAt" <= now()
-        AND ("leaseUntil" IS NULL OR "leaseUntil" < now()) ORDER BY "nextAttemptAt", "requestedAt" LIMIT 1 FOR UPDATE SKIP LOCKED)
-      RETURNING "clientId", revision, attempts, "skuIds", "allSkus"`;
+    // Queue rows are owned only by workers; business transactions merely append events.
+    await this.db.$executeRaw`INSERT INTO "WbStockSyncQueue" ("clientId")
+      SELECT DISTINCT "clientId" FROM "WbStockSyncEvent" WHERE "processedAt" IS NULL
+      ON CONFLICT ("clientId") DO NOTHING`;
+    const rows = await this.db.$queryRaw<Job[]>`UPDATE "WbStockSyncQueue" q SET "leaseToken" = ${token}, "leaseUntil" = now() + interval '60 seconds'
+      WHERE q."clientId" = (SELECT "clientId" FROM "WbStockSyncQueue" c WHERE "nextAttemptAt" <= now()
+        AND ("leaseUntil" IS NULL OR "leaseUntil" < now())
+        AND EXISTS (SELECT 1 FROM "WbStockSyncEvent" e WHERE e."clientId" = c."clientId" AND e."processedAt" IS NULL)
+        ORDER BY "nextAttemptAt", "requestedAt" LIMIT 1 FOR UPDATE SKIP LOCKED)
+      RETURNING "clientId", attempts`;
     const job = rows[0];
     if (!job) return;
+    const events = await this.db.$queryRaw<Event[]>`SELECT id, "skuIds", "allSkus" FROM "WbStockSyncEvent"
+      WHERE "clientId" = ${job.clientId} AND "processedAt" IS NULL ORDER BY id LIMIT 5000`;
+    const eventIds = events.map(e => e.id);
+    const skuIds = events.some(e => e.allSkus) ? null : [...new Set(events.flatMap(e => e.skuIds))];
     let leaseLost = false;
     const renew = async () => {
       const count = await this.db.$executeRaw`UPDATE "WbStockSyncQueue" SET "leaseUntil" = now() + interval '60 seconds'
@@ -77,20 +108,23 @@ export class WbStockSyncWorker {
     heartbeat.unref?.();
     const record = (phase: string, details: Record<string, unknown> = {}) => this.db.auditLog.create({ data: {
       action: 'WB_STOCK_URGENT_SYNC', entity: 'Client', entityId: job.clientId,
-      payload: { phase, revision: job.revision.toString(), ...details } as any,
+      payload: { phase, eventCount: events.length, lastEventId: events.at(-1)?.id.toString(), ...details } as any,
     } });
     try {
       await record('STARTED');
-      await urgent.run({ skuIds: job.allSkus || !job.skuIds?.length ? null : job.skuIds, guard: renew }, () => this.sync(job.clientId));
-      // A change during the last HTTP request remains pending; it cannot be acknowledged away.
-      const current = await stockRevision(this.db, job.clientId);
-      if (current !== job.revision || leaseLost) throw new StaleWbStockPlan();
+      await urgent.run({ skuIds, guard: renew }, () => this.sync(job.clientId));
       await renew();
-      await record('PROCESSED');
-      await this.db.$executeRaw`UPDATE "WbStockSyncQueue" SET "completedRevision" = ${job.revision}, attempts = 0, "lastError" = NULL,
-        "skuIds" = CASE WHEN revision = ${job.revision} THEN ARRAY[]::text[] ELSE "skuIds" END,
-        "allSkus" = CASE WHEN revision = ${job.revision} THEN false ELSE "allSkus" END,
-        "leaseToken" = NULL, "leaseUntil" = NULL WHERE "clientId" = ${job.clientId} AND "leaseToken" = ${token}`;
+      // FIX: acknowledge only events observed before this calculation. A late commit stays pending,
+      // even if its sequence ID was allocated before newer already-processed transactions.
+      await this.db.$transaction(async tx => {
+        const owned = await tx.$executeRaw`UPDATE "WbStockSyncQueue" SET attempts = 0, "lastError" = NULL,
+          "nextAttemptAt" = now(), "leaseToken" = NULL, "leaseUntil" = NULL
+          WHERE "clientId" = ${job.clientId} AND "leaseToken" = ${token} AND "leaseUntil" > now()`;
+        if (owned !== 1) throw new StaleWbStockPlan();
+        await tx.$executeRaw`UPDATE "WbStockSyncEvent" SET "processedAt" = now() WHERE id = ANY(${eventIds}::bigint[])`;
+        await tx.auditLog.create({ data: { action: 'WB_STOCK_URGENT_SYNC', entity: 'Client', entityId: job.clientId,
+          payload: { phase: 'PROCESSED', eventCount: events.length } } });
+      });
     } catch (error) {
       const stale = error instanceof StaleWbStockPlan;
       const message = stale ? error.message : 'Синхронизация WB не подтверждена. Следующая попытка выполнит новый расчёт и проверку.';
@@ -112,6 +146,9 @@ export class WbStockSyncWorker {
 export function urgentWbStockScope(meta: Map<string, { sources?: Array<{ skuId: string }> }>): Set<string> | null {
   const changed = urgentWbSkuIds();
   if (!changed) return null;
+  return expandWbStockScope(changed, meta);
+}
+export function expandWbStockScope(changed: string[], meta: Map<string, { sources?: Array<{ skuId: string }> }>): Set<string> {
   const result = new Set(changed);
   let expanded = true;
   while (expanded) {

@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assertFreshWbStockPlan, captureWbStockPlan, StaleWbStockPlan, withWbStockPlan, WbStockSyncWorker, wbStockRetryDelay, urgentWbStockScope } from '../src/modules/marketplace-connections/wb-stock-sync-queue';
+import { assertFreshWbStockPlan, captureWbStockPlan, StaleWbStockPlan, withWbStockPlan, WbStockSyncWorker, wbStockRetryDelay, urgentWbStockScope, registerWbStockPlan } from '../src/modules/marketplace-connections/wb-stock-sync-queue';
 import { allocateFbsStock } from '../src/modules/marketplace-connections/fbs-stock-allocation';
 
 afterEach(() => vi.unstubAllEnvs());
 function fixture() {
   vi.stubEnv('WMS_WB_URGENT_STOCK_SYNC', 'true');
-  let revision = 1n;
-  const db = { $queryRaw: vi.fn(async (sql: TemplateStringsArray) => sql.join('').includes('RETURNING') ? [{ clientId: 'client', revision, attempts: 0 }] : [{ revision }]),
-    $executeRaw: vi.fn(async () => 1), auditLog: { create: vi.fn(async () => ({})) }, fbsStockAllocationPolicy: { updateMany: vi.fn(async () => ({})) } };
-  return { db: db as any, change: () => { revision++; } };
+  let stale = false;
+  const db: any = { $queryRaw: vi.fn(async (sql: TemplateStringsArray) => {
+    const q = sql.join('');
+    if (q.includes('txid_current_snapshot')) { stale = false; return [{ snapshot: '1:10:' }]; }
+    if (q.includes('RETURNING')) return [{ clientId: 'client', attempts: 0 }];
+    if (q.includes('SELECT id,')) return [{ id: 1n, skuIds: ['target1'], allSkus: false }];
+    return [{ stale }];
+  }), $executeRaw: vi.fn(async () => 1), auditLog: { create: vi.fn(async () => ({})) }, fbsStockAllocationPolicy: { updateMany: vi.fn(async () => ({})) } };
+  db.$transaction = (fn: any) => fn(db);
+  return { db, change: () => { stale = true; } };
 }
 describe('WB stock urgent queue', () => {
   // TEST: a committed sale while waiting for the HTTP rate limiter invalidates a positive plan.
@@ -19,7 +25,8 @@ describe('WB stock urgent queue', () => {
       await assertFreshWbStockPlan(f.db, 'client');
       f.change();
       await expect(assertFreshWbStockPlan(f.db, 'client')).rejects.toBeInstanceOf(StaleWbStockPlan);
-      await expect(captureWbStockPlan(f.db, 'client')).rejects.toBeInstanceOf(StaleWbStockPlan);
+      await captureWbStockPlan(f.db, 'client');
+      await expect(assertFreshWbStockPlan(f.db, 'client')).rejects.toBeInstanceOf(StaleWbStockPlan);
     });
     await withWbStockPlan('client', async () => {
       await captureWbStockPlan(f.db, 'client');
@@ -33,12 +40,14 @@ describe('WB stock urgent queue', () => {
     await new WbStockSyncWorker(f.db, vi.fn(), vi.fn()).tick();
     expect(f.db.$queryRaw).not.toHaveBeenCalled();
   });
-  // TEST: a change during an in-flight PUT remains dirty and gets a fresh calculation.
-  it('does not acknowledge a newer revision after a successful older send', async () => {
+  // TEST: acknowledge explicit observed event IDs only, never a high-water sequence.
+  it('acknowledges only observed events, leaving concurrent commits pending', async () => {
     const f = fixture();
     await new WbStockSyncWorker(f.db, async () => { f.change(); }, vi.fn()).tick();
-    expect(f.db.auditLog.create.mock.calls.map((c: any) => c[0].data.payload.phase)).toEqual(['STARTED', 'RECALCULATE']);
-    expect(f.db.$executeRaw.mock.calls[0][0].join('')).not.toContain('"completedRevision" =');
+    const calls = f.db.$executeRaw.mock.calls;
+    const ack = calls.find((c: any) => c[0].join('').includes('SET "processedAt"'));
+    expect(ack[1]).toEqual([1n]);
+    expect(f.db.auditLog.create.mock.calls.map((c: any) => c[0].data.payload.phase)).toEqual(['STARTED', 'PROCESSED']);
   });
   // TEST: uncertainty retries the calculation, never replays a stored positive payload.
   it('retries after failure and records confirmation only after successful sync', async () => {
@@ -65,8 +74,6 @@ describe('WB stock urgent queue', () => {
   // TEST: a changed source updates all of its relabel targets without touching unrelated stock.
   it('expands an urgent event to its complete shared relabel pool', async () => {
     const f = fixture();
-    f.db.$queryRaw.mockImplementation(async (sql: TemplateStringsArray) => sql.join('').includes('RETURNING')
-      ? [{ clientId: 'client', revision: 1n, attempts: 0, skuIds: ['target1'], allSkus: false }] : [{ revision: 1n }]);
     await new WbStockSyncWorker(f.db, async () => {
       expect(urgentWbStockScope(new Map([
         ['target2', { sources: [{ skuId: 'source' }] }],

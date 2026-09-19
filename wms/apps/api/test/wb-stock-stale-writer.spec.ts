@@ -9,7 +9,7 @@ it('does not send a stale positive stock after a new order arrives', async () =>
   vi.stubEnv('WMS_WB_URGENT_STOCK_SYNC', 'true');
   vi.stubEnv('WMS_FBS_ZERO_STOCK_HISTORY_ENABLED', 'true');
   let revision = 1n;
-  const db: any = { $queryRaw: vi.fn(async () => [{ revision }]),
+  const db: any = { $queryRaw: vi.fn(async (sql: TemplateStringsArray) => sql.join('').includes('txid_current_snapshot') ? [{ snapshot: '1:10:' }] : [{ stale: revision > 1n }]),
     clientMarketplaceConnection: { findFirst: async () => ({ id: 'conn' }) }, auditLog: { create: vi.fn(async () => ({})) } };
   const svc: any = new MarketplaceConnectionsService(db, {} as never);
   svc.stockControl = { assertEnabled: vi.fn(async () => {}) };
