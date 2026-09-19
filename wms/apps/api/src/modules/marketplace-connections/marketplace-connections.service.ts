@@ -1,3 +1,4 @@
+import { WbStockSyncWorker, withWbStockPlan, captureWbStockPlan, assertFreshWbStockPlan, isUrgentWbStockSync, urgentWbStockScope } from './wb-stock-sync-queue';
 import { fbsZeroStockHistoryEnabled, publishFbsStocksWithHistory } from './fbs-stock-publication-history';
 import { claimReleasedFbsKiz } from './fbs-released-kiz-claim';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
@@ -669,6 +670,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private fbsRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   private fbsBackgroundRefreshRunning = false;
   private fbsBackgroundRefreshStopped = false;
+  private urgentStockWorker?: WbStockSyncWorker;
   private printBillingWorker?: FbsPrintBillingWorker;
 
   constructor(
@@ -707,6 +709,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   onModuleInit() {
+    // FIX: committed stock/order changes bypass the long order-history refresh.
+    this.urgentStockWorker = new WbStockSyncWorker(this.prisma, clientId => this.autoSyncFbsStocksForClient(clientId), message => this.logger.warn(message));
+    this.urgentStockWorker.start();
     // FIX: sold installations without the lifecycle flag never access the new queue.
     if (wbOrderStockLifecycleEnabled()) {
       this.printBillingWorker = new FbsPrintBillingWorker(this.prisma,
@@ -734,6 +739,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       clearTimeout(this.fbsRefreshTimer);
       this.fbsRefreshTimer = undefined;
     }
+    await this.urgentStockWorker?.stop();
     await this.printBillingWorker?.stop();
   }
 
@@ -1120,6 +1126,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async autoSyncFbsStocksForClient(clientId: string) {
+    // FIX: isolate calculation versions across concurrent publication requests.
+    return withWbStockPlan(clientId, () => this.autoSyncFbsStocksForClientFresh(clientId));
+  }
+
+  private async autoSyncFbsStocksForClientFresh(clientId: string) {
+    await captureWbStockPlan(this.prisma, clientId);
     if (
       typeof this.prisma.clientMarketplaceConnection?.findMany !== 'function'
     ) {
@@ -1153,6 +1165,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         try {
           await this.syncAllocatedFbsStocksForConnection(connection.clientId, connection.id);
         } catch (caught) {
+          if (isUrgentWbStockSync()) throw caught;
           this.logger.warn(
             `Automatic allocated FBS stock sync failed for connection ${connection.id}: ${marketplaceErrorText(caught)}`,
           );
@@ -1254,11 +1267,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         this.logger.warn(
           `Automatic FBS stock sync failed for connection ${connection.id}: ${message}`,
         );
+        if (isUrgentWbStockSync()) throw caught;
       }
     }
   }
 
   private async syncAllocatedFbsStocksForConnection(clientId: string, connectionId: string) {
+    // FIX: isolate calculation versions across concurrent publication requests.
+    return withWbStockPlan(clientId, () => this.syncAllocatedFbsStocksForConnectionFresh(clientId, connectionId));
+  }
+
+  private async syncAllocatedFbsStocksForConnectionFresh(clientId: string, connectionId: string) {
+    await captureWbStockPlan(this.prisma, clientId);
     const allocation = this.requireFbsStockAllocationService();
     const [connection, policy] = await Promise.all([
       this.prisma.clientMarketplaceConnection.findFirst({
@@ -1319,13 +1339,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       connection.id,
       primaryWarehouseId,
     );
+    const urgentScope = urgentWbStockScope(stockPlan.meta);
     const overrideBySku = new Map(policy.overrides.map((row) => [row.skuId, row.requestedAmount]));
     // ADDED: a percentage policy owns every matched SKU with free WMS stock.
     // Existing rows stay in the plan after stock reaches zero so WB receives
     // an explicit zero instead of retaining a stale quantity.
     const quantities = [...stockPlan.quantities.values()].filter(
       // FIX: a mapped zero-stock card still needs an explicit WB zero on managed warehouses.
-      (quantity) => fbsZeroStockHistoryEnabled() || quantity.sellable > 0 || sourceBySku.has(quantity.skuId),
+      (quantity) => (!urgentScope || urgentScope.has(quantity.skuId)) && (fbsZeroStockHistoryEnabled() || quantity.sellable > 0 || sourceBySku.has(quantity.skuId)),
     );
     if (quantities.length === 0) {
       await allocation.markSync(policy.id, null);
@@ -6722,6 +6743,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async updateFbsStockPublication(dto: FbsStockPublicationDto, user: AuthUser) {
+    // FIX: isolate calculation versions across concurrent publication requests.
+    return withWbStockPlan(dto.clientId.trim(), () => this.updateFbsStockPublicationFresh(dto, user));
+  }
+
+  private async updateFbsStockPublicationFresh(dto: FbsStockPublicationDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(
       user,
@@ -6894,6 +6920,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async reconcileFbsStockItem(dto: ReconcileFbsStockItemDto, user: AuthUser) {
+    // FIX: isolate calculation versions across concurrent publication requests.
+    return withWbStockPlan(dto.clientId.trim(), () => this.reconcileFbsStockItemFresh(dto, user));
+  }
+
+  private async reconcileFbsStockItemFresh(dto: ReconcileFbsStockItemDto, user: AuthUser) {
     // FIX: preview and apply share one calculation, so the confirmation dialog
     // and the WB PUT can never use different WMS rules.
     const prepared = await this.prepareFbsStockReconciliation(dto, user);
@@ -7031,6 +7062,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
    * decision ("Продавать"/"Не продавать") in the FBS stock tile.
    */
   async updateFbsStockPublicationBulk(dto: FbsStockPublicationBulkDto, user: AuthUser) {
+    // FIX: isolate calculation versions across concurrent publication requests.
+    return withWbStockPlan(dto.clientId.trim(), () => this.updateFbsStockPublicationBulkFresh(dto, user));
+  }
+
+  private async updateFbsStockPublicationBulkFresh(dto: FbsStockPublicationBulkDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     const skuIds = Array.from(new Set(dto.skuIds.map((value) => value.trim()).filter(Boolean)));
     if (!clientId || skuIds.length === 0) {
@@ -7261,6 +7297,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async syncFbsStocks(dto: FbsStockSyncDto, user: AuthUser) {
+    // FIX: isolate calculation versions across concurrent publication requests.
+    return withWbStockPlan(dto.clientId.trim(), () => this.syncFbsStocksFresh(dto, user));
+  }
+
+  private async syncFbsStocksFresh(dto: FbsStockSyncDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(
       user,
@@ -7916,6 +7957,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     connectionId: string,
     warehouseId: string,
   ) {
+    // FIX: capture before any asynchronous stock/reservation reads.
+    await captureWbStockPlan(this.prisma, clientId);
     // A few isolated service tests use deliberately minimal Prisma doubles.
     // In production all delegates exist; falling back to the already computed
     // base quantities keeps those narrow tests compatible.
@@ -8112,7 +8155,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })),
         }),
       },
-      () => this.stockControl.assertEnabled(clientId),
+      async () => { await this.stockControl.assertEnabled(clientId); await assertFreshWbStockPlan(this.prisma, clientId); },
     );
     if (!fbsZeroStockHistoryEnabled()) return send();
     // FIX: all outgoing writers retain immutable intent, acknowledgement and uncached verification.
