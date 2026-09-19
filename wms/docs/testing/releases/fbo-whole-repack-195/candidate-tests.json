@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "apiImage": "sha256:81c57ffc82eb4c5b4ba6b04157d9a31707947394dd68bbfb43a539e599cc049b",
+  "baselineFailed": 131,
+  "candidateFailed": 131,
+  "newFailures": 0,
+  "baselineTests": 1398,
+  "candidateTests": 1398,
+  "note": "Full image suites contain pre-existing failures; candidate introduces none. Local project suite separately passed."
+}

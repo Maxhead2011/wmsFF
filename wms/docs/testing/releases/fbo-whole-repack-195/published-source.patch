@@ -1,0 +1,56 @@
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -341 +341 @@
+-                    if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => !u.wholeBox && u.state === 'PICKED'))
++                    if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => u.state === 'PICKED' && (!u.wholeBox || process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && !!u.markId)))
+@@ -356,0 +357,4 @@
++                // FIX: a whole-picked box may be poured into the packing pile; never debit AVAILABLE twice.
++                if (process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && mark && units.some(u => u.wholeBox && u.state === 'PICKED' && u.markId === mark.id)) {
++                    await this.manualPack(tx, r, dto, user, key);
++                } else {
+@@ -367,0 +372 @@
++                }
+@@ -457 +462 @@
+-        const mark = await this.manualPackingMark(tx, r, dto, user);
++        let mark = await this.manualPackingMark(tx, r, dto, user);
+@@ -468 +473 @@
+-        if (existing && (existing.requestId !== r.id || existing.state !== 'PICKED' || existing.wholeBox))
++        if (existing && (existing.requestId !== r.id || existing.state !== 'PICKED'))
+@@ -471,0 +477,4 @@
++        if (existing?.wholeBox) {
++            await this.unpackPickedWholeBox(tx, r, existing.sourceBoxId, user, key);
++            mark = await tx.productMark.findUniqueOrThrow({ where: { id: mark.id } });
++        }
+@@ -534,0 +544,25 @@
++    }
++    // FIX: change packing representation of already picked stock, atomically with the first unit scan.
++    private async unpackPickedWholeBox(tx: Prisma.TransactionClient, r: Request, sourceId: string, user: AuthUser, key: string) {
++        const source = await tx.box.findUniqueOrThrow({ where: { id: sourceId } });
++        await this.box(tx, r, source.code);
++        await this.requireIdleBox(tx, source.id, r.id);
++        if (await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: source.id } }))
++            throw new ConflictException('Короб уже включён в упаковку. Сначала требуется разбор его упаковки.');
++        const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: r.id, sourceBoxId: source.id, wholeBox: true, state: 'PICKED' } });
++        if (!units.length) throw new ConflictException('Короб уже изменён. Обновите упаковку.');
++        const holding = await tx.box.upsert({ where: { code: `FBO-PICK-${r.id}` },
++            create: { code: `FBO-PICK-${r.id}`, clientId: r.clientId, warehouseId: r.warehouseId, status: 'fbo-picking' }, update: {} });
++        for (const skuId of [...new Set(units.map(u => u.skuId))]) {
++            const group = units.filter(u => u.skuId === skuId);
++            const markIds = group.map(u => u.markId).filter((id): id is string => !!id);
++            const movement = await this.move(tx, r, skuId, source.id, holding.id, 'PACKING', 'PACKING', group.length, `${key}:unpack:${skuId}`, user);
++            if (markIds.length) {
++                const moved = await tx.productMark.updateMany({ where: { id: { in: markIds }, clientId: r.clientId, skuId, boxId: source.id, status: 'PACKING' },
++                    data: { boxId: holding.id, stockMovementId: movement.id } });
++                if (moved.count !== markIds.length) throw new ConflictException('Состав КИЗ исходного короба изменился. Товар не перенесён.');
++            }
++        }
++        await tx.fboAssemblyUnit.updateMany({ where: { id: { in: units.map(u => u.id) } }, data: { wholeBox: false } });
++        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_WHOLE_BOX_OPENED', entity: 'ClientRequest', entityId: r.id,
++            payload: { sourceBoxCode: source.code, holdingBoxCode: holding.code, quantity: units.length, packingOperation: key, repeatedWarehouseDebit: false } } });
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -27,2 +27,2 @@
+-            versionCode = 194 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.194-fbo-packing-recovery"
++            versionCode = 195 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.195-fbo-whole-repack"

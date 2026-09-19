@@ -246,7 +246,7 @@ export class FboTwoStageService {
                 else {
                     if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
                         throw new ConflictException('Для упаковки нужен пустой короб.');
-                    if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => !u.wholeBox && u.state === 'PICKED'))
+                    if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => u.state === 'PICKED' && (!u.wholeBox || process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && !!u.markId)))
                         throw new ConflictException('Все отдельные единицы уже вложены.');
                     await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
                 }
@@ -262,6 +262,10 @@ export class FboTwoStageService {
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
+                // FIX: a whole-picked box may be poured into the packing pile; never debit AVAILABLE twice.
+                if (process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && mark && units.some(u => u.wholeBox && u.state === 'PICKED' && u.markId === mark.id)) {
+                    await this.manualPack(tx, r, dto, user, key);
+                } else {
                 const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && u.barcode === dto.barcode && (mark ? u.markId === mark.id : !u.markId));
                 if (!unit)
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
@@ -273,6 +277,7 @@ export class FboTwoStageService {
                         throw new ConflictException('КИЗ перемещён после отбора. Нужна сверка.');
                 }
                 await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'PACKED', targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id } });
+                }
             }
             else if (dto.action === 'PACK_BOX') {
                 requirePhase('PACKING');
@@ -357,7 +362,7 @@ export class FboTwoStageService {
     // FIX: recover a missed physical pick and pack atomically using the exact scanned mark.
     private async manualPack(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser, key: string) {
         if (!dto.kiz || !dto.barcode) throw new BadRequestException('Отсканируйте ШК и КИЗ товара.');
-        const mark = await this.manualPackingMark(tx, r, dto, user);
+        let mark = await this.manualPackingMark(tx, r, dto, user);
         const sku = await tx.sku.findUnique({ where: { id: mark.skuId }, include: { barcodes: true } });
         if (mark.clientId !== r.clientId || !sku || sku.clientId !== r.clientId ||
             !sku.barcodes.some(b => b.value === dto.barcode) && !r.items.some(i => i.skuId === sku.id && i.barcode === dto.barcode))
@@ -368,10 +373,14 @@ export class FboTwoStageService {
         if (!parcel || parcel.requestId !== r.id || parcel.closedAt || parcel.wholeBox)
             throw new ConflictException('Сначала откройте короб для ручного добавления.');
         const existing = await tx.fboAssemblyUnit.findUnique({ where: { activeMarkId: mark.id } });
-        if (existing && (existing.requestId !== r.id || existing.state !== 'PICKED' || existing.wholeBox))
+        if (existing && (existing.requestId !== r.id || existing.state !== 'PICKED'))
             throw new ConflictException(existing.requestId === r.id && existing.state === 'PACKED'
                 ? `Товар уже упакован в короб ${existing.targetBoxCode}.`
                 : 'КИЗ уже отобран в другой короб или другую сборку.');
+        if (existing?.wholeBox) {
+            await this.unpackPickedWholeBox(tx, r, existing.sourceBoxId, user, key);
+            mark = await tx.productMark.findUniqueOrThrow({ where: { id: mark.id } });
+        }
         let source;
         if (existing) {
             source = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${r.id}` } });
@@ -416,6 +425,31 @@ export class FboTwoStageService {
             await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_PICK_RECOVERED', entity: 'ClientRequest', entityId: r.id,
                 payload: { operationId: dto.operationId, sourceBoxCode: source.code, targetBoxCode: target.code, markId: mark.id, barcode: dto.barcode, addedQuantity } } });
         }
+    }
+    // FIX: change packing representation of already picked stock, atomically with the first unit scan.
+    private async unpackPickedWholeBox(tx: Prisma.TransactionClient, r: Request, sourceId: string, user: AuthUser, key: string) {
+        const source = await tx.box.findUniqueOrThrow({ where: { id: sourceId } });
+        await this.box(tx, r, source.code);
+        await this.requireIdleBox(tx, source.id, r.id);
+        if (await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: source.id } }))
+            throw new ConflictException('Короб уже включён в упаковку. Сначала требуется разбор его упаковки.');
+        const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: r.id, sourceBoxId: source.id, wholeBox: true, state: 'PICKED' } });
+        if (!units.length) throw new ConflictException('Короб уже изменён. Обновите упаковку.');
+        const holding = await tx.box.upsert({ where: { code: `FBO-PICK-${r.id}` },
+            create: { code: `FBO-PICK-${r.id}`, clientId: r.clientId, warehouseId: r.warehouseId, status: 'fbo-picking' }, update: {} });
+        for (const skuId of [...new Set(units.map(u => u.skuId))]) {
+            const group = units.filter(u => u.skuId === skuId);
+            const markIds = group.map(u => u.markId).filter((id): id is string => !!id);
+            const movement = await this.move(tx, r, skuId, source.id, holding.id, 'PACKING', 'PACKING', group.length, `${key}:unpack:${skuId}`, user);
+            if (markIds.length) {
+                const moved = await tx.productMark.updateMany({ where: { id: { in: markIds }, clientId: r.clientId, skuId, boxId: source.id, status: 'PACKING' },
+                    data: { boxId: holding.id, stockMovementId: movement.id } });
+                if (moved.count !== markIds.length) throw new ConflictException('Состав КИЗ исходного короба изменился. Товар не перенесён.');
+            }
+        }
+        await tx.fboAssemblyUnit.updateMany({ where: { id: { in: units.map(u => u.id) } }, data: { wholeBox: false } });
+        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_WHOLE_BOX_OPENED', entity: 'ClientRequest', entityId: r.id,
+            payload: { sourceBoxCode: source.code, holdingBoxCode: holding.code, quantity: units.length, packingOperation: key, repeatedWarehouseDebit: false } } });
     }
     // FIX: an unknown scanned mark can claim only unmarked stock from evidenced sources of this assembly.
     private async manualPackingMark(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser) {

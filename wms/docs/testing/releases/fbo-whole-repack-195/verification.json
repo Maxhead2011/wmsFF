@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 195,
+  "versionName": "0.1.195-fbo-whole-repack",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "44c6e88746c993210dc54540d567cc90ab29657304716450b6995903c6625a36"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "706425a6af0229361e80d9dd9ea8008a8aea48fd04e8bc7067bd2a6d528ca30e",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}
