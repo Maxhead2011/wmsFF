@@ -10,7 +10,7 @@ Branch: fix/fbo-packing-scan-recovery. Target PR: feature/fbo-packing-mode-choic
 
 ## Speech
 
-Bundled Microsoft Irina Russian recordings; no device TTS required.
+Bundled recordings; no device TTS required. PUT starts with the user-authorized recording 20260919_025859.m4a, decoded without changing speech or speed, followed by 0.1s silence and the Microsoft Irina barcode cue. Other phrases use Irina. Original recording metadata is not shipped.
 
 | Asset | Spoken text |
 |---|---|
@@ -28,4 +28,4 @@ Do not publish an APK built directly from this older repository baseline. Integr
 
 ## Local verification
 
-2026-09-19: repository API suite 2696 passed, 38 skipped (227 files passed, 2 skipped). Includes real PostgreSQL receipt/rollback/idempotency tests through the dedicated loopback test database. TypeScript noEmit passed. Android all six variant suites: 143 tests each, 858 executions, zero failures. Production overlay integration and deployment have not been performed. User supplied pronunciation sample 20260919_025859.m4a; whether to use this recording or retain synthesized voice is awaiting clarification.
+2026-09-19: repository API suite 2696 passed, 38 skipped (227 files passed, 2 skipped). Includes real PostgreSQL receipt/rollback/idempotency tests through the dedicated loopback test database. TypeScript noEmit passed. Android all six variant suites: 143 tests each, 858 executions, zero failures. Production overlay integration and deployment have not been performed. User supplied pronunciation sample 20260919_025859.m4a; user explicitly authorized using this recording; user-voice.json records conversion verification and hashes.
