@@ -3480,3 +3480,15 @@ model FboAssemblyAction {
   createdAt DateTime @default(now())
   @@index([requestId, createdAt])
 }
+
+// FIX: independent committed events avoid a shared write lock on warehouse operations.
+model WbStockSyncEvent {
+  id BigInt @id @default(autoincrement())
+  clientId String
+  skuIds String[]
+  allSkus Boolean
+  txid BigInt @default(dbgenerated("txid_current()"))
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  processedAt DateTime? @db.Timestamptz(6)
+  @@index([clientId, txid], map: "WbStockSyncEvent_revision_idx")
+}

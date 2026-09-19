@@ -1,4 +1,4 @@
-import { WbStockSyncWorker, withWbStockPlan, captureWbStockPlan, assertFreshWbStockPlan, isUrgentWbStockSync, urgentWbStockScope } from './wb-stock-sync-queue';
+import { WbStockSyncWorker, withWbStockPlan, captureWbStockPlan, assertFreshWbStockPlan, isUrgentWbStockSync, urgentWbStockScope, registerWbStockPlan } from './wb-stock-sync-queue';
 import { fbsZeroStockHistoryEnabled, publishFbsStocksWithHistory } from './fbs-stock-publication-history';
 import { claimReleasedFbsKiz } from './fbs-released-kiz-claim';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
@@ -8107,6 +8107,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     });
 
+    registerWbStockPlan(adjusted, meta);
     return { quantities: adjusted, meta };
   }
 
@@ -8155,7 +8156,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })),
         }),
       },
-      async () => { await this.stockControl.assertEnabled(clientId); await assertFreshWbStockPlan(this.prisma, clientId); },
+      async () => { await this.stockControl.assertEnabled(clientId); await assertFreshWbStockPlan(this.prisma, clientId, stocks.map(s => s.chrtId)); },
     );
     if (!fbsZeroStockHistoryEnabled()) return send();
     // FIX: all outgoing writers retain immutable intent, acknowledgement and uncached verification.
