@@ -1279,6 +1279,21 @@ model ProductMark {
   @@index([boxId])
 }
 
+// FIX: durable WB stock changes; partial pending index and triggers are defined in the migration.
+model WbStockSyncQueue {
+  clientId          String   @id
+  revision          BigInt   @default(1)
+  completedRevision BigInt   @default(0)
+  requestedAt       DateTime @default(now()) @db.Timestamptz(6)
+  nextAttemptAt     DateTime @default(now()) @db.Timestamptz(6)
+  attempts          Int      @default(0)
+  skuIds            String[] @default([])
+  allSkus           Boolean  @default(false)
+  leaseToken        String?
+  leaseUntil        DateTime? @db.Timestamptz(6)
+  lastError         String?
+}
+
 model StockBalance {
   id         String      @id @default(uuid())
   balanceKey String      @unique
