@@ -1,3 +1,4 @@
+import { fbsZeroStockHistoryEnabled, publishFbsStocksWithHistory } from './fbs-stock-publication-history';
 import { claimReleasedFbsKiz } from './fbs-released-kiz-claim';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
@@ -1323,7 +1324,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // Existing rows stay in the plan after stock reaches zero so WB receives
     // an explicit zero instead of retaining a stale quantity.
     const quantities = [...stockPlan.quantities.values()].filter(
-      (quantity) => quantity.sellable > 0 || sourceBySku.has(quantity.skuId),
+      // FIX: a mapped zero-stock card still needs an explicit WB zero on managed warehouses.
+      (quantity) => fbsZeroStockHistoryEnabled() || quantity.sellable > 0 || sourceBySku.has(quantity.skuId),
     );
     if (quantities.length === 0) {
       await allocation.markSync(policy.id, null);
@@ -8098,7 +8100,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.stockControl.assertEnabled(clientId);
     // ADDED: callers may persist the real WB acknowledgement in an audit
     // history; existing callers can continue ignoring the return value.
-    return marketplaceJsonUncached(
+    const send = () => marketplaceJsonUncached(
       `https://marketplace-api.wildberries.ru/api/v3/stocks/${numericPositiveId(warehouseId, 'склада WB')}`,
       {
         method: 'PUT',
@@ -8112,6 +8114,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       () => this.stockControl.assertEnabled(clientId),
     );
+    if (!fbsZeroStockHistoryEnabled()) return send();
+    // FIX: all outgoing writers retain immutable intent, acknowledgement and uncached verification.
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: { clientId, marketplace: MarketplaceType.WILDBERRIES, apiKey, isActive: true }, select: { id: true },
+    });
+    if (!connection) throw new BadRequestException('Подключение WB для отправки остатков не найдено.');
+    return publishFbsStocksWithHistory(stocks, {
+      record: async (phase, details) => {
+        await this.prisma.auditLog.create({ data: { action: 'FBS_WB_STOCK_PUBLICATION', entity: 'ClientMarketplaceConnection', entityId: connection.id,
+          payload: JSON.parse(JSON.stringify({ clientId, connectionId: connection.id, warehouseId, phase, ...details })) as Prisma.InputJsonObject } });
+      },
+      read: async () => {
+        const amounts = new Map<number, number>();
+        for (const batch of chunks(stocks, 1000)) {
+          const response = await marketplaceJsonUncached(
+            `https://marketplace-api.wildberries.ru/api/v3/stocks/${numericPositiveId(warehouseId, 'склада WB')}`,
+            { method: 'POST', headers: wbHeaders(apiKey), body: JSON.stringify({ chrtIds: batch.map(s => s.chrtId) }) },
+          );
+          for (const row of asArray<Record<string, unknown>>(response.stocks)) {
+            if (typeof row.chrtId === 'number' && typeof row.amount === 'number') amounts.set(row.chrtId, row.amount);
+          }
+        }
+        return amounts;
+      },
+      send,
+    });
   }
 
   async openFbsCargoPacking(payload: Record<string, unknown>, user: AuthUser) {
