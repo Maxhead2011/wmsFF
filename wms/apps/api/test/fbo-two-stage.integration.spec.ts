@@ -178,6 +178,31 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         expect(await p.productMark.count({where:{clientId:client}})).toBe(5);
         expect(await p.box.findUnique({where:{code:`FBO-RECOVER-${request}`}})).toBeNull();
     });
+    // TEST: whole-picked stock can be repacked, without a second pick/debit or a phantom whole box.
+    it.each(['PACK_UNIT','MANUAL_PACK_UNIT'])('unpacks a whole-picked box on %s and packs its remaining units normally',async action=>{
+        await manualReady();
+        const before=await p.stockMovement.count({where:{clientId:client,status:'AVAILABLE'}});
+        const operationId=randomUUID();
+        const payload={targetBoxCode:'FFL_'+target,barcode:'2051234567890',kiz:marks[0].value,operationId};
+        const result=await act(action,payload);
+        expect(result).toMatchObject({needed:4,picked:4,packed:1});
+        expect(result.wholeBoxes).not.toContain('FFL_'+whole);
+        expect(await p.fboAssemblyUnit.count({where:{requestId:request,sourceBoxId:whole,wholeBox:true}})).toBe(0);
+        expect(await p.stockMovement.count({where:{clientId:client,status:'AVAILABLE'}})).toBe(before);
+        expect(await act(action,payload)).toMatchObject({needed:4,picked:4,packed:1});
+        await expect(act(action,{...payload,operationId:randomUUID()})).rejects.toThrow();
+        expect(await act('PACK_UNIT',{...payload,kiz:marks[1].value,operationId:randomUUID()})).toMatchObject({needed:4,picked:4,packed:2});
+        await expect(act('PACK_BOX',{sourceBoxCode:'FFL_'+whole})).rejects.toThrow();
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_WHOLE_BOX_OPENED'}})).toBe(1);
+    });
+    // TEST: a stale mark rolls back the entire whole-box split and target scan.
+    it('does not partially unpack a box if a remaining mark changed location',async()=>{
+        await manualReady();await p.productMark.update({where:{id:marks[1].id},data:{boxId:partial}});
+        const before=await p.stockBalance.findMany({where:{clientId:client},orderBy:{id:'asc'}});
+        await expect(manual(marks[0].value)).rejects.toThrow('Состав КИЗ');
+        expect(await p.stockBalance.findMany({where:{clientId:client},orderBy:{id:'asc'}})).toEqual(before);
+        expect(await p.fboAssemblyUnit.count({where:{requestId:request,sourceBoxId:whole,wholeBox:true,state:'PICKED'}})).toBe(2);
+    });
     // TEST: 1509_27 must not consume one unit of demand before an exact whole 1509_31.
     it('prefers the complete matching box over an earlier mixed box', async () => {
         await p.clientRequestItem.update({ where: { id: line }, data: { quantity: 2 } });
