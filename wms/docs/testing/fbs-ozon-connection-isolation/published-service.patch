@@ -1,0 +1,31 @@
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -0,0 +1 @@
++import { collectFbsConnectionOrders, fbsConnectionIsolationEnabled, type FbsConnectionError } from './fbs-connection-results';
+@@ -346,0 +348 @@
++  connectionErrors?: FbsConnectionError[];
+@@ -2174,3 +2176,6 @@
+-    return { ...scoped, fetchedAt: value?.fetchedAt ?? '', sync: {
+-      refreshing: state?.pending ?? false, partial: !value,
+-      lastSuccessAt: value?.fetchedAt ?? null, error: state?.error ?? null,
++    // FIX: warnings follow the same branch scope as the visible cabinets.
++    const visibleConnections = new Set(scoped.connections.map(connection => connection.id));
++    const connectionErrors = (scoped.connectionErrors ?? []).filter(error => visibleConnections.has(error.connectionId));
++    return { ...scoped, connectionErrors, fetchedAt: value?.fetchedAt ?? '', sync: {
++      refreshing: state?.pending ?? false, partial: !value || connectionErrors.length > 0,
++      lastSuccessAt: value?.fetchedAt ?? null, error: state?.error ?? (connectionErrors.length ? connectionErrors.map(error => error.message).join(' ') : null),
+@@ -26726,3 +26731,4 @@
+-    const rawOrderGroups: WildberriesFbsOrder[][] = (
+-      await Promise.all(
+-        connections.map(async (connection): Promise<WildberriesFbsOrder[]> => {
++    // FIX: a broken cabinet cannot hide healthy orders on the read-only display.
++    const { groups: rawOrderGroups, errors: connectionErrors } = await collectFbsConnectionOrders(
++      connections,
++      async (connection): Promise<WildberriesFbsOrder[]> => {
+@@ -26746,2 +26752,2 @@
+-        }),
+-      )
++      },
++      fbsConnectionIsolationEnabled(Boolean(options.readOnly)),
+@@ -27025,0 +27032 @@
++      ...(connectionErrors.length ? { connectionErrors } : {}),
