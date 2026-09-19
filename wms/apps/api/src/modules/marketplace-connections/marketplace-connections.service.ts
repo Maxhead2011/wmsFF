@@ -1,3 +1,4 @@
+import { claimReleasedFbsKiz } from './fbs-released-kiz-claim';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
 import { fbsCalculationFastEnabled, readFbsCalculationLinks } from './fbs-calculation-links';
@@ -10688,6 +10689,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           );
         }
       }
+    }
+
+    // FIX: reserve a released live KIZ slot before contacting WB, retaining its old binding in audit.
+    if (process.env.WMS_FBS_RELEASED_KIZ_CLAIM_ENABLED === 'true' && mark?.status === StockStatus.AVAILABLE && mark.boxId === task.boxId) {
+      task = await this.withFbsTsdLeaseTransaction(task, user, async tx => {
+        const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+        this.requireCurrentFbsTsdLease(fresh, user);
+        if (fresh.updatedAt.getTime() !== task.updatedAt.getTime()) this.throwFbsTsdTaskStale(fresh, user);
+        return claimReleasedFbsKiz(tx, fresh, kiz, user.id);
+      });
     }
 
     let historicalMarkRegistration:
