@@ -45,6 +45,25 @@ public class FboTwoStageScreenTest {
             }finally{screen.close();}
         }
     }
+    // TEST: closing a real packing widget speaks only after the server response.
+    @Test public void closingBoxAnnouncesConfirmedClose() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
+            List<FboPackingVoice.Cue> spoken=new ArrayList<>();
+            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
+            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{},feedback);
+            try {
+                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
+                assertFalse(spoken.contains(FboPackingVoice.Cue.CLOSED));
+                box.closed=true; // response supplied by the test API
+                find(a.findViewById(android.R.id.content),"Закрыть короб").performClick();waitIdle(screen);
+                assertEquals(FboPackingVoice.Cue.CLOSED,spoken.get(spoken.size()-1));
+                assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.CLOSED));
+            }finally{screen.close();}
+        }
+    }
     // TEST: failed and uncertain PACK_UNIT requests never tell the operator to put the item away.
     @Test public void packingErrorsSpeakOnceAndCannotCancelUnknownResult() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;

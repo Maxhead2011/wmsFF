@@ -38,7 +38,8 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     if(barcode){await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode,kiz:value});return;}
     const line=plan.lines.find(l=>l.barcode===value&&(plan.phase==='PICKING'?l.remaining>0:l.picked>l.packed));
     if(!line){setError('Этот ШК не требуется на текущем этапе.');return;}
-    if(line.requiresKiz){setBarcode(value);setError('');}
+    // FIX: the same scanner input becomes the KIZ field; return focus from the submit button.
+    if(line.requiresKiz){setBarcode(value);setError('');field.current?.focus();}
     else await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode:value});
   }
   async function refresh(){if(inFlight.current||pending)return;inFlight.current=true;setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){setError(String(e));}finally{inFlight.current=false;setBusy(false);}}

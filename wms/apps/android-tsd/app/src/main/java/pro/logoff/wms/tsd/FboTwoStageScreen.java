@@ -239,6 +239,8 @@ final class FboTwoStageScreen {
             TsdFboPlan next=res.body();handler.post(()->{state.accepted();manualPackingScan=false;prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
                 if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);
                 if(packingVoiceActive()&&("PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action"))))packingPrompt(packingVoice.accepted(payload.get("operationId")));
+                // FIX: only the successful server response may announce box closure.
+                if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
                 if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
         }catch(Exception e){handler.post(()->{busy=false;feedbackColor=Color.rgb(254,202,202);message="Ответ не получен. Повторите тот же запрос.";packingErrorSpeech=true;render();});}});
     }
