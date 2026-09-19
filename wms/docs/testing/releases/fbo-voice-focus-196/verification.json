@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 196,
+  "versionName": "0.1.196-fbo-voice-focus",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "c7ea317bc079ea505affd01e3ef9340bd509b440d741b1d495baf8ef26ab3f09"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 178,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "9a00b24d216a90645f2892ff114bfec1e40f12c260099c509797e03129cc27d3",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}
