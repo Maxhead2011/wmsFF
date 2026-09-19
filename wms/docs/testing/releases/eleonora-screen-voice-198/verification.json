@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 198,
+  "versionName": "0.1.198-eleonora-events",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "50284c615fc25c7ae568c5729c1f63a65b4ef4f5181b414a3a97e61ae24ea27f"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 184,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 184,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 184,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 184,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 184,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 184,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "c3f1e717ae43a9c94c3fff76ab3ad3ce6eec8f2a06ae2c55128d182672ab9886",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}
