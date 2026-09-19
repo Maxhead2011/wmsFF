@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "path": [
+    194,
+    195
+  ],
+  "signedApkStarts": true,
+  "languagePreserved": "uz",
+  "preferencesPreserved": true,
+  "pendingOperationPreserved": true,
+  "apkSha256": "a035fa06aa023e25fb44dfc931a2d192ab0a2a6c612541bc86cef0845435cfbc"
+}
