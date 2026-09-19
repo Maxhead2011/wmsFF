@@ -1,3 +1,4 @@
+import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { collectFbsConnectionOrders, type FbsConnectionError } from './fbs-connection-results';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
@@ -17379,6 +17380,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const doneRequests: Array<{ id: string }> = [];
     for (const ids of chunks(uniqueStrings(currentTasks.map(task => task.requestId)), 10000)) {
       doneRequests.push(...await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE', id: { in: ids } }, select: { id: true } }));
+    }
+    // FIX: a migrated shipment fact does not prove that its packing ledger was closed.
+    if (doneRequestPackingEnabled()) {
+      const residuals = await this.prisma.stockMovement.groupBy({ by: ['sourceDocument'],
+        where: { clientId, status: 'PACKING', sourceDocument: { not: null } },
+        _sum: { quantity: true }, having: { quantity: { _sum: { gt: 0 } } },
+      });
+      const residualIds = new Set(residuals.map(row => row.sourceDocument));
+      for (const request of doneRequests) {
+        if (!residualIds.has(request.id)) continue;
+        try {
+          await this.prisma.$transaction(tx => reconcileDoneRequestPacking(tx, request.id), { timeout: 30_000 });
+        } catch (error) {
+          this.logger.warn(`Done request ${request.id} needs packing reconciliation: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     }
     const doneIds = new Set(doneRequests.map(request => request.id));
     const incomingShipped = new Set(orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped')
