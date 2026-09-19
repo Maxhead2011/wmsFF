@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "before": "sha256:00a05dc3b67b815de2d80ef55d28b644371d053d81fa332d488c589c341acfd4",
+  "after": "sha256:8319248be19517c39f4d30d8d514f37365eb35d67d04e31259554f26c7607063",
+  "changes": [
+    "/app/apps/api/dist/modules/marketplace-connections/fbs-connection-results.js",
+    "/app/apps/api/dist/modules/marketplace-connections/marketplace-connections.service.js",
+    "/app/apps/api/src/modules/marketplace-connections/fbs-connection-results.ts",
+    "/app/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts"
+  ]
+}

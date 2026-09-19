@@ -1,3 +1,4 @@
+import { collectFbsConnectionOrders, type FbsConnectionError } from './fbs-connection-results';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
 import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
@@ -325,6 +326,7 @@ type FbsOrdersResponse = {
   };
   counts: { active: number; shipped: number; cancelled: number; archive: number; all: number };
   orders: FbsOrderSummary[];
+  connectionErrors?: FbsConnectionError[];
 };
 
 type FbsOrderHistoryMode = 'full' | 'cache-only';
@@ -26102,9 +26104,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       };
     }
 
-    const rawOrderGroups: WildberriesFbsOrder[][] = (
-      await Promise.all(
-        connections.map(async (connection): Promise<WildberriesFbsOrder[]> => {
+    // FIX: a broken cabinet cannot hide healthy orders on the read-only display.
+    const { groups: rawOrderGroups, errors: connectionErrors } = await collectFbsConnectionOrders(
+      connections,
+      async (connection): Promise<WildberriesFbsOrder[]> => {
           if (connection.marketplace === MarketplaceType.WILDBERRIES) {
             return (await this.fetchWildberriesFbsOrders(
               connection,
@@ -26118,8 +26121,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             return (await this.fetchYandexFbsOrders(connection)) as WildberriesFbsOrder[];
           }
           return [] as WildberriesFbsOrder[];
-        }),
-      )
+      },
+      false /* Legacy operational loader stays strict; published display adapter opts in. */,
     );
     const rawOrders = rawOrderGroups.flat();
 
@@ -26388,6 +26391,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return {
       client,
       connected: true,
+      ...(connectionErrors.length ? { connectionErrors } : {}),
       connections: connections.map((connection) => ({
         id: connection.id,
         marketplace: connection.marketplace,
