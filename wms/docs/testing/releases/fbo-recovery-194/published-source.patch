@@ -1,0 +1,183 @@
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -457 +457 @@
+-        const mark = await this.exactMark(tx, dto.kiz);
++        const mark = await this.manualPackingMark(tx, r, dto, user);
+@@ -534,0 +535,56 @@
++    }
++    // FIX: an unknown scanned mark can claim only unmarked stock from evidenced sources of this assembly.
++    private async manualPackingMark(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser) {
++        const key = identity(dto.kiz!);
++        const rows = await tx.productMark.findMany({ where: { OR: [key, ']d2' + key, ']D2' + key]
++            .map(prefix => ({ value: { startsWith: prefix.replace(/[\\%_]/g, '\\$&') } })) } });
++        const matches = rows.filter(m => identity(m.value) === key);
++        if (matches.length > 1) throw new ConflictException('Несколько записей этого КИЗ. Отмените скан и передайте товар администратору.');
++        if (matches.length === 1) return matches[0];
++        if (!physicalKizIdentity(dto.kiz!)) throw new BadRequestException('Не распознан КИЗ. Отсканируйте маркировку товара.');
++        const skus = await tx.sku.findMany({ where: { clientId: r.clientId, barcodes: { some: { value: dto.barcode! } } } });
++        if (skus.length !== 1) throw new ConflictException('ШК не определяет единственный товар клиента. Отмените скан.');
++        const sku = skus[0];
++        // A prior pick or explicit selection proves association with this request; never guess across all warehouse boxes.
++        const [picked, selected] = await Promise.all([
++            tx.fboAssemblyUnit.findMany({ where: { requestId: r.id, skuId: sku.id, state: { not: 'RETURNED' } }, select: { sourceBoxId: true } }),
++            tx.clientRequestBoxSelection.findMany({ where: { requestItem: { requestId: r.id, skuId: sku.id } }, select: { boxId: true } }),
++        ]);
++        const ids = [...new Set([...picked.map(x => x.sourceBoxId), ...selected.map(x => x.boxId)].filter((x): x is string => !!x))];
++        const candidates = await tx.box.findMany({ where: { id: { in: ids }, clientId: r.clientId, warehouseId: r.warehouseId,
++            status: 'active', code: { not: dto.targetBoxCode! } }, orderBy: { code: 'asc' } });
++        for (const candidate of candidates) {
++            const source = await this.box(tx, r, candidate.code);
++            if ((await this.busyBoxes(tx, [source.id], r.id, true)).has(source.id)) continue;
++            const [balance, linked] = await Promise.all([
++                tx.stockBalance.aggregate({ where: { boxId: source.id, skuId: sku.id, clientId: r.clientId, warehouseId: r.warehouseId,
++                    status: 'AVAILABLE' }, _sum: { quantity: true } }),
++                tx.productMark.count({ where: { boxId: source.id, skuId: sku.id, status: { not: 'SHIPPING' } } }),
++            ]);
++            if ((balance._sum.quantity ?? 0) <= linked) continue;
++            const mark = await tx.productMark.create({ data: { clientId: r.clientId, skuId: sku.id, boxId: source.id,
++                value: dto.kiz!, status: 'AVAILABLE', sourceDocument: r.id } });
++            await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_UNLINKED_STOCK_CLAIM', entity: 'ClientRequest', entityId: r.id,
++                payload: { operationId: dto.operationId, sourceBoxCode: source.code, barcode: dto.barcode, markId: mark.id,
++                    sourceInferred: true, availableBefore: balance._sum.quantity, linkedMarksBefore: linked } } });
++            return mark;
++        }
++        // FIX: explicit business rule: recover unknown physical goods as a backdated receipt, atomically with packing.
++        const recordedAt = new Date();
++        const moscow = new Date(recordedAt.getTime() + 3 * 60 * 60 * 1000);
++        const receivedAt = new Date(Date.UTC(moscow.getUTCFullYear(), moscow.getUTCMonth(), 1) - 3 * 60 * 60 * 1000);
++        const code = `FBO-RECOVER-${r.id}`;
++        await tx.box.upsert({ where: { code }, create: { code, clientId: r.clientId, warehouseId: r.warehouseId }, update: {} });
++        const source = await this.box(tx, r, code);
++        const dimensions = { clientId: r.clientId, warehouseId: r.warehouseId, skuId: sku.id, boxId: source.id, palletId: source.palletId, status: 'AVAILABLE' as const };
++        const balanceKey = this.balances.balanceKey(dimensions);
++        await tx.stockBalance.upsert({ where: { balanceKey }, create: { ...dimensions, balanceKey, quantity: 1 }, update: { quantity: { increment: 1 } } });
++        const receipt = await tx.stockMovement.create({ data: { ...dimensions, type: 'RECEIPT', quantity: 1,
++            sourceDocument: r.id, idempotencyKey: `fbo-recovery:${r.id}:${dto.operationId}`, createdAt: receivedAt,
++            comment: `Восстановительное поступление при упаковке FBO. Источник не установлен. Фактически записано ${recordedAt.toISOString()}; ${user.name || user.id}` } });
++        const mark = await tx.productMark.create({ data: { clientId: r.clientId, skuId: sku.id, boxId: source.id,
++            value: dto.kiz!, status: 'AVAILABLE', sourceDocument: r.id, stockMovementId: receipt.id } });
++        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_BACKDATED_RECEIPT', entity: 'ClientRequest', entityId: r.id,
++            payload: { operationId: dto.operationId, barcode: dto.barcode, markId: mark.id, receiptMovementId: receipt.id,
++                receivedAt: receivedAt.toISOString(), recordedAt: recordedAt.toISOString(), sourceUnknown: true, quantity: 1 } } });
++        return mark;
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -27,2 +27,2 @@
+-            versionCode = 193 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.193-fbo-manual-packing"
++            versionCode = 194 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.194-fbo-packing-recovery"
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
+@@ -5 +5 @@
+-    enum Cue { BOX, BARCODE, KIZ, PUT }
++    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR }
+@@ -19 +19 @@
+-        last = Cue.BARCODE; // Do not interrupt "put in box" with the next barcode prompt.
++        last = Cue.BARCODE; // FIX: PUT recording includes the next barcode prompt; do not interrupt it.
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
+@@ -35,0 +36 @@
++                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, R.raw.fbo_pack_error, 1));
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
+@@ -44,0 +45 @@
++    private boolean manualPackingScan,packingErrorSpeech;
+@@ -110,0 +112,12 @@
++    // FIX: cancel only the unsubmitted barcode/KIZ pair, never a committed packing operation.
++    private boolean packingScanRecovery(){return !closed&&packingChoices()&&plan!=null&&"PACKING".equals(screenPhase())&&!state.target.isEmpty()&&!state.barcode.isEmpty();}
++    private void cancelPackingScan(){
++        if(!packingScanRecovery()||!ready())return;
++        handler.removeCallbacks(automatic);state.barcode="";manualPackingScan=false;
++        message="Скан отменён. Отсканируйте ШК следующего товара.";feedbackColor=Color.TRANSPARENT;render();
++    }
++    private void manualPackingKiz(){
++        if(!packingScanRecovery()||!ready()||!plan.manualPackingEnabled)return;
++        handler.removeCallbacks(automatic);manualPackingScan=true;
++        message="Отсканируйте КИЗ для товара "+state.barcode;feedbackColor=Color.TRANSPARENT;render();
++    }
+@@ -153,0 +167,4 @@
++                if(packingScanRecovery()){
++                    button(root,"Отменить скан",ready(),this::cancelPackingScan);
++                    if(plan.manualPackingEnabled)button(root,"Добавить КИЗ вручную",ready(),this::manualPackingKiz);
++                }
+@@ -198,0 +216 @@
++        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices())packingPrompt(FboPackingVoice.Cue.ERROR);}
+@@ -220 +238 @@
+-                    else{message="Этот короб не ожидается среди целых коробов заявки.";render();}
++                    else{message="Этот короб не ожидается среди целых коробов заявки.";packingErrorSpeech=true;render();}
+@@ -222 +240 @@
+-                    if(plan.wholeBoxes.contains(value)){message="Выберите «Отсканировать целые короба» для этого короба.";render();}
++                    if(plan.wholeBoxes.contains(value)){message="Выберите «Отсканировать целые короба» для этого короба.";packingErrorSpeech=true;render();}
+@@ -228 +246 @@
+-            else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";feedbackColor=Color.rgb(254,202,202);render();}
++            else if(!plan.wholeBoxes.isEmpty()){message="Сначала отсканируйте целые короба.";packingErrorSpeech=true;feedbackColor=Color.rgb(254,202,202);render();}
+@@ -234 +252 @@
+-            else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";render();}
++            else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";packingErrorSpeech=true;render();}
+@@ -237,0 +256 @@
++        if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
+@@ -240 +259 @@
+-        if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";render();return;}
++        if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";packingErrorSpeech=true;render();return;}
+@@ -257 +276 @@
+-        state.accepted();state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
++        state.accepted();manualPackingScan=false;state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
+@@ -269 +288 @@
+-                    message=detail;feedbackColor=Color.rgb(254,202,202);if(res.code()==409&&state.pending()==null)refresh();else render();});return;
++                    message=detail;packingErrorSpeech=true;feedbackColor=Color.rgb(254,202,202);if(res.code()==409&&state.pending()==null&&!packingScanRecovery())refresh();else render();});return;
+@@ -293 +312 @@
+-        if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).putBoolean(pendingKey+":fast",fast).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";render();return;}
++        if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).putBoolean(pendingKey+":fast",fast).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";packingErrorSpeech=true;render();return;}
+@@ -297 +316 @@
+-            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;
++            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
+@@ -299 +318 @@
+-                if(res.code()==409&&rejected)refresh();else render();});return;}
++                if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
+@@ -302 +321 @@
+-                state.accepted();feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
++                state.accepted();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
+@@ -304 +323 @@
+-        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";render();});}});
++        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";packingErrorSpeech=true;render();});}});
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboScanFeedbackTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboScanFeedbackTest.java
+@@ -23 +23 @@
+-        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put};
++        int[] resources={R.raw.fbo_pack_box,R.raw.fbo_pack_barcode,R.raw.fbo_pack_kiz,R.raw.fbo_pack_put,R.raw.fbo_pack_error};
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboTwoStageScreenTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboTwoStageScreenTest.java
+@@ -342,0 +343,32 @@
++    // TEST: a rejected KIZ leaves barcode recovery available; cancel is local, manual uses the preserved pair.
++    @Test public void rejectedPackingScanCanBeCancelledOrAddedManually() throws Exception {
++        if(!"logoff".equals(BuildConfig.FLAVOR))return;
++        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
++            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.manualPackingEnabled=true;
++            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.requiresKiz=true;line.picked=3;line.remaining=3;p.lines.add(line);
++            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
++            List<Map<String,String>> commands=new ArrayList<>();
++            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
++                if(!method.getName().equals("execute"))return null;
++                if(m.getName().equals("actFbo")){
++                    Map<String,String> payload=new LinkedHashMap<>((Map<String,String>)args[2]);commands.add(payload);
++                    if("PACK_UNIT".equals(payload.get("action")))return Response.error(409,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{\"message\":\"КИЗ отсутствует. Нужна актуализация.\"}"));
++                }
++                return Response.success(p);
++            }));
++            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},null);
++            try{
++                waitIdle(screen);find(a.findViewById(android.R.id.content),"Собрать новые короба").performClick();
++                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
++                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("BAD-KIZ");screen.submit();waitIdle(screen);
++                TextView cancel=find(a.findViewById(android.R.id.content),"Отменить скан");assertNotNull(cancel);assertTrue(cancel.isEnabled());
++                int before=commands.size();cancel.performClick();assertEquals(before,commands.size());assertEquals("ШК товара",screen.scannerField().getHint().toString());
++                screen.scannerField().setText("123");screen.submit();find(a.findViewById(android.R.id.content),"Добавить КИЗ вручную").performClick();
++                assertEquals(before,commands.size());screen.scannerField().setText("REAL-KIZ");screen.submit();waitIdle(screen);
++                assertEquals("MANUAL_PACK_UNIT",commands.get(before).get("action"));assertEquals("123",commands.get(before).get("barcode"));assertEquals("REAL-KIZ",commands.get(before).get("kiz"));
++                assertEquals("TARGET",commands.get(before).get("targetBoxCode"));assertNotEquals(commands.get(1).get("operationId"),commands.get(before).get("operationId"));
++                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("NEXT-KIZ");screen.submit();waitIdle(screen);
++                assertEquals("PACK_UNIT",commands.get(before+1).get("action"));
++            }finally{screen.close();}
++        }
++    }

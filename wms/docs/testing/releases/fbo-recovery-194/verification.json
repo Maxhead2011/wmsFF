@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 194,
+  "versionName": "0.1.194-fbo-packing-recovery",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "33bf60674a8743b3ac046c681cc3a3a6c32ccfbf7ffd67a491f0e7f72efb5391"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 176,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "efdde7bdfd004a5b7072f52138a473c89b740fed6586d283fa42c77dbf1a89b5",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

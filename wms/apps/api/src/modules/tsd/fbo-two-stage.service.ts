@@ -357,7 +357,7 @@ export class FboTwoStageService {
     // FIX: recover a missed physical pick and pack atomically using the exact scanned mark.
     private async manualPack(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser, key: string) {
         if (!dto.kiz || !dto.barcode) throw new BadRequestException('Отсканируйте ШК и КИЗ товара.');
-        const mark = await this.exactMark(tx, dto.kiz);
+        const mark = await this.manualPackingMark(tx, r, dto, user);
         const sku = await tx.sku.findUnique({ where: { id: mark.skuId }, include: { barcodes: true } });
         if (mark.clientId !== r.clientId || !sku || sku.clientId !== r.clientId ||
             !sku.barcodes.some(b => b.value === dto.barcode) && !r.items.some(i => i.skuId === sku.id && i.barcode === dto.barcode))
@@ -416,6 +416,62 @@ export class FboTwoStageService {
             await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_PICK_RECOVERED', entity: 'ClientRequest', entityId: r.id,
                 payload: { operationId: dto.operationId, sourceBoxCode: source.code, targetBoxCode: target.code, markId: mark.id, barcode: dto.barcode, addedQuantity } } });
         }
+    }
+    // FIX: an unknown scanned mark can claim only unmarked stock from evidenced sources of this assembly.
+    private async manualPackingMark(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser) {
+        const key = identity(dto.kiz!);
+        const rows = await tx.productMark.findMany({ where: { OR: [key, ']d2' + key, ']D2' + key]
+            .map(prefix => ({ value: { startsWith: prefix.replace(/[\\%_]/g, '\\$&') } })) } });
+        const matches = rows.filter(m => identity(m.value) === key);
+        if (matches.length > 1) throw new ConflictException('Несколько записей этого КИЗ. Отмените скан и передайте товар администратору.');
+        if (matches.length === 1) return matches[0];
+        if (!physicalKizIdentity(dto.kiz!)) throw new BadRequestException('Не распознан КИЗ. Отсканируйте маркировку товара.');
+        const skus = await tx.sku.findMany({ where: { clientId: r.clientId, barcodes: { some: { value: dto.barcode! } } } });
+        if (skus.length !== 1) throw new ConflictException('ШК не определяет единственный товар клиента. Отмените скан.');
+        const sku = skus[0];
+        // A prior pick or explicit selection proves association with this request; never guess across all warehouse boxes.
+        const [picked, selected] = await Promise.all([
+            tx.fboAssemblyUnit.findMany({ where: { requestId: r.id, skuId: sku.id, state: { not: 'RETURNED' } }, select: { sourceBoxId: true } }),
+            tx.clientRequestBoxSelection.findMany({ where: { requestItem: { requestId: r.id, skuId: sku.id } }, select: { boxId: true } }),
+        ]);
+        const ids = [...new Set([...picked.map(x => x.sourceBoxId), ...selected.map(x => x.boxId)].filter((x): x is string => !!x))];
+        const candidates = await tx.box.findMany({ where: { id: { in: ids }, clientId: r.clientId, warehouseId: r.warehouseId,
+            status: 'active', code: { not: dto.targetBoxCode! } }, orderBy: { code: 'asc' } });
+        for (const candidate of candidates) {
+            const source = await this.box(tx, r, candidate.code);
+            if ((await this.busyBoxes(tx, [source.id], r.id, true)).has(source.id)) continue;
+            const [balance, linked] = await Promise.all([
+                tx.stockBalance.aggregate({ where: { boxId: source.id, skuId: sku.id, clientId: r.clientId, warehouseId: r.warehouseId,
+                    status: 'AVAILABLE' }, _sum: { quantity: true } }),
+                tx.productMark.count({ where: { boxId: source.id, skuId: sku.id, status: { not: 'SHIPPING' } } }),
+            ]);
+            if ((balance._sum.quantity ?? 0) <= linked) continue;
+            const mark = await tx.productMark.create({ data: { clientId: r.clientId, skuId: sku.id, boxId: source.id,
+                value: dto.kiz!, status: 'AVAILABLE', sourceDocument: r.id } });
+            await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_UNLINKED_STOCK_CLAIM', entity: 'ClientRequest', entityId: r.id,
+                payload: { operationId: dto.operationId, sourceBoxCode: source.code, barcode: dto.barcode, markId: mark.id,
+                    sourceInferred: true, availableBefore: balance._sum.quantity, linkedMarksBefore: linked } } });
+            return mark;
+        }
+        // FIX: explicit business rule: recover unknown physical goods as a backdated receipt, atomically with packing.
+        const recordedAt = new Date();
+        const moscow = new Date(recordedAt.getTime() + 3 * 60 * 60 * 1000);
+        const receivedAt = new Date(Date.UTC(moscow.getUTCFullYear(), moscow.getUTCMonth(), 1) - 3 * 60 * 60 * 1000);
+        const code = `FBO-RECOVER-${r.id}`;
+        await tx.box.upsert({ where: { code }, create: { code, clientId: r.clientId, warehouseId: r.warehouseId }, update: {} });
+        const source = await this.box(tx, r, code);
+        const dimensions = { clientId: r.clientId, warehouseId: r.warehouseId, skuId: sku.id, boxId: source.id, palletId: source.palletId, status: 'AVAILABLE' as const };
+        const balanceKey = this.balances.balanceKey(dimensions);
+        await tx.stockBalance.upsert({ where: { balanceKey }, create: { ...dimensions, balanceKey, quantity: 1 }, update: { quantity: { increment: 1 } } });
+        const receipt = await tx.stockMovement.create({ data: { ...dimensions, type: 'RECEIPT', quantity: 1,
+            sourceDocument: r.id, idempotencyKey: `fbo-recovery:${r.id}:${dto.operationId}`, createdAt: receivedAt,
+            comment: `Восстановительное поступление при упаковке FBO. Источник не установлен. Фактически записано ${recordedAt.toISOString()}; ${user.name || user.id}` } });
+        const mark = await tx.productMark.create({ data: { clientId: r.clientId, skuId: sku.id, boxId: source.id,
+            value: dto.kiz!, status: 'AVAILABLE', sourceDocument: r.id, stockMovementId: receipt.id } });
+        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_BACKDATED_RECEIPT', entity: 'ClientRequest', entityId: r.id,
+            payload: { operationId: dto.operationId, barcode: dto.barcode, markId: mark.id, receiptMovementId: receipt.id,
+                receivedAt: receivedAt.toISOString(), recordedAt: recordedAt.toISOString(), sourceUnknown: true, quantity: 1 } } });
+        return mark;
     }
     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
         if (!code)

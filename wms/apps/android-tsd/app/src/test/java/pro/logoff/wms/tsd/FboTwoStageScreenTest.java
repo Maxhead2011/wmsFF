@@ -46,7 +46,7 @@ public class FboTwoStageScreenTest {
         }
     }
     // TEST: failed and uncertain PACK_UNIT requests never tell the operator to put the item away.
-    @Test public void packingErrorsStaySilentUntilRetryIsConfirmed() throws Exception {
+    @Test public void packingErrorsSpeakOnceAndCannotCancelUnknownResult() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
         for(boolean timeout:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
             Activity a=controller.get();TsdFboPlan p=plan("PACKING");
@@ -69,6 +69,9 @@ public class FboTwoStageScreenTest {
                 screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
                 screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("KIZ");screen.submit();waitIdle(screen);
                 assertFalse(spoken.contains(FboPackingVoice.Cue.PUT));
+                assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.ERROR));
+                TextView cancel=find(a.findViewById(android.R.id.content),"Отменить скан");
+                assertNotNull(cancel);assertEquals(!timeout,cancel.isEnabled());
                 if(timeout)find(a.findViewById(android.R.id.content),"Повторить неподтверждённый запрос").performClick();
                 else{screen.scannerField().setText("KIZ");screen.submit();}
                 waitIdle(screen);assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.PUT));
@@ -113,6 +116,38 @@ public class FboTwoStageScreenTest {
             try {
                 if("logoff".equals(BuildConfig.FLAVOR))find(a.findViewById(android.R.id.content),"Завершить формирование новых коробов").performClick();
                 assertNull(find(a.findViewById(android.R.id.content),"Добавить товар вручную"));
+            }finally{screen.close();}
+        }
+    }
+    // TEST: a rejected KIZ leaves barcode recovery available; cancel is local, manual uses the preserved pair.
+    @Test public void rejectedPackingScanCanBeCancelledOrAddedManually() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.manualPackingEnabled=true;
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.requiresKiz=true;line.picked=3;line.remaining=3;p.lines.add(line);
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
+            List<Map<String,String>> commands=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
+                if(!method.getName().equals("execute"))return null;
+                if(m.getName().equals("actFbo")){
+                    Map<String,String> payload=new LinkedHashMap<>((Map<String,String>)args[2]);commands.add(payload);
+                    if("PACK_UNIT".equals(payload.get("action")))return Response.error(409,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{\"message\":\"КИЗ отсутствует. Нужна актуализация.\"}"));
+                }
+                return Response.success(p);
+            }));
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},null);
+            try{
+                waitIdle(screen);find(a.findViewById(android.R.id.content),"Собрать новые короба").performClick();
+                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
+                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("BAD-KIZ");screen.submit();waitIdle(screen);
+                TextView cancel=find(a.findViewById(android.R.id.content),"Отменить скан");assertNotNull(cancel);assertTrue(cancel.isEnabled());
+                int before=commands.size();cancel.performClick();assertEquals(before,commands.size());assertEquals("ШК товара",screen.scannerField().getHint().toString());
+                screen.scannerField().setText("123");screen.submit();find(a.findViewById(android.R.id.content),"Добавить КИЗ вручную").performClick();
+                assertEquals(before,commands.size());screen.scannerField().setText("REAL-KIZ");screen.submit();waitIdle(screen);
+                assertEquals("MANUAL_PACK_UNIT",commands.get(before).get("action"));assertEquals("123",commands.get(before).get("barcode"));assertEquals("REAL-KIZ",commands.get(before).get("kiz"));
+                assertEquals("TARGET",commands.get(before).get("targetBoxCode"));assertNotEquals(commands.get(1).get("operationId"),commands.get(before).get("operationId"));
+                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("NEXT-KIZ");screen.submit();waitIdle(screen);
+                assertEquals("PACK_UNIT",commands.get(before+1).get("action"));
             }finally{screen.close();}
         }
     }
