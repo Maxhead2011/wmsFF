@@ -13,6 +13,7 @@ interface FboScanFeedback {
     default void scan(boolean accepted,String errorKey){play(accepted);}
     default void error(String errorKey){prompt(FboPackingVoice.Cue.ERROR);}
     default void success(){}
+    default void event(PersonalEventVoice.Cue cue) {}
     void close();
 
     final class Voice implements FboScanFeedback {
@@ -20,6 +21,7 @@ interface FboScanFeedback {
         private final Set<Integer> loaded = new HashSet<>();
         private int hit, miss, repeat, pending, stream;
         private final PersonalScanVoice personal;
+        private final java.util.Map<PersonalEventVoice.Cue,Integer> events = new java.util.EnumMap<>(PersonalEventVoice.Cue.class);
         private final java.util.Map<FboPackingVoice.Cue,Integer> prompts = new java.util.EnumMap<>(FboPackingVoice.Cue.class);
         Voice(Context context) { this(context,null); }
         Voice(Context context,String userId) {
@@ -42,6 +44,14 @@ interface FboScanFeedback {
                 prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, (personal.personal?R.raw.eleonora_error:R.raw.fbo_pack_error), 1));
                 prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, (personal.personal?R.raw.eleonora_closed:R.raw.fbo_pack_closed), 1));
                 if(personal.personal)repeat=pool.load(context,R.raw.eleonora_repeat,1);
+                if(personal.personal){
+                    events.put(PersonalEventVoice.Cue.FBS_OPEN,pool.load(context,R.raw.eleonora_event_fbs_open,1));
+                    events.put(PersonalEventVoice.Cue.FBS_DONE,pool.load(context,R.raw.eleonora_event_fbs_done,1));
+                    events.put(PersonalEventVoice.Cue.FBS_EMPTY,pool.load(context,R.raw.eleonora_event_fbs_empty,1));
+                    events.put(PersonalEventVoice.Cue.RECOUNT,pool.load(context,R.raw.eleonora_event_recount,1));
+                    events.put(PersonalEventVoice.Cue.KIZ_CHECK,pool.load(context,R.raw.eleonora_event_kiz_check,1));
+                    events.put(PersonalEventVoice.Cue.PALLET,pool.load(context,R.raw.eleonora_event_pallet,1));
+                }
             } catch (RuntimeException unavailable) { close(); }
         }
         public void play(boolean accepted) { scan(accepted,"scan:miss"); }
@@ -56,6 +66,7 @@ interface FboScanFeedback {
             if(cue==FboPackingVoice.Cue.PUT||cue==FboPackingVoice.Cue.CLOSED)personal.success();
             if(cue!=null)playSample(prompts.getOrDefault(cue,0));
         }
+        public void event(PersonalEventVoice.Cue cue){if(personal.personal&&cue!=null)playSample(events.getOrDefault(cue,0));}
         private void playSample(int sample) {
             if (pool == null || sample == 0) return;
             // FIX: rapid scans replace the previous phrase, including while sounds are loading.

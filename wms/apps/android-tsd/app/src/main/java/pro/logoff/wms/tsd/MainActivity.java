@@ -185,6 +185,7 @@ public class MainActivity extends Activity {
     private FboScanFeedback assemblyScanVoice;
     private String assemblyScanVoiceOwner;
     private boolean assemblyVoicePaused;
+    private final PersonalEventVoice personalEvents = new PersonalEventVoice();
     private String fboTransferRequestId="";
     private boolean fboPacking;
     private TsdAssemblyPlan assemblyPlan;
@@ -707,6 +708,7 @@ public class MainActivity extends Activity {
             kizLocationScreen = null;
             renderMainScreen();
         });
+        speakPersonalEvent(PersonalEventVoice.Cue.KIZ_CHECK);
     }
 
     // FIX: enter the existing transfer menu and reload FBO from the server on return.
@@ -1324,6 +1326,7 @@ public class MainActivity extends Activity {
             }
             TsdStoragePalletResponse loaded = response.body();
             mainHandler.post(() -> {
+                if(screen!=Screen.STORAGE_PALLET || !fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
                 online = true;
                 storagePalletAssembly = loaded;
                 prepareStoragePalletRecovery(loaded);
@@ -1332,6 +1335,7 @@ public class MainActivity extends Activity {
                 }
                 statusMessage = safeText(loaded.message);
                 renderStoragePalletAssemblyScreen();
+                if(screen==Screen.STORAGE_PALLET && fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))speakPersonalEvent(PersonalEventVoice.Cue.PALLET);
             });
         });
     }
@@ -2514,10 +2518,12 @@ public class MainActivity extends Activity {
             }
             TsdInventoryDashboard loaded = response.body();
             mainHandler.post(() -> {
+                if(screen!=Screen.INVENTORY_START || !fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
                 online = true;
                 inventoryDashboard = loaded;
                 statusMessage = "";
                 renderInventoryStartScreen();
+                if("BOX_CHECK".equals(type) && screen==Screen.INVENTORY_START && fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))speakPersonalEvent(PersonalEventVoice.Cue.RECOUNT);
             });
         });
     }
@@ -4479,6 +4485,7 @@ public class MainActivity extends Activity {
             return;
         }
         selectedFbsRequestId = request.requestId;
+        personalEvents.selected(selectedFbsRequestId);
         fbsAssembly = null;
         fbsFeedbackColor = 0;
         statusMessage = tr("Открываю выбранную FBS-заявку...", "Tanlangan FBS arizasi ochilmoqda...");
@@ -4498,9 +4505,10 @@ public class MainActivity extends Activity {
         screen = Screen.FBS_ASSEMBLY;
         fbsBusy = true;
         renderFbsAssemblyScreen();
+        final String voiceRequest=selectedFbsRequestId, voiceSession=fbsSessionOwnerKey(session);
         runBackground(() -> {
             Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
-                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode, selectedFbsRequestId)
+                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode, voiceRequest)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
                 String message = responseErrorMessage(response, tr(
@@ -4512,6 +4520,7 @@ public class MainActivity extends Activity {
             }
             TsdFbsAssemblyResponse loaded = response.body();
             mainHandler.post(() -> {
+                if(screen!=Screen.FBS_ASSEMBLY || !voiceSession.equals(fbsSessionOwnerKey(safeSession())) || !java.util.Objects.equals(voiceRequest,selectedFbsRequestId))return;
                 online = true;
                 fbsBusy = false;
                 fbsFeedbackColor = 0;
@@ -4586,6 +4595,8 @@ public class MainActivity extends Activity {
             ));
         }
 
+        if(!fbsBusy && online && fbsFeedbackColor!=BOX_NOT_NEEDED_RED)
+            speakPersonalEvent(personalEvents.fbs(selectedFbsRequestId,fbsAssembly));
         TsdFbsAssemblyResponse.Task task = fbsAssembly == null ? null : fbsAssembly.task;
         if (task == null) {
             dismissFbsGuidedScanDialog();
@@ -6072,6 +6083,14 @@ public class MainActivity extends Activity {
     // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
     private void closeAssemblyScanVoice() {
         if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;assemblyScanVoiceOwner=null;}
+    }
+    // FIX: all entry phrases share the existing cancellable offline voice and exact account gate.
+    private void speakPersonalEvent(PersonalEventVoice.Cue cue){
+        TsdSession session=safeSession();
+        if(cue==null||session==null||assemblyVoicePaused||isFinishing()||isDestroyed()||!new PersonalScanVoice(session.userId).personal)return;
+        if(!java.util.Objects.equals(session.userId,assemblyScanVoiceOwner))closeAssemblyScanVoice();
+        if(assemblyScanVoice==null){assemblyScanVoice=new FboScanFeedback.Voice(this,session.userId);assemblyScanVoiceOwner=session.userId;}
+        assemblyScanVoice.event(cue);
     }
     private void speakAssemblyScan(Boolean accepted,String code) { speakAssemblyScan(accepted,code,"scan:"+screen); }
     private void speakAssemblyScan(Boolean accepted,String code,String errorKey) {
