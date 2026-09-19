@@ -183,6 +183,7 @@ public class MainActivity extends Activity {
     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
     private FboTwoStageScreen fboTwoStageScreen;
     private FboScanFeedback assemblyScanVoice;
+    private String assemblyScanVoiceOwner;
     private boolean assemblyVoicePaused;
     private String fboTransferRequestId="";
     private boolean fboPacking;
@@ -6070,17 +6071,20 @@ public class MainActivity extends Activity {
 
     // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
     private void closeAssemblyScanVoice() {
-        if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;}
+        if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;assemblyScanVoiceOwner=null;}
     }
-    private void speakAssemblyScan(Boolean accepted,String code) {
+    private void speakAssemblyScan(Boolean accepted,String code) { speakAssemblyScan(accepted,code,"scan:"+screen); }
+    private void speakAssemblyScan(Boolean accepted,String code,String errorKey) {
         if(accepted==null||assemblyVoicePaused||isFinishing()||isDestroyed()||!"logoff".equals(BuildConfig.FLAVOR)||AssemblyScanVoice.isKiz(code))return;
         if(screen!=Screen.FBS_ASSEMBLY&&screen!=Screen.OZON_FBO_BOXES&&screen!=Screen.OZON_FBO_ASSEMBLY)return;
-        if(assemblyScanVoice==null)assemblyScanVoice=new FboScanFeedback.Voice(this);
-        assemblyScanVoice.play(accepted);
+        String voiceOwner=safeSession()==null?null:safeSession().userId;
+        if(!java.util.Objects.equals(voiceOwner,assemblyScanVoiceOwner))closeAssemblyScanVoice();
+        if(assemblyScanVoice==null){assemblyScanVoice=new FboScanFeedback.Voice(this,voiceOwner);assemblyScanVoiceOwner=voiceOwner;}
+        assemblyScanVoice.scan(accepted,errorKey);
     }
     private void speakFbsScan(String action,String state,String code,int status,TsdFbsAssemblyResponse result,String owner,String taskId) {
         if(screen!=Screen.FBS_ASSEMBLY||!owner.equals(fbsSessionOwnerKey(safeSession()))||fbsAssembly==null||fbsAssembly.task==null||!taskId.equals(fbsAssembly.task.id))return;
-        speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code);
+        speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code,"fbs:"+action+":"+state+":"+status+":"+(result==null?"rejected":String.valueOf(result.message)));
     }
 
     private void playFbsSuccess() {

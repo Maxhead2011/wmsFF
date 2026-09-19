@@ -1,0 +1,47 @@
+{
+  "miss": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_134452.m4a",
+    "sourceSha256": "bfce0f1bef52eff4c174e7deb9b3ab0e9acfcc45f158ff8e2b52270c3334e22e",
+    "wavSha256": "6249f66f3508ad3b952258b8120500614d4244139151220bd9e1e9c8b7964111"
+  },
+  "hit": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_134558.m4a",
+    "sourceSha256": "a04cbce8602bc7bc18caff2ca9f35a075b5c5273edaf327e2f65334d54167091",
+    "wavSha256": "1843765a6d8b3a878b5a7e8e0d99aec5791c02710b8eba2b5b678e5e458c4c85"
+  },
+  "repeat": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_134643.m4a",
+    "sourceSha256": "6e5f6513cd7f6417c0948b346799b32d5bdd7de20aad32ac7cf112ac26514ab9",
+    "wavSha256": "83688f3206dc97f2e517fe5c26a23d9e33d73bceea8ab882df88e4db8643a3e0"
+  },
+  "error": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_134749.m4a",
+    "sourceSha256": "53cc2ade7671935d4c7d16af93b2eeef0663dc44648820a159c71fbe4ba538ef",
+    "wavSha256": "2a9757c09327725b55e1b6894dad3018f7757563b34f9e30d6b296699f4d889a"
+  },
+  "box": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_134857.m4a",
+    "sourceSha256": "ba56d0992925c045a96e31313cc3c8f6a4673f751b360ed1ba4fcf797b64cac9",
+    "wavSha256": "46d45f1993c36b5264ebffdf6e087fc9abe22bb091479986446f3dd58ae6d0bb"
+  },
+  "barcode": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_135051.m4a",
+    "sourceSha256": "5e09e3bcbcaf9630ec8a4951fab1970895df0ba37b96e40134b0c394c4e1aaea",
+    "wavSha256": "d264ed18aa5fd6d00c4144e9af460f35d83ee49a9a0402cec60f78113a58ad00"
+  },
+  "kiz": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_135155.m4a",
+    "sourceSha256": "a9a8b88faf722a7476b42321e5a25de2bc72ad81e7c32f34f014169e3d82553f",
+    "wavSha256": "f3a9b725dd673fb17f0d17f1434ae0ab22a66c3de38ec34c32b6da15b1782958"
+  },
+  "put": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_135231.m4a",
+    "sourceSha256": "aa6baac85599129dd9ead6e8d9af0439a96bb474487650f4488c78126864a214",
+    "wavSha256": "864f8ebe4c5bddd90215774f97c3071cbb054d5d358b5de939f135751b26d60d"
+  },
+  "closed": {
+    "source": "D:\\Huawei Share\\Huawei Share\\20260919_135318.m4a",
+    "sourceSha256": "10ed8aab516fb0f66cc0b96beda65faad8da86d6916d292ea5b330508f9d5811",
+    "wavSha256": "a1c07c576b28553ee8c913eb90c454b5f89b84a3e640364fd0e92db30b4c8a7d"
+  }
+}

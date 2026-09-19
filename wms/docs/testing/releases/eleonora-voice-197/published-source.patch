@@ -1,0 +1,250 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 196 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.196-fbo-voice-focus"
++            versionCode = 197 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.197-eleonora-voice"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
+@@ -10,14 +10,20 @@
+ interface FboScanFeedback {
+     void play(boolean accepted);
+     default void prompt(FboPackingVoice.Cue cue) {}
++    default void scan(boolean accepted,String errorKey){play(accepted);}
++    default void error(String errorKey){prompt(FboPackingVoice.Cue.ERROR);}
++    default void success(){}
+     void close();
+ 
+     final class Voice implements FboScanFeedback {
+         private SoundPool pool;
+         private final Set<Integer> loaded = new HashSet<>();
+-        private int hit, miss, pending, stream;
++        private int hit, miss, repeat, pending, stream;
++        private final PersonalScanVoice personal;
+         private final java.util.Map<FboPackingVoice.Cue,Integer> prompts = new java.util.EnumMap<>(FboPackingVoice.Cue.class);
+-        Voice(Context context) {
++        Voice(Context context) { this(context,null); }
++        Voice(Context context,String userId) {
++            personal=new PersonalScanVoice(userId);
+             try {
+                 pool = new SoundPool.Builder().setMaxStreams(1).setAudioAttributes(
+                     new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+@@ -27,18 +33,29 @@
+                     loaded.add(sample);
+                     if (pending == sample) playSample(sample);
+                 });
+-                hit = pool.load(context, R.raw.fbo_scan_hit, 1);
+-                miss = pool.load(context, R.raw.fbo_scan_miss, 1);
+-                prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, R.raw.fbo_pack_box, 1));
+-                prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, R.raw.fbo_pack_barcode, 1));
+-                prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, R.raw.fbo_pack_kiz, 1));
+-                prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, R.raw.fbo_pack_put, 1));
+-                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, R.raw.fbo_pack_error, 1));
+-                prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, R.raw.fbo_pack_closed, 1));
++                hit = pool.load(context, (personal.personal?R.raw.eleonora_hit:R.raw.fbo_scan_hit), 1);
++                miss = pool.load(context, (personal.personal?R.raw.eleonora_miss:R.raw.fbo_scan_miss), 1);
++                prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, (personal.personal?R.raw.eleonora_box:R.raw.fbo_pack_box), 1));
++                prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, (personal.personal?R.raw.eleonora_barcode:R.raw.fbo_pack_barcode), 1));
++                prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, (personal.personal?R.raw.eleonora_kiz:R.raw.fbo_pack_kiz), 1));
++                prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, (personal.personal?R.raw.eleonora_put:R.raw.fbo_pack_put), 1));
++                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, (personal.personal?R.raw.eleonora_error:R.raw.fbo_pack_error), 1));
++                prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, (personal.personal?R.raw.eleonora_closed:R.raw.fbo_pack_closed), 1));
++                if(personal.personal)repeat=pool.load(context,R.raw.eleonora_repeat,1);
+             } catch (RuntimeException unavailable) { close(); }
+         }
+-        public void play(boolean accepted) { playSample(accepted ? hit : miss); }
+-        public void prompt(FboPackingVoice.Cue cue) { if(cue!=null) playSample(prompts.getOrDefault(cue,0)); }
++        public void play(boolean accepted) { scan(accepted,"scan:miss"); }
++        public void scan(boolean accepted,String errorKey) {
++            if(accepted){personal.success();playSample(hit);}
++            else playSample(personal.repeated(errorKey)?repeat:miss);
++        }
++        public void error(String errorKey) { playSample(personal.repeated(errorKey)?repeat:prompts.getOrDefault(FboPackingVoice.Cue.ERROR,0)); }
++        public void success(){personal.success();}
++        public void prompt(FboPackingVoice.Cue cue) {
++            if(cue==FboPackingVoice.Cue.ERROR){error("packing:error");return;}
++            if(cue==FboPackingVoice.Cue.PUT||cue==FboPackingVoice.Cue.CLOSED)personal.success();
++            if(cue!=null)playSample(prompts.getOrDefault(cue,0));
++        }
+         private void playSample(int sample) {
+             if (pool == null || sample == 0) return;
+             // FIX: rapid scans replace the previous phrase, including while sounds are loading.
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
+@@ -63,7 +63,7 @@
+     }
+     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder) {
+         this(activity,session,api,baseUrl,id,packing,back,moveRemainder,
+-            "logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
++            "logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity,session.userId):null);
+     }
+     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder,FboScanFeedback scanFeedback) {
+         this.scanFeedback=scanFeedback;
+@@ -104,7 +104,7 @@
+     // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
+     // FIX: packing can start with the first confirmed unit while collection stays open.
+     private String screenPhase(){return FboScanState.screenPhase(plan,packing && "logoff".equals(BuildConfig.FLAVOR));}
+-    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(screenPhase())&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
++    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(screenPhase())&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.scan(accepted,"picking:"+(state.source.isEmpty()?"location":"barcode"));}
+     // FIX: preserve parallel packing and acknowledge speech only after a durable receipt.
+     private boolean packingVoiceActive(){return !closed&&packingChoices()&&(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)&&plan!=null&&"PACKING".equals(screenPhase());}
+     private void packingPrompt(FboPackingVoice.Cue cue){if(!closed&&scanFeedback!=null&&cue!=null)scanFeedback.prompt(cue);}
+@@ -213,7 +213,7 @@
+         button(root,"Обновить",state.pending()==null&&!busy,this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
+         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
+         if(plan!=null)packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
+-        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices())packingPrompt(FboPackingVoice.Cue.ERROR);}
++        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices()&&scanFeedback!=null)scanFeedback.error("packing:"+message);}
+         // FIX: scanner Enter may move focus after this render; focus the new KIZ field on the next UI turn.
+         if("logoff".equals(BuildConfig.FLAVOR)&&input!=null&&ready()&&!state.barcode.isEmpty()){
+             EditText kizInput=input;
+@@ -250,7 +250,7 @@
+         if(packingChoices()&&packingMode==PackingMode.MANUAL&&"PACKING".equals(screenPhase())){
+             if(!state.barcode.isEmpty())send("MANUAL_PACK_UNIT",value);
+             else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";packingErrorSpeech=true;render();}
+-            else{state.barcode=value;message="Отсканируйте КИЗ товара.";render();}
++            else{state.barcode=value;if(scanFeedback!=null)scanFeedback.success();message="Отсканируйте КИЗ товара.";render();}
+             return;
+         }
+         if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
+@@ -259,7 +259,7 @@
+         if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";packingErrorSpeech=true;render();return;}
+         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
+         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
+-        state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
++        state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
+     }
+     private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
+@@ -273,7 +273,7 @@
+         if(!prefs.edit().remove(pendingKey).remove(pendingKey+":fast").putString(pendingKey+":position",new JSONObject(position).toString()).commit()){
+             busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
+         }
+-        state.accepted();manualPackingScan=false;state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
++        state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
+         message=FboFeedback.accepted(payload,plan);packingAccepted(payload);render();
+         if("FINISH".equals(payload.get("action"))&&!packingChoices())download();refresh();
+     }
+@@ -318,7 +318,7 @@
+                 if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
+             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
+                 if(!prefs.edit().remove(pendingKey).commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
+-                state.accepted();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
++                state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
+                 if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);packingAccepted(payload);
+                 // FIX: preserve confirmed state persistence before announcing closure.
+                 if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
+@@ -183,6 +183,7 @@
+     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
+     private FboTwoStageScreen fboTwoStageScreen;
+     private FboScanFeedback assemblyScanVoice;
++    private String assemblyScanVoiceOwner;
+     private boolean assemblyVoicePaused;
+     private String fboTransferRequestId="";
+     private boolean fboPacking;
+@@ -6202,17 +6203,20 @@
+ 
+     // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
+     private void closeAssemblyScanVoice() {
+-        if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;}
+-    }
+-    private void speakAssemblyScan(Boolean accepted,String code) {
++        if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;assemblyScanVoiceOwner=null;}
++    }
++    private void speakAssemblyScan(Boolean accepted,String code) { speakAssemblyScan(accepted,code,"scan:"+screen); }
++    private void speakAssemblyScan(Boolean accepted,String code,String errorKey) {
+         if(accepted==null||assemblyVoicePaused||isFinishing()||isDestroyed()||!"logoff".equals(BuildConfig.FLAVOR)||AssemblyScanVoice.isKiz(code))return;
+         if(screen!=Screen.FBS_ASSEMBLY&&screen!=Screen.OZON_FBO_BOXES&&screen!=Screen.OZON_FBO_ASSEMBLY)return;
+-        if(assemblyScanVoice==null)assemblyScanVoice=new FboScanFeedback.Voice(this);
+-        assemblyScanVoice.play(accepted);
++        String voiceOwner=safeSession()==null?null:safeSession().userId;
++        if(!java.util.Objects.equals(voiceOwner,assemblyScanVoiceOwner))closeAssemblyScanVoice();
++        if(assemblyScanVoice==null){assemblyScanVoice=new FboScanFeedback.Voice(this,voiceOwner);assemblyScanVoiceOwner=voiceOwner;}
++        assemblyScanVoice.scan(accepted,errorKey);
+     }
+     private void speakFbsScan(String action,String state,String code,int status,TsdFbsAssemblyResponse result,String owner,String taskId) {
+         if(screen!=Screen.FBS_ASSEMBLY||!owner.equals(fbsSessionOwnerKey(safeSession()))||fbsAssembly==null||fbsAssembly.task==null||!taskId.equals(fbsAssembly.task.id))return;
+-        speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code);
++        speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code,"fbs:"+action+":"+state+":"+status+":"+(result==null?"rejected":String.valueOf(result.message)));
+     }
+ 
+     private void playFbsSuccess() {
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/PersonalScanVoice.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/PersonalScanVoice.java
+@@ -0,0 +1,16 @@
++package pro.logoff.wms.tsd;
++
++// FIX: account identity, not display name or device, selects the personal voice.
++final class PersonalScanVoice {
++    static final String ACCOUNT="8e175b30-8535-4881-9324-a875c9fd8c1d";
++    final boolean personal;
++    private String previousError;
++    PersonalScanVoice(String userId){personal="logoff".equals(BuildConfig.FLAVOR)&&ACCOUNT.equals(userId);}
++    boolean repeated(String error){
++        if(!personal)return false;
++        boolean repeat=error!=null&&error.equals(previousError);
++        previousError=error;
++        return repeat;
++    }
++    void success(){previousError=null;}
++}
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/PersonalScanVoiceTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/PersonalScanVoiceTest.java
+@@ -0,0 +1,48 @@
++package pro.logoff.wms.tsd;
++import org.junit.Test;
++import static org.junit.Assert.*;
++import android.media.SoundPool;
++import org.junit.runner.RunWith;
++import org.robolectric.RuntimeEnvironment;
++import org.robolectric.RobolectricTestRunner;
++import org.robolectric.Shadows;
++import org.robolectric.annotation.Config;
++import org.robolectric.shadows.ShadowSoundPool;
++
++@RunWith(RobolectricTestRunner.class) @Config(sdk=28)
++public class PersonalScanVoiceTest {
++    // TEST: identity and flavor, never display name, select the personal account.
++    @Test public void identityAndRepeatedErrors(){
++        PersonalScanVoice p=new PersonalScanVoice(PersonalScanVoice.ACCOUNT);
++        assertEquals("logoff".equals(BuildConfig.FLAVOR),p.personal);
++        assertFalse(new PersonalScanVoice("Элькапоне").personal);
++        assertFalse(new PersonalScanVoice(null).personal);
++        assertFalse(p.repeated("wrong-box"));
++        assertEquals(p.personal,p.repeated("wrong-box"));
++        assertEquals(p.personal,p.repeated("wrong-box"));
++        assertFalse(p.repeated("wrong-barcode"));
++        p.success();assertFalse(p.repeated("wrong-barcode"));
++    }
++    // TEST: every personal recording maps to its intended cue, other accounts keep common audio.
++    @Test public void resourcesAndRepeatReset() throws Exception {
++        if(!"logoff".equals(BuildConfig.FLAVOR))return;
++        FboScanFeedback.Voice voice=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(),PersonalScanVoice.ACCOUNT);
++        var field=FboScanFeedback.Voice.class.getDeclaredField("pool");field.setAccessible(true);
++        ShadowSoundPool sound=Shadows.shadowOf((SoundPool)field.get(voice));
++        int[] ids={R.raw.eleonora_box,R.raw.eleonora_barcode,R.raw.eleonora_kiz,R.raw.eleonora_put,R.raw.eleonora_error,R.raw.eleonora_closed};
++        try {
++            for(int i=0;i<ids.length;i++){voice.prompt(FboPackingVoice.Cue.values()[i]);sound.notifyResourceLoaded(ids[i],true);assertEquals(1,sound.getResourcePlaybacks(ids[i]).size());}
++            sound.notifyResourceLoaded(R.raw.eleonora_repeat,true);
++            voice.error("bad-kiz");assertEquals(2,sound.getResourcePlaybacks(R.raw.eleonora_error).size());
++            voice.error("bad-kiz");voice.error("bad-kiz");assertEquals(2,sound.getResourcePlaybacks(R.raw.eleonora_repeat).size());
++            voice.success();voice.error("bad-kiz");assertEquals(3,sound.getResourcePlaybacks(R.raw.eleonora_error).size());
++            voice.error("other-error");assertEquals(4,sound.getResourcePlaybacks(R.raw.eleonora_error).size());
++            voice.success();voice.scan(false,"bad-barcode");sound.notifyResourceLoaded(R.raw.eleonora_miss,true);assertEquals(1,sound.getResourcePlaybacks(R.raw.eleonora_miss).size());
++            voice.scan(false,"bad-barcode");assertEquals(3,sound.getResourcePlaybacks(R.raw.eleonora_repeat).size());
++            voice.scan(true,"ok");sound.notifyResourceLoaded(R.raw.eleonora_hit,true);voice.scan(false,"bad-barcode");assertEquals(2,sound.getResourcePlaybacks(R.raw.eleonora_miss).size());
++            assertFalse(sound.wasResourcePlayed(R.raw.fbo_scan_hit));assertFalse(sound.wasResourcePlayed(R.raw.fbo_pack_box));
++        }finally{voice.close();}
++        FboScanFeedback.Voice other=new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(),"another-user");
++        try{ShadowSoundPool normal=Shadows.shadowOf((SoundPool)field.get(other));other.error("x");normal.notifyResourceLoaded(R.raw.fbo_pack_error,true);other.error("x");assertEquals(2,normal.getResourcePlaybacks(R.raw.fbo_pack_error).size());assertFalse(normal.wasResourcePlayed(R.raw.eleonora_error));}finally{other.close();}
++    }
++}
