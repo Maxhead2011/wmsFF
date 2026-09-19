@@ -10,14 +10,20 @@ import java.util.Set;
 interface FboScanFeedback {
     void play(boolean accepted);
     default void prompt(FboPackingVoice.Cue cue) {}
+    default void scan(boolean accepted,String errorKey){play(accepted);}
+    default void error(String errorKey){prompt(FboPackingVoice.Cue.ERROR);}
+    default void success(){}
     void close();
 
     final class Voice implements FboScanFeedback {
         private SoundPool pool;
         private final Set<Integer> loaded = new HashSet<>();
-        private int hit, miss, pending, stream;
+        private int hit, miss, repeat, pending, stream;
+        private final PersonalScanVoice personal;
         private final java.util.Map<FboPackingVoice.Cue,Integer> prompts = new java.util.EnumMap<>(FboPackingVoice.Cue.class);
-        Voice(Context context) {
+        Voice(Context context) { this(context,null); }
+        Voice(Context context,String userId) {
+            personal=new PersonalScanVoice(userId);
             try {
                 pool = new SoundPool.Builder().setMaxStreams(1).setAudioAttributes(
                     new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
@@ -27,18 +33,29 @@ interface FboScanFeedback {
                     loaded.add(sample);
                     if (pending == sample) playSample(sample);
                 });
-                hit = pool.load(context, R.raw.fbo_scan_hit, 1);
-                miss = pool.load(context, R.raw.fbo_scan_miss, 1);
-                prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, R.raw.fbo_pack_box, 1));
-                prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, R.raw.fbo_pack_barcode, 1));
-                prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, R.raw.fbo_pack_kiz, 1));
-                prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, R.raw.fbo_pack_put, 1));
-                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, R.raw.fbo_pack_error, 1));
-                prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, R.raw.fbo_pack_closed, 1));
+                hit = pool.load(context, (personal.personal?R.raw.eleonora_hit:R.raw.fbo_scan_hit), 1);
+                miss = pool.load(context, (personal.personal?R.raw.eleonora_miss:R.raw.fbo_scan_miss), 1);
+                prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, (personal.personal?R.raw.eleonora_box:R.raw.fbo_pack_box), 1));
+                prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, (personal.personal?R.raw.eleonora_barcode:R.raw.fbo_pack_barcode), 1));
+                prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, (personal.personal?R.raw.eleonora_kiz:R.raw.fbo_pack_kiz), 1));
+                prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, (personal.personal?R.raw.eleonora_put:R.raw.fbo_pack_put), 1));
+                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, (personal.personal?R.raw.eleonora_error:R.raw.fbo_pack_error), 1));
+                prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, (personal.personal?R.raw.eleonora_closed:R.raw.fbo_pack_closed), 1));
+                if(personal.personal)repeat=pool.load(context,R.raw.eleonora_repeat,1);
             } catch (RuntimeException unavailable) { close(); }
         }
-        public void play(boolean accepted) { playSample(accepted ? hit : miss); }
-        public void prompt(FboPackingVoice.Cue cue) { if(cue!=null) playSample(prompts.getOrDefault(cue,0)); }
+        public void play(boolean accepted) { scan(accepted,"scan:miss"); }
+        public void scan(boolean accepted,String errorKey) {
+            if(accepted){personal.success();playSample(hit);}
+            else playSample(personal.repeated(errorKey)?repeat:miss);
+        }
+        public void error(String errorKey) { playSample(personal.repeated(errorKey)?repeat:prompts.getOrDefault(FboPackingVoice.Cue.ERROR,0)); }
+        public void success(){personal.success();}
+        public void prompt(FboPackingVoice.Cue cue) {
+            if(cue==FboPackingVoice.Cue.ERROR){error("packing:error");return;}
+            if(cue==FboPackingVoice.Cue.PUT||cue==FboPackingVoice.Cue.CLOSED)personal.success();
+            if(cue!=null)playSample(prompts.getOrDefault(cue,0));
+        }
         private void playSample(int sample) {
             if (pool == null || sample == 0) return;
             // FIX: rapid scans replace the previous phrase, including while sounds are loading.

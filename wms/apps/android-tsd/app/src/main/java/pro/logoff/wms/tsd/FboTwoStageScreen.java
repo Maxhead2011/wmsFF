@@ -63,7 +63,7 @@ final class FboTwoStageScreen {
     }
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder) {
         this(activity,session,api,baseUrl,id,packing,back,moveRemainder,
-            "logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity):null);
+            "logoff".equals(BuildConfig.FLAVOR)?new FboScanFeedback.Voice(activity,session.userId):null);
     }
     FboTwoStageScreen(Activity activity,TsdSession session,WmsApi api,String baseUrl,String id,boolean packing,Runnable back,Runnable moveRemainder,FboScanFeedback scanFeedback) {
         this.scanFeedback=scanFeedback;
@@ -83,7 +83,7 @@ final class FboTwoStageScreen {
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
     private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
     // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
-    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.play(accepted);}
+    private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(plan.phase)&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.scan(accepted,"picking:"+(state.source.isEmpty()?"location":"barcode"));}
     // FIX: packing speech is exclusive to new boxes in our flavor.
     private boolean packingVoiceActive(){return !closed&&packingChoices()&&(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)&&plan!=null&&"PACKING".equals(plan.phase);}
     private void packingPrompt(FboPackingVoice.Cue cue){if(!closed&&scanFeedback!=null&&cue!=null)scanFeedback.prompt(cue);}
@@ -183,7 +183,7 @@ final class FboTwoStageScreen {
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
         packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
         // FIX: one error cue per rejection, after rendering so a stage prompt cannot interrupt it.
-        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices())packingPrompt(FboPackingVoice.Cue.ERROR);}
+        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices()&&scanFeedback!=null)scanFeedback.error("packing:"+message);}
     }
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
         if("CONTROL".equals(plan.phase)){state.target=value;send("CONFIRM_BOX",null);return;}
@@ -215,7 +215,7 @@ final class FboTwoStageScreen {
         if(packingChoices()&&packingMode==PackingMode.MANUAL&&"PACKING".equals(plan.phase)){
             if(!state.barcode.isEmpty())send("MANUAL_PACK_UNIT",value);
             else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";packingErrorSpeech=true;render();}
-            else{state.barcode=value;message="Отсканируйте КИЗ товара.";render();}
+            else{state.barcode=value;if(scanFeedback!=null)scanFeedback.success();message="Отсканируйте КИЗ товара.";render();}
             return;
         }
         if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
@@ -224,7 +224,7 @@ final class FboTwoStageScreen {
         if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";packingErrorSpeech=true;render();return;}
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
-        state.barcode=value;if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
+        state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
     }
     private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
     private void send(String action,String kiz){send(action,kiz,null);}
@@ -236,7 +236,7 @@ final class FboTwoStageScreen {
             if(!res.isSuccessful()||res.body()==null){boolean rejected=res.code()>=400&&res.code()<500&&res.code()!=408;String detail=error(res);handler.post(()->{if(rejected){state.rejected();prefs.edit().remove(pendingKey).commit();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
-            TsdFboPlan next=res.body();handler.post(()->{state.accepted();manualPackingScan=false;prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
+            TsdFboPlan next=res.body();handler.post(()->{state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
                 if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);
                 if(packingVoiceActive()&&("PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action"))))packingPrompt(packingVoice.accepted(payload.get("operationId")));
                 // FIX: only the successful server response may announce box closure.

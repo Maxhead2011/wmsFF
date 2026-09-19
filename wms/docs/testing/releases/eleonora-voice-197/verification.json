@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 197,
+  "versionName": "0.1.197-eleonora-voice",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "3a747ae37dbc918c3852d800481f3bf7aa669b5347e470ac13afc0b1cdb24ebd"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 180,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 180,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 180,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 180,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 180,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 180,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "d311afe7a50de8b786e1f3d91cb384e152aaae333216723878df36b7d293083b",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}
