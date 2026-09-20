@@ -130,8 +130,29 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
       if (mark.status === 'RESERVED' && mark.boxId === box!.id) continue;
       // FIX: legacy administrative exclusions are recoverable only from physical
       // scans, with no surviving box ownership or evidence of any order/dispatch.
+      let documentedShortage = false;
+      // FIX: recover only the exact mark retired by an approved negative inventory adjustment.
+      if (mark.status === 'BLOCKED' && !mark.boxId && mark.updatedAt < audit.startedAt &&
+          mark.sourceDocument?.startsWith('repair:inventory-after-movement:') && mark.stockMovementId) {
+        const movement = await tx.stockMovement.findUnique({ where: { id: mark.stockMovementId } });
+        const lineId = movement?.idempotencyKey?.startsWith('web-inventory:')
+          ? movement.idempotencyKey.slice('web-inventory:'.length) : null;
+        const line = lineId ? await tx.inventoryAuditLine.findUnique({ where: { id: lineId },
+          include: { auditBox: { include: { session: true } } } }) : null;
+        documentedShortage = Boolean(movement && line && movement.type === 'INVENTORY_ADJUSTMENT' &&
+          movement.status === 'AVAILABLE' && movement.quantity < 0 && movement.clientId === box!.clientId &&
+          movement.warehouseId === box!.warehouseId && movement.skuId === scan.skuId &&
+          movement.createdAt.getTime() === mark.updatedAt.getTime() &&
+          line.skuId === scan.skuId && line.decision === 'APPLY_ACTUAL' && line.difference === movement.quantity &&
+          line.decidedAt?.getTime() === movement.createdAt.getTime() &&
+          line.auditBox.boxId === movement.boxId && line.auditBox.clientId === box!.clientId &&
+          line.auditBox.status === 'RESOLVED' && line.auditBox.session.type === 'BOX_CHECK' &&
+          line.auditBox.session.status === 'COMPLETED');
+      }
+      const administrativeExclusion = mark.sourceDocument === 'admin-unpalleted-writeoff' ||
+        mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-');
       if (mark.status !== 'BLOCKED' || mark.boxId || !(mark.updatedAt < audit.startedAt) ||
-          !mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-')) {
+          !(administrativeExclusion || documentedShortage)) {
         stop('Отсканированный КИЗ заблокирован, отобран или отгружен. Нужна проверка возврата или переклейка КИЗ.');
       }
       const prefixes = [scan.identity, ']d2' + scan.identity,
@@ -145,6 +166,11 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
         tx.fbsPrintJob.findFirst({ where, select: { id: true } }),
         tx.kizCirculationItem.findFirst({ where: { OR: prefixes.map(prefix => ({ kizRaw: { startsWith: prefix } })) }, select: { id: true } }),
       ]);
+      // FIX: a recovered shortage must not revive a physical FBO pick or durable WB shipment.
+      if (documentedShortage) history.push(...await Promise.all([
+        tx.fboAssemblyUnit.findFirst({ where: { OR: [{ markId: mark.id }, ...prefixes.map(prefix => ({ kiz: { startsWith: prefix } }))] }, select: { id: true } }),
+        tx.wbOrderShipment.findFirst({ where, select: { id: true } }),
+      ]));
       if (history.some(Boolean)) stop('У заблокированного КИЗ есть история заказа или передачи. Нужна проверка возврата или переклейка КИЗ.');
     }
   }
