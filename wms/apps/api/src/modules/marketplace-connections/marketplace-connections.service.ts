@@ -24700,19 +24700,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           continue;
         }
 
+        // FIX: a recovered WB status does not resolve the manager's physical-pick decision.
+        const pendingPhysicalDecision = permanentStorageBoxesEnabled() &&
+          task?.status === FBS_TSD_RETURN_REQUIRED && fbsTsdTaskWasPhysicallyHandled(task);
+        const nextSyncStatus = pendingPhysicalDecision ? FBS_REQUEST_LINK_RETURN_REQUIRED : FBS_REQUEST_LINK_ACTIVE;
+        const nextSyncIssue = pendingPhysicalDecision ? (task.errorMessage ?? link.syncIssue) : null;
         if (
           snapshotChanged ||
           Object.entries(timingSnapshot(order.sourceTiming)).some(([field, value]) =>
             String((link as unknown as Record<string, unknown>)[field] ?? '') !== String(value)) ||
-          link.syncStatus !== FBS_REQUEST_LINK_ACTIVE ||
-          Boolean(link.syncIssue)
+          link.syncStatus !== nextSyncStatus ||
+          link.syncIssue !== nextSyncIssue
         ) {
           await tx.fbsOrderRequestLink.update({
             where: { id: link.id },
             data: {
               ...fbsOrderLinkSnapshot(order),
-              syncStatus: FBS_REQUEST_LINK_ACTIVE,
-              syncIssue: null,
+              syncStatus: nextSyncStatus,
+              syncIssue: nextSyncIssue,
             },
           });
         }

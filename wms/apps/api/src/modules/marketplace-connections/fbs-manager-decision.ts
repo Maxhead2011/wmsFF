@@ -74,7 +74,13 @@ export async function confirmFbsPickedManagerDecision(
     const nextTaskStatus = disposition === FbsPickedDisposition.SHIP_WITH_WB_LABEL ? 'COMPLETED' : 'RETURN_REQUIRED';
     // FIX: retries after a lost response do not repeat audit or stock/planning operations.
     if (previous === disposition && freshTask.status === nextTaskStatus) return;
-    if (previous || freshTask.status !== 'RETURN_REQUIRED' || freshLink.syncStatus !== 'RETURN_REQUIRED' ||
+    // FIX: older synchronization could restore ACTIVE while the physical pick still awaited a decision.
+    // Only accept the unchanged, completed pick with an explicitly shipped WB snapshot.
+    const recoveredShippedLink = freshLink.syncStatus === 'ACTIVE' && freshLink.lastCategory === 'shipped' &&
+      freshLink.lastSupplierStatus === 'complete' && Boolean(freshTask.completedAt && freshTask.kiz) &&
+      freshLink.lastSkuId === freshTask.skuId && freshLink.lastItemCount === freshTask.itemCount;
+    if (previous || freshTask.status !== 'RETURN_REQUIRED' ||
+      (freshLink.syncStatus !== 'RETURN_REQUIRED' && !recoveredShippedLink) ||
       freshTask.updatedAt.getTime() !== task.updatedAt.getTime() || request.status === 'DONE') {
       throw new BadRequestException('Решение уже принято или заказ изменился. Обновите заявку.');
     }

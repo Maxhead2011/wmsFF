@@ -48,3 +48,26 @@ describe('manager decisions survive WB synchronization', () => {
     expect(f.tx.fbsOrderRequestLink.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ syncStatus: 'RETURN_REQUIRED' }) }));
   });
 });
+
+// TEST: WB recovery must not erase an unresolved physical-pick decision.
+it('preserves an unresolved return when WB reports the order shipped again', async () => {
+  const f = fixture('RETURN');
+  f.link.syncStatus = 'RETURN_REQUIRED';
+  f.link.syncIssue = 'Needs manager';
+  f.task.errorMessage = 'Needs manager';
+  f.order.category = 'shipped'; f.order.supplierStatus = 'complete'; f.order.wbStatus = 'waiting';
+  await f.run();
+  expect(f.tx.fbsOrderRequestLink.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ syncStatus: 'RETURN_REQUIRED', syncIssue: 'Needs manager' }),
+  }));
+});
+// TEST: sold WMS retains its existing ACTIVE transition for the same WB recovery.
+it('keeps recovered-order synchronization unchanged in sold WMS', async () => {
+  const f = fixture('RETURN', false);
+  f.link.syncStatus = 'RETURN_REQUIRED'; f.link.syncIssue = 'Needs manager';
+  f.order.category = 'shipped'; f.order.supplierStatus = 'complete'; f.order.wbStatus = 'waiting';
+  await f.run();
+  expect(f.tx.fbsOrderRequestLink.update).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ syncStatus: 'ACTIVE', syncIssue: null }),
+  }));
+});
