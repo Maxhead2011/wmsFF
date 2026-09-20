@@ -1,3 +1,4 @@
+import type { WarehouseNotificationTarget } from '../../lib/adminNotificationTarget';
 import {
   Archive,
   ArrowRightLeft,
@@ -75,7 +76,7 @@ const actionLabels: Record<TurnoverActionKind, string> = {
   REPLACE_BARCODE: 'Исправить ШК', // ADDED
 };
 
-export function BoxManagementPanel({ session }: { session: AuthSession }) {
+export function BoxManagementPanel({ session, notificationTarget }: { session: AuthSession; notificationTarget?: WarehouseNotificationTarget | null }) {
   const [showArchive, setShowArchive] = useState(false);
   // ADDED: the third view is read from the existing stock report and never mutates placement.
   const [showWithoutPallet, setShowWithoutPallet] = useState(false);
@@ -99,6 +100,20 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
   const [isLoadingClients, setLoadingClients] = useState(false);
   const [isLoadingWithoutPallet, setLoadingWithoutPallet] = useState(false);
   const [withoutPalletError, setWithoutPalletError] = useState('');
+
+  // FIX: open the exact client/code after the requested warehouse session is active.
+  useEffect(() => {
+    if (!notificationTarget || notificationTarget.warehouseId && notificationTarget.warehouseId !== session.user.activeWarehouseId) return;
+    let live = true;
+    const box = { clientId: notificationTarget.clientId, code: notificationTarget.boxCode };
+    setShowArchive(false); setShowWithoutPallet(false); setShowSuggestions(false);
+    setSelectedBox(box); setQuery(box.code); setActionState(null); setActionMessage(''); setSearchError('');
+    setDetails({ status: 'loading', data: null });
+    void fetchTurnoverBoxDetails(session.accessToken, box.code, { clientId: box.clientId })
+      .then(data => { if (live) setDetails({ status: 'ready', data }); })
+      .catch(caught => { if (live) setDetails({ status: 'error', data: null, error: errorMessage(caught) }); });
+    return () => { live = false; };
+  }, [notificationTarget?.nonce, session.accessToken, session.user.activeWarehouseId]);
 
   const visibleSuggestions = useMemo(() => suggestions.slice(0, 14), [suggestions]);
 
@@ -498,7 +513,7 @@ export function BoxManagementPanel({ session }: { session: AuthSession }) {
       {details.data ? (
         <BoxCard
           details={details.data}
-          readOnly={showArchive}
+          readOnly={showArchive || details.data.box.status === 'archived'}
           onAction={startAction}
           onClose={() => {
             setSelectedBox(null);

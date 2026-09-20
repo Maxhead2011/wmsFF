@@ -1,3 +1,4 @@
+import type { WarehouseNotificationTarget } from '../../lib/adminNotificationTarget';
 import { ArrowLeft, ArrowRightLeft, ChevronRight, ClipboardCheck, History, PackageCheck, PackagePlus, PackageSearch, RefreshCw, Truck } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { deleteSku, fetchClients, fetchSkus, type AuthSession, type AuthUser, type ClientSummary, type SkuSummary } from '../../lib/api';
@@ -15,6 +16,7 @@ import { useRememberedClientId, validRememberedClientId } from '../../lib/rememb
 type WarehouseOpsPanelProps = {
   session: AuthSession;
   onOpenCatalog?: () => void;
+  notificationTarget?: WarehouseNotificationTarget | null;
 };
 
 type WarehouseTopic =
@@ -27,8 +29,10 @@ type WarehouseTopic =
   | 'operations'
   | 'drafts';
 
-export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelProps) {
+export function WarehouseOpsPanel({ onOpenCatalog, session, notificationTarget }: WarehouseOpsPanelProps) {
   const [activeTopic, setActiveTopic] = useState<WarehouseTopic | null>(null);
+  // FIX: a notification always opens the boxes section, including repeated navigation.
+  useEffect(() => { if (notificationTarget) setActiveTopic('boxes'); }, [notificationTarget?.nonce]);
 
   if (!canUse(session.user, 'stock:write')) {
     return null;
@@ -82,7 +86,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
           <PackageSearch size={20} aria-hidden="true" />
         </div>
 
-        <BoxManagementPanel session={session} />
+        <BoxManagementPanel session={session} notificationTarget={notificationTarget} />
       </section> : null}
 
       {activeTopic === 'integrity' ? <section className="warehouse-panel warehouse-panel--integrity" aria-label="Проверка коробов">
