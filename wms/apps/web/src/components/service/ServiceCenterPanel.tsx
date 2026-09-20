@@ -1,3 +1,5 @@
+import { SizeSubstitutionPanel } from './SizeSubstitutionPanel';
+import { fetchSizeSubstitutionCapabilities } from '../../lib/api';
 import {
   AlertTriangle,
   Bell,
@@ -80,6 +82,7 @@ const telegramSectionOptions: Array<{ id: TelegramNotificationSection; label: st
 ];
 
 const tabs = [
+  { id: 'sizeSubstitution', label: 'Замена размера WB', icon: RefreshCw },
   { id: 'mode', label: 'Режим', icon: Lock },
   { id: 'sessions', label: 'Сессии', icon: Users },
   { id: 'telegram', label: 'Telegram', icon: Bell },
@@ -92,6 +95,11 @@ const tabs = [
 type TabId = (typeof tabs)[number]['id'];
 
 export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
+  const [sizeSubstitutionEnabled, setSizeSubstitutionEnabled] = useState(false);
+  useEffect(() => {
+    if (!session.user.roleCodes.some(role => ['ADMIN', 'OWNER'].includes(role))) return;
+    void fetchSizeSubstitutionCapabilities(session.accessToken).then(result => setSizeSubstitutionEnabled(result.enabled)).catch(() => setSizeSubstitutionEnabled(false));
+  }, [session.accessToken]);
   const [activeTab, setActiveTab] = useState<TabId>('mode');
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
   const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
@@ -370,7 +378,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
       </div>
 
       <div className="service-tabs" role="tablist" aria-label="Разделы сервисного меню">
-        {tabs.map((tab) => {
+        {tabs.filter(tab => tab.id !== 'sizeSubstitution' || sizeSubstitutionEnabled).map((tab) => {
           const Icon = tab.icon;
           return (
             <button
@@ -396,6 +404,8 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
       />
 
       {message ? <div className="service-message">{message}</div> : null}
+
+      {activeTab === 'sizeSubstitution' && sizeSubstitutionEnabled && <SizeSubstitutionPanel key={`${selectedClientId}:${session.user.activeWarehouseId}`} session={session} clientId={selectedClientId} />}
 
       {activeTab === 'mode' ? (
         <Section title="Сервисный режим" icon={<Lock size={18} />}>

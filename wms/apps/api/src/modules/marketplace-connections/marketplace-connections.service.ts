@@ -1,3 +1,4 @@
+import { approvedSizeRoutes } from './fbs-size-substitution-route';
 import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { collectFbsConnectionOrders, type FbsConnectionError } from './fbs-connection-results';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
@@ -15359,7 +15360,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   // FIX: request 1049 uses its approved source with fresh stock and competing reservations.
   private async resolveDovoz1049TsdStockSource(task: FbsTsdAssemblyRecord | null): Promise<FbsTsdStockSource | null> {
-    if (!task || !retainDovoz1049Route(task)) return null;
+    if (!task || !(retainDovoz1049Route(task) || (await approvedSizeRoutes(this.prisma, [task])).has(task.id))) return null;
     const warehouseId = task.stockWarehouseId ?? (await this.prisma.clientRequest.findUnique({
       where: { id: task.requestId }, select: { warehouseId: true },
     }))?.warehouseId;
@@ -25062,7 +25063,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    const approvedSizeTaskIds = await approvedSizeRoutes(this.prisma, [...taskByKey.values()]);
     const reservableOrders = relevantOrders.filter((order) => {
+      if (approvedSizeTaskIds.has(taskByKey.get(selectionKey(order.connectionId, order.id))?.id ?? '')) return false;
       if (retainDovoz1049Route(taskByKey.get(selectionKey(order.connectionId, order.id)))) return false;
       if (
         order.category !== 'active' ||
@@ -25239,7 +25242,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
       // FIX: request 1049 has explicit one-off size substitutions. Cancellation above still releases them.
       // Live route/scan validation and explicit route repair remain enabled; only background rewriting is skipped.
-      if (retainDovoz1049Route(existing)) continue;
+      if (retainDovoz1049Route(existing) || (existing && approvedSizeTaskIds.has(existing.id))) continue;
       const sourceSkuId = order.relabeling?.sourceSkuId ?? null;
       const stockSkuId = sourceSkuId || order.product.id;
       const requestItem = order.request

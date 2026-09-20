@@ -12374,3 +12374,15 @@ async function responseError(response: Response) {
     return `HTTP ${response.status}`;
   }
 }
+
+// FIX: explicit per-order size substitution in Service.
+export type SizeSubstitutionProduct = { id: string; name: string; article: string | null; color: string | null; size: string | null; barcodes: string[] };
+export type SizeSubstitutionPreview = {
+  warning?: string | null;
+  existingRequest?: { id: string; number: number }; taskId?: string; orderId?: string; previewToken?: string;
+  target?: SizeSubstitutionProduct;
+  options: Array<SizeSubstitutionProduct & { distance: number; available: number; boxes: Array<{ id: string; code: string; pallet: string; available: number }> }>;
+};
+export const fetchSizeSubstitutionCapabilities = (accessToken: string) => request<{ enabled: boolean }>('/marketplace-connections/fbs/size-substitution/capabilities', { accessToken });
+export const previewSizeSubstitution = (accessToken: string, body: { clientId: string; orderId: string }) => request<SizeSubstitutionPreview>('/marketplace-connections/fbs/size-substitution/preview', { accessToken, method: 'POST', body });
+export const createSizeSubstitution = (accessToken: string, body: { clientId: string; orderId: string; taskId: string; sourceSkuId: string; previewToken: string; confirmRelabel: true }) => request<{ id: string; number: number }>('/marketplace-connections/fbs/size-substitution', { accessToken, method: 'POST', body });
