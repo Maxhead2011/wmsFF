@@ -5,7 +5,8 @@ type CellValue = string | number;
 
 const XLSX_MIME_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-export function buildTurnoverReceiptWorkbook(document: TurnoverReceiptDocument) {
+export function buildTurnoverReceiptWorkbook(document: TurnoverReceiptDocument, clientSummary = false) {
+  if (clientSummary) return buildClientReceiptSummary(document);
   const workbook = XLSX.utils.book_new();
 
   XLSX.utils.book_append_sheet(workbook, sheetFromRows(summaryRows(document), [24, 48]), 'Сводка');
@@ -18,7 +19,8 @@ export function buildTurnoverReceiptWorkbook(document: TurnoverReceiptDocument) 
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
 
-export function buildTurnoverReceiptPeriodWorkbook(document: TurnoverReceiptPeriodDocument) {
+export function buildTurnoverReceiptPeriodWorkbook(document: TurnoverReceiptPeriodDocument, clientSummary = false) {
+  if (clientSummary) return buildClientReceiptSummary(document);
   const workbook = XLSX.utils.book_new();
 
   XLSX.utils.book_append_sheet(workbook, sheetFromRows(periodSummaryRows(document), [24, 48]), 'Сводка');
@@ -226,4 +228,36 @@ function formatDateOnly(value: string | null) {
   }
 
   return new Intl.DateTimeFormat('ru-RU').format(new Date(value));
+}
+
+// FIX: pivot the existing scoped receipt rows by barcode, without touching warehouse accounting.
+function buildClientReceiptSummary(document: TurnoverReceiptDocument | TurnoverReceiptPeriodDocument) {
+  const groups = new Map<string, { values: Set<string>[]; quantity: number; barcode: string }>();
+  for (const row of document.rows) {
+    const barcode = row.barcode?.trim() || '';
+    // Missing barcodes must not merge unrelated products.
+    const key = barcode ? `barcode:${barcode}` : `sku:${row.internalSku}`;
+    const group = groups.get(key) ?? { values: [new Set<string>(), new Set<string>(), new Set<string>(), new Set<string>()], quantity: 0, barcode };
+    [row.name, row.article, row.color, row.size].forEach((value, index) => {
+      if (value) group.values[index].add(value);
+    });
+    group.quantity += row.quantity;
+    groups.set(key, group);
+  }
+  const data = [...groups.values()].map(({ values, quantity, barcode }) => {
+    const [name, article, color, size] = values.map((items) => [...items].sort().join(', '));
+    return [name, article, barcode, color, size, quantity] as CellValue[];
+  });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheetFromRows([
+    ['Клиент', `${document.client.code} · ${document.client.name}`],
+    ['Период с', formatDateOnly(document.periodFrom)],
+    ['Период по', formatDateOnly(document.periodTo)],
+    ['Позиций', data.length],
+    ['Товаров, шт', document.totalQuantity],
+  ], [24, 48]), 'Сводка');
+  XLSX.utils.book_append_sheet(workbook, sheetFromRows([
+    ['Товар', 'Артикул', 'Баркод', 'Цвет', 'Размер', 'Количество'], ...data,
+  ], [40, 32, 22, 24, 16, 16]), 'Приемка');
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
 }
