@@ -149,8 +149,10 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
           line.auditBox.status === 'RESOLVED' && line.auditBox.session.type === 'BOX_CHECK' &&
           line.auditBox.session.status === 'COMPLETED');
       }
+      const administrativeExclusion = mark.sourceDocument === 'admin-unpalleted-writeoff' ||
+        mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-');
       if (mark.status !== 'BLOCKED' || mark.boxId || !(mark.updatedAt < audit.startedAt) ||
-          !mark.sourceDocument?.startsWith('admin-unpalleted-physical-snapshot-') && !documentedShortage) {
+          !(administrativeExclusion || documentedShortage)) {
         stop('Отсканированный КИЗ заблокирован, отобран или отгружен. Нужна проверка возврата или переклейка КИЗ.');
       }
       const prefixes = [scan.identity, ']d2' + scan.identity,

@@ -432,3 +432,11 @@ it.each(['missing-proof','wrong-client','wrong-warehouse','wrong-sku','not-short
  if(kind==='fbs')f.db.fbsTsdAssembly.findFirst.mockResolvedValue({id:'picked'});
  await expect(f.confirm()).rejects.toThrow();expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
 });
+
+// TEST: preserve the published administrative writeoff recovery alongside shortage recovery.
+it('preserves recovery of a physically scanned administrative writeoff', async () => {
+  const f = blockedSnapshotFixture();
+  f.marks[0].sourceDocument = 'admin-unpalleted-writeoff';
+  await f.confirm();
+  expect(f.marks[0]).toMatchObject({ id: 'current', status: 'AVAILABLE', boxId: 'box' });
+});
