@@ -214,6 +214,8 @@ export type TurnoverReceiptPeriodDocument = {
     barcode: string | null;
     kiz: string | null;
     clientSku: string | null;
+    article: string | null;
+    internalSku: string;
     name: string;
     color: string | null;
     size: string | null;
@@ -1308,7 +1310,8 @@ export class TurnoverService {
 
   async getReceiptDocumentXlsx(movementId: string, user: AuthUser) {
     const document = await this.getReceiptDocument(movementId, user);
-    const content = buildTurnoverReceiptWorkbook(document);
+    // FIX: only client receipt downloads use the summary; staff and shipment documents stay detailed.
+    const content = buildTurnoverReceiptWorkbook(document, this.isExternalClient(user) && document.type !== MovementType.SHIP);
 
     return {
       fileName: document.fileName,
@@ -1378,7 +1381,7 @@ export class TurnoverService {
       : candidateMovements;
 
     const document = buildReceiptPeriodDocument(client, movements, query);
-    const content = buildTurnoverReceiptPeriodWorkbook(document);
+    const content = buildTurnoverReceiptPeriodWorkbook(document, this.isExternalClient(user));
 
     return {
       fileName: document.fileName,
@@ -2421,6 +2424,7 @@ const receiptPeriodInclude = {
       id: true,
       internalSku: true,
       clientSku: true,
+      article: true,
       name: true,
       color: true,
       size: true,
@@ -2515,6 +2519,8 @@ function receiptPeriodRowsFromMovement(movement: ReceiptPeriodMovement): Omit<Tu
     barcode: primaryBarcode,
     name: movement.sku.name,
     clientSku: movement.sku.clientSku,
+    article: movement.sku.article,
+    internalSku: movement.sku.internalSku,
     color: movement.sku.color,
     size: movement.sku.size,
     sourceDocument: movement.sourceDocument,

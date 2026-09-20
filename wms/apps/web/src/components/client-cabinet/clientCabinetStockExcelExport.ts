@@ -1,5 +1,5 @@
 import type { ClientRequestSummary, ClientSummary, StockBalance } from '../../lib/api';
-import { formatCabinetDate, formatCabinetNumber, primaryBarcode, stockStatusLabel } from './clientCabinetFormat';
+import { formatCabinetNumber, primaryBarcode, stockStatusLabel } from './clientCabinetFormat';
 
 export function downloadClientCabinetStockExcel(
   client: ClientSummary,
@@ -7,15 +7,16 @@ export function downloadClientCabinetStockExcel(
   canSeeStoragePlaces: boolean,
   activeRequests: ClientRequestSummary[] = [],
 ) {
-  const stockHeader = ['SKU', 'Наименование', 'Штрихкод', 'Статус', 'Количество', 'Обновлено'];
+  // FIX: client-only summary uses barcode grouping and readable product attributes.
+  const stockHeader = ['Товар', 'Артикул', 'Баркод', 'Цвет', 'Размер', 'Количество'];
   const stockRows = aggregateStockRows(stock, activeRequests);
   const stockExportRows = stockRows.map((row) => [
-    row.internalSku,
     row.name,
+    row.article,
     row.barcode,
-    row.status,
-    formatCabinetNumber(row.quantity),
-    formatCabinetDate(row.updatedAt),
+    row.color,
+    row.size,
+    row.quantity,
   ]);
 
   const rows = [
@@ -50,6 +51,9 @@ export function downloadClientCabinetStockExcel(
 type AggregatedStockRow = {
   internalSku: string;
   name: string;
+  article: string;
+  color: string;
+  size: string;
   barcode: string;
   status: string;
   quantity: number;
@@ -65,6 +69,9 @@ export function aggregateStockRows(stock: StockBalance[], activeRequests: Client
       internalSkus: Set<string>;
       names: Set<string>;
       statuses: Set<string>;
+      articles: Set<string>;
+      colors: Set<string>;
+      sizes: Set<string>;
     }
   >();
 
@@ -74,6 +81,9 @@ export function aggregateStockRows(stock: StockBalance[], activeRequests: Client
     const existing = byBarcode.get(barcode) ?? {
       internalSku: '',
       name: '',
+      article: '',
+      color: '',
+      size: '',
       barcode: primaryBarcode(balance) || '',
       status: '',
       quantity: 0,
@@ -83,6 +93,9 @@ export function aggregateStockRows(stock: StockBalance[], activeRequests: Client
       internalSkus: new Set<string>(),
       names: new Set<string>(),
       statuses: new Set<string>(),
+      articles: new Set<string>(),
+      colors: new Set<string>(),
+      sizes: new Set<string>(),
     };
 
     existing.skuIds.add(balance.skuId);
@@ -93,6 +106,12 @@ export function aggregateStockRows(stock: StockBalance[], activeRequests: Client
     });
     existing.internalSkus.add(balance.sku.internalSku);
     existing.names.add(balance.sku.name);
+    if (balance.sku.article) existing.articles.add(balance.sku.article);
+    if (balance.sku.color) existing.colors.add(balance.sku.color);
+    if (balance.sku.size) existing.sizes.add(balance.sku.size);
+    existing.article = [...existing.articles].sort().join(', ');
+    existing.color = [...existing.colors].sort().join(', ');
+    existing.size = [...existing.sizes].sort().join(', ');
     existing.statuses.add(stockStatusLabel(balance.status));
     // FIX: server free stock excludes PACKING and includes incoming WB reservations.
     existing.quantity += Number(balance.freeQuantity ?? balance.quantity);
@@ -108,7 +127,7 @@ export function aggregateStockRows(stock: StockBalance[], activeRequests: Client
 
   return [...byBarcode.values()]
     .filter((row) => row.quantity > 0)
-    .map(({ barcodes, internalSkus, names, statuses, skuIds, ...row }) => row)
+    .map(({ barcodes, internalSkus, names, statuses, articles, colors, sizes, skuIds, ...row }) => row)
     .sort((left, right) => left.name.localeCompare(right.name, 'ru') || left.barcode.localeCompare(right.barcode, 'ru'));
 }
 
@@ -120,6 +139,9 @@ function applyActiveRequestReservations(
       internalSkus: Set<string>;
       names: Set<string>;
       statuses: Set<string>;
+      articles: Set<string>;
+      colors: Set<string>;
+      sizes: Set<string>;
     }
   >,
   requests: ClientRequestSummary[],
@@ -174,7 +196,7 @@ function latestDateString(left: string, right: string) {
 
 function rowHtml(row: Array<string | number>, isHeader: boolean) {
   const tag = isHeader ? 'th' : 'td';
-  return `<tr>${row.map((cell) => `<${tag}>${escapeHtml(String(cell))}</${tag}>`).join('')}</tr>`;
+  return `<tr>${row.map((cell) => `<${tag}${typeof cell === 'number' ? ' style="mso-number-format:0"' : ''}>${escapeHtml(String(cell))}</${tag}>`).join('')}</tr>`;
 }
 
 function escapeHtml(value: string) {

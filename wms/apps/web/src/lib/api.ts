@@ -4088,6 +4088,9 @@ export type StockBalance = {
     internalSku: string;
     clientSku: string | null;
     article: string | null;
+    // FIX: stock responses already include the variant attributes used by client reports.
+    color?: string | null;
+    size?: string | null;
     name: string;
     barcodes: Array<{
       id: string;
