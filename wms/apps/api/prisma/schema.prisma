@@ -3460,3 +3460,15 @@ model FboAssemblyAction {
   createdAt DateTime @default(now())
   @@index([requestId, createdAt])
 }
+
+// FIX: explicit size substitution approval, separate from stock movements.
+model FbsSizeSubstitution {
+  taskId String @id
+  clientId String
+  warehouseId String
+  requestId String @unique
+  sourceSkuId String
+  targetSkuId String
+  approvedByUserId String
+  createdAt DateTime @default(now())
+}

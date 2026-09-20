@@ -1,3 +1,5 @@
+import { FbsSizeSubstitutionService } from './fbs-size-substitution.service';
+import { FbsSizeSubstitutionController } from './fbs-size-substitution.controller';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { LogisticsModule } from '../logistics/logistics.module';
@@ -17,8 +19,8 @@ import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule],
-  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
-  providers: [
+  controllers: [FbsSizeSubstitutionController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+  providers: [FbsSizeSubstitutionService,
     MarketplaceStockControlService,
     // FIX: keep current stock-control registration when adding independent repeats.
     FbsRepeatAssemblyService,
