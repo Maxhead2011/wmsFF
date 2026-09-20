@@ -1,3 +1,4 @@
+import { resolveAdminNotificationTarget, type WarehouseNotificationTarget } from './lib/adminNotificationTarget';
 import { reportInventoryOpened } from './lib/adminNotifications';
 import { AdminNotificationList, AdminNotificationToasts, useAdminNotifications } from './components/admin-notifications/AdminNotifications';
 import { type AdminNotification, type InventoryNotificationTarget } from './lib/adminNotifications';
@@ -159,6 +160,7 @@ export function App() {
   const [isRestoring, setRestoring] = useState(Boolean(session));
   // FIX: claim popups only after the authenticated workspace can display them.
   const adminNotifications = useAdminNotifications(isRestoring ? null : session);
+  const [warehouseNotificationTarget, setWarehouseNotificationTarget] = useState<WarehouseNotificationTarget | null>(null);
   const [inventoryNotificationTarget, setInventoryNotificationTarget] = useState<InventoryNotificationTarget | null>(null);
   const [showAuthPanel, setShowAuthPanel] = useState(false);
   const [uiTheme, setUiTheme] = useState<UiTheme>(() => initialTheme);
@@ -499,12 +501,22 @@ export function App() {
   async function openAdminNotification(item: AdminNotification) {
     if (!session) return;
     try {
-      if (item.warehouseId && item.warehouseId !== session.user.activeWarehouseId && branches.some(branch => branch.id === item.warehouseId)) {
+      if (item.warehouseId && item.warehouseId !== session.user.activeWarehouseId) {
+        if (!branches.some(branch => branch.id === item.warehouseId)) throw new Error('Нет доступа к филиалу уведомления.');
         await selectBranch(item.warehouseId);
       }
-      const targetWorkspace = item.sessionId ? 'inventory' : 'requests';
+      // FIX: route the operational event, not its technical inventory-session container.
+      const target = resolveAdminNotificationTarget(item);
+      const targetWorkspace = target.workspace;
       if (!canKeepWorkspace(session.user, targetWorkspace)) throw new Error('Нет доступа к разделу события.');
-      if (item.sessionId) {
+      if (target.workspace === 'monitoring') {
+        sessionStorage.setItem('monitoring-surface', 'wb-sync');
+        setActiveWorkspaceId('monitoring');
+        window.dispatchEvent(new Event('wb-sync-health-open'));
+      } else if (target.workspace === 'warehouse') {
+        setWarehouseNotificationTarget({ ...target, nonce: Date.now() });
+        setActiveWorkspaceId('warehouse');
+      } else if (target.workspace === 'inventory' && item.sessionId) {
         setInventoryNotificationTarget({ sessionId: item.sessionId, auditBoxId: item.auditBoxId, nonce: Date.now() });
         void reportInventoryOpened(session.accessToken, session.user.id, item.sessionId, item.auditBoxId ?? undefined).catch(caught => adminNotifications.setError(caught instanceof Error ? caught.message : 'Не удалось зафиксировать открытие проверки.'));
         setActiveWorkspaceId('inventory');
@@ -821,6 +833,7 @@ export function App() {
             },
             () => setFocusedRequestId(null),
             inventoryNotificationTarget,
+            warehouseNotificationTarget,
           )}
         </section>
 
@@ -923,6 +936,7 @@ function renderWorkspace(
   openRequestFromFbs: (requestId: string) => void,
   clearFocusedRequest: () => void,
   inventoryNotificationTarget: InventoryNotificationTarget | null,
+  warehouseNotificationTarget: WarehouseNotificationTarget | null,
 ) {
   switch (activeWorkspaceId) {
     case 'ai':
@@ -952,7 +966,7 @@ function renderWorkspace(
     case 'logistics':
       return <LogisticsQuotePanel session={session} />;
     case 'warehouse':
-      return <WarehouseOpsPanel session={session} />;
+      return <WarehouseOpsPanel session={session} notificationTarget={warehouseNotificationTarget} />;
     case 'branches':
       return <BranchesPanel session={session} />;
     case 'storage-zones':

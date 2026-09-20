@@ -13,3 +13,19 @@
 .admin-notification-center--enabled > .modern-header-action{display:inline-flex;align-items:center;justify-content:center;gap:4px;min-width:36px;min-height:36px;border:1px solid #d8e0e8;border-radius:8px;background:var(--surface,#fff);color:var(--text,#172033);cursor:pointer}
 .admin-notification-center--enabled > .modern-header-action span{font-size:11px;font-weight:700}
 .admin-notification-toasts{max-height:calc(100dvh - 104px);overflow-y:auto;padding-bottom:8px}
+
+/* FIX: this button has text only, so it must not inherit the 38px icon column. */
+.admin-notification-row .header-notification-item { grid-template-columns: minmax(0, 1fr); }
+.admin-notification-row .header-notification-item__body { overflow-wrap: anywhere; }
+.admin-notification-row .header-notification-item__body strong,
+.admin-notification-row .header-notification-item__body span {
+  display: block;
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+  -webkit-line-clamp: unset;
+}
+
+.admin-notification-row .header-notification-item__body strong { font-size: 14px; }
+.admin-notification-row .header-notification-item__body span { font-size: 13px; line-height: 1.5; }
+.admin-notification-row .header-notification-item__body small { font-size: 12px; }
