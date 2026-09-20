@@ -509,7 +509,11 @@ export function App() {
       const target = resolveAdminNotificationTarget(item);
       const targetWorkspace = target.workspace;
       if (!canKeepWorkspace(session.user, targetWorkspace)) throw new Error('Нет доступа к разделу события.');
-      if (target.workspace === 'warehouse') {
+      if (target.workspace === 'monitoring') {
+        sessionStorage.setItem('monitoring-surface', 'wb-sync');
+        setActiveWorkspaceId('monitoring');
+        window.dispatchEvent(new Event('wb-sync-health-open'));
+      } else if (target.workspace === 'warehouse') {
         setWarehouseNotificationTarget({ ...target, nonce: Date.now() });
         setActiveWorkspaceId('warehouse');
       } else if (target.workspace === 'inventory' && item.sessionId) {
