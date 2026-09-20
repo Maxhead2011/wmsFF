@@ -401,3 +401,34 @@ it('replays box 338: two blocked units, one missing registration, two stale bind
   expect(f.db.productMark.create).toHaveBeenCalledOnce();expect(f.balances).toEqual(stock);expect(f.evidence).toEqual(scans);
   await expect(f.run()).resolves.toMatchObject({ready:true});
 });
+// TEST: BOX_0136 contains a mark excluded by a documented historical shortage.
+function shortageFixture() {
+  const f = blockedSnapshotFixture();
+  Object.assign(f.marks[0], { sourceDocument: 'repair:inventory-after-movement:20260827', stockMovementId: 'shortage' });
+  const movement: any = { id: 'shortage', clientId: 'client', warehouseId: 'warehouse', skuId: 'sku', boxId: 'old-box', type: 'INVENTORY_ADJUSTMENT', status: 'AVAILABLE', quantity: -8, idempotencyKey: 'web-inventory:old-line', createdAt: f.marks[0].updatedAt };
+  const line: any = { id: 'old-line', skuId: 'sku', decision: 'APPLY_ACTUAL', difference: -8, decidedAt: movement.createdAt, auditBox: { boxId: 'old-box', clientId: 'client', status: 'RESOLVED', session: { type: 'BOX_CHECK', status: 'COMPLETED' } } };
+  f.db.stockMovement.findUnique = vi.fn(async () => movement);
+  f.db.inventoryAuditLine = { findUnique: vi.fn(async () => line) };
+  f.db.fboAssemblyUnit = { findFirst: vi.fn(async () => null) };
+  f.db.wbOrderShipment = { findFirst: vi.fn(async () => null) };
+  return {...f,movement,line};
+}
+it('restores the same shortage KIZ from saved admin scans without receiving it twice',async()=>{
+ const f=shortageFixture(),stock=structuredClone(f.balances);await f.confirm();
+ expect(f.marks[0]).toMatchObject({id:'current',status:'AVAILABLE',boxId:'box'});
+ expect(f.balances).toEqual(stock);expect(f.db.productMark.create).not.toHaveBeenCalled();
+});
+it.each(['missing-proof','wrong-client','wrong-warehouse','wrong-sku','not-shortage','wrong-time','unapproved','fbo','wb-shipment','fbs'])('rejects unsafe shortage recovery: %s',async kind=>{
+ const f=shortageFixture();
+ if(kind==='missing-proof')f.db.stockMovement.findUnique.mockResolvedValue(null);
+ if(kind==='wrong-client')f.movement.clientId='other';
+ if(kind==='wrong-warehouse')f.movement.warehouseId='other';
+ if(kind==='wrong-sku')f.movement.skuId='other';
+ if(kind==='not-shortage')f.movement.quantity=1;
+ if(kind==='wrong-time')f.movement.createdAt=new Date('2026-08-28');
+ if(kind==='unapproved')f.line.decision='PENDING';
+ if(kind==='fbo')f.db.fboAssemblyUnit.findFirst.mockResolvedValue({id:'picked'});
+ if(kind==='wb-shipment')f.db.wbOrderShipment.findFirst.mockResolvedValue({id:'shipped'});
+ if(kind==='fbs')f.db.fbsTsdAssembly.findFirst.mockResolvedValue({id:'picked'});
+ await expect(f.confirm()).rejects.toThrow();expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
