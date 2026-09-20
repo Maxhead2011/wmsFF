@@ -23,6 +23,9 @@ export class StockBalancesService {
   ) {}
 
   async list(filter: ListStockBalancesDto, user: AuthUser) {
+    // FIX: our client cabinet/export accepts only located free stock. Internal
+    // operations retain physical quantities and other installations opt out.
+    const locatedFreeStock = process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED === 'true';
     const search = filter.search?.trim();
     const skuWhere: Prisma.SkuWhereInput | undefined =
       filter.barcode || search
@@ -189,28 +192,34 @@ export class StockBalancesService {
       include: {
         sku: { include: { barcodes: true } },
         warehouse: true,
-        box: { include: { warehouse: true } },
+        box: { include: { warehouse: true, ...(locatedFreeStock ? { storagePlacement: { select: { pallet: { select: { clientId: true, warehouseId: true } } } } } : {}) } },
         pallet: true,
       },
       orderBy: [{ updatedAt: 'desc' }],
       take: search ? 100 : undefined,
     });
     // FIX: preserve physical box quantities; expose free stock separately for the cabinet/export.
-    if (!wbOrderStockLifecycleEnabled()) return rows;
+    if (!wbOrderStockLifecycleEnabled() && !locatedFreeStock) return rows;
     const freeById = new Map<string, number>();
     for (const clientId of [...new Set(rows.map(row => row.clientId))]) {
       for (const warehouseId of [...new Set(rows.filter(row => row.clientId === clientId).map(row => row.warehouseId ?? row.box?.warehouseId).filter((id): id is string => Boolean(id)))]) {
         const scoped = rows.filter(row => row.clientId === clientId && (row.warehouseId ?? row.box?.warehouseId) === warehouseId);
         const reserved = await wbReservationQuantities(this.prisma, clientId, [...new Set(scoped.map(row => row.skuId))], warehouseId);
         for (const row of scoped) {
-          const physical = row.status === StockStatus.AVAILABLE ? Math.max(0, row.quantity) : 0;
+          const placement = (row.box && 'storagePlacement' in row.box ? row.box.storagePlacement : null) as
+            { pallet: { clientId: string; warehouseId: string } } | null;
+          const located = !locatedFreeStock || Boolean(placement?.pallet && placement.pallet.clientId === clientId && placement.pallet.warehouseId === warehouseId);
+          const physical = row.status === StockStatus.AVAILABLE && located ? Math.max(0, row.quantity) : 0;
           const deduction = Math.min(physical, reserved.get(row.skuId) ?? 0);
           freeById.set(row.id, physical - deduction);
           reserved.set(row.skuId, Math.max(0, (reserved.get(row.skuId) ?? 0) - deduction));
         }
       }
     }
-    return rows.map(row => ({ ...row, freeQuantity: freeById.get(row.id) ?? 0 }));
+    const result = rows.map(row => ({ ...row, freeQuantity: freeById.get(row.id) ?? 0 }));
+    return locatedFreeStock && user.roleCodes?.includes('CLIENT')
+      ? result.filter(row => row.freeQuantity > 0).map(row => ({ ...row, quantity: row.freeQuantity }))
+      : result;
   }
 
   balanceKey(input: BalanceKeyInput) {
