@@ -5,9 +5,26 @@ import { PrismaClient } from '@prisma/client';
 import { donePackingQuantity, reconcileDoneRequestPacking } from '../src/common/stock/done-request-packing';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
+import { reconcileHistoricalPacking } from '../src/common/stock/historical-packing';
+import { StockBalancesService } from '../src/modules/stock/stock-balances.service';
 
 // TEST: mixed-request packing must never be zeroed by SKU or by shipment count.
 describe('done packing ledger', () => {
+  // TEST: old repairs must not prevent shipment of a later, independently picked request.
+  it('allows a new request after old cross-document deductions, without spending old stock', () => {
+    expect(donePackingQuantity('new', 2, [
+      { sourceDocument: 'old', quantity: 5, createdAt: new Date('2026-09-01') },
+      { sourceDocument: 'old-adjustment', quantity: -5, createdAt: new Date('2026-09-02') },
+      { sourceDocument: 'new', quantity: 2, createdAt: new Date('2026-09-20') },
+    ])).toBe(2);
+  });
+  it('still rejects an unassigned deduction made after the new pick', () => {
+    expect(() => donePackingQuantity('new', 3, [
+      { sourceDocument: 'old', quantity: 2, createdAt: new Date('2026-09-01') },
+      { sourceDocument: 'new', quantity: 2, createdAt: new Date('2026-09-19') },
+      { sourceDocument: 'other', quantity: -1, createdAt: new Date('2026-09-20') },
+    ])).toThrow('Требуется сверка');
+  });
   it('subtracts whole-request debits and leaves other request stock alone', () => {
     expect(donePackingQuantity('done', 5, [
       { sourceDocument: 'done', quantity: 4 }, { sourceDocument: 'done', quantity: -2 },
@@ -51,6 +68,68 @@ describe.skipIf(!url).sequential('done packing PostgreSQL', () => {
       connectionId: randomUUID(), orderId: randomUUID(), quantity: 1, source: 'LEGACY_WMS_SHIPMENT', orderSnapshot: {}, assemblySnapshot: {} } });
     return { clientId, warehouseId, skuId, requestId, taskId, balance, shipment };
   }
+  // TEST: preview/apply/retry on real PostgreSQL, with concurrent new scans protected.
+  it('applies the reviewed historical plan once and rejects a changed plan atomically', async () => {
+    const f = await fixture();
+    await db.stockMovement.updateMany({ where: { clientId: f.clientId }, data: { createdAt: new Date('2026-09-19T10:00:00Z') } });
+    const cutoff = new Date('2026-09-19T21:00:00Z');
+    const old = process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED;
+    process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED = 'true';
+    try {
+      const plan = await db.$transaction(async tx => { await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY'); return reconcileHistoricalPacking(tx, f.balance.id, cutoff); });
+      expect(plan.quantity).toBe(1);
+      await db.$transaction(tx => reconcileHistoricalPacking(tx, f.balance.id, cutoff, plan.fingerprint));
+      expect((await db.stockBalance.findUniqueOrThrow({ where: { id: f.balance.id } })).quantity).toBe(1);
+      await expect(db.$transaction(tx => reconcileHistoricalPacking(tx, f.balance.id, cutoff, plan.fingerprint))).rejects.toThrow('plan changed');
+      expect((await db.$transaction(tx => reconcileHistoricalPacking(tx, f.balance.id, cutoff))).quantity).toBe(0);
+      expect(await db.wbOrderShipment.findUnique({ where: { id: f.shipment.id } })).toEqual(f.shipment);
+      expect(await db.stockMovement.findMany({ where: { clientId: f.clientId, idempotencyKey: { startsWith: 'historical-packing:' } }, select: { type: true, quantity: true } }))
+        .toEqual([{ type: 'INVENTORY_ADJUSTMENT', quantity: -1 }]);
+    } finally { if (old === undefined) delete process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED; else process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED = old; }
+  });
+  it('rejects a preview invalidated by a new scan without any repair movement', async () => {
+    const f = await fixture();
+    await db.stockMovement.updateMany({ where: { clientId: f.clientId }, data: { createdAt: new Date('2026-09-19T10:00:00Z') } });
+    const cutoff = new Date('2026-09-19T21:00:00Z');
+    const plan = await db.$transaction(tx => reconcileHistoricalPacking(tx, f.balance.id, cutoff));
+    await db.$transaction(async tx => {
+      await tx.stockBalance.update({ where: { id: f.balance.id }, data: { quantity: { increment: 1 } } });
+      await tx.stockMovement.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, skuId: f.skuId, status: 'PACKING', type: 'PICK', quantity: 1, sourceDocument: f.requestId } });
+    });
+    const old = process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED;
+    process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED = 'true';
+    try { await expect(db.$transaction(tx => reconcileHistoricalPacking(tx, f.balance.id, cutoff, plan.fingerprint))).rejects.toThrow('plan changed'); }
+    finally { if (old === undefined) delete process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED; else process.env.WMS_HISTORICAL_PACKING_REPAIR_ENABLED = old; }
+    expect(await db.stockMovement.count({ where: { clientId: f.clientId, idempotencyKey: { startsWith: 'historical-packing:' } } })).toBe(0);
+  });
+  // TEST: deleting an old task does not erase its immutable shipment proof.
+  it('loads shipment evidence for a deleted legacy task from PostgreSQL', async () => {
+    const f = await fixture();
+    await db.stockMovement.updateMany({ where: { clientId: f.clientId }, data: { createdAt: new Date('2026-09-18') } });
+    await db.wbOrderShipment.update({ where: { id: f.shipment.id }, data: { shippedAt: new Date('2026-09-19') } });
+    await db.fbsTsdAssembly.delete({ where: { id: f.taskId } });
+    const plan = await db.$transaction(tx => reconcileHistoricalPacking(tx, f.balance.id, new Date('2026-09-19T21:00:00Z')));
+    expect(plan.quantity).toBe(1);
+    expect(plan.after).toBe(1);
+  });
+  it('serves only available stock actually linked to pallet-sort using the real database', async () => {
+    const f = await fixture();
+    await db.client.update({ where: { id: f.clientId }, data: { stockBalanceMode: 'PALLET_SORT' } });
+    const box = await db.box.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, code: randomUUID(), status: 'active' } });
+    const unplaced = await db.box.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, code: randomUUID(), status: 'active' } });
+    const pallet = await db.storagePallet.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, code: randomUUID() } });
+    await db.storagePalletBox.create({ data: { palletId: pallet.id, boxId: box.id, boxCode: box.code } });
+    for (const [boxId, status, quantity] of [[box.id, 'AVAILABLE', 5], [box.id, 'PACKING', 44], [unplaced.id, 'AVAILABLE', 50]] as const)
+      await db.stockBalance.create({ data: { clientId: f.clientId, warehouseId: f.warehouseId, skuId: f.skuId, boxId, status, quantity, balanceKey: randomUUID() } });
+    const old = process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED;
+    process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED = 'true';
+    try {
+      const service = new StockBalancesService(db as never, { resolveClientFilter: () => f.clientId } as never);
+      const rows = await service.list({}, { roleCodes: ['CLIENT'], permissionCodes: [] } as never);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ boxId: box.id, status: 'AVAILABLE', quantity: 5, freeQuantity: 5 });
+    } finally { if (old === undefined) delete process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED; else process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED = old; }
+  });
   // TEST: reproduces the production bug: DONE + imported shipment still leaves PACKING.
   it('repairs an already DONE request through the real close entry point, preserving shipment and other stock', async () => {
     const f = await fixture();

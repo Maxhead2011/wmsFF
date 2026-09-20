@@ -4,14 +4,22 @@ import { Prisma } from '@prisma/client';
 // FIX: opt-in only for our installation; sold WMS retains its existing behavior.
 export const doneRequestPackingEnabled = () => process.env.WMS_DONE_PACKING_RECONCILIATION_ENABLED === 'true';
 
-type LedgerRow = { sourceDocument: string | null; quantity: number };
+type LedgerRow = { sourceDocument: string | null; quantity: number; createdAt?: Date };
 // FIX: a request may consume only its proven residual, never another request's stock.
 export function donePackingQuantity(requestId: string, quantity: number, ledger: LedgerRow[]) {
   const byRequest = new Map<string | null, number>();
   for (const row of ledger) byRequest.set(row.sourceDocument, (byRequest.get(row.sourceDocument) ?? 0) + row.quantity);
   const own = byRequest.get(requestId) ?? 0;
   if (own <= 0) return 0;
-  if (Array.from(byRequest.values()).some(value => value < 0) ||
+  // FIX: an earlier deduction cannot consume a later pick. Missing timestamps
+  // or deductions after this request's first pick remain ambiguous and blocked.
+  const ownCredits = ledger.filter(row => row.sourceDocument === requestId && row.quantity > 0);
+  const firstPick = ownCredits.every(row => row.createdAt && Number.isFinite(row.createdAt.getTime()))
+    ? Math.min(...ownCredits.map(row => row.createdAt!.getTime())) : NaN;
+  const ambiguous = [...byRequest].some(([document, total]) => total < 0 &&
+    (!Number.isFinite(firstPick) || ledger.some(row => row.sourceDocument === document && row.quantity < 0 &&
+      (!row.createdAt || !Number.isFinite(row.createdAt.getTime()) || row.createdAt.getTime() >= firstPick))));
+  if (ambiguous ||
       ledger.reduce((sum, row) => sum + row.quantity, 0) !== quantity || own > quantity) {
     throw new ConflictException('Остаток «В сборке» не сходится с движениями заявок. Требуется сверка, автоматическое списание остановлено.');
   }
@@ -55,7 +63,7 @@ export async function reconcileDoneRequestPacking(tx: Prisma.TransactionClient, 
     if (found.length !== 1) throw new ConflictException('Не найден однозначный остаток сданной заявки. Требуется сверка.');
     if (!dryRun) await tx.$queryRaw`SELECT id FROM "StockBalance" WHERE id=${found[0].id} FOR UPDATE`;
     const balance = await tx.stockBalance.findUniqueOrThrow({ where: { id: found[0].id } });
-    const ledger = await tx.stockMovement.findMany({ where, select: { sourceDocument: true, quantity: true, idempotencyKey: true } });
+    const ledger = await tx.stockMovement.findMany({ where, select: { sourceDocument: true, quantity: true, idempotencyKey: true, createdAt: true } });
     const quantity = donePackingQuantity(request.id, balance.quantity, ledger);
     plans.push({ balance, quantity });
   }
