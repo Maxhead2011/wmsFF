@@ -24,6 +24,21 @@ function fixture() {
 }
 // TEST: only 3 located free units reach client JSON/Excel, not 44 PACKING or unlocated stock.
 describe('client pallet-sort free stock', () => {
+  // TEST: Noginsk uses BOXES; a pallet is not required, but reservations still apply.
+  it.each([['BOXES', false], ['BOXES', true]])('shows free stock for %s, boxless=%s', async (stockBalanceMode, storesWithoutBoxes) => {
+    process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED = 'true';
+    const db = {
+      client: { findMany: vi.fn(async () => [{ id: 'client', storesWithoutBoxes, stockBalanceMode }]) },
+      stockBalance: { findMany: vi.fn(async () => [
+        { id: 'a', clientId: 'client', skuId: 'sku', warehouseId: 'noginsk', status: 'AVAILABLE', quantity: 5,
+          box: storesWithoutBoxes ? null : { warehouseId: 'noginsk', storagePlacement: null } },
+        { id: 'b', clientId: 'client', skuId: 'sku', warehouseId: 'noginsk', status: 'PACKING', quantity: 7, box: null },
+      ]) },
+    };
+    const service = new StockBalancesService(db as never, { resolveClientFilter: () => 'client' } as never);
+    expect(await service.list({}, { roleCodes: ['CLIENT'], permissionCodes: [] } as never))
+      .toEqual([expect.objectContaining({ id: 'a', quantity: 3, freeQuantity: 3 })]);
+  });
   it('excludes nonavailable/unlocated/mismatched stock and deducts reservations once', async () => {
     process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED = 'true';
     process.env.WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED = 'true';
