@@ -53,7 +53,8 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
   // FIX: ordinary WMS picks also leave AVAILABLE and must stop reserving it.
   const requestPicks = requests.length ? await db.stockMovement.groupBy({ by: ['sourceDocument', 'skuId'], where: {
     clientId, ...(warehouseId ? { warehouseId } : {}), sourceDocument: { in: requests.map(r => r.id) },
-    status: 'AVAILABLE', type: { in: ['PICK', 'PACK', 'SHIP', 'RETURN'] },
+    // FIX: FBO picks use MOVE; net AVAILABLE movement also cancels out storage-only transfers.
+    status: 'AVAILABLE', type: { in: ['PICK', 'PACK', 'SHIP', 'RETURN', 'MOVE'] },
     OR: [{ idempotencyKey: null }, { NOT: { idempotencyKey: { startsWith: 'fbs-sticker-pick:' } } }],
   }, _sum: { quantity: true } }) : [];
   const shipmentBatches = [];

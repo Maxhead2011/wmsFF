@@ -1,3 +1,4 @@
+import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestStatus, ClientRequestType, ClientStockBalanceMode, Prisma, StockStatus } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
@@ -125,6 +126,13 @@ export class WmsStockAvailabilityService {
         const picked = pickedByRequestSku.get(requestSkuKey(row.requestId, row.skuId)) ?? 0;
         reservedBySku.set(row.skuId, (reservedBySku.get(row.skuId) ?? 0) + Math.max(0, requested - picked));
       });
+
+      // FIX: our WMS uses the same remaining demand as WB, including FBO picks and incoming orders.
+      if (wbOrderStockLifecycleEnabled()) {
+        const unified = await wbReservationQuantities(this.prisma, clientId, skuIds, warehouseId);
+        reservedBySku.clear();
+        unified.forEach((quantity, skuId) => reservedBySku.set(skuId, quantity));
+      }
 
       skus.forEach((sku) => {
         const barcode = sku.barcodes[0]?.value.trim();

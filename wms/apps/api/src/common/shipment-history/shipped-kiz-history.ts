@@ -23,6 +23,41 @@ export async function captureShippedKizHistory(
   if (!request) return 0;
   if (!shippedAt && request.status !== ClientRequestStatus.DONE) return 0;
 
+  // FIX: FBO has its own unit records; archive only after an explicit shipment or DONE.
+  let fboCount = 0;
+  if (process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true') {
+    const units = await tx.fboAssemblyUnit.findMany({
+      where: { requestId, state: 'PACKED', kiz: { not: null } },
+    });
+    if (units.length) {
+      const skus = await tx.sku.findMany({ where: { id: { in: [...new Set(units.map(unit => unit.skuId))] } } });
+      const byId = new Map(skus.map(sku => [sku.id, sku]));
+      const at = shippedAt ?? request.updatedAt;
+      const rows = units.map(unit => {
+        const sku = byId.get(unit.skuId);
+        if (!sku || !unit.kiz) throw new Error('Не найдена карточка отгруженной единицы ФБО.');
+        return { assemblyId: `fbo:${unit.id}`, clientId: request.clientId,
+          warehouseId: request.warehouseId, clientName: request.client.name,
+          requestId, requestNumber: request.number, requestTitle: request.title,
+          skuId: sku.id, internalSku: sku.internalSku, barcode: unit.barcode,
+          article: sku.article, productName: sku.name, color: sku.color, size: sku.size,
+          kiz: unit.kiz, sourceBoxCode: unit.sourceBoxCode, shippedAt: at };
+      });
+      fboCount = (await tx.shippedKizHistory.createMany({ data: rows, skipDuplicates: true })).count;
+      // FIX: historical rebuild is read-only for marks; a later receipt must survive.
+      if (request.status !== ClientRequestStatus.DONE) {
+        for (const unit of units) {
+          if (!unit.markId || !unit.targetBoxId) continue;
+          await tx.productMark.updateMany({ where: {
+            id: unit.markId, clientId: request.clientId, skuId: unit.skuId,
+            value: unit.kiz!, boxId: unit.targetBoxId, status: StockStatus.SHIPPING,
+            updatedAt: { lte: at },
+          }, data: { boxId: null } });
+        }
+      }
+    }
+  }
+
   const assemblies = await tx.fbsTsdAssembly.findMany({
     where: {
       requestId,
@@ -43,7 +78,7 @@ export async function captureShippedKizHistory(
   // FIX: archived attempts are history only; they cannot own a currently active KIZ.
   const currentAssemblies = [...assemblies];
   await appendFbsAttemptHistory(tx, assemblies, { requestId });
-  if (assemblies.length === 0) return 0;
+  if (assemblies.length === 0) return fboCount;
 
   const skuIds = [...new Set(assemblies.map((row) => row.skuId))];
   const kizValues = assemblies
@@ -141,7 +176,7 @@ export async function captureShippedKizHistory(
       },
     ];
   });
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) return fboCount;
   const result = await tx.shippedKizHistory.createMany({
     data: rows,
     skipDuplicates: true,
@@ -163,7 +198,7 @@ export async function captureShippedKizHistory(
         });
       }
     }
-    return result.count;
+    return result.count + fboCount;
   }
   await tx.productMark.updateMany({
     where: {
@@ -173,5 +208,5 @@ export async function captureShippedKizHistory(
     },
     data: { status: StockStatus.SHIPPING },
   });
-  return result.count;
+  return result.count + fboCount;
 }
