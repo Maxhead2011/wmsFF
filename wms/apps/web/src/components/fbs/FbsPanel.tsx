@@ -118,7 +118,7 @@ import {
   type UpdateFbsBillingSettingsPayload,
 } from '../../lib/api';
 import { FbsCostCalculator } from './FbsCostCalculator';
-import { FbsStockAllocationView } from './FbsStockAllocationView';
+import { StockManagementView } from './StockManagementView';
 import {
   FBS_AUTO_CANCEL_HOURS,
   fbsActiveOrderAgeTone,
@@ -445,6 +445,9 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
   const allBranches = displayMode === 'all';
   const displayWarehouseId = allBranches ? undefined : displayMode;
   const [activeView, setActiveView] = useState<FbsView>('active');
+  // FIX: late order responses cannot replace the client selected in stock management.
+  const currentView = useRef(activeView);
+  currentView.current = activeView;
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [activeClients, setActiveClients] = useState<FbsActiveClientSummary[]>([]);
   const [activeClientsLoading, setActiveClientsLoading] = useState(false);
@@ -625,6 +628,7 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
     setActiveClientsLoading(true);
     try {
       const rows = await fetchFbsActiveClients(session.accessToken, marketplace, allBranches, displayWarehouseId);
+      if (currentView.current === 'allocation') return;
       setActiveClients(rows);
       setSelectedClientId((current) => {
         if (rows.some((item) => item.client.id === current)) return current;
@@ -692,6 +696,7 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
   useEffect(() => {
     setConnectionOpen(false);
     setConnectionError('');
+    if (activeView === 'allocation') { ++loadSequence.current; return; }
     void loadOrders();
     if (!selectedClientId) {
       return;
@@ -702,10 +707,10 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
       }
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [loadOrders, selectedClientId]);
+  }, [loadOrders, selectedClientId, activeView]);
 
   useEffect(() => {
-    if (!marketplace) return;
+    if (!marketplace || activeView === 'allocation') return;
     void loadActiveClients();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
@@ -713,7 +718,7 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
       }
     }, 60_000);
     return () => window.clearInterval(timer);
-  }, [loadActiveClients, marketplace]);
+  }, [loadActiveClients, marketplace, activeView]);
 
   useEffect(() => {
     if (marketplace) return;
@@ -2124,7 +2129,9 @@ function FbsPanelContent({ session, onOpenRequest, marketplace, setMarketplace, 
         ) : activeView === 'stocks' ? (
           <FbsStocksView clientId={selectedClientId} session={session} search={search} />
         ) : activeView === 'allocation' ? (
-          <FbsStockAllocationView
+          <StockManagementView
+            key={selectedClientId}
+            renderStocks={() => <FbsStocksView clientId={selectedClientId} session={session} search={search} />}
             clientId={selectedClientId}
             connectionId={data?.connections.find((connection) => connection.marketplace === 'WILDBERRIES')?.id ?? ''}
             session={session}

@@ -9604,6 +9604,46 @@ export async function connectAnalyticsApi(accessToken: string, clientId: string,
   });
 }
 
+// FIX: preparation is deliberately distinct from actual marketplace publication.
+export type MarketplaceAllocationDraft = { wbConnectionId: string; ozonConnectionId: string; wbPercent: number };
+export type MarketplaceAllocationProduct = { productId: string; offerId: string; article?: string; name: string; size: string; color: string; barcodes: string[] };
+export type MarketplaceAllocationBinding = { sourceBarcode: string; wbConnectionId: string; ozonConnectionId: string;
+  wb: MarketplaceAllocationProduct; ozon: MarketplaceAllocationProduct; revision: string };
+export function fetchAllocationCatalog(accessToken: string, clientId: string, draft: MarketplaceAllocationDraft) {
+  return request<{ wb: MarketplaceAllocationProduct[]; ozon: MarketplaceAllocationProduct[]; bindings: MarketplaceAllocationBinding[] }>(
+    `/marketplace-connections/allocation/${encodeURIComponent(clientId)}/catalog`, { accessToken, method: 'POST', body: { draft } });
+}
+export function confirmAllocationBinding(accessToken: string, clientId: string, body: {
+  draft: MarketplaceAllocationDraft; sourceBarcode: string; wbProductId: string; ozonProductId: string; confirmed: boolean; revision: string | null;
+}) {
+  return request<MarketplaceAllocationBinding>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}/binding`, { accessToken, method: 'PUT', body });
+}
+export type MarketplaceAllocationSettings = {
+  available: boolean; count: number; message: string; invalidated: boolean; revision: string | null;
+  publicationEnabled: boolean; draft: MarketplaceAllocationDraft | null;
+  connections: Array<{ id: string; marketplace: 'WILDBERRIES' | 'OZON'; accountName: string | null; fbsExecutionWarehouseId: string | null }>;
+};
+export type MarketplaceAllocationPreview = {
+  generatedAt: string; totalRows: number; page: number; pageSize: number; missingBarcodeCount: number;
+  rows: Array<{ barcode: string; total: number; reserved: number; available: number; wb: number; ozon: number }>;
+};
+export function fetchMarketplaceAllocationCapabilities(accessToken: string) {
+  return request<{ enabled: boolean; publicationEnabled: boolean }>('/marketplace-connections/allocation/capabilities', { accessToken });
+}
+export function fetchMarketplaceAllocation(accessToken: string, clientId: string) {
+  return request<MarketplaceAllocationSettings>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}`, { accessToken });
+}
+export function saveMarketplaceAllocation(accessToken: string, clientId: string, draft: MarketplaceAllocationDraft, revision: string | null) {
+  return request<{ revision: string; draft: MarketplaceAllocationDraft }>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}`, {
+    accessToken, method: 'PUT', body: { draft, revision },
+  });
+}
+export function previewMarketplaceAllocation(accessToken: string, clientId: string, draft: MarketplaceAllocationDraft, search = '', page = 1) {
+  return request<MarketplaceAllocationPreview>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}/preview`, {
+    accessToken, method: 'POST', body: { draft, search, page },
+  });
+}
+
 export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, allBranches = false, displayWarehouseId?: string) {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {

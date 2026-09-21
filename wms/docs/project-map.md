@@ -39,6 +39,13 @@
 
 ## Основные связи данных
 
+Подготовка распределения WB/Ozon: `modules/marketplace-connections/marketplace-allocation.{controller,service}.ts`
+и `marketplace-allocation.ts`; web `components/fbs/StockManagementView.tsx`,
+`MarketplaceAllocationView.tsx`, `MarketplaceAllocationBindings.tsx` (каталоги и подтверждение пар).
+Данные таблиц запрашиваются при открытии раздела, каталоги — отдельно по кнопке.
+Границы текущего этапа и флаг: [распределение WB/Ozon](marketplace-allocation.md).
+Этот механизм пока не отправляет остатки и не заменяет существующий WB publisher.
+
 | Сущности Prisma | Что проверять |
 | --- | --- |
 | `ClientMarketplaceConnection`, `FbsOrderRequestLink` | Подключение и клиент заказа, ссылка на заявку, последний сохранённый статус WB и время синхронизации |

@@ -204,10 +204,11 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     name: 'Маркетплейсы и FBS',
     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
       '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
-      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment'],
+      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment',
+      '/marketplace-connections/allocation'],
     // FIX: preserve delivery-options plus six reshipment handlers; aliases count once.
-    routeCount: 109, // FIX: includes the one-time WB portal command.
-    description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+    routeCount: 115, // FIX: allocation preparation, read-only catalogs and confirmed mappings; no publication.
+    description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков. Подготовка WB/Ozon: проверка кабинетов, черновик долей и предпросмотр без отправки.',
     logic: ['Перенос из доставки через расширение: после подтверждения выдаёт одну команду кабинету WB, затем независимо проверяет поставки и новый стикер; токены кабинета остаются в браузере.', 'Учёт по статусу WB: решение менеджера после проверки WB; точная пара КИЗ–ШК списывается и сохраняется в истории отгрузок, неизвестный источник — без короба.', 'Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
   },
