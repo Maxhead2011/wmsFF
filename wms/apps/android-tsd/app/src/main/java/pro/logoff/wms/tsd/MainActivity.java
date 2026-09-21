@@ -183,6 +183,7 @@ public class MainActivity extends Activity {
     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
     private FboTwoStageScreen fboTwoStageScreen;
     private FboScanFeedback assemblyScanVoice;
+    private final FbsStepVoice fbsStepVoice = new FbsStepVoice(); // FIX: deduplicate confirmed stage prompts.
     private String assemblyScanVoiceOwner;
     private boolean assemblyVoicePaused;
     private final PersonalEventVoice personalEvents = new PersonalEventVoice();
@@ -4645,6 +4646,9 @@ public class MainActivity extends Activity {
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
         boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        speakFbsPrompt(fbsStepVoice.step(BuildConfig.FLAVOR,
+            !fbsBusy && online && fbsFeedbackColor != BOX_NOT_NEEDED_RED && !assemblyVoicePaused,
+            fbsSessionOwnerKey(safeSession()), task.id, state));
         boolean guidedScanDialog = FbsAssemblyUi.shouldUseGuidedScanDialog(state);
         if (!guidedScanDialog) dismissFbsGuidedScanDialog();
         if (!"WAIT_MARKETPLACE_LABEL".equals(state)) {
@@ -6066,6 +6070,7 @@ public class MainActivity extends Activity {
         fbsFeedbackColor = BOX_NOT_NEEDED_RED;
         statusMessage = message;
         playFbsError();
+        speakFbsPrompt(FboPackingVoice.Cue.ERROR); // FIX: includes locally rejected KIZ scans.
         renderFbsAssemblyScreen();
         showScanningErrorDialog(message);
     }
@@ -6081,6 +6086,19 @@ public class MainActivity extends Activity {
     }
 
     // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
+    private void speakFbsPrompt(FboPackingVoice.Cue cue) {
+        // FIX: never speak from a background screen, paused activity or sold application.
+        if (cue == null || screen != Screen.FBS_ASSEMBLY || assemblyVoicePaused
+            || isFinishing() || isDestroyed() || !"logoff".equals(BuildConfig.FLAVOR)) return;
+        String owner = safeSession() == null ? null : safeSession().userId;
+        if (!java.util.Objects.equals(owner, assemblyScanVoiceOwner)) closeAssemblyScanVoice();
+        if (assemblyScanVoice == null) {
+            assemblyScanVoice = new FboScanFeedback.Voice(this, owner);
+            assemblyScanVoiceOwner = owner;
+        }
+        assemblyScanVoice.prompt(cue);
+    }
+
     private void closeAssemblyScanVoice() {
         if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;assemblyScanVoiceOwner=null;}
     }
