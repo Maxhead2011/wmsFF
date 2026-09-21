@@ -3361,6 +3361,35 @@ model LabelTemplateVersion {
   @@index([templateId, createdAt])
 }
 
+// FIX: durable administrator queue; snapshots survive changes to the original picking task.
+model KizReviewCase {
+  id               String   @id @default(uuid())
+  clientId         String
+  warehouseId      String
+  taskId           String
+  requestId        String
+  kizIdentity      String
+  kiz              String   @db.Text
+  context          String
+  status           String   @default("OPEN")
+  decision         String
+  resolution       String?
+  reason           String?
+  decidedById      String?
+  decidedByName    String?
+  decidedAt        DateTime?
+  usedAt           DateTime?
+  snapshot         Json
+  evidence         Json
+  attempts         Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([taskId, kizIdentity])
+  @@index([warehouseId, status, createdAt])
+  @@index([clientId, warehouseId, status])
+}
+
 model AuditLog {
   id        String   @id @default(uuid())
   userId    String?

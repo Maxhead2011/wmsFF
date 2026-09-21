@@ -4,10 +4,15 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service';
 import { inspectKizReuse, kizReuseEnabled, kizReuseMessage } from '../../common/kiz-wb-reuse';
+import { KizReviewQueue, kizReviewEnabled } from '../../common/kiz-review-queue';
 
 @Injectable()
 export class KizLocationService {
   constructor(private readonly prisma: PrismaService, private readonly clients: ClientScopeService) {}
+  reviews(user: AuthUser, cursor?: string) { return new KizReviewQueue(this.prisma,this.clients).list(user,cursor); }
+  decideReview(id: string, resolution: 'REUSE'|'RELABEL', reason: string, confirmed: boolean, user: AuthUser) {
+    return new KizReviewQueue(this.prisma,this.clients).decide(id,resolution,reason,confirmed,user);
+  }
   async lookup(kiz: string, user: AuthUser) {
     // FIX: read-only administrator feature, isolated from sold installations and scoped before lookup.
     if (process.env.WMS_KIZ_LOCATION_CHECK_ENABLED !== 'true' || user.isDemo ||
@@ -77,6 +82,7 @@ export class KizLocationService {
         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
       };
     }));
-    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches };
+    const reviews=kizReviewEnabled() ? await new KizReviewQueue(this.prisma,this.clients).forKiz(identity,user) : undefined;
+    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches, reviews };
   }
 }

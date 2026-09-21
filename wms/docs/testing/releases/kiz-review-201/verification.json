@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 201,
+  "versionName": "0.1.201-kiz-review",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "640b2d22cbf71008247d13d090a801372e8a7eafec668ff12f1724cc49f17954"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 189,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 189,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 189,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 189,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 189,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 189,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "5490ed046a2d8190f62496c69a1e535538aea22f4ddb7fe064557a9e10c85c6f",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

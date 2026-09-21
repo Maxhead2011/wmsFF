@@ -1,0 +1,211 @@
+{
+  "passed": true,
+  "before": {
+    "images": {
+      "api": "sha256:51e8923d12d53b67908c96933d4bc6779f15c729a4d9988871434a0e1e2704be",
+      "web": "sha256:0e8a717a6e3164aeed1b895530e5873cd5e9f7c43a75f6056d633bd8ebd0d34b"
+    },
+    "metadata": {
+      "versionCode": 200,
+      "versionName": "0.1.200-kiz-history",
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-kiz-history-200.apk",
+      "sha256": "eafc75065747cafc3fddb9f52c3f8391171def7b04c405adb30596bcf4669956",
+      "size": 5366167,
+      "releasedAt": "2026-09-21T13:21:47.591187+00:00",
+      "releaseNotes": "KIZ history and verified WB reuse/relabel decisions. Install over the existing app without deleting data."
+    },
+    "releases": [
+      {
+        "path": "/opt/logoff-wms-releases/kiz-wb-history",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-step-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-newest-first",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/client-report-summary",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-unconfirmed-stock-retry",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/dovoz-relabel-20260917",
+        "sources": [
+          "1083-list-source.txt",
+          "pick-1195-cambridge-source.cjs"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/historical-packing-publish-237",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/size-substitution-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/historical-packing-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/notification-navigation-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-shortage-kiz-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-manager-decision-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-stock-independent-events",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-stock-urgent-sync",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/done-packing-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-ozon-isolation",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-zero-stock-history",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/eleonora-screen-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/eleonora-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-released-kiz",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-voice-focus",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-whole-repack",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-packing-recovery",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-completion-220",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-manual-219",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-mixed-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/relabel-source-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-packing-215",
+        "sources": [
+          "next-android-source.tar.gz",
+          "published-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-stock-load-20260918",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-coalesce-20260918",
+        "sources": []
+      }
+    ],
+    "apiDiff": "",
+    "webDiff": "C /etc\nC /etc/nginx\nC /etc/nginx/conf.d\nC /etc/nginx/conf.d/default.conf\nC /run\nA /run/nginx.pid\nC /var\nC /var/cache\nC /var/cache/nginx\nA /var/cache/nginx/client_temp\nA /var/cache/nginx/fastcgi_temp\nA /var/cache/nginx/proxy_temp\nA /var/cache/nginx/scgi_temp\nA /var/cache/nginx/uwsgi_temp\n"
+  },
+  "webImage": "sha256:25a626ab2d9f542f1c79675d39108b7be70cd04d4bac49d6f56cd0d22d89520f",
+  "metadata": {
+    "versionCode": 201,
+    "versionName": "0.1.201-kiz-review",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-kiz-review-201.apk",
+    "sha256": "9d3cdb29220073f25fbf877a48730f50b6f0b1cb5571fda17a0f03cccd692aba",
+    "size": 5366167,
+    "releasedAt": "2026-09-21T14:28:05.109768+00:00",
+    "releaseNotes": "KIZ history and verified WB reuse/relabel decisions. Install over the existing app without deleting data."
+  },
+  "changes": [
+    "/usr/share/nginx/html/assets/AdministrationPanel-CRAxPVb8.js",
+    "/usr/share/nginx/html/assets/AnalyticsPanel-BxhajICR.js",
+    "/usr/share/nginx/html/assets/ArticleMappingPanel-9myQBqe9.js",
+    "/usr/share/nginx/html/assets/BillingPanel-SYr2QgLQ.js",
+    "/usr/share/nginx/html/assets/ClientRequestsPanel-DrZRxwXV.js",
+    "/usr/share/nginx/html/assets/DbsPanel-DpjpSwzY.js",
+    "/usr/share/nginx/html/assets/DirectoryPanel-BCoU7OD9.js",
+    "/usr/share/nginx/html/assets/FactoryPanel-CseYxLbE.js",
+    "/usr/share/nginx/html/assets/FboWorkspace-Cr2kDJCR.js",
+    "/usr/share/nginx/html/assets/FbsPackedItemsPanel-DRwZlPim.js",
+    "/usr/share/nginx/html/assets/FbsPanel-DB1qrRqV.js",
+    "/usr/share/nginx/html/assets/IntegrationApiPanel-CLgH2eYL.js",
+    "/usr/share/nginx/html/assets/KizCirculationPanel-B77KJIV6.js",
+    "/usr/share/nginx/html/assets/MonitoringPanel-BoyWicfJ.js",
+    "/usr/share/nginx/html/assets/OrderAssemblyPanel-nOB3WLho.js",
+    "/usr/share/nginx/html/assets/OzonFboPanel-C5yEHP2S.js",
+    "/usr/share/nginx/html/assets/RelabelingPanel-Bod1Izbj.js",
+    "/usr/share/nginx/html/assets/activity-hI8A1a-c.js",
+    "/usr/share/nginx/html/assets/code-xml-IUfPDzqh.js",
+    "/usr/share/nginx/html/assets/eye-off-B0vAM0IE.js",
+    "/usr/share/nginx/html/assets/index-_pBQfHyz.js",
+    "/usr/share/nginx/html/assets/link-2-xs0Lngi5.js",
+    "/usr/share/nginx/html/assets/shopping-bag-BMcdtt1g.js",
+    "/usr/share/nginx/html/assets/shopping-cart-C_EXDSjt.js",
+    "/usr/share/nginx/html/assets/tablet-owODXkDt.js",
+    "/usr/share/nginx/html/assets/wand-sparkles-BUbmtCcu.js",
+    "/usr/share/nginx/html/assets/wbStockPreview-XCcXw6nf.js",
+    "/usr/share/nginx/html/downloads/logoff-tsd-kiz-review-201.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.json",
+    "/usr/share/nginx/html/index.html"
+  ],
+  "signatureMatches": true,
+  "signedContentsMatch": true,
+  "existingAssetsAndPrintAgentsPreserved": true,
+  "builderAssetsVerified": true
+}
