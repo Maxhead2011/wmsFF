@@ -25,6 +25,7 @@ import {
 } from '../../lib/api';
 import './kiz.css';
 import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
+import { KizCheckPanel } from './KizCheckPanel';
 
 type KizIssuesPanelProps = {
   session: AuthSession;
@@ -32,6 +33,9 @@ type KizIssuesPanelProps = {
 };
 
 export function KizIssuesPanel({ session, embedded = false }: KizIssuesPanelProps) {
+  const [checking, setChecking] = useState(false); // FIX: separate scanner scenario from issue correction.
+  const canCheck = import.meta.env.VITE_KIZ_REUSE_EVIDENCE_ENABLED === 'true' &&
+    session.user.roleCodes.some(role => ['ADMIN', 'OWNER', 'SUPER_ADMIN'].includes(role));
   const [status, setStatus] = useState<'open' | 'resolved' | 'all'>('open');
   const [search, setSearch] = useState('');
   const [report, setReport] = useState<KizIssuesReport | null>(null);
@@ -56,6 +60,7 @@ export function KizIssuesPanel({ session, embedded = false }: KizIssuesPanelProp
 
   const load = useCallback(
     async (quiet = false) => {
+      if (checking && canCheck) return;
       if (!quiet) setLoading(true);
       setError('');
       try {
@@ -82,7 +87,7 @@ export function KizIssuesPanel({ session, embedded = false }: KizIssuesPanelProp
         if (!quiet) setLoading(false);
       }
     },
-    [search, session.accessToken, status],
+    [search, session.accessToken, status, checking, canCheck],
   );
 
   useEffect(() => {
@@ -275,12 +280,13 @@ export function KizIssuesPanel({ session, embedded = false }: KizIssuesPanelProp
       title="КИЗ"
       description="Сначала выберите сценарий: разобрать проблему сканирования, сверить короба или выполнить корректировку."
       tiles={[
-        { title: 'Проблемные КИЗ', description: 'Очередь ошибок и полная история использования кода.', icon: AlertTriangle, tone: 'red' },
-        { title: 'Расхождения в коробах', description: 'Найти лишние и отсутствующие КИЗ по фактическим остаткам.', icon: Search, tone: 'orange' },
-        { title: 'Исправления', description: 'Заменить КИЗ, подтвердить единицу или списать расхождение.', icon: Wrench, tone: 'green' },
+        ...(canCheck ? [{ title: 'Проверка КИЗов', description: 'Товар, размещение, первые заявки и проверка возможности повторной сборки.', icon: Search, onOpen: () => setChecking(true) }] : []),
+        { title: 'Проблемные КИЗ', description: 'Очередь ошибок и полная история использования кода.', icon: AlertTriangle, tone: 'red', onOpen: () => setChecking(false) },
+        { title: 'Расхождения в коробах', description: 'Найти лишние и отсутствующие КИЗ по фактическим остаткам.', icon: Search, tone: 'orange', onOpen: () => setChecking(false) },
+        { title: 'Исправления', description: 'Заменить КИЗ, подтвердить единицу или списать расхождение.', icon: Wrench, tone: 'green', onOpen: () => setChecking(false) },
       ]}
     >
-    <div className="kiz-panel">
+    {checking && canCheck ? <KizCheckPanel key={`${session.accessToken}:${session.user.activeWarehouseId}`} session={session} /> : <div className="kiz-panel">
       <section className="kiz-hero">
         <div className="kiz-hero__icon">
           <ShieldCheck size={26} aria-hidden="true" />
@@ -1051,7 +1057,7 @@ export function KizIssuesPanel({ session, embedded = false }: KizIssuesPanelProp
           </section>
         </div>
       ) : null}
-    </div>
+    </div>}
     </WorkspaceTileGate>
   );
 }

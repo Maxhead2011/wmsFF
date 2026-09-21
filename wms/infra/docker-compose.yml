@@ -57,6 +57,10 @@ services:
     build:
       context: ..
       dockerfile: infra/web.Dockerfile
+      # FIX: pass opt-in KIZ features into the web build, not only runtime.
+      args:
+        VITE_KIZ_REUSE_EVIDENCE_ENABLED: ${VITE_KIZ_REUSE_EVIDENCE_ENABLED:-false}
+        VITE_KIZ_REVIEW_QUEUE_ENABLED: ${VITE_KIZ_REVIEW_QUEUE_ENABLED:-false}
     restart: unless-stopped
     ports:
       - "127.0.0.1:3080:80"
