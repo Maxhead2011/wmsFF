@@ -1,0 +1,30 @@
+.duplicate-stock { display: grid; gap: 16px; color: #18283b; }
+.duplicate-stock h3, .duplicate-stock h4, .duplicate-stock p { margin: 0; }
+.duplicate-stock h3 { font-size: 22px; }
+.duplicate-stock h4 { font-size: 17px; margin-bottom: 8px; }
+.duplicate-stock > ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.duplicate-stock > ul > li { padding: 12px; border: 1px solid #dce3ec; border-radius: 10px; background: #f8fafc; }
+.duplicate-stock button { padding: 9px 14px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #1e3a5f; cursor: pointer; font: inherit; width: auto; }
+.duplicate-stock button:disabled { opacity: .5; cursor: default; }
+.duplicate-stock fieldset { border: 1px solid #dce3ec; border-radius: 10px; padding: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; min-width: 0; }
+.duplicate-stock fieldset > fieldset { flex-basis: 100%; background: #f8fafc; }
+.duplicate-stock legend { font-weight: 600; padding: 0 6px; }
+.duplicate-stock label { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.duplicate-stock input:not([type=checkbox]), .duplicate-stock select { padding: 9px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; background: white; max-width: 100%; min-width: 0; }
+.duplicate-stock input[type=number] { width: 85px; }
+.duplicate-stock input[type=checkbox] { width: 17px; height: 17px; }
+.duplicate-stock__new { padding: 18px; background: #f1f6fd; border: 1px solid #cbdcf4; border-radius: 12px; }
+.duplicate-stock__pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
+.duplicate-stock__pair fieldset { display: grid; background: white; }
+.duplicate-stock__search { display: flex; gap: 8px; }
+.duplicate-stock__search input { flex: 1; }
+.duplicate-stock .duplicate-stock__apply { background: #2459a6; border-color: #2459a6; color: white; }
+.duplicate-stock summary { cursor: pointer; padding: 8px 0; }
+.duplicate-stock [role=alert] { color: #a12727; background: #fff4f4; padding: 12px; border-radius: 8px; }
+.duplicate-stock [role=status] { padding: 10px; }
+.duplicate-stock table { width: 100%; border-collapse: collapse; }
+.duplicate-stock td, .duplicate-stock th { padding: 9px; border-bottom: 1px solid #dce3ec; text-align: left; }
+.duplicate-stock .fbs-allocation__table-wrap { overflow-x: auto; }
+@media(max-width: 800px) { .duplicate-stock__pair { grid-template-columns: 1fr; } }
+
+.duplicate-stock fieldset > h4, .duplicate-stock fieldset > p { flex-basis: 100%; }

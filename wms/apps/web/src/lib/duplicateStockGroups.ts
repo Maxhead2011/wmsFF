@@ -16,9 +16,9 @@ export function matchesRelabelArticle(card: DuplicateCard, article: string, sour
 }
 export type DuplicateMapping = { id: string; sourceArticle: string; targetArticle: string };
 export type DuplicateSettings = { groups: DuplicateGroup[]; revision: string | null; publicationEnabled: boolean; relabelingEnabled: boolean;
-  activeGroupIds: string[]; commonReserve: { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
+  selfServiceEnabled?: boolean; activeGroupIds: string[]; commonReserve: { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
   mappings: DuplicateMapping[]; connections: Array<{ id: string; accountName: string | null; fbsExecutionWarehouseId: string | null }> };
-export type DuplicatePreview = { generatedAt: string; totalAllocated: number; totalRelabel: number; wbPercent: number; publicationEnabled: boolean;
+export type DuplicatePreview = { previewKey: string; missingMappings: Array<{ sourceArticle: string; targetArticle: string }>; generatedAt: string; totalAllocated: number; totalRelabel: number; wbPercent: number; publicationEnabled: boolean;
   pickingWarnings: Array<{ sourceSkuId: string; targetSkuId: string; message: string }>;
   publications: Array<{ skuId: string; enabled: boolean; saleLimit: number | null; relabelManualAmount: number | null }>;
   rows: Array<{ sourceSkuId: string; source: DuplicateCard; size: string; total: number; reserved: number; freeBeforeSafety: number; safetyReserve: number;
@@ -44,4 +44,9 @@ export function duplicateGroupReady(group: DuplicateGroup) {
     && group.overrides.every(o => validShares(o.shares)) && Number.isSafeInteger(group.reserve.value) && group.reserve.value >= 0
     && group.reserve.value <= (group.reserve.mode === 'PERCENT' ? 100 : 1_000_000)
     && group.variants.every(v => v.targets.length === group.shares.length && v.targets.every(t => t.targetId && t.confirmed)));
+}
+
+// FIX: barcode/name searches select an article, never silently a single size.
+export function duplicateArticleOptions(cards: DuplicateCard[]) {
+  return [...new Set(cards.map(c => c.article?.trim() || c.clientSku?.trim()).filter((s): s is string => Boolean(s)))].sort((a,b) => a.localeCompare(b));
 }

@@ -51,7 +51,10 @@
 web `components/fbs/DuplicateStockGroupsView.tsx`, `lib/duplicateStockGroups.ts`.
 Флаг редактора `WMS_DUPLICATE_STOCK_GROUPS_ENABLED` выключен по умолчанию.
 Активные группы: `duplicate-stock-runtime.ts`, отдельный флаг
-`WMS_DUPLICATE_STOCK_PUBLICATION_ENABLED`, явное включение групп администратором.
+`WMS_DUPLICATE_STOCK_PUBLICATION_ENABLED`. Самостоятельное применение клиента —
+`DuplicateStockGroupsService.apply`, отдельный флаг `WMS_DUPLICATE_STOCK_SELF_SERVICE_ENABLED`;
+выбор артикулов — `DuplicateArticlePicker.tsx`. Применение добавляет событие
+`WbStockSyncEvent` для штатного WB publisher.
 Общий резерв — существующие настройки `marketplace.wbReserve.client.<clientId>`.
 Серверная интеграция: [порядок выпуска](deployment/duplicate-stock-20260921/README.md).
 Существующая переклейка: `ClientArticleMapping`,

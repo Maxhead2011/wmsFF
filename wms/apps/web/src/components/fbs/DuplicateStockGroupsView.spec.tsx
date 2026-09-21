@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchDuplicateCatalog, previewDuplicateGroup, saveDuplicateGroup } from '../../lib/api';
-import { duplicateGroupReady, effectiveDuplicateShares, matchesRelabelArticle, suggestDuplicateTarget, withDuplicateException, type DuplicateGroup } from '../../lib/duplicateStockGroups';
+import { applyDuplicateGroup, fetchDuplicateCatalog, previewDuplicateGroup, saveDuplicateGroup } from '../../lib/api';
+import { duplicateArticleOptions, duplicateGroupReady, effectiveDuplicateShares, matchesRelabelArticle, suggestDuplicateTarget, withDuplicateException, type DuplicateGroup } from '../../lib/duplicateStockGroups';
 const group = (): DuplicateGroup => ({ id: 'g', name: 'Группа', connectionId: 'wb', reserve: { mode: 'PERCENT', value: 10 },
   shares: [{ targetKey: 'original', label: 'Основная', percent: 75 }, { targetKey: 'duplicate', label: 'Дубль', percent: 25 }],
   variants: [{ sourceSkuId: 's', targets: [{ targetKey: 'original', targetId: 's', confirmed: true, requiresRelabel: false }, { targetKey: 'duplicate', targetId: 't', confirmed: true, requiresRelabel: true }] }], overrides: [] });
@@ -41,4 +41,13 @@ describe('duplicate groups editor', () => {
     expect(JSON.parse(fetch.mock.calls[1][1].body).revision).toBe('v1');
     expect(fetch.mock.calls.some(([url]) => url.includes('/sync'))).toBe(false);
   });
+});
+
+// TEST: barcode matches select an article across sizes, then apply a reviewed rule.
+it('selects articles across sizes and sends an explicit reviewed apply request',async()=>{
+  const cards=['M','L'].map(size=>({id:size,article:'Корея',name:'Костюм',size,color:'',barcodes:[{value:'001'}]}));
+  expect(duplicateArticleOptions(cards)).toEqual(['Корея']);
+  const fetch=vi.fn().mockResolvedValue(new Response('{}',{status:200,headers:{'Content-Type':'application/json'}}));vi.stubGlobal('fetch',fetch);
+  await applyDuplicateGroup('token','client/1',{group:group(),revision:'v1',previewKey:'reviewed'});
+  expect(fetch.mock.calls[0][0]).toContain('client%2F1/apply');expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({revision:'v1',previewKey:'reviewed'});
 });
