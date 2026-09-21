@@ -7191,6 +7191,19 @@ export type AdministrationPhantomStock = {
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1';
 
+// FIX: read-only KIZ history uses the same scoped endpoint as the administrator TSD.
+export type KizCheckResult = { found: boolean; ambiguous: boolean; identity: string; matches: Array<{
+  id: string; client: string; status: string; boxCode: string | null; palletCode: string | null;
+  room: string | null; warehouse: string | null; locationWarning: string | null;
+  product: { name: string; article: string | null; size: string | null; color: string | null };
+  reuse?: { decision: 'ALLOW' | 'REVIEW' | 'RELABEL'; message: string; circulation: string | null; checkedAt: string;
+    history: Array<{ orderId: string | null; at: string | null; event: string; worker?: string; supplyId?: string;
+      request: { number: number; status: string } | null }> };
+}> };
+export function checkKizHistory(accessToken: string, kiz: string) {
+  return request<KizCheckResult>('/inventory/kiz-location/check', { accessToken, method: 'POST', body: { kiz } });
+}
+
 export async function login(payload: LoginPayload) {
   return request<AuthSession>('/auth/login', {
     method: 'POST',

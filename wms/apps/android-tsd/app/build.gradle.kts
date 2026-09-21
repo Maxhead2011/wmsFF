@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 198 // FIX: offline pallet, box and product speech in FBO/FBS.
-            versionName = "0.1.198-eleonora-events"
+            versionCode = 200 // FIX: verified KIZ reuse history in our TSD flavor.
+            versionName = "0.1.200-kiz-history"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

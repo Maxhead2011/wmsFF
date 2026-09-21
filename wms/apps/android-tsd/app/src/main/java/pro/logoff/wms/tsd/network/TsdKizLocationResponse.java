@@ -10,7 +10,17 @@ public class TsdKizLocationResponse {
     public static class Match {
         public String id, client, status, boxCode, boxStatus, palletCode, room, warehouse, locationWarning;
         public Product product;
+        public Reuse reuse; // FIX: historical use is separate from current AVAILABLE stock.
     }
+    public static class Reuse {
+        public String decision, message, circulation, checkedAt;
+        public List<History> history;
+    }
+    public static class History {
+        public String orderId, at, event, supplyId, worker;
+        public Request request;
+    }
+    public static class Request { public int number; public String status; }
     public static class Product {
         public String id, name, article, size, color;
     }

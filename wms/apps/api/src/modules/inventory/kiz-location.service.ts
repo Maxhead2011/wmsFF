@@ -3,6 +3,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service';
+import { inspectKizReuse, kizReuseEnabled, kizReuseMessage } from '../../common/kiz-wb-reuse';
 
 @Injectable()
 export class KizLocationService {
@@ -54,22 +55,28 @@ export class KizLocationService {
       select: { boxId: true, boxCode: true, pallet: { select: { code: true, clientId: true, warehouseId: true,
         zone: { select: { name: true, warehouseId: true } } } } },
     }) : [];
-    const matches = marks.map(mark => {
+    const matches = await Promise.all(marks.map(async mark => {
       const box = mark.box;
       const placement = box ? placements.find(p => p.pallet.clientId === mark.clientId && p.pallet.warehouseId === warehouseId &&
         (p.boxId === box.id || (!p.boxId && p.boxCode === box.code))) : null;
       const boxIsConsistent = box?.clientId === mark.clientId && box.warehouseId === warehouseId;
       const legacy = boxIsConsistent && !placement && box?.pallet?.clientId === mark.clientId ? box.pallet : null;
       const room = placement?.pallet.zone ?? legacy?.zone ?? (boxIsConsistent ? box?.zone : null);
+      // FIX: history survives AVAILABLE restoration; show only requests inside the selected branch.
+      const evidence = kizReuseEnabled() ? await inspectKizReuse(this.prisma, mark.clientId, mark.value) : null;
+      const reuse = evidence ? { ...evidence, message: evidence.history.length ? kizReuseMessage(evidence.decision) : 'История использования в WB не найдена.',
+        history: evidence.history.filter(h => h.request?.warehouseId === warehouseId),
+        orders: evidence.orders.filter(o => evidence.history.some(h => h.orderId === o.orderId && h.request?.warehouseId === warehouseId)) } : undefined;
       return {
         id: mark.id, product: mark.sku, client: mark.client.name, status: mark.status,
+        reuse,
         boxCode: boxIsConsistent ? box!.code : null, boxStatus: boxIsConsistent ? box!.status : null,
         palletCode: boxIsConsistent ? placement?.pallet.code ?? legacy?.code ?? null : null,
         room: boxIsConsistent && room?.warehouseId === warehouseId ? room.name : null,
         warehouse: boxIsConsistent ? box?.warehouse?.name ?? null : !box ? mark.stockMovement?.warehouse?.name ?? null : null,
         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
       };
-    });
+    }));
     return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches };
   }
 }

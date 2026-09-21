@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 200,
+  "versionName": "0.1.200-kiz-history",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "55b8b5cf2cbf38824649f55f984d52680c206bb600af9533465ca39760a25547"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "486a88c3d9dd8edb8b9b5523daee3cfe0547ad6980bfe8466b3e01dbb7124e55",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

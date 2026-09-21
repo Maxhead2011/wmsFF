@@ -1,0 +1,16 @@
+{
+  "decision": "REVIEW",
+  "circulation": null,
+  "orders": [
+    {
+      "orderId": "5664720661",
+      "verified": true,
+      "supplierStatus": "complete",
+      "wbStatus": "canceled_by_client",
+      "containsKiz": true,
+      "supplyAccepted": false
+    }
+  ],
+  "historyEvents": 2,
+  "elapsedMs": 315
+}
