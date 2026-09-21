@@ -46,8 +46,11 @@
 Границы текущего этапа и флаг: [распределение WB/Ozon](marketplace-allocation.md).
 Этот механизм пока не отправляет остатки и не заменяет существующий WB publisher.
 Расчёт дублей: `modules/marketplace-connections/duplicate-stock-plan.ts`,
-тест `apps/api/test/duplicate-stock-plan.spec.ts`. Это пока чистый расчёт без подключения
-к экрану/публикации. Существующая переклейка: `ClientArticleMapping`,
+тест `apps/api/test/duplicate-stock-plan.spec.ts`. Редактор и предпросмотр групп:
+`duplicate-stock-groups.{controller,service}.ts`, `duplicate-stock-groups.ts`,
+web `components/fbs/DuplicateStockGroupsView.tsx`, `lib/duplicateStockGroups.ts`.
+Флаг `WMS_DUPLICATE_STOCK_GROUPS_ENABLED` выключен по умолчанию. Автоотправка не подключена.
+Существующая переклейка: `ClientArticleMapping`,
 `FbsStockPublication.relabelManualAmount`, `MarketplaceConnectionsService.calculateFbsRelabelStockPlan`.
 Общий сценарий остатков, долей и безопасного включения описан в том же документе WB/Ozon.
 

@@ -9644,6 +9644,22 @@ export function previewMarketplaceAllocation(accessToken: string, clientId: stri
   });
 }
 
+export function fetchDuplicateGroupCapabilities(accessToken: string) {
+  return request<{ enabled: boolean; publicationEnabled: boolean }>('/marketplace-connections/duplicate-groups/capabilities', { accessToken });
+}
+export function fetchDuplicateGroups(accessToken: string, clientId: string) {
+  return request<import('./duplicateStockGroups').DuplicateSettings>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}`, { accessToken });
+}
+export function fetchDuplicateCatalog(accessToken: string, clientId: string, body: { search?: string; page?: number; ids?: string[] }) {
+  return request<{ rows: import('./duplicateStockGroups').DuplicateCard[]; page: number; hasMore: boolean }>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/catalog`, { accessToken, method: 'POST', body });
+}
+export function saveDuplicateGroup(accessToken: string, clientId: string, body: { group?: import('./duplicateStockGroups').DuplicateGroup; deleteId?: string; revision: string | null }) {
+  return request<{ groups: import('./duplicateStockGroups').DuplicateGroup[]; revision: string; publicationEnabled: boolean }>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}`, { accessToken, method: 'PUT', body });
+}
+export function previewDuplicateGroup(accessToken: string, clientId: string, group: import('./duplicateStockGroups').DuplicateGroup) {
+  return request<import('./duplicateStockGroups').DuplicatePreview>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/preview`, { accessToken, method: 'POST', body: { group } });
+}
+
 export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, allBranches = false, displayWarehouseId?: string) {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {
