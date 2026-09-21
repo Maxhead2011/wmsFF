@@ -1,0 +1,215 @@
+--- /dev/null
++++ b/wms/apps/api/prisma/migrations/20260921170000_fbo_remainder_requests/migration.sql
+@@ -0,0 +1,8 @@
++-- FIX: additive relation; existing requests retain NULL and unchanged behavior.
++ALTER TABLE "ClientRequest" ADD COLUMN "parentRequestId" TEXT;
++ALTER TABLE "ClientRequest" ADD COLUMN "fboRequestCode" TEXT;
++ALTER TABLE "ClientRequest" ADD COLUMN "fboRemainderSequence" INTEGER NOT NULL DEFAULT 0;
++CREATE UNIQUE INDEX "ClientRequest_fboRequestCode_key" ON "ClientRequest"("fboRequestCode");
++CREATE INDEX "ClientRequest_parentRequestId_idx" ON "ClientRequest"("parentRequestId");
++ALTER TABLE "ClientRequest" ADD CONSTRAINT "ClientRequest_parentRequestId_fkey"
++  FOREIGN KEY ("parentRequestId") REFERENCES "ClientRequest"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+--- a/wms/apps/api/prisma/schema.prisma
++++ b/wms/apps/api/prisma/schema.prisma
+@@ -1636,6 +1636,12 @@
+ 
+ model ClientRequest {
+   id                           String                     @id @default(uuid())
++  // FIX: a remainder request retains its direct parent for incremental FBO fulfillment.
++  parentRequestId              String?
++  fboRequestCode               String?                    @unique
++  fboRemainderSequence         Int                        @default(0)
++  parentRequest                ClientRequest?             @relation("FboRemainderRequests", fields: [parentRequestId], references: [id], onDelete: Restrict)
++  childRequests                ClientRequest[]            @relation("FboRemainderRequests")
+   number                       Int                        @unique @default(autoincrement())
+   clientId                     String
+   warehouseId                  String?
+@@ -1683,6 +1689,7 @@
+   @@index([type, status])
+   @@index([createdByUserId])
+   @@index([assignedToUserId])
++  @@index([parentRequestId])
+ }
+ 
+ model SkuCollectionSource {
+--- a/wms/apps/api/src/modules/tsd/dto/fbo-action.dto.ts
++++ b/wms/apps/api/src/modules/tsd/dto/fbo-action.dto.ts
+@@ -8,7 +8,7 @@
+     @Min(1)
+     confirmedQuantity?: number;
+     // FIX: explicit WMS close is separate from the terminal's strict full-pick transition.
+-    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'STOP_PICK', 'OPEN_BOX', 'MANUAL_OPEN_BOX', 'MANUAL_PACK_UNIT', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
++    @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'STOP_PICK', 'TRANSFER_REMAINDER', 'OPEN_BOX', 'MANUAL_OPEN_BOX', 'MANUAL_PACK_UNIT', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
+     action!: string;
+     @IsString()
+     @MinLength(8)
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -13,6 +13,7 @@
+ import { closedFboItems, fboClosePickEnabled, fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
+ import { FboActionDto } from './dto/fbo-action.dto';
+ const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
++    parentRequest: { select: { id: true, number: true, fboRequestCode: true } }, childRequests: { select: { id: true, number: true, status: true, fboRequestCode: true } },
+     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
+ type Request = Prisma.ClientRequestGetPayload<{
+     include: typeof include;
+@@ -154,7 +155,8 @@
+                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
+                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
+         }
+-        return { manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
++        return { remainderTransferEnabled: process.env.WMS_FBO_REMAINDER_TRANSFER_ENABLED === 'true', parentRequest: r.parentRequest, childRequests: r.childRequests,
++            manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+             observedAt: new Date().toISOString(),
+             pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
+                 kiz: u.kiz, sourceBoxCode: u.sourceBoxCode, targetBoxCode: u.targetBoxCode, wholeBox: u.wholeBox, state: u.state,
+@@ -181,6 +183,8 @@
+     private async executeAction(id: string, dto: FboActionDto, user: AuthUser) {
+         if (!fboTwoStageEnabled())
+             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
++        if (dto.action === 'TRANSFER_REMAINDER' && process.env.WMS_FBO_REMAINDER_TRANSFER_ENABLED !== 'true')
++            throw new BadRequestException('Перенос остатка ФБО выключен.');
+         // FIX: explicitly enabled only for our deployment; old clients and sold VMs retain their behavior.
+         if (dto.action.startsWith('MANUAL_') && process.env.WMS_FBO_MANUAL_PACKING_ENABLED !== 'true')
+             throw new BadRequestException('Ручное добавление при упаковке выключено.');
+@@ -308,6 +312,54 @@
+                 }
+                 await this.releaseDisplacedRoutes(tx, source.id, source.code, [...new Set(chosen.map(p => p.skuId))]);
+             }
++            // FIX: parent demand shrinks in the same transaction that creates child demand.
++            // Physical units, marks and stock movements remain owned by the original request.
++            else if (dto.action === 'TRANSFER_REMAINDER') {
++                requirePhase('PICKING');
++                if (!lines.some(l => l.picked)) throw new ConflictException('Сначала отберите хотя бы одну единицу товара.');
++                const remainder = lines.filter(l => l.remaining > 0);
++                if (!remainder.length) throw new ConflictException('Неотобранного остатка нет.');
++                if (lines.some(l => l.picked > l.quantity)) throw new ConflictException('Отобрано больше состава заявки. Требуется сверка.');
++                const quantity = remainder.reduce((sum, l) => sum + l.remaining, 0);
++                // FIX: lock the root counter so sibling and grandchild branches share one durable sequence.
++                let root: { id: string; parentRequestId: string | null; number: number } = r;
++                const visited = new Set<string>();
++                while (root.parentRequestId) {
++                    if (visited.has(root.id)) throw new ConflictException('Нарушена связь основной заявки.');
++                    visited.add(root.id);
++                    const parent = await tx.clientRequest.findUniqueOrThrow({ where: { id: root.parentRequestId } });
++                    if (parent.clientId !== r.clientId || parent.warehouseId !== r.warehouseId)
++                        throw new ConflictException('Филиал или клиент основной заявки изменён.');
++                    root = parent;
++                }
++                await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${root.id} FOR UPDATE`;
++                const counter = await tx.clientRequest.update({ where: { id: root.id }, data: { fboRemainderSequence: { increment: 1 } } });
++                const fboRequestCode = `${root.number}_${String(counter.fboRemainderSequence).padStart(2, '0')}`;
++                const parentLabel = r.fboRequestCode ?? String(r.number);
++                const child = await tx.clientRequest.create({ data: {
++                    fboRequestCode,
++                    parentRequestId: id, clientId: r.clientId, warehouseId: r.warehouseId,
++                    type: r.type, status: 'SUBMITTED', priority: r.priority,
++                    title: `ФБО №${fboRequestCode} — остаток заявки №${parentLabel}`,
++                    comment: `Неотобранный остаток заявки №${parentLabel}: ${quantity} шт.`,
++                    destinationCity: r.destinationCity, deliveryAddress: r.deliveryAddress, desiredDate: r.desiredDate,
++                    contactName: r.contactName, contactPhone: r.contactPhone, createdByUserId: user.id,
++                    items: { create: remainder.map(l => ({ skuId: l.skuId, barcode: l.barcode,
++                        name: l.name, comment: l.comment, quantity: l.remaining })) },
++                } });
++                for (const l of remainder) {
++                    if (l.picked) await tx.clientRequestItem.update({ where: { id: l.id }, data: { quantity: l.picked } });
++                    else await tx.clientRequestItem.delete({ where: { id: l.id } });
++                }
++                const remainingItems = await tx.clientRequestItem.findMany({ where: { requestId: id } });
++                await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING', compositionHash: composition({ ...r, items: remainingItems } as Request) } });
++                await tx.clientRequestEvent.createMany({ data: [
++                    { requestId: id, clientId: r.clientId, eventType: 'COMMENT', title: 'Остаток ФБО перенесён',
++                        body: `${quantity} шт. перенесено в заявку №${fboRequestCode}. Отобранный товар оставлен для упаковки.`, createdByUserId: user.id },
++                    { requestId: child.id, clientId: r.clientId, eventType: 'CREATED', title: 'Неотобранный остаток ФБО',
++                        body: `${quantity} шт. из заявки №${parentLabel}.`, statusTo: 'SUBMITTED', createdByUserId: user.id },
++                ] });
++            }
+             else if (dto.action === 'STOP_PICK') {
+                 // FIX: serialized with scans, frozen once, and replayed through the durable receipt above.
+                 if (!fboClosePickEnabled()) throw new NotFoundException('Завершение отбора с недобором выключено.');
+--- a/wms/apps/web/src/components/client-requests/ClientRequestEditModal.tsx
++++ b/wms/apps/web/src/components/client-requests/ClientRequestEditModal.tsx
+@@ -106,7 +106,7 @@
+         <header className="client-request-edit-modal__header">
+           <div>
+             <span>Редактирование заявки</span>
+-            <h3>№{String(request.number).padStart(6, '0')} · {request.title}</h3>
++            <h3>№{request.fboRequestCode ?? String(request.number).padStart(6, '0')} · {request.title}</h3>
+             <small>{request.client.name} · {request.status}</small>
+           </div>
+           <button className="icon-button" type="button" onClick={onClose} title="Закрыть">
+--- a/wms/apps/web/src/components/client-requests/ClientRequestsTable.tsx
++++ b/wms/apps/web/src/components/client-requests/ClientRequestsTable.tsx
+@@ -168,7 +168,8 @@
+           {items.map((request) => {
+             const originalFile = findOriginalRequestFile(request);
+             const emergencyClosed = isEmergencyClosedRequest(request);
+-            const formattedRequestNumber = formatRequestNumber(request.number);
++            // FIX: display the FBO branch number while retaining the numeric database identifier.
++            const formattedRequestNumber = request.fboRequestCode ?? formatRequestNumber(request.number);
+             // FIX: keep the familiar three-digit accent below 1000, then highlight the entire number.
+             const accentLength = Math.max(3, String(request.number).length);
+             const requestNumberPrefix = formattedRequestNumber.slice(0, -accentLength);
+--- a/wms/apps/web/src/components/client-requests/FboTwoStagePanel.tsx
++++ b/wms/apps/web/src/components/client-requests/FboTwoStagePanel.tsx
+@@ -17,6 +17,7 @@
+   const [scanMode,setScanMode]=useState(false);
+   const [downloading,setDownloading]=useState(false);
+   const downloadInFlight=useRef(false);
++  const [confirmRemainder,setConfirmRemainder]=useState(false);
+   const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
+   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState<FboAction|null>(()=>{
+     try{return JSON.parse(localStorage.getItem(storageKey)||'null');}catch{return null;}
+@@ -36,6 +37,7 @@
+       if(!next.route.some(r=>r.pallet===pallet))setPallet('');
+       if(!next.boxes.some(b=>b.code===target&&!b.closed) || next.phase!=='PACKING')setTarget('');
+       if(dto.action==='OPEN_BOX')setTarget(dto.targetBoxCode??'');
++      if(dto.action==='TRANSFER_REMAINDER')setConfirmRemainder(false);
+       // FIX: committed packing is independent of retryable document downloads.
+       if(dto.action==='FINISH')void download();
+     }catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить операцию.');if((e as {rejected?:boolean}).rejected){localStorage.removeItem(storageKey);setPending(null);}}
+@@ -78,6 +80,9 @@
+     <FboProgress plan={plan} paused={scanMode||!!pending}/>
+     <p>Нужно {plan.plannedNeeded??plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
+     {plan.pickClosed&&<p>Отбор завершён · К упаковке {plan.packingNeeded??plan.needed} ед. · Не отобрано {plan.unpicked??0} ед.</p>}
++    {/* FIX: keep the parent/child chain visible after retries and page reloads. */}
++    {plan.parentRequest&&<p>Исходная заявка: №{plan.parentRequest.fboRequestCode ?? plan.parentRequest.number}</p>}
++    {!!plan.childRequests?.length&&<p>Неотобранное перенесено в заявки: {plan.childRequests.map(r=>`№${r.fboRequestCode ?? r.number}`).join(', ')}. Их можно открыть в разделе «Заявки».</p>}
+     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
+     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
+     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
+@@ -92,6 +97,13 @@
+     {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p>{plan.closePickSupported
+       ?<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!plan.picked||plan.compositionChanged||!canWrite} onClick={finishPicking}>Завершить отбор</button>
+       :<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.picked!==plan.needed||!canWrite} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>}
++      {plan.remainderTransferEnabled&&plan.picked>0&&plan.picked<plan.needed&&<div>
++        {!confirmRemainder?<button className="icon-text-button" disabled={busy||!!pending||!canWrite} onClick={()=>setConfirmRemainder(true)}>Перенести неотобранное</button>:<>
++          <p>В новую заявку перейдёт {plan.needed-plan.picked} шт. В основной останется {plan.picked} шт. и начнётся упаковка.</p>
++          <button className="icon-text-button" disabled={busy||!!pending||!canWrite} onClick={()=>void command('TRANSFER_REMAINDER')}>Перенести остаток и перейти к упаковке</button>
++          <button className="icon-text-button" disabled={busy||!!pending} onClick={()=>setConfirmRemainder(false)}>Продолжить отбор</button>
++        </>}
++      </div>}
+       {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
+       {!pallet&&<ul>{[...new Set(plan.route.map(r=>r.pallet).filter(Boolean))].map(p=><li key={p}>{p} · Нужных коробов: {plan.route.filter(r=>r.pallet===p).length}</li>)}</ul>}
+       <div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Паллет / зона</th><th>Нужный короб</th><th>Отобрать</th></tr></thead><tbody>{plan.route.filter(r=>r.pallet===pallet).map(r=><tr key={r.boxCode}><td>{r.pallet||'Без паллета'} · {r.zone}</td><td>{r.boxCode}</td><td>{r.tasks.map(t=>`${t.name}: ${t.quantity}`).join('; ')}</td></tr>)}</tbody></table></div></>}
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -1460,6 +1460,7 @@
+ };
+ 
+ export type ClientRequestSummary = {
++  fboRequestCode?: string | null;
+   // FIX: populated only when system authorship is explicitly confirmed by server audit.
+   creationAuthorLabel?: string;
+   id: string;
+@@ -11161,6 +11162,10 @@
+   pickedUnits?:Array<{id:string;requestItemId:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;wholeBox:boolean;state:string;pickedAt:string;packedAt:string|null;pickedBy:string|null;packedBy:string|null}>;
+   // FIX: original demand remains visible after freezing the actual packing target.
+   closePickSupported?:boolean; pickClosed?:boolean; plannedNeeded?:number; packingNeeded?:number; unpicked?:number;
++  // FIX: optional metadata keeps older deployments compatible.
++  remainderTransferEnabled?:boolean;
++  parentRequest?:{id:string;number:number;fboRequestCode?:string|null}|null;
++  childRequests?:Array<{id:string;number:number;status:string;fboRequestCode?:string|null}>;
+   requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
+   compositionChanged:boolean; wholeBoxes:string[];
+   lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number}>;
