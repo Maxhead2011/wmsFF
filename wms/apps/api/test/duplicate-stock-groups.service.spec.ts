@@ -34,7 +34,7 @@ describe('duplicate stock groups API', () => {
   it('uses reserves before insurance before shares, and keeps target own stock separate', async () => {
     const f = fixture(); const result = await f.service.preview('client', { group: f.group }, user);
     expect(result.totalAllocated).toBe(70); expect(result.totalRelabel).toBe(35);
-    expect(result.rows[0]).toMatchObject({ total: 100, reserved: 20, safetyReserve: 10 });
+    expect(result.rows[0]).toMatchObject({ total: 105, reserved: 20, safetyReserve: 10 });
     expect(result.rows[0].targets.find(t => t.requiresRelabel)).toMatchObject({ quantity: 35, ownStock: 5 });
   });
   it('does not invent a second relabel mapping or accept mismatched sizes', async () => {

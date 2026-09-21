@@ -1,7 +1,7 @@
 export type DuplicateShare = { targetKey: string; label: string; percent: number };
 export type DuplicateGroup = {
   id: string; name: string; connectionId: string; shares: DuplicateShare[];
-  reserve: { mode: 'UNITS' | 'PERCENT'; value: number };
+  reserve: { mode: 'COMMON' | 'UNITS' | 'PERCENT'; value: number };
   variants: Array<{ sourceSkuId: string; targets: Array<{ targetKey: string; targetId: string; confirmed: boolean; requiresRelabel: boolean }> }>;
   overrides: Array<{ sourceSkuId: string; shares: Array<{ targetKey: string; percent: number }> }>;
 };
@@ -16,6 +16,7 @@ export function matchesRelabelArticle(card: DuplicateCard, article: string, sour
 }
 export type DuplicateMapping = { id: string; sourceArticle: string; targetArticle: string };
 export type DuplicateSettings = { groups: DuplicateGroup[]; revision: string | null; publicationEnabled: boolean; relabelingEnabled: boolean;
+  activeGroupIds: string[]; commonReserve: { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
   mappings: DuplicateMapping[]; connections: Array<{ id: string; accountName: string | null; fbsExecutionWarehouseId: string | null }> };
 export type DuplicatePreview = { generatedAt: string; totalAllocated: number; totalRelabel: number; wbPercent: number; publicationEnabled: boolean;
   pickingWarnings: Array<{ sourceSkuId: string; targetSkuId: string; message: string }>;

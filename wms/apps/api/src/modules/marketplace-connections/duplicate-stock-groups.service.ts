@@ -5,8 +5,9 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
 import { calculateDuplicateStockPlan } from './duplicate-stock-plan';
-import { assertNoDuplicateGroupOverlap, duplicateGroupsEnabled, duplicateGroupSkuIds, stockAfterSafetyReserve, validateDuplicateGroup, type DuplicateGroup } from './duplicate-stock-groups';
+import { assertNoDuplicateGroupOverlap, duplicateGroupsEnabled, duplicateGroupSkuIds, validateDuplicateGroup, type DuplicateGroup } from './duplicate-stock-groups';
 import { splitMarketplaceStock, validateAllocationDraft } from './marketplace-allocation';
+import { activeDuplicateGroups, commonDuplicateReserve, duplicatePublicationEnabled, duplicateVariantBudget } from './duplicate-stock-runtime';
 
 const prefix = 'marketplace.duplicates.groups.';
 const select = { id: true, article: true, clientSku: true, internalSku: true, name: true, size: true, color: true, marketplaceProductId: true,
@@ -15,7 +16,7 @@ const norm = (s: string | null) => s?.trim().toLowerCase() ?? '';
 @Injectable()
 export class DuplicateStockGroupsService {
   constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly marketplaces: MarketplaceConnectionsService) {}
-  capabilities() { return { enabled: duplicateGroupsEnabled(), publicationEnabled: false }; }
+  capabilities() { return { enabled: duplicateGroupsEnabled(), publicationEnabled: duplicatePublicationEnabled() }; }
   private authorize(id: string, user: AuthUser, write = false) {
     if (!duplicateGroupsEnabled() || user.isDemo) throw new ForbiddenException('Распределение между артикулами недоступно.');
     if (!id?.trim()) throw new BadRequestException('Выберите клиента.');
@@ -39,7 +40,8 @@ export class DuplicateStockGroupsService {
       this.prisma.client.findUnique({ where: { id: clientId }, select: { relabelingEnabled: true } }),
     ]);
     return { groups: this.decode(setting?.value), revision: setting?.updatedAt.toISOString() ?? null, mappings,
-      relabelingEnabled: Boolean(client?.relabelingEnabled), connections: connections.filter(c => c.marketplace === 'WILDBERRIES'), publicationEnabled: false };
+      commonReserve: await commonDuplicateReserve(this.prisma, clientId), activeGroupIds: (await activeDuplicateGroups(this.prisma, clientId)).map(g => g.id),
+      relabelingEnabled: Boolean(client?.relabelingEnabled), connections: connections.filter(c => c.marketplace === 'WILDBERRIES'), publicationEnabled: duplicatePublicationEnabled() };
   }
   async catalog(clientId: string, body: { search?: unknown; ids?: unknown; page?: unknown }, user: AuthUser) {
     this.authorize(clientId, user);
@@ -93,6 +95,10 @@ export class DuplicateStockGroupsService {
       const old = await tx.systemSetting.findUnique({ where: { key } });
       if ((old?.updatedAt.toISOString() ?? null) !== body.revision) throw new ConflictException('Группы изменены другим пользователем. Обновите список.');
       const groups = this.decode(old?.value);
+      // FIX: active rules must be changed through a controlled publication transition.
+      const active = await activeDuplicateGroups(tx, clientId);
+      const changedId = body.deleteId ?? (body.group as { id?: string } | undefined)?.id;
+      if (active.some(g => g.id === changedId)) throw new ConflictException('Группа уже управляет остатками WB. Для изменения требуется пересчёт и переключение действующей публикации.');
       if (body.deleteId !== undefined) { if (!groups.some(g => g.id === body.deleteId)) throw new BadRequestException('Группа не найдена.'); }
       else {
         const { group } = await this.validate(clientId, body.group, user, tx);
@@ -121,13 +127,14 @@ export class DuplicateStockGroupsService {
       } catch { throw new BadRequestException('Сначала настройте доли WB/Ozon для выбранного кабинета и общего склада исполнения.'); }
     }
     const quantities = await this.marketplaces.calculateFbsStockQuantities(clientId, duplicateGroupSkuIds(group), warehouseId, group.connectionId);
+    const reserveRule = group.reserve.mode === 'COMMON' ? await commonDuplicateReserve(this.prisma, clientId) : { mode: group.reserve.mode as 'UNITS' | 'PERCENT', value: group.reserve.value };
     const stocks = group.variants.map(v => {
       const q = quantities.get(v.sourceSkuId);
       if (!q) throw new BadRequestException('Не удалось рассчитать исходный SKU. Проверьте ID размера WB.');
-      const reserve = stockAfterSafetyReserve(q.sellable, group.reserve);
-      return { ...v, size: skus.find(s => s.id === v.sourceSkuId)!.size!, available: reserve.distributable,
-        marketplaceBudget: splitMarketplaceStock(reserve.distributable, wbPercent).wb, total: q.available, reserved: q.reserved,
-        freeBeforeSafety: q.sellable, safetyReserve: reserve.safetyReserve };
+      const budget = duplicateVariantBudget(v, quantities, reserveRule);
+      return { ...v, size: skus.find(s => s.id === v.sourceSkuId)!.size!, available: budget.sourceBudget,
+        marketplaceBudget: splitMarketplaceStock(budget.sourceBudget, wbPercent).wb, total: budget.totalAvailable, reserved: budget.totalReserved,
+        freeBeforeSafety: budget.freeBeforeSafety, safetyReserve: budget.safetyReserve, ownByTarget: budget.ownByTarget };
     });
     const plan = calculateDuplicateStockPlan(group, stocks);
     const publications = await this.prisma.fbsStockPublication.findMany({ where: { clientId, connectionId: group.connectionId, skuId: { in: duplicateGroupSkuIds(group) } },
@@ -153,6 +160,6 @@ export class DuplicateStockGroupsService {
     return { ...plan, generatedAt: new Date().toISOString(), warehouseId, wbPercent, publicationEnabled: false, publications, pickingWarnings,
       rows: plan.rows.map((r, i) => ({ ...r, total: stocks[i].total, reserved: stocks[i].reserved, freeBeforeSafety: stocks[i].freeBeforeSafety,
         safetyReserve: stocks[i].safetyReserve, source: skus.find(s => s.id === r.sourceSkuId)!,
-        targets: r.targets.map(t => ({ ...t, card: skus.find(s => s.id === t.targetId)!, ownStock: t.targetId === r.sourceSkuId ? 0 : (quantities.get(t.targetId)?.sellable ?? null) })) })) };
+        targets: r.targets.map(t => ({ ...t, card: skus.find(s => s.id === t.targetId)!, ownStock: stocks[i].ownByTarget.get(t.targetId) ?? 0 })) })) };
   }
 }

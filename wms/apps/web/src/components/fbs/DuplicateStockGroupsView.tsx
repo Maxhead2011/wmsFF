@@ -46,7 +46,7 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
         overrides: group.overrides.map(o => ({ ...o, shares: [...o.shares, { targetKey: key, percent: 0 }] })) });
     } else {
       setIndividual(false);
-      change({ id: crypto.randomUUID(), name: mapping.sourceArticle, connectionId: data?.connections[0]?.id ?? '', reserve: { mode: 'UNITS', value: 0 },
+      change({ id: crypto.randomUUID(), name: mapping.sourceArticle, connectionId: data?.connections[0]?.id ?? '', reserve: { mode: 'COMMON', value: 0 },
         shares: [{ targetKey: 'original', label: mapping.sourceArticle, percent: 50 }, { targetKey: key, label: mapping.targetArticle, percent: 50 }],
         variants: sources.map(s => ({ sourceSkuId: s.id, targets: [{ targetKey: 'original', targetId: s.id, confirmed: true, requiresRelabel: false },
           { targetKey: key, ...suggestDuplicateTarget(s, targets) }] })), overrides: [] });
@@ -73,7 +73,7 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
   return <section className="fbs-allocation">
     <h3>Между артикулами</h3>
     <p>Группы используют соответствия из меню «Переклейка». Доли делят общий остаток каждого размера после резервов заказов и страхового резерва.</p>
-    <p><strong>Настройка и предпросмотр.</strong> Автоматическая отправка новых процентных правил пока не включена. Действующие настройки WB сохраняются.</p>
+    <p><strong>Настройка и предпросмотр.</strong> {data?.activeGroupIds.length ? 'Отмеченные группы участвуют в автоматической отправке WB. Остальные группы — черновики.' : 'Автоматическая отправка групп ещё не включена.'}</p>
     {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
     <button disabled={busy} onClick={() => { if (!group || window.confirm('Обновить список? Несохранённые изменения будут потеряны.')) setReload(n => n + 1); }}>Обновить список</button>
     {!data ? <p>{busy ? 'Загрузка групп…' : 'Не удалось загрузить группы.'}</p> : <>
@@ -82,6 +82,7 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
       <ul>{data.groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase())).map(g => <li key={g.id}>
         <button disabled={busy} onClick={() => { if (!group || window.confirm('Открыть другую группу без сохранения текущих изменений?')) void run(() => edit(g)); }}>{g.name}</button>
         {' — '}{g.variants.length} размеров/вариантов · {g.shares.map(s => `${s.percent}%`).join(' / ')}
+        {data.activeGroupIds.includes(g.id) && <strong> · Отправляется в WB</strong>}
       </li>)}</ul>
       {!data.groups.length && <p>Сохранённых групп пока нет.</p>}
       <fieldset disabled={busy || !data.relabelingEnabled}><legend>Соответствия из «Переклейки»</legend>
@@ -102,10 +103,11 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
         onChange={e => change({ ...group, shares: group.shares.map(x => x.targetKey === s.targetKey ? { ...x, percent: e.target.value === '' ? NaN : Number(e.target.value) } : x) })} /></label>)}
       <p>Сумма долей: {group.shares.reduce((sum, s) => sum + (s.percent || 0), 0)}%. Должно быть 100%.</p>
       <button onClick={() => change({ ...group, shares: group.shares.map((s, i) => ({ ...s, percent: Math.floor(100 / group.shares.length) + (i < 100 % group.shares.length ? 1 : 0) })) })}>Поровну</button>
-      <label>Страховой резерв <select value={group.reserve.mode} onChange={e => change({ ...group, reserve: { mode: e.target.value as 'UNITS' | 'PERCENT', value: 0 } })}><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option></select>
-        <input aria-label="Величина страхового резерва" type="number" min="0" max={group.reserve.mode === 'PERCENT' ? 100 : 1_000_000} step="1" value={Number.isFinite(group.reserve.value) ? group.reserve.value : ''}
+      <label>Страховой резерв <select value={group.reserve.mode} onChange={e => change({ ...group, reserve: { mode: e.target.value as 'COMMON' | 'UNITS' | 'PERCENT', value: 0 } })}><option value="COMMON">Из общих настроек клиента</option><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option></select>
+        <input disabled={group.reserve.mode === 'COMMON'} aria-label="Величина страхового резерва" type="number" min="0" max={group.reserve.mode === 'PERCENT' ? 100 : 1_000_000} step="1" value={Number.isFinite(group.reserve.value) ? group.reserve.value : ''}
           onChange={e => change({ ...group, reserve: { ...group.reserve, value: e.target.value === '' ? NaN : Number(e.target.value) } })} /></label>
       <p>Один резерв на исходный размер/цвет, до долей WB/Ozon и дублей. Процент округляется вверх.</p>
+      {group.reserve.mode === 'COMMON' && data && <p>Общий резерв: {data.commonReserve.value}{data.commonReserve.mode === 'PERCENT' ? '%' : ' шт.'}{data.commonReserve.lowStock && `; при остатке меньше ${data.commonReserve.lowStock.threshold} — ${data.commonReserve.lowStock.reserveUnits} шт.`}. Изменения общих настроек применяются автоматически.</p>}
       <label><input type="checkbox" checked={individual} onChange={e => { const on = e.target.checked; if (!on && group.overrides.length && !window.confirm('Удалить исключения и вернуть общие доли всем размерам?')) return; setIndividual(on); if (!on) change({ ...group, overrides: [] }); }} /> Индивидуальное распределение по размерам</label>
       {group.variants.map(v => {
         const source = cards.find(c => c.id === v.sourceSkuId), override = group.overrides.find(o => o.sourceSkuId === v.sourceSkuId);
@@ -124,9 +126,10 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
           <button onClick={() => change({ ...group, variants: group.variants.filter(x => x.sourceSkuId !== v.sourceSkuId), overrides: group.overrides.filter(o => o.sourceSkuId !== v.sourceSkuId) })}>Исключить размер из группы</button>
         </fieldset>;
       })}
-      <button disabled={!duplicateGroupReady(group)} onClick={() => void run(() => persist())}>Сохранить правило</button>
+      <button disabled={!duplicateGroupReady(group) || data?.activeGroupIds.includes(group.id)} onClick={() => void run(() => persist())}>Сохранить правило</button>
       <button disabled={!duplicateGroupReady(group)} onClick={() => void run(async () => { const id = generation.current; const result = await previewDuplicateGroup(session.accessToken, clientId, group); if (id === generation.current) setPreview(result); })}>Рассчитать предпросмотр</button>
-      {data?.groups.some(g => g.id === group.id) && <button onClick={() => { if (window.confirm('Удалить сохранённую группу? Действующие настройки WB не изменятся.')) void run(() => persist(group.id)); }}>Удалить группу</button>}
+      {data?.groups.some(g => g.id === group.id) && <button disabled={data.activeGroupIds.includes(group.id)} onClick={() => { if (window.confirm('Удалить сохранённую группу? Действующие настройки WB не изменятся.')) void run(() => persist(group.id)); }}>Удалить группу</button>}
+      {data?.activeGroupIds.includes(group.id) && <p>Для изменения действующего правила требуется пересчёт и переключение публикации администратором.</p>}
       {!duplicateGroupReady(group) && <p>Проверьте доли, резерв и подтвердите все соответствия размеров.</p>}
     </fieldset>}
     {preview && <section><h4>Предпросмотр на {new Date(preview.generatedAt).toLocaleString('ru-RU')}</h4>

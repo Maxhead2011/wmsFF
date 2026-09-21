@@ -3,7 +3,7 @@ import { calculateDuplicateStockPlan, type DuplicateShare } from './duplicate-st
 export type DuplicateGroup = {
   id: string; name: string; connectionId: string;
   shares: Array<DuplicateShare & { label: string }>;
-  reserve: { mode: 'UNITS' | 'PERCENT'; value: number };
+  reserve: { mode: 'COMMON' | 'UNITS' | 'PERCENT'; value: number };
   variants: Array<{ sourceSkuId: string; targets: Array<{ targetKey: string; targetId: string; confirmed: boolean; requiresRelabel: boolean }> }>;
   overrides: Array<{ sourceSkuId: string; shares: DuplicateShare[] }>;
 };
@@ -14,6 +14,7 @@ function text(value: unknown, max: number) {
 }
 // FIX: the buffer belongs to the physical size/color pool, never to each duplicate card.
 export function stockAfterSafetyReserve(available: number, reserve: DuplicateGroup['reserve']) {
+  if (reserve.mode === 'COMMON') throw new Error('Общий резерв необходимо загрузить из настроек клиента.');
   if (!Number.isSafeInteger(available) || available < 0) throw new Error('Некорректный свободный остаток.');
   const requested = reserve.mode === 'UNITS' ? reserve.value : Number((BigInt(available) * BigInt(reserve.value) + 99n) / 100n);
   const safetyReserve = Math.min(available, requested);
@@ -24,7 +25,7 @@ export function validateDuplicateGroup(value: unknown): DuplicateGroup {
   const g = value as DuplicateGroup;
   if (!Array.isArray(g.shares) || g.shares.length > 6 || !Array.isArray(g.variants) || !g.variants.length || g.variants.length > 100
     || !Array.isArray(g.overrides) || g.overrides.length > 100) throw new Error('Выберите от 2 до 6 карточек и от 1 до 100 вариантов товара.');
-  if (!g.reserve || !['UNITS', 'PERCENT'].includes(g.reserve.mode) || !Number.isSafeInteger(g.reserve.value) || g.reserve.value < 0
+  if (!g.reserve || !['COMMON', 'UNITS', 'PERCENT'].includes(g.reserve.mode) || !Number.isSafeInteger(g.reserve.value) || g.reserve.value < 0 || (g.reserve.mode === 'COMMON' && g.reserve.value !== 0)
     || g.reserve.value > (g.reserve.mode === 'PERCENT' ? 100 : 1_000_000)) throw new Error('Страховой резерв: целое неотрицательное количество или процент от 0 до 100.');
   const group: DuplicateGroup = { id: text(g.id, 80), name: text(g.name, 150), connectionId: text(g.connectionId, 80),
     shares: g.shares.map(s => ({ targetKey: text(s.targetKey, 80), label: text(s.label, 150), percent: s.percent })),

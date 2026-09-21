@@ -16,6 +16,7 @@ import { recordReshipmentTransition } from './fbs-reshipment-transition';
 import { requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
+import { activeDuplicateGroups, calculateActiveDuplicateQuantities, commonDuplicateReserve, exactDuplicateSource, validateActiveDuplicatePairs } from './duplicate-stock-runtime';
 import {
   BadRequestException,
   ConflictException,
@@ -7857,6 +7858,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }),
     ]);
 
+    const duplicateGroups = await activeDuplicateGroups(this.prisma, clientId, connectionId, executionWarehouseId);
+    const duplicateManaged = validateActiveDuplicatePairs(duplicateGroups, skus, mappings);
     const publicationsBySku = new Map(publications.map((item) => [item.skuId, item]));
     const adjusted = new Map<string, FbsStockQuantity>();
     base.forEach((quantity, skuId) => adjusted.set(skuId, { ...quantity }));
@@ -7876,8 +7879,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     const targetRules = new Map<string, Array<{ sourceArticle: string; sourceSkus: typeof skus }>>();
     mappings.forEach((mapping) => {
-      const targets = refs.get(normalizeFbsRelabelReference(mapping.targetArticle)) ?? [];
-      const sources = refs.get(normalizeFbsRelabelReference(mapping.sourceArticle)) ?? [];
+      const targets = (refs.get(normalizeFbsRelabelReference(mapping.targetArticle)) ?? []).filter(s => !duplicateManaged.has(s.id));
+      const sources = (refs.get(normalizeFbsRelabelReference(mapping.sourceArticle)) ?? []).filter(s => !duplicateManaged.has(s.id));
       targets.forEach((target) => {
         const sameSizeSources = sources.filter(
           (source) =>
@@ -7954,6 +7957,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
     });
 
+    if (duplicateGroups.length) {
+      const duplicatePlan = calculateActiveDuplicateQuantities(duplicateGroups, base, await commonDuplicateReserve(this.prisma, clientId));
+      duplicatePlan.quantities.forEach((q, id) => adjusted.set(id, q));
+      duplicatePlan.meta.forEach((m, id) => meta.set(id, m));
+    }
     return { quantities: adjusted, meta };
   }
 
@@ -14956,6 +14964,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return orders;
     }
 
+    const exactDuplicateSources = new Map((await activeDuplicateGroups(this.prisma, clientId)).flatMap(g =>
+      g.variants.flatMap(v => v.targets.filter(t => t.requiresRelabel).map(t => [t.targetId, v.sourceSkuId] as const))));
     const sourceArticles = uniqueStrings(mappings.map((mapping) => mapping.sourceArticle));
     const sourceSkus = await this.prisma.sku.findMany({
       where: {
@@ -15026,7 +15036,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
 
       const targetSize = fbsArticleKey(order.product.size ?? '');
+      const requiredSource = exactDuplicateSources.get(order.product.id);
       const candidates = sourceSkus
+        .filter(sku => !requiredSource || sku.id === requiredSource)
         .flatMap((sku) => {
           const mapping = matchedMappings.find((item) =>
             fbsSkuMatchesSourceArticle(sku, item.sourceArticle),
@@ -15368,10 +15380,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       };
     }
 
+    const exactSourceId = await exactDuplicateSource(this.prisma, clientId, targetSku.id);
     const sourceArticles = uniqueStrings(mappings.map((mapping) => mapping.sourceArticle));
     const sourceSkus = await this.prisma.sku.findMany({
       where: {
         clientId,
+        ...(exactSourceId ? { id: exactSourceId } : {}),
         ...(targetSku.size
           ? { size: { equals: targetSku.size, mode: Prisma.QueryMode.insensitive } }
           : {}),
