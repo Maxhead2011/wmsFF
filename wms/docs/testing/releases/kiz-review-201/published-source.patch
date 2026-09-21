@@ -1,0 +1,897 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 200 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.200-kiz-history"
++            versionCode = 201 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.201-kiz-review"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizLocationScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizLocationScreen.java
+@@ -1,6 +1,7 @@
+ package pro.logoff.wms.tsd;
+ 
+ import android.app.Activity;
++import android.app.AlertDialog;
+ import android.graphics.Color;
+ import android.os.Handler;
+ import android.os.Looper;
+@@ -10,12 +11,15 @@
+ import android.view.KeyEvent;
+ import android.view.inputmethod.EditorInfo;
+ import android.widget.Button;
++import android.widget.CheckBox;
+ import android.widget.EditText;
+ import android.widget.LinearLayout;
+ import android.widget.ScrollView;
+ import android.widget.TextView;
+ import org.json.JSONObject;
+ import java.util.Collections;
++import java.util.HashMap;
++import java.util.Map;
+ import java.util.concurrent.ExecutorService;
+ import java.util.concurrent.Executors;
+ import pro.logoff.wms.tsd.auth.TsdSession;
+@@ -23,7 +27,7 @@
+ import pro.logoff.wms.tsd.network.WmsApi;
+ import retrofit2.Response;
+ 
+-// FIX: a separate read-only scanner screen; it never enters picking or inventory workflows.
++// FIX: administrator decisions use the same case and audit workflow as desktop WMS.
+ final class KizLocationScreen {
+     private final Activity activity;
+     private final TsdSession session;
+@@ -33,6 +37,9 @@
+     private final EditText input;
+     private final TextView result;
+     private final Button check;
++    private final LinearLayout decisions;
++    private TsdKizLocationResponse lastResponse;
++    private AlertDialog decisionDialog;
+     private boolean closed, busy;
+     private final Runnable autoSubmit = this::submit;
+ 
+@@ -47,6 +54,7 @@
+         input.setImeOptions(EditorInfo.IME_ACTION_DONE); root.addView(input);
+         check = new TsdUi.Button(activity); check.setText("Проверить"); check.setOnClickListener(v -> submit()); root.addView(check);
+         result = new TsdUi.Label(activity); result.setTextSize(20); result.setTextColor(Color.BLACK); result.setPadding(0, 20, 0, 20); root.addView(result);
++        decisions = new LinearLayout(activity); decisions.setOrientation(LinearLayout.VERTICAL); root.addView(decisions);
+         Button exit = new TsdUi.Button(activity); exit.setText("Назад"); exit.setOnClickListener(v -> { close(); back.run(); }); root.addView(exit);
+         input.setOnEditorActionListener((v, action, event) -> {
+             if (action == EditorInfo.IME_ACTION_DONE || action == EditorInfo.IME_ACTION_GO ||
+@@ -57,6 +65,7 @@
+             public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+             public void onTextChanged(CharSequence s, int start, int before, int count) {}
+             public void afterTextChanged(Editable value) {
++                if (!busy && value.length()>0) { lastResponse=null; decisions.removeAllViews(); }
+                 handler.removeCallbacks(autoSubmit);
+                 if (!busy && !closed && KizLocationPolicy.readyToSubmit(value.toString())) handler.postDelayed(autoSubmit, 400);
+             }
+@@ -65,18 +74,20 @@
+     }
+     EditText scannerField() { return input; }
+     boolean belongsTo(TsdSession current) { return session.hasSameAccessToken(current) && KizLocationPolicy.canOpen("logoff", current); }
+-    void close() { closed = true; handler.removeCallbacks(autoSubmit); executor.shutdownNow(); }
++    void close() { closed = true; handler.removeCallbacks(autoSubmit); if(decisionDialog!=null)decisionDialog.dismiss(); executor.shutdownNow(); }
+     void submit() {
+         handler.removeCallbacks(autoSubmit);
+         if (closed || busy) return;
+         String scan = input.getText().toString().trim();
+         if (scan.isEmpty()) { result.setText("Отсканируйте КИЗ."); return; }
+         busy = true; check.setEnabled(false); input.setEnabled(false); result.setText("Проверяю КИЗ…");
++        lastResponse=null; decisions.removeAllViews();
+         executor.execute(() -> {
+             String message;
++            TsdKizLocationResponse body=null;
+             try {
+                 Response<TsdKizLocationResponse> response = api.checkKizLocation(session.authorizationHeader(), Collections.singletonMap("kiz", scan)).execute();
+-                if (response.isSuccessful()) message = KizLocationPolicy.describe(response.body());
++                if (response.isSuccessful()) { body=response.body(); message = KizLocationPolicy.describe(body); }
+                 else {
+                     message = "Не удалось проверить КИЗ. Повторите попытку.";
+                     if (response.errorBody() != null) {
+@@ -87,11 +98,70 @@
+                 }
+             } catch (Exception error) { message = "Нет ответа от ВМС. Проверьте соединение и повторите сканирование."; }
+             String displayed = message;
++            TsdKizLocationResponse received=body;
+             handler.post(() -> {
+                 if (closed || activity.isDestroyed()) return;
+                 busy = false; check.setEnabled(true); input.setEnabled(true);
+                 result.setText(displayed); input.setText(""); input.requestFocus();
++                lastResponse=received; renderDecisions();
+             });
+         });
+     }
++    private void renderDecisions() {
++        decisions.removeAllViews();
++        if(lastResponse==null||lastResponse.reviews==null)return;
++        if(lastResponse.reviews.isEmpty()&&lastResponse.found){
++            TextView hint=new TsdUi.Label(activity);hint.setText("Для решения нужно обращение из текущей сборки. Попросите сборщика отсканировать этот КИЗ в задании.");decisions.addView(hint);
++            for(String caption:new String[]{"Разрешить использовать","Разрешить переклейку"}){
++                Button button=new TsdUi.Button(activity);button.setText(caption);button.setEnabled(false);decisions.addView(button);
++            }
++        }
++        for(TsdKizLocationResponse.Review row:lastResponse.reviews){
++            TextView title=new TsdUi.Label(activity);
++            title.setText(row.snapshot==null?"Обращение сборщика":"Заявка №"+row.snapshot.requestNumber+" · WB "+row.snapshot.orderId+"\n"+row.snapshot.workerName+" · "+row.snapshot.boxCode);
++            decisions.addView(title);
++            if("APPROVED".equals(row.status)){TextView approved=new TsdUi.Label(activity);approved.setText("Разрешено: "+("RELABEL".equals(row.resolution)?"переклейка":"использование")+" · "+row.decidedByName);decisions.addView(approved);}
++            for(String mode:new String[]{"REUSE","RELABEL"}){
++                Button button=new TsdUi.Button(activity);button.setText("REUSE".equals(mode)?"Разрешить использовать":"Разрешить переклейку");
++                button.setEnabled(!busy&&KizReviewPolicy.canDecide(BuildConfig.FLAVOR,session,row,mode));
++                button.setOnClickListener(v->confirmDecision(row,mode));decisions.addView(button);
++            }
++        }
++    }
++    private void confirmDecision(TsdKizLocationResponse.Review row,String mode) {
++        if(closed||busy||!KizReviewPolicy.canDecide(BuildConfig.FLAVOR,session,row,mode))return;
++        handler.removeCallbacks(autoSubmit);input.setEnabled(false);check.setEnabled(false);
++        LinearLayout form=new LinearLayout(activity);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(24,12,24,12);
++        TextView code=new TsdUi.Label(activity);code.setText(row.kizIdentity);form.addView(code);
++        EditText reason=new EditText(activity);TsdUi.hint(reason,"Основание решения (не менее 5 символов)");form.addView(reason);
++        CheckBox confirmed=new CheckBox(activity);confirmed.setText("REUSE".equals(mode)?
++            "Проверено: единица на складе, КИЗ не погашен и допускает повторное использование.":
++            "Единица физически на складе. Разрешаю заменить её КИЗ без пересчёта всего короба.");form.addView(confirmed);
++        TextView error=new TsdUi.Label(activity);form.addView(error);
++        AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("REUSE".equals(mode)?"Разрешить использовать":"Разрешить переклейку")
++            .setView(form).setPositiveButton("Подтвердить",null).setNegativeButton("Отмена",null).create();
++        decisionDialog=dialog;
++        dialog.setOnDismissListener(d->{decisionDialog=null;if(!closed&&!busy){input.setEnabled(true);check.setEnabled(true);}});
++        dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
++            String why=reason.getText().toString().trim();
++            if(busy)return;
++            if(!confirmed.isChecked()||why.length()<5||why.length()>1000){error.setText("Подтвердите проверку и укажите основание (5–1000 символов).");return;}
++            busy=true;renderDecisions();dialog.setCancelable(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
++            Map<String,Object> payload=new HashMap<>();payload.put("resolution",mode);payload.put("reason",why);payload.put("confirmed",true);
++            executor.execute(()->{
++                String problem=null;
++                try{Response<Map<String,Object>> response=api.decideKizReview(session.authorizationHeader(),row.id,payload).execute();
++                    if(!response.isSuccessful()){problem="Решение не сохранено. Повторите отправку.";if(response.errorBody()!=null){Object detail=new JSONObject(response.errorBody().string()).opt("message");if(detail instanceof String)problem=(String)detail;}}
++                }catch(Exception e){problem="Подтверждение не получено. Повторите отправку этой кнопкой.";}
++                String failure=problem;
++                handler.post(()->{if(closed||activity.isDestroyed())return;busy=false;dialog.setCancelable(true);
++                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(true);
++                    if(failure==null){row.status="APPROVED";row.resolution=mode;row.decidedByName="администратор";dialog.dismiss();result.setText("Решение сохранено. Сборщик может повторить сканирование старого КИЗа.");}
++                    else error.setText(failure);
++                    renderDecisions();
++                });
++            });
++        }));
++        dialog.show();
++    }
+ }
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizReviewPolicy.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizReviewPolicy.java
+@@ -0,0 +1,13 @@
++package pro.logoff.wms.tsd;
++import pro.logoff.wms.tsd.auth.TsdSession;
++import pro.logoff.wms.tsd.network.TsdKizLocationResponse.Review;
++
++final class KizReviewPolicy {
++    private KizReviewPolicy() {}
++    // FIX: identical choices on desktop and TSD; server still rechecks evidence and permissions.
++    static boolean canDecide(String flavor, TsdSession session, Review row, String resolution) {
++        if (!KizLocationPolicy.canOpen(flavor,session) || row == null || !row.active || !"OPEN".equals(row.status)) return false;
++        return "REUSE".equals(resolution) ? !"RELABEL".equals(row.decision) :
++            "RELABEL".equals(resolution) && "RELABEL".equals(row.decision);
++    }
++}
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdKizLocationResponse.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdKizLocationResponse.java
+@@ -7,6 +7,13 @@
+     public boolean ambiguous;
+     public String identity;
+     public List<Match> matches;
++    public List<Review> reviews;
++    public static class Review {
++        public String id, kizIdentity, status, decision, resolution, reason, decidedByName;
++        public boolean active;
++        public Snapshot snapshot;
++    }
++    public static class Snapshot { public int requestNumber; public String orderId, productName, boxCode, workerName; }
+     public static class Match {
+         public String id, client, status, boxCode, boxStatus, palletCode, room, warehouse, locationWarning;
+         public Product product;
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/WmsApi.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/WmsApi.java
+@@ -37,6 +37,8 @@
+     // FIX: read-only administrator lookup; no stock or marketplace mutations.
+     @POST("api/v1/inventory/kiz-location/check")
+     Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);
++    @POST("api/v1/inventory/kiz-location/reviews/{id}/decision")
++    Call<Map<String,Object>> decideKizReview(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String,Object> request);
+     // ADDED: independent administrator sorting; ordinary transfer APIs are unchanged.
+     @GET("api/v1/pallet-sorting")
+     Call<List<Map<String, Object>>> listPalletSortings(@Header("Authorization") String authorization);
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/KizReviewPolicyTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/KizReviewPolicyTest.java
+@@ -0,0 +1,23 @@
++package pro.logoff.wms.tsd;
++import static org.junit.Assert.*;
++import java.util.Collections;
++import org.junit.Test;
++import pro.logoff.wms.tsd.auth.TsdSession;
++import pro.logoff.wms.tsd.network.TsdKizLocationResponse.Review;
++
++public class KizReviewPolicyTest {
++    private TsdSession user(String role){return new TsdSession("token","Bearer","dev","TSD","u","Name",Collections.singletonList(role));}
++    @Test public void provenUseOnlyOffersRelabelToAdministrators(){
++        // TEST: both choices exist, but permissions and evidence determine the available action.
++        Review r=new Review();r.active=true;r.status="OPEN";r.decision="RELABEL";
++        assertFalse(KizReviewPolicy.canDecide("logoff",user("OWNER"),null,"REUSE"));
++        assertFalse(KizReviewPolicy.canDecide("logoff",user("ADMIN"),r,"REUSE"));
++        for(String role:new String[]{"ADMIN","OWNER","SUPER_ADMIN"})assertTrue(KizReviewPolicy.canDecide("logoff",user(role),r,"RELABEL"));
++        for(String role:new String[]{"OPERATOR","CLIENT","MANAGER"})assertFalse(KizReviewPolicy.canDecide("logoff",user(role),r,"RELABEL"));
++        assertFalse(KizReviewPolicy.canDecide("platform",user("OWNER"),r,"RELABEL"));
++        r.decision="REVIEW";assertTrue(KizReviewPolicy.canDecide("logoff",user("OWNER"),r,"REUSE"));
++        assertFalse(KizReviewPolicy.canDecide("logoff",user("OWNER"),r,"RELABEL"));
++        r.status="APPROVED";assertFalse(KizReviewPolicy.canDecide("logoff",user("OWNER"),r,"REUSE"));
++        r.status="OPEN";r.active=false;assertFalse(KizReviewPolicy.canDecide("logoff",user("OWNER"),r,"REUSE"));
++    }
++}
+--- a/wms/apps/api/prisma/migrations/20260921170000_kiz_review_queue/migration.sql
++++ b/wms/apps/api/prisma/migrations/20260921170000_kiz_review_queue/migration.sql
+@@ -0,0 +1,14 @@
++-- FIX: isolated review workflow, with no changes to inventory or existing KIZ history.
++CREATE TABLE "KizReviewCase" (
++ "id" TEXT NOT NULL, "clientId" TEXT NOT NULL, "warehouseId" TEXT NOT NULL,
++ "taskId" TEXT NOT NULL, "requestId" TEXT NOT NULL, "kizIdentity" TEXT NOT NULL,
++ "kiz" TEXT NOT NULL, "context" TEXT NOT NULL, "status" TEXT NOT NULL DEFAULT 'OPEN',
++ "decision" TEXT NOT NULL, "resolution" TEXT, "reason" TEXT, "decidedById" TEXT,
++ "decidedByName" TEXT, "decidedAt" TIMESTAMP(3), "usedAt" TIMESTAMP(3),
++ "snapshot" JSONB NOT NULL, "evidence" JSONB NOT NULL, "attempts" INTEGER NOT NULL DEFAULT 1,
++ "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL,
++ CONSTRAINT "KizReviewCase_pkey" PRIMARY KEY ("id")
++);
++CREATE UNIQUE INDEX "KizReviewCase_taskId_kizIdentity_key" ON "KizReviewCase"("taskId", "kizIdentity");
++CREATE INDEX "KizReviewCase_warehouseId_status_createdAt_idx" ON "KizReviewCase"("warehouseId", "status", "createdAt");
++CREATE INDEX "KizReviewCase_clientId_warehouseId_status_idx" ON "KizReviewCase"("clientId", "warehouseId", "status");
+--- a/wms/apps/api/prisma/schema.prisma
++++ b/wms/apps/api/prisma/schema.prisma
+@@ -3404,6 +3404,35 @@
+   @@index([templateId, createdAt])
+ }
+ 
++// FIX: durable administrator queue; snapshots survive changes to the original picking task.
++model KizReviewCase {
++  id               String   @id @default(uuid())
++  clientId         String
++  warehouseId      String
++  taskId           String
++  requestId        String
++  kizIdentity      String
++  kiz              String   @db.Text
++  context          String
++  status           String   @default("OPEN")
++  decision         String
++  resolution       String?
++  reason           String?
++  decidedById      String?
++  decidedByName    String?
++  decidedAt        DateTime?
++  usedAt           DateTime?
++  snapshot         Json
++  evidence         Json
++  attempts         Int      @default(1)
++  createdAt        DateTime @default(now())
++  updatedAt        DateTime @updatedAt
++
++  @@unique([taskId, kizIdentity])
++  @@index([warehouseId, status, createdAt])
++  @@index([clientId, warehouseId, status])
++}
++
+ model AuditLog {
+   id        String   @id @default(uuid())
+   userId    String?
+--- a/wms/apps/api/scripts/backfill-kiz-review-queue.cjs
++++ b/wms/apps/api/scripts/backfill-kiz-review-queue.cjs
+@@ -0,0 +1,29 @@
++// FIX: one-off import of already recorded scanner problems; dry run unless --apply is supplied.
++const {PrismaClient}=require('@prisma/client');
++const {queueKizReview,kizReviewEnabled}=require('../dist/common/kiz-review-queue');
++const {inspectKizReuse}=require('../dist/common/kiz-wb-reuse');
++const db=new PrismaClient();
++(async()=>{
++ if(!kizReviewEnabled())throw Error('Enable our KIZ review queue after its migration first');
++ const args=process.argv.slice(2),position=args.indexOf('--since');
++ if(position<0||!args[position+1])throw Error('Provide --since with an ISO timestamp; --apply enables case creation');
++ const since=new Date(args[position+1]);if(!Number.isFinite(+since))throw Error('Invalid --since');
++ const rows=await db.auditLog.findMany({where:{action:'KIZ_REUSE_CHECK',entity:'FbsTsdAssembly',createdAt:{gte:since}},
++   orderBy:[{createdAt:'desc'},{id:'desc'}],take:1001});
++ if(rows.length>1000)throw Error('More than 1000 events: use a narrower --since window');
++ const seen=new Set();let eligible=0,queued=0,skipped=0;
++ for(const row of rows){const v=row.payload||{},key=row.entityId+':'+v.kizIdentity;
++   if(seen.has(key))continue;seen.add(key);
++   if(!['REVIEW','RELABEL'].includes(v.decision)||typeof v.kizIdentity!=='string'||!row.entityId){skipped++;continue;}
++   const task=await db.fbsTsdAssembly.findUnique({where:{id:row.entityId}});
++   if(!task||task.status!=='IN_PROGRESS'||task.kiz||task.clientId!==v.clientId){skipped++;continue;}
++   const request=await db.clientRequest.findUnique({where:{id:task.requestId}});
++   if(!request?.warehouseId||['DONE','CANCELLED','REJECTED'].includes(request.status)){skipped++;continue;}
++   eligible++;
++   if(args.includes('--apply')){
++     const evidence=await inspectKizReuse(db,task.clientId,v.kizIdentity,task.id);
++     await queueKizReview(db,task.clientId,v.kizIdentity,task.id,evidence);queued++;
++   }
++ }
++ console.log(JSON.stringify({dryRun:!args.includes('--apply'),eligible,queued,skipped}));
++})().catch(e=>{console.error(e.message);process.exitCode=1}).finally(()=>db.$disconnect());
+--- a/wms/apps/api/src/common/kiz-review-queue.ts
++++ b/wms/apps/api/src/common/kiz-review-queue.ts
+@@ -0,0 +1,165 @@
++import {BadRequestException, ConflictException, ForbiddenException, NotFoundException} from '@nestjs/common';
++import {createHash} from 'node:crypto';
++import {ClientRequestStatus, FbsTsdAssembly, Prisma} from '@prisma/client';
++import {PrismaService} from './prisma/prisma.service';
++import {physicalKizIdentity} from './kiz-physical-identity';
++import {inspectKizReuse, kizReuseEnabled, type ReuseDecision} from './kiz-wb-reuse';
++import {ClientScopeService} from '../modules/auth/client-scope.service';
++import type {AuthUser} from '../modules/auth/auth.types';
++
++export const kizReviewEnabled = () => kizReuseEnabled() && process.env.WMS_KIZ_REVIEW_QUEUE_ENABLED === 'true';
++const closed: ClientRequestStatus[] = ['DONE','CANCELLED','REJECTED'];
++const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringify(value));
++const identityOf = (value: string) => physicalKizIdentity(value.replace(/^\(01\)(\d{14})\(21\)/,(_,gtin)=>`01${gtin}21`).replace(/^(01\d{14})\u001d21/,(_,gtin)=>`${gtin}21`));
++const prefixesOf = (identity: string) => [identity,']d2'+identity,']D2'+identity,`(01)${identity.slice(2,16)}(21)${identity.slice(18)}`];
++type Evidence = Awaited<ReturnType<typeof inspectKizReuse>>;
++export const reviewContext = (t: FbsTsdAssembly) => createHash('sha256').update(JSON.stringify([
++  t.id,t.clientId,t.connectionId,t.requestId,t.orderId,t.skuId,t.boxId,t.workerUserId,t.startedAt,t.createdAt,
++])).digest('hex');
++// FIX: approvals never transfer to another unit, task attempt or relabel route.
++export function permittedReviewAction(row: {context:string;status:string;resolution:string|null}|null,
++  context: string, decision: ReuseDecision): ReuseDecision|null {
++  if (!row || row.context !== context || row.status !== 'APPROVED') return null;
++  if (row.resolution === 'REUSE' && decision !== 'RELABEL') return 'ALLOW';
++  if (row.resolution === 'RELABEL' && decision === 'RELABEL') return 'RELABEL';
++  return null;
++}
++export function requireReviewAdmin(user: AuthUser) {
++  if (!kizReviewEnabled() || user.isDemo || !user.roleCodes.some(r=>['ADMIN','OWNER','SUPER_ADMIN'].includes(r)))
++    throw new ForbiddenException('Разбор КИЗов доступен администратору и собственнику.');
++  if (!user.activeWarehouseId) throw new BadRequestException('Сначала выберите филиал.');
++  if (!user.permissionCodes.includes('system:admin') && user.warehouseIds && !user.warehouseIds.includes(user.activeWarehouseId))
++    throw new ForbiddenException('Нет доступа к выбранному филиалу.');
++}
++async function lock(tx: Prisma.TransactionClient, taskId: string) {
++  await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "FbsTsdAssembly" WHERE "id"=${taskId} FOR UPDATE`);
++}
++// FIX: persist the case outside the subsequently rejected scanner action. Repeated scans update one row.
++export async function queueKizReview(db: PrismaService, clientId: string, kiz: string, taskId: string, evidence: Evidence) {
++  if (!kizReviewEnabled()) return evidence.decision;
++  const identity=identityOf(kiz);
++  if (!identity) throw new BadRequestException('Не удалось определить КИЗ для проверки.');
++  return db.$transaction(async tx=>{
++    await lock(tx,taskId);
++    const task=await tx.fbsTsdAssembly.findUnique({where:{id:taskId}});
++    if (!task || task.clientId!==clientId || task.marketplace!=='WILDBERRIES') throw new ConflictException('Задание изменилось.');
++    const request=await tx.clientRequest.findUnique({where:{id:task.requestId},select:{clientId:true,warehouseId:true,number:true,status:true}});
++    if (!request?.warehouseId || request.clientId!==clientId || closed.includes(request.status) || task.status!=='IN_PROGRESS')
++      throw new ConflictException('Заявка больше не доступна для отбора.');
++    const key={taskId_kizIdentity:{taskId,kizIdentity:identity}};
++    const previous=await tx.kizReviewCase.findUnique({where:key});
++    if (evidence.decision==='ALLOW' && !previous) return 'ALLOW';
++    const context=reviewContext(task);
++    const permission=permittedReviewAction(previous,context,evidence.decision);
++    const reset=previous?.context!==context || (previous?.resolution==='REUSE' && evidence.decision==='RELABEL') ||
++      (previous?.resolution==='RELABEL' && evidence.decision!=='RELABEL');
++    const status=permission ? 'APPROVED' : evidence.decision==='ALLOW' ? 'RESOLVED' : 'OPEN';
++    const common={clientId,warehouseId:request.warehouseId,requestId:task.requestId,kiz,context,decision:evidence.decision,status,
++      snapshot:json({requestNumber:request.number,orderId:task.orderId,productName:task.productName,article:task.article,
++        barcode:task.barcode,boxCode:task.boxCode,workerName:task.workerName,workerUserId:task.workerUserId}),evidence:json(evidence)};
++    const row=await tx.kizReviewCase.upsert({where:key,create:{...common,taskId,kizIdentity:identity},
++      update:{...common,attempts:{increment:1},...(reset?{resolution:null,reason:null,decidedById:null,decidedByName:null,decidedAt:null,usedAt:null}:{})}});
++    if (!previous || reset) await tx.auditLog.create({data:{userId:task.workerUserId,action:'KIZ_REVIEW_OPENED',entity:'KizReviewCase',entityId:row.id,
++      payload:json({taskId,clientId,kizIdentity:identity,context,evidence})}});
++    return permission ?? (evidence.decision==='ALLOW'?'ALLOW':'REVIEW');
++  });
++}
++
++export class KizReviewQueue {
++  constructor(private readonly db: PrismaService, private readonly clients: ClientScopeService) {}
++  async forKiz(identity: string, user: AuthUser) { return (await this.list(user,undefined,identity)).items; }
++  async list(user: AuthUser, cursor?: string, identity?: string) {
++    requireReviewAdmin(user);
++    const items=await this.db.kizReviewCase.findMany({where:{warehouseId:user.activeWarehouseId!,clientId:this.clients.resolveClientFilter(user),
++      status:{in:['OPEN','APPROVED']},...(identity?{kizIdentity:identity}:{})},orderBy:[{createdAt:'desc'},{id:'desc'}],take:51,...(cursor?{cursor:{id:cursor},skip:1}:{})});
++    const tasks=await this.db.fbsTsdAssembly.findMany({where:{id:{in:items.map(r=>r.taskId)}}});
++    const rows=items.slice(0,50).map(({kiz,...r})=>{
++      const task=tasks.find(t=>t.id===r.taskId);
++      const evidence=r.evidence as unknown as Evidence;
++      const history=evidence.history.filter(h=>h.request?.warehouseId===user.activeWarehouseId);
++      return {...r,evidence:{...evidence,history,orders:evidence.orders.filter(o=>history.some(h=>h.orderId===o.orderId))},
++        active:Boolean(task && task.status==='IN_PROGRESS' && !task.kiz && reviewContext(task)===r.context)};
++    });
++    return {items:rows,nextCursor:items.length>50?rows[rows.length-1].id:null};
++  }
++  async decide(id: string, resolution: 'REUSE'|'RELABEL', reason: string, confirmed: boolean, user: AuthUser) {
++    requireReviewAdmin(user);
++    if (!user.permissionCodes.includes('system:admin') && user.writableWarehouseIds && !user.writableWarehouseIds.includes(user.activeWarehouseId!))
++      throw new ForbiddenException('Нет права изменять данные выбранного филиала.');
++    if (!['REUSE','RELABEL'].includes(resolution) || !confirmed || reason.trim().length<5 || reason.length>1000)
++      throw new BadRequestException('Подтвердите проверку единицы и укажите основание решения (от 5 до 1000 символов).');
++    const row=await this.db.kizReviewCase.findFirst({where:{id,warehouseId:user.activeWarehouseId!,clientId:this.clients.resolveClientFilter(user)}});
++    if (!row) throw new NotFoundException('Обращение не найдено в выбранном филиале.');
++    this.clients.requireClientAccess(user,row.clientId,'write');
++    const evidence=await inspectKizReuse(this.db,row.clientId,row.kiz,row.taskId);
++    if (resolution==='REUSE' && evidence.decision==='RELABEL') throw new BadRequestException('Подтверждена продажа или погашение. Можно разрешить только переклейку.');
++    if (resolution==='RELABEL' && evidence.decision!=='RELABEL') throw new BadRequestException('Необходимость переклейки не подтверждена. Обновите проверку.');
++    return this.db.$transaction(async tx=>{
++      await lock(tx,row.taskId);
++      const task=await tx.fbsTsdAssembly.findUnique({where:{id:row.taskId}});
++      const fresh=await tx.kizReviewCase.findUnique({where:{id}});
++      if (!task || !fresh || task.kiz || task.status!=='IN_PROGRESS' || task.clientId!==row.clientId ||
++        reviewContext(task)!==row.context || fresh.context!==row.context || !['OPEN','APPROVED'].includes(fresh.status))
++        throw new ConflictException('Задание или обращение изменилось. Обновите очередь.');
++      const request=await tx.clientRequest.findUnique({where:{id:task.requestId}});
++      const box=task.boxId?await tx.box.findUnique({where:{id:task.boxId}}):null;
++      const marks=await tx.productMark.findMany({where:{clientId:row.clientId,OR:prefixesOf(row.kizIdentity).map(prefix=>({value:{startsWith:prefix}}))}});
++      const exact=marks.filter(m=>identityOf(m.value)===row.kizIdentity);
++      if(exact.length>1) throw new ConflictException('Найден дубль КИЗа. Сначала разберите дубли.');
++      const mark=exact[0];
++      if (!request || closed.includes(request.status) || request.clientId!==row.clientId || request.warehouseId!==row.warehouseId ||
++        !box || box.clientId!==row.clientId || box.warehouseId!==row.warehouseId || ['archived','deleted'].includes(box.status) ||
++        !mark || mark.status!=='AVAILABLE' || mark.skuId!==task.skuId || mark.boxId!==task.boxId)
++        throw new ConflictException('Единица не подтверждена в доступном остатке выбранного короба.');
++      const balance=await tx.stockBalance.aggregate({where:{clientId:row.clientId,warehouseId:row.warehouseId,skuId:task.skuId,boxId:task.boxId,status:'AVAILABLE'},_sum:{quantity:true}});
++      if ((balance._sum.quantity??0)<1) throw new ConflictException('Доступного остатка для единицы нет.');
++      const links=await tx.fbsTsdAssembly.findMany({where:{id:{not:task.id},clientId:row.clientId,
++        OR:prefixesOf(row.kizIdentity).map(prefix=>({kiz:{startsWith:prefix}}))}});
++      // Reuse cannot steal any stored binding; relabel keeps history and retains its normal source checks.
++      if (resolution==='REUSE' && links.some(t=>identityOf(t.kiz??'')===row.kizIdentity))
++        throw new ConflictException('КИЗ ещё привязан к другой сборке. Сначала разберите прежнюю заявку.');
++      if(resolution==='RELABEL') {
++        const exactLinks=links.filter(t=>identityOf(t.kiz??'')===row.kizIdentity);
++        const requestIds=[...new Set(exactLinks.map(t=>t.requestId))];
++        const closedCount=requestIds.length?await tx.clientRequest.count({where:{id:{in:requestIds},clientId:row.clientId,status:{in:closed}}}):0;
++        if(closedCount!==requestIds.length || exactLinks.some(t=>!['COMPLETED','RETURN_REQUIRED'].includes(t.status)))
++          throw new ConflictException('КИЗ занят другой незавершённой сборкой. Сначала разберите прежнюю заявку.');
++      }
++      if (fresh.status==='APPROVED') {
++        if(fresh.resolution!==resolution) throw new ConflictException('По обращению уже принято другое решение.');
++        return {id,status:fresh.status,resolution:fresh.resolution};
++      }
++      await tx.kizReviewCase.update({where:{id},data:{status:'APPROVED',resolution,reason:reason.trim(),decidedById:user.id,
++        decidedByName:user.name,decidedAt:new Date(),decision:evidence.decision,evidence:json(evidence)}});
++      await tx.auditLog.create({data:{userId:user.id,action:'KIZ_REVIEW_APPROVED',entity:'KizReviewCase',entityId:id,
++        payload:json({resolution,reason:reason.trim(),confirmed,taskId:task.id,context:row.context,kizIdentity:row.kizIdentity,evidence})}});
++      return {id,status:'APPROVED',resolution};
++    });
++  }
++}
++
++// FIX: acceptance consumes only this task's approval; uncertain network retries remain possible beforehand.
++export async function finishKizReview(tx: Prisma.TransactionClient, task: FbsTsdAssembly, kiz: string, resolution: 'REUSE'|'RELABEL') {
++  if (!kizReviewEnabled()) return;
++  await tx.kizReviewCase.updateMany({where:{taskId:task.id,kizIdentity:identityOf(kiz),context:reviewContext(task),
++    status:'APPROVED',resolution},data:{status:'USED',usedAt:new Date()}});
++}
++export async function approvedUnitRelabel(tx: Prisma.TransactionClient, task: FbsTsdAssembly, kiz: string) {
++  if (!kizReviewEnabled()) return false;
++  return Boolean(await tx.kizReviewCase.findFirst({where:{taskId:task.id,kizIdentity:identityOf(kiz),
++    context:reviewContext(task),status:'APPROVED',resolution:'RELABEL'}}));
++}
++// FIX: a different crypto suffix does not make an already registered serial into a new KIZ.
++export async function assertUnusedReplacement(tx: Prisma.TransactionClient, value: string) {
++  const identity=identityOf(value);
++  if(!identity)throw new BadRequestException('Отсканируйте полный новый КИЗ.');
++  await tx.$queryRaw(Prisma.sql`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${identity},0))`);
++  const prefixes=prefixesOf(identity);
++  const [marks,tasks,history]=await Promise.all([
++    tx.productMark.findMany({where:{OR:prefixes.map(p=>({value:{startsWith:p}}))},select:{value:true}}),
++    tx.fbsTsdAssembly.findMany({where:{OR:prefixes.map(p=>({kiz:{startsWith:p}}))},select:{kiz:true}}),
++    tx.shippedKizHistory.findMany({where:{OR:prefixes.map(p=>({kiz:{startsWith:p}}))},select:{kiz:true}}),
++  ]);
++  if(marks.some(m=>identityOf(m.value)===identity)||[...tasks,...history].some(m=>identityOf(m.kiz??'')===identity))
++    throw new BadRequestException('Новый КИЗ уже зарегистрирован или использован. Возьмите свободный новый КИЗ.');
++}
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -192,8 +192,8 @@
+     id: 'inventory',
+     name: 'Инвентаризация и сортировка',
+     prefixes: ['/inventory', '/pallet-sorting', '/inventory/kiz-location'],
+-    routeCount: 27, // FIX: include SKU collection capabilities and the administrator KIZ location check.
+-    description: 'Пересчёты, актуализация и отдельная сортировка паллет-сорта или короба для администратора.',
++    routeCount: 29, // FIX: include SKU collection capabilities and the administrator KIZ location check.
++    description: 'Пересчёты, актуализация, сортировка и очередь проверки КИЗов с разрешением использования или переклейки отдельной единицы.',
+     logic: ['Фиксирует снимок ожидаемых остатков.', 'Сравнивает факт со снимком.', 'Применяет подтверждённые расхождения через движения склада.', 'Сортировка переносит товар и КИЗ в новые короба без приёмки; списывает недостачу только по свежему подтверждению и перестраивает затронутые FBS-маршруты.', 'Снятие сборки по SKU сохраняет историю и выполненные перемещения; доступно при включённом флаге снятия задач в пределах разрешённых клиента и склада.'],
+     dependencies: ['Основная БД', 'Складские движения'],
+   },
+--- a/wms/apps/api/src/modules/inventory/kiz-location.controller.ts
++++ b/wms/apps/api/src/modules/inventory/kiz-location.controller.ts
+@@ -1,5 +1,5 @@
+-import { Body, Controller, Post } from '@nestjs/common';
+-import { IsString, MaxLength, MinLength } from 'class-validator';
++import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
++import { IsBoolean, IsIn, IsString, MaxLength, MinLength } from 'class-validator';
+ import type { AuthUser } from '../auth/auth.types';
+ import { CurrentUser } from '../auth/decorators/current-user.decorator';
+ import { KizLocationService } from './kiz-location.service';
+@@ -10,11 +10,24 @@
+   @MaxLength(1024)
+   kiz!: string;
+ }
++export class DecideKizReviewDto {
++  @IsIn(['REUSE','RELABEL']) resolution!: 'REUSE'|'RELABEL';
++  @IsString() @MinLength(5) @MaxLength(1000) reason!: string;
++  @IsBoolean() confirmed!: boolean;
++}
+ 
+ // FIX: authenticate globally and authorize in the service; scanning does not modify stock.
+ @Controller('inventory/kiz-location')
+ export class KizLocationController {
+   constructor(private readonly location: KizLocationService) {}
++  @Get('reviews')
++  reviews(@CurrentUser() user: AuthUser, @Query('cursor') cursor?: string) {
++    return this.location.reviews(user, cursor);
++  }
++  @Post('reviews/:id/decision')
++  decide(@Param('id') id: string, @Body() dto: DecideKizReviewDto, @CurrentUser() user: AuthUser) {
++    return this.location.decideReview(id,dto.resolution,dto.reason,dto.confirmed,user);
++  }
+   @Post('check')
+   check(@Body() dto: CheckKizLocationDto, @CurrentUser() user: AuthUser) {
+     return this.location.lookup(dto.kiz, user);
+--- a/wms/apps/api/src/modules/inventory/kiz-location.service.ts
++++ b/wms/apps/api/src/modules/inventory/kiz-location.service.ts
+@@ -4,10 +4,15 @@
+ import type { AuthUser } from '../auth/auth.types';
+ import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service';
+ import { inspectKizReuse, kizReuseEnabled, kizReuseMessage } from '../../common/kiz-wb-reuse';
++import { KizReviewQueue, kizReviewEnabled } from '../../common/kiz-review-queue';
+ 
+ @Injectable()
+ export class KizLocationService {
+   constructor(private readonly prisma: PrismaService, private readonly clients: ClientScopeService) {}
++  reviews(user: AuthUser, cursor?: string) { return new KizReviewQueue(this.prisma,this.clients).list(user,cursor); }
++  decideReview(id: string, resolution: 'REUSE'|'RELABEL', reason: string, confirmed: boolean, user: AuthUser) {
++    return new KizReviewQueue(this.prisma,this.clients).decide(id,resolution,reason,confirmed,user);
++  }
+   async lookup(kiz: string, user: AuthUser) {
+     // FIX: read-only administrator feature, isolated from sold installations and scoped before lookup.
+     if (process.env.WMS_KIZ_LOCATION_CHECK_ENABLED !== 'true' || user.isDemo ||
+@@ -77,6 +82,7 @@
+         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
+       };
+     }));
+-    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches };
++    const reviews=kizReviewEnabled() ? await new KizReviewQueue(this.prisma,this.clients).forKiz(identity,user) : undefined;
++    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches, reviews };
+   }
+ }
+--- a/wms/apps/api/src/modules/marketplace-connections/fbs-physical-kiz-relabel.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/fbs-physical-kiz-relabel.ts
+@@ -1,6 +1,7 @@
+ import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+ import { FbsTsdAssembly, Prisma, StockStatus } from '@prisma/client';
+ import type { AuthUser } from '../auth/auth.types';
++import { approvedUnitRelabel, finishKizReview, assertUnusedReplacement } from '../../common/kiz-review-queue';
+ 
+ const ACTION = 'FBS_PHYSICAL_KIZ_RELABEL';
+ const CLOSED = ['DONE', 'CANCELLED', 'REJECTED'];
+@@ -54,10 +55,12 @@
+       mark.boxId !== task.boxId || mark.status !== 'AVAILABLE') {
+     throw new BadRequestException('Старый КИЗ не подтверждён в доступном остатке выбранного короба и товара. Нужна проверка короба.');
+   }
++  // FIX: an administrator-approved physical unit does not require a complete box recount.
++  const unitApproved = await approvedUnitRelabel(tx,task,oldKiz);
+   const [balance, count, picked, linked] = await Promise.all([
+     tx.stockBalance.aggregate({where: {clientId: task.clientId, warehouseId: box.warehouseId, skuId: task.skuId,
+       boxId: task.boxId, status: 'AVAILABLE'}, _sum: {quantity: true}}),
+-    tx.productMark.count({where: {clientId: task.clientId, skuId: task.skuId, boxId: task.boxId, status: 'AVAILABLE'}}),
++    unitApproved ? Promise.resolve(1) : tx.productMark.count({where: {clientId: task.clientId, skuId: task.skuId, boxId: task.boxId, status: 'AVAILABLE'}}),
+     tx.stockMovement.findFirst({where: {idempotencyKey: {startsWith: `fbs-sticker-pick:${task.id}:`}, quantity: {lt: 0}}}),
+     tx.fbsTsdAssembly.findMany({where: {id: {not: task.id}, clientId: task.clientId,
+       kiz: {equals: oldKiz, mode: 'insensitive'}, status: {in: ['IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED']}},
+@@ -76,7 +79,7 @@
+   // RETURN_REQUIRED unit is physically available again. Keep its old task/KIZ intact;
+   // this proof permits replacement, never reuse, and is rechecked on application.
+   const returns = linked.filter(t => t.status === 'RETURN_REQUIRED');
+-  if (returns.length) {
++  if (returns.length && !unitApproved) {
+     const movement = mark.stockMovementId
+       ? await tx.stockMovement.findUnique({where: {id: mark.stockMovementId}}) : null;
+     const sessionId = movement?.sourceDocument?.match(/^PALLET_SORTING:(.+)$/)?.[1];
+@@ -124,6 +127,7 @@
+   if (sameKiz(previous.intent.oldKiz, newKiz)) throw new BadRequestException('Отсканируйте новый КИЗ после переклейки, а не старый.');
+   const old = await source(tx, fresh, previous.intent.oldKiz);
+   if (old.id !== previous.intent.oldMarkId) throw new ConflictException('Запись исходного КИЗ изменилась.');
++  if(await approvedUnitRelabel(tx,fresh,previous.intent.oldKiz)) await assertUnusedReplacement(tx,newKiz);
+   const [registered, taskUsage, shipped] = await Promise.all([
+     tx.productMark.findFirst({where: {value: {equals: newKiz, mode: 'insensitive'}}}),
+     tx.fbsTsdAssembly.findFirst({where: {kiz: {equals: newKiz, mode: 'insensitive'}}}),
+@@ -136,6 +140,7 @@
+   const mark = await tx.productMark.create({data: {clientId: fresh.clientId, skuId: fresh.skuId, boxId: fresh.boxId,
+     value: newKiz, status: 'AVAILABLE', sourceDocument: `Переклейка КИЗ FBS, заказ ${fresh.orderId}; исходная запись ${old.id}`}});
+   const updated = await tx.fbsTsdAssembly.update({where: {id: fresh.id}, data: {kiz: newKiz, wbMetaStatus: 'PENDING', errorMessage: null}});
++  await finishKizReview(tx,fresh,previous.intent.oldKiz,'RELABEL');
+   await tx.auditLog.create({data: {userId: user.id, action: ACTION, entity: 'FbsTsdAssembly', entityId: fresh.id,
+     payload: {...previous.intent, stage: 'APPLIED', proposalId, newKiz, newMarkId: mark.id,
+       oldMark: JSON.parse(JSON.stringify(old)), clientId: fresh.clientId, requestId: fresh.requestId, orderId: fresh.orderId,
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -22,6 +22,7 @@
+ import { branchScopedFbsDateKey, loadFbsDateBillingBranches } from './fbs-billing-shipment-key';
+ import { physicalKizLookup, physicalKizHistoryFilter, physicalKizIdentity } from '../../common/kiz-physical-identity';
+ import { inspectKizReuse, kizReuseEnabled, kizReuseMessage, pendingSizeKizRelabel } from '../../common/kiz-wb-reuse';
++import { queueKizReview, kizReviewEnabled, finishKizReview } from '../../common/kiz-review-queue';
+ import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
+ import { retainFbsBranchEvidence } from '../billing/fbs-billing-branch-evidence';
+ import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
+@@ -10821,7 +10822,10 @@
+     // FIX: a past binding alone must never propose destroying a reusable marking code.
+     if (kizReuseEnabled() && !pendingSizeKizRelabel(task)) {
+       const evidence = await inspectKizReuse(this.prisma, task.clientId, kiz, task.id);
++      const reviewDecision=kizReviewEnabled()?await queueKizReview(this.prisma,task.clientId,kiz,task.id,evidence):evidence.decision;
+       if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
++      if (kizReviewEnabled() && reviewDecision!=='RELABEL')
++        throw new BadRequestException('КИЗ передан администратору в «Проверку КИЗов». Требуется разрешение на переклейку.');
+     }
+     await this.inventoryLock?.assertStockMovementsAllowed();
+     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
+@@ -10890,6 +10894,8 @@
+         if (!proposal || proposal.id !== proposalId) throw new ConflictException('Предложение переклейки изменилось. Обновите задание.');
+         const evidence = await inspectKizReuse(this.prisma, task.clientId, proposal.oldKiz, task.id);
+         if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
++        if (kizReviewEnabled() && await queueKizReview(this.prisma,task.clientId,proposal.oldKiz,task.id,evidence)!=='RELABEL')
++          throw new BadRequestException('Переклейка ожидает решения администратора в «Проверке КИЗов».');
+       }
+       if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {
+         throw new BadRequestException('Новый КИЗ уже использовался в WB. Возьмите свободный новый КИЗ.');
+@@ -13847,6 +13853,7 @@
+ 
+   private async recordAcceptedFbsKizScan(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
+     try {
++      await finishKizReview(this.prisma,task,kiz,'REUSE');
+       await this.prisma.auditLog.create({
+         data: {
+           userId: user.id,
+@@ -14209,8 +14216,10 @@
+       const evidence = await inspectKizReuse(this.prisma, clientId, kiz, excludedAssemblyId);
+       await this.prisma.auditLog.create({ data: { action: 'KIZ_REUSE_CHECK', entity: 'FbsTsdAssembly', entityId: excludedAssemblyId,
+         payload: JSON.parse(JSON.stringify({ clientId, kizIdentity: physicalKizIdentity(kiz), ...evidence })) } });
+-      if (evidence.decision === 'ALLOW') return null;
+-      if (evidence.decision === 'REVIEW') throw new BadRequestException(kizReuseMessage('REVIEW'));
++      const decision = await queueKizReview(this.prisma,clientId,kiz,excludedAssemblyId,evidence);
++      if (decision === 'ALLOW') return null;
++      if (decision === 'REVIEW') throw new BadRequestException(kizReviewEnabled()
++        ? 'КИЗ передан администратору в «Проверку КИЗов». После решения повторите сканирование.' : kizReuseMessage('REVIEW'));
+       const first = evidence.history[0];
+       return { source: 'SHIPMENT' as const, orderId: first?.orderId ?? null, requestId: first?.requestId ?? '', shippedAt: first?.at ?? null };
+     }
+--- a/wms/apps/api/test/kiz-review-queue.postgres.spec.ts
++++ b/wms/apps/api/test/kiz-review-queue.postgres.spec.ts
+@@ -0,0 +1,66 @@
++import {afterAll,afterEach,expect,it,vi} from 'vitest';
++import {PrismaClient} from '@prisma/client';
++import {randomUUID} from 'node:crypto';
++import {KizReviewQueue,queueKizReview} from '../src/common/kiz-review-queue';
++import {ClientScopeService} from '../src/modules/auth/client-scope.service';
++import {inspectKizReuse} from '../src/common/kiz-wb-reuse';
++import {applyPhysicalKizRelabel,proposePhysicalKizRelabel,readPhysicalKizRelabel} from '../src/modules/marketplace-connections/fbs-physical-kiz-relabel';
++vi.mock('../src/common/kiz-wb-reuse',async original=>({...await original<any>(),inspectKizReuse:vi.fn()}));
++const url=process.env.KIZ_REVIEW_TEST_DATABASE_URL;
++if(url){const u=new URL(url);if(!['127.0.0.1','localhost'].includes(u.hostname)||!u.pathname.endsWith('/kiz_review_tests'))throw Error('Disposable local review database required');}
++const db=url?new PrismaClient({datasources:{db:{url}}}):null;
++afterAll(async()=>{await db?.$disconnect();});
++afterEach(()=>vi.unstubAllEnvs());
++// TEST: real transactions, persistent coalescing, scoped decisions and unit-only relabel rollback.
++it.skipIf(!db)('persists one concurrent case, audits one decision, and replaces one KIZ without a box recount',async()=>{
++  const p=db!;
++  for(const name of ['WMS_KIZ_REUSE_EVIDENCE_ENABLED','WMS_KIZ_REVIEW_QUEUE_ENABLED','WMS_FBS_KIZ_RELABEL_ENABLED'])vi.stubEnv(name,'true');
++  const prefix=randomUUID();const id=(s:string)=>prefix+'-'+s;
++  await p.user.create({data:{id:id('user'),name:'Admin',email:id('mail')+'@example.test',passwordHash:'NO-LOGIN'}});
++  await p.client.create({data:{id:id('client'),code:id('client'),name:'Test client'}});
++  await p.warehouse.create({data:{id:id('wh'),code:id('wh'),name:'Test warehouse'}});
++  await p.sku.create({data:{id:id('sku'),clientId:id('client'),internalSku:'TEST',name:'Test SKU'}});
++  await p.box.create({data:{id:id('box'),clientId:id('client'),warehouseId:id('wh'),code:id('box')}});
++  await p.clientRequest.create({data:{id:id('request'),clientId:id('client'),warehouseId:id('wh'),type:'OUTBOUND',status:'IN_WORK',title:'Test'}});
++  await p.stockBalance.create({data:{balanceKey:id('stock'),clientId:id('client'),warehouseId:id('wh'),skuId:id('sku'),boxId:id('box'),status:'AVAILABLE',quantity:1}});
++  const old='010468099259002221'+prefix.replaceAll('-','').slice(0,13)+'\u001d91EE12\u001d92OLD';
++  const next='010468099259765621'+prefix.replaceAll('-','').slice(-13)+'\u001d91EE12\u001d92NEW';
++  await p.productMark.create({data:{id:id('mark'),clientId:id('client'),skuId:id('sku'),boxId:id('box'),value:old,status:'AVAILABLE'}});
++  let task=await p.fbsTsdAssembly.create({data:{id:id('task'),clientId:id('client'),connectionId:id('conn'),orderId:'1',requestId:id('request'),requestItemId:id('item'),skuId:id('sku'),
++    productName:'Test SKU',barcodes:['123'],storageBoxes:[],deviceCode:'test',workerUserId:id('user'),workerName:'Picker',startedAt:new Date(),boxId:id('box'),boxCode:id('box'),barcode:'123',requiresKiz:true}});
++  const user:any={id:id('user'),name:'Admin',deviceCode:'test',roleCodes:['ADMIN'],permissionCodes:[],clientScopeMode:'LIMITED',clientIds:[id('client')],writableClientIds:[id('client')],activeWarehouseId:id('wh'),warehouseIds:[id('wh')],writableWarehouseIds:[id('wh')]};
++  let evidence:any={decision:'REVIEW',checkedAt:new Date().toISOString(),history:[{orderId:'foreign',event:'other branch',request:{warehouseId:'other'}}],orders:[],circulation:null};
++  vi.mocked(inspectKizReuse).mockImplementation(async()=>evidence);
++  const service=new KizReviewQueue(p as any,new ClientScopeService());
++  await Promise.all([queueKizReview(p as any,task.clientId,old,task.id,evidence),queueKizReview(p as any,task.clientId,old,task.id,evidence)]);
++  expect(await p.kizReviewCase.count({where:{taskId:task.id}})).toBe(1);
++  let row=await p.kizReviewCase.findFirstOrThrow({where:{taskId:task.id}});expect(row.attempts).toBe(2);
++  expect((await service.list({...user,clientIds:['other']})).items).toHaveLength(0);
++  expect((await service.list(user)).items[0].evidence.history).toHaveLength(0);
++  await expect(service.decide(row.id,'REUSE','Проверено вручную',true,{...user,roleCodes:['OPERATOR']})).rejects.toThrow();
++  await expect(service.decide(row.id,'REUSE','Проверено вручную',true,{...user,writableClientIds:[]})).rejects.toThrow();
++  await Promise.all([service.decide(row.id,'REUSE','Проверено вручную',true,user),service.decide(row.id,'REUSE','Проверено вручную',true,user)]);
++  expect(await p.auditLog.count({where:{entityId:row.id,action:'KIZ_REVIEW_APPROVED'}})).toBe(1);
++  expect(await queueKizReview(p as any,task.clientId,old,task.id,evidence)).toBe('ALLOW');
++  task=await p.fbsTsdAssembly.update({where:{id:task.id},data:{startedAt:new Date(task.startedAt!.getTime()+1)}});
++  expect(await queueKizReview(p as any,task.clientId,old,task.id,evidence)).toBe('REVIEW');
++  row=await p.kizReviewCase.findUniqueOrThrow({where:{id:row.id}});expect(row.status).toBe('OPEN');expect(row.decidedById).toBeNull();
++  evidence={...evidence,decision:'RELABEL',circulation:'RETIRED'};
++  await queueKizReview(p as any,task.clientId,old,task.id,evidence);
++  await expect(service.decide(row.id,'REUSE','Физически найден',true,user)).rejects.toThrow('только переклейку');
++  await service.decide(row.id,'RELABEL','Погашен, единица проверена',true,user);
++  // A separate stale mark in the same box must not force a complete-box inventory.
++  await p.productMark.create({data:{id:id('unrelated'),clientId:id('client'),skuId:id('sku'),boxId:id('box'),value:id('unrelated'),status:'AVAILABLE'}});
++  const lease=(fresh:any)=>{if(fresh?.workerUserId!==user.id)throw Error('Lease changed');};
++  await p.$transaction(tx=>proposePhysicalKizRelabel(tx,task,old,user,lease));
++  task=await p.fbsTsdAssembly.findUniqueOrThrow({where:{id:task.id}});
++  const proposal=await readPhysicalKizRelabel(p,task,user);expect(proposal).toBeTruthy();
++  await expect(p.$transaction(async tx=>{await applyPhysicalKizRelabel(tx,task,user,proposal!.id,next,lease);throw Error('forced rollback');})).rejects.toThrow('forced rollback');
++  expect((await p.kizReviewCase.findUniqueOrThrow({where:{id:row.id}})).status).toBe('APPROVED');
++  expect((await p.productMark.findUniqueOrThrow({where:{id:id('mark')}})).status).toBe('AVAILABLE');
++  await p.$transaction(tx=>applyPhysicalKizRelabel(tx,task,user,proposal!.id,next,lease));
++  expect((await p.kizReviewCase.findUniqueOrThrow({where:{id:row.id}})).status).toBe('USED');
++  expect((await p.productMark.findUniqueOrThrow({where:{id:id('unrelated')}})).status).toBe('AVAILABLE');
++  expect((await p.stockBalance.findUniqueOrThrow({where:{balanceKey:id('stock')}})).quantity).toBe(1);
++  expect(await p.stockMovement.count({where:{clientId:task.clientId}})).toBe(0);
++},30000);
+--- a/wms/apps/api/test/kiz-review-queue.spec.ts
++++ b/wms/apps/api/test/kiz-review-queue.spec.ts
+@@ -0,0 +1,32 @@
++import {afterEach, beforeEach, expect, it, vi} from 'vitest';
++import {reviewContext, permittedReviewAction, requireReviewAdmin,assertUnusedReplacement} from '../src/common/kiz-review-queue';
++// TEST: released codes and retired codes never share an administrator permission.
++it('separates reuse from relabel and requires a matching task context',()=>{
++  const row={context:'same',status:'APPROVED',resolution:'REUSE'};
++  expect(permittedReviewAction(row,'same','REVIEW')).toBe('ALLOW');
++  expect(permittedReviewAction(row,'same','RELABEL')).toBeNull();
++  expect(permittedReviewAction(row,'changed','REVIEW')).toBeNull();
++  expect(permittedReviewAction({...row,resolution:'RELABEL'},'same','RELABEL')).toBe('RELABEL');
++  expect(permittedReviewAction({...row,resolution:'RELABEL'},'same','REVIEW')).toBeNull();
++});
++it('binds a decision to one task attempt, unit route and order',()=>{
++  const task={id:'t',clientId:'c',connectionId:'conn',requestId:'r',orderId:'1',skuId:'s',boxId:'b',workerUserId:'w',startedAt:new Date(0),createdAt:new Date(0)};
++  for(const changed of [{id:'next'},{boxId:'other'},{skuId:'other'},{orderId:'2'},{startedAt:new Date(1)}])
++    expect(reviewContext({...task,...changed} as any)).not.toBe(reviewContext(task as any));
++});
++beforeEach(()=>{vi.stubEnv('WMS_KIZ_REVIEW_QUEUE_ENABLED','true');vi.stubEnv('WMS_KIZ_REUSE_EVIDENCE_ENABLED','true');});
++afterEach(()=>vi.unstubAllEnvs());
++it('denies pickers, demo accounts and inaccessible warehouses before reading',()=>{
++  const admin={roleCodes:['ADMIN'],permissionCodes:[],activeWarehouseId:'wh',warehouseIds:['wh']};
++  expect(()=>requireReviewAdmin(admin as any)).not.toThrow();
++  for(const change of [{roleCodes:['OPERATOR']},{isDemo:true},{warehouseIds:['other']},{activeWarehouseId:null}])
++    expect(()=>requireReviewAdmin({...admin,...change} as any)).toThrow();
++  vi.stubEnv('WMS_KIZ_REVIEW_QUEUE_ENABLED','false');expect(()=>requireReviewAdmin(admin as any)).toThrow();
++});
++// TEST: scanner formatting or a changed signature never bypasses the replacement serial check.
++it('rejects a registered new serial with a different cryptographic suffix',async()=>{
++  const identity='0104680992590022215MywwfMmgS<1E';
++  const tx:any={$queryRaw:vi.fn(async()=>[]),productMark:{findMany:vi.fn(async()=>[{value:identity+'\u001d91EE12\u001d92OLD'}])},
++    fbsTsdAssembly:{findMany:vi.fn(async()=>[])},shippedKizHistory:{findMany:vi.fn(async()=>[])}};
++  await expect(assertUnusedReplacement(tx,']d2'+identity+'\u001d91EE12\u001d92NEW')).rejects.toThrow('уже зарегистрирован');
++});
+--- a/wms/apps/web/src/components/kiz/KizCheckPanel.tsx
++++ b/wms/apps/web/src/components/kiz/KizCheckPanel.tsx
+@@ -1,5 +1,6 @@
+ import { useRef, useState } from 'react';
+ import { checkKizHistory, type AuthSession, type KizCheckResult } from '../../lib/api';
++import { KizReviewQueuePanel } from './KizReviewQueuePanel';
+ 
+ // FIX: a dedicated read-only scanner view, with explicit evidence instead of inferred relabeling.
+ export function KizCheckPanel({ session }: { session: AuthSession }) {
+@@ -10,6 +11,11 @@
+   const lock = useRef(false);
+   return <section className="kiz-panel">
+     <h2>Проверка КИЗов</h2>
++    {import.meta.env.VITE_KIZ_REVIEW_QUEUE_ENABLED==='true'&&<KizReviewQueuePanel session={session} onInspect={async kiz=>{
++      if(lock.current)return;lock.current=true;setScan(kiz);setBusy(true);setError('');setResult(null);
++      try{setResult(await checkKizHistory(session.accessToken,kiz));}catch(e){setError(e instanceof Error?e.message:'Не удалось проверить КИЗ.');}
++      finally{lock.current=false;setBusy(false);}
++    }}/>}
+     <p>Отсканируйте или вставьте КИЗ. Проверка не изменяет остатки и привязки.</p>
+     <form className="kiz-search" onSubmit={async event => {
+       event.preventDefault(); if (lock.current || !scan.trim()) return;
+--- a/wms/apps/web/src/components/kiz/KizReviewQueuePanel.spec.tsx
++++ b/wms/apps/web/src/components/kiz/KizReviewQueuePanel.spec.tsx
+@@ -0,0 +1,14 @@
++import React from 'react';
++import {renderToStaticMarkup} from 'react-dom/server';
++import {expect,it} from 'vitest';
++import {KizReviewCard} from './KizReviewQueuePanel';
++// TEST: sold/retired history never presents an enabled reuse action in WMS.
++it('shows both decisions, with only the evidence-compatible action enabled',()=>{
++  const row:any={id:'case',active:true,status:'OPEN',decision:'RELABEL',snapshot:{requestNumber:646,orderId:'order',productName:'Костюм',workerName:'Соня',boxCode:'335'},createdAt:'2026-09-21T12:00:00Z',attempts:2};
++  const html=renderToStaticMarkup(<KizReviewCard row={row} disabled={false} onInspect={()=>{}} onDecision={()=>{}}/>);
++  expect(html).toContain('Соня');expect(html).toContain('000646');
++  expect(html).toMatch(/disabled="">Разрешить использовать/);
++  expect(html).not.toMatch(/disabled="">Разрешить переклейку/);
++  row.active=false;
++  expect(renderToStaticMarkup(<KizReviewCard row={row} disabled={false} onInspect={()=>{}} onDecision={()=>{}}/>)).toMatch(/disabled="">Разрешить переклейку/);
++});
+--- a/wms/apps/web/src/components/kiz/KizReviewQueuePanel.tsx
++++ b/wms/apps/web/src/components/kiz/KizReviewQueuePanel.tsx
+@@ -0,0 +1,63 @@
++import {useCallback,useEffect,useRef,useState} from 'react';
++import {decideKizReview,fetchKizReviewQueue,type AuthSession,type KizReviewCase} from '../../lib/api';
++
++export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onInspect:(kiz:string)=>void}) {
++  const [items,setItems]=useState<KizReviewCase[]>([]),[cursor,setCursor]=useState<string|null>(null);
++  const [error,setError]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true);
++  const [selected,setSelected]=useState<{row:KizReviewCase;resolution:'REUSE'|'RELABEL'}|null>(null);
++  const [reason,setReason]=useState(''),[confirmed,setConfirmed]=useState(false),[saving,setSaving]=useState(false);
++  const live=useRef(true),lock=useRef(false),generation=useRef(0);
++  const load=useCallback(async(next?:string)=>{
++    const current=++generation.current;
++    try {const response=await fetchKizReviewQueue(session.accessToken,next);
++      if(!live.current||current!==generation.current)return;
++      setItems(previous=>next?[...previous,...response.items.filter(r=>!previous.some(p=>p.id===r.id))]:response.items);
++      setCursor(response.nextCursor);setError('');
++    }catch(e){if(live.current&&current===generation.current)setError(e instanceof Error?e.message:'Не удалось загрузить обращения.');}
++    finally{if(live.current&&current===generation.current)setLoading(false);}
++  },[session.accessToken]);
++  useEffect(()=>{live.current=true;void load();return()=>{live.current=false;generation.current++;};},[load]);
++  useEffect(()=>{if(selected)return;const timer=window.setInterval(()=>{if(!document.hidden&&!lock.current)void load();},30000);return()=>window.clearInterval(timer);},[load,selected]);
++  return <section className="kiz-queue">
++    <h3>Обращения сборщиков</h3>
++    <p>Проблемные КИЗы поступают сюда автоматически. Решение действует только для указанного задания.</p>
++    <button type="button" disabled={saving} onClick={()=>void load()}>Обновить обращения</button>
++    {loading&&<p>Загружаю обращения…</p>}{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
++    {!loading&&!error&&!items.length&&<p>Обращений на проверку нет.</p>}
++    {items.map(row=><KizReviewCard key={row.id} row={row} disabled={saving} onInspect={()=>onInspect(row.kizIdentity)}
++      onDecision={resolution=>{setSelected({row,resolution});setReason('');setConfirmed(false);setNotice('');}}/>)}
++    {cursor&&<button type="button" onClick={()=>void load(cursor)}>Показать ещё</button>}
++    {selected&&<form className="kiz-queue" onSubmit={async e=>{
++      e.preventDefault();if(lock.current)return;lock.current=true;setSaving(true);setError('');
++      try{await decideKizReview(session.accessToken,selected.row.id,selected.resolution,reason.trim(),confirmed);
++        if(!live.current)return;setSelected(null);setNotice('Решение сохранено. Сборщик может повторить сканирование старого КИЗа.');await load();
++      }catch(e){if(live.current)setError(e instanceof Error?e.message:'Решение не подтверждено. Повторите отправку.');}
++      finally{lock.current=false;if(live.current)setSaving(false);}
++    }}>
++      <h4>{selected.resolution==='REUSE'?'Разрешить использовать':'Разрешить переклейку'} · заказ {selected.row.snapshot.orderId}</h4>
++      <p>КИЗ: {selected.row.kizIdentity}</p>
++      <label>Основание решения<textarea required minLength={5} maxLength={1000} value={reason} disabled={saving} onChange={e=>setReason(e.target.value)}/></label>
++      <label><input type="checkbox" required checked={confirmed} disabled={saving} onChange={e=>setConfirmed(e.target.checked)}/>
++        {selected.resolution==='REUSE'?'Проверено: единица физически на складе, КИЗ не погашен и допускает повторное использование.':'Подтверждаю наличие этой единицы для замены старого КИЗа на новый без пересчёта всего короба.'}</label>
++      <button type="submit" disabled={saving||!confirmed||reason.trim().length<5}>{saving?'Сохраняю…':'Подтвердить решение'}</button>
++      <button type="button" disabled={saving} onClick={()=>setSelected(null)}>Отмена</button>
++    </form>}
++  </section>;
++}
++// FIX: both administrator actions stay visible; confirmed usage can only be relabeled.
++export function KizReviewCard({row,disabled,onDecision,onInspect}:{row:KizReviewCase;disabled:boolean;
++  onDecision:(resolution:'REUSE'|'RELABEL')=>void;onInspect:()=>void}) {
++  const blocked=disabled||!row.active||row.status!=='OPEN';
++  return <article className="kiz-queue">
++    <h4>{row.snapshot.productName} · заявка №{String(row.snapshot.requestNumber).padStart(6,'0')}</h4>
++    <p>Сборщик: {row.snapshot.workerName??'не указан'} · заказ WB {row.snapshot.orderId} · короб {row.snapshot.boxCode??'не указан'}</p>
++    <p>КИЗ: {row.kizIdentity} · ШК: {row.snapshot.barcode??'—'}</p>
++    <p>{row.decision==='RELABEL'?'Подтверждено использование: нужна переклейка.':'История использования требует проверки администратора.'}</p>
++    <p>Первое обращение: {new Date(row.createdAt).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})} · сканирований: {row.attempts}</p>
++    {!row.active&&<p>Задание изменилось или единица уже принята. Нужно новое обращение из текущей сборки.</p>}
++    {row.status==='APPROVED'&&<p>Разрешено: {row.resolution==='RELABEL'?'переклейка':'использование'}. {row.decidedByName} · {row.reason}</p>}
++    <button type="button" onClick={onInspect}>Посмотреть историю КИЗа</button>
++    <button type="button" disabled={blocked||row.decision==='RELABEL'} onClick={()=>onDecision('REUSE')}>Разрешить использовать</button>
++    <button type="button" disabled={blocked||row.decision!=='RELABEL'} onClick={()=>onDecision('RELABEL')}>Разрешить переклейку</button>
++  </article>;
++}
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -7232,7 +7232,18 @@
+ const API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1';
+ 
+ // FIX: read-only KIZ history uses the same scoped endpoint as the administrator TSD.
+-export type KizCheckResult = { found: boolean; ambiguous: boolean; identity: string; matches: Array<{
++export type KizReviewCase = {id:string;kizIdentity:string;taskId:string;status:string;decision:string;active:boolean;
++  createdAt:string;updatedAt:string;attempts:number;resolution:string|null;reason:string|null;decidedByName:string|null;
++  snapshot:{requestNumber:number;orderId:string;productName:string;article:string|null;barcode:string|null;boxCode:string|null;workerName:string|null};
++  evidence:{circulation:string|null;history:Array<{orderId:string|null;event:string;at:string|null;request?:{number:number}|null}>}};
++export function fetchKizReviewQueue(accessToken:string,cursor?:string) {
++  return request<{items:KizReviewCase[];nextCursor:string|null}>('/inventory/kiz-location/reviews'+(cursor?'?cursor='+encodeURIComponent(cursor):''),{accessToken});
++}
++export function decideKizReview(accessToken:string,id:string,resolution:'REUSE'|'RELABEL',reason:string,confirmed:boolean) {
++  return request<{id:string;status:string;resolution:string}>('/inventory/kiz-location/reviews/'+encodeURIComponent(id)+'/decision',
++    {accessToken,method:'POST',body:{resolution,reason,confirmed}});
++}
++export type KizCheckResult = { found: boolean; ambiguous: boolean; identity: string; reviews?:KizReviewCase[]; matches: Array<{
+   id: string; client: string; status: string; boxCode: string | null; palletCode: string | null;
+   room: string | null; warehouse: string | null; locationWarning: string | null;
+   product: { name: string; article: string | null; size: string | null; color: string | null };

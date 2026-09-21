@@ -5,6 +5,7 @@ import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQua
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
 import { physicalKizLookup, physicalKizHistoryFilter, physicalKizIdentity } from '../../common/kiz-physical-identity';
 import { inspectKizReuse, kizReuseEnabled, kizReuseMessage, pendingSizeKizRelabel } from '../../common/kiz-wb-reuse';
+import { queueKizReview, kizReviewEnabled, finishKizReview } from '../../common/kiz-review-queue';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
@@ -10274,7 +10275,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: a past binding alone must never propose destroying a reusable marking code.
     if (kizReuseEnabled() && !pendingSizeKizRelabel(task)) {
       const evidence = await inspectKizReuse(this.prisma, task.clientId, kiz, task.id);
+      const reviewDecision=kizReviewEnabled()?await queueKizReview(this.prisma,task.clientId,kiz,task.id,evidence):evidence.decision;
       if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
+      if (kizReviewEnabled() && reviewDecision!=='RELABEL')
+        throw new BadRequestException('КИЗ передан администратору в «Проверку КИЗов». Требуется разрешение на переклейку.');
     }
     await this.inventoryLock?.assertStockMovementsAllowed();
     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
@@ -10331,6 +10335,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         if (!proposal || proposal.id !== proposalId) throw new ConflictException('Предложение переклейки изменилось. Обновите задание.');
         const evidence = await inspectKizReuse(this.prisma, task.clientId, proposal.oldKiz, task.id);
         if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
+        if (kizReviewEnabled() && await queueKizReview(this.prisma,task.clientId,proposal.oldKiz,task.id,evidence)!=='RELABEL')
+          throw new BadRequestException('Переклейка ожидает решения администратора в «Проверке КИЗов».');
       }
       if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {
         throw new BadRequestException('Новый КИЗ уже использовался в WB. Возьмите свободный новый КИЗ.');
@@ -13251,6 +13257,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async recordAcceptedFbsKizScan(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
     try {
+      await finishKizReview(this.prisma,task,kiz,'REUSE');
       await this.prisma.auditLog.create({
         data: {
           userId: user.id,
@@ -13613,8 +13620,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const evidence = await inspectKizReuse(this.prisma, clientId, kiz, excludedAssemblyId);
       await this.prisma.auditLog.create({ data: { action: 'KIZ_REUSE_CHECK', entity: 'FbsTsdAssembly', entityId: excludedAssemblyId,
         payload: JSON.parse(JSON.stringify({ clientId, kizIdentity: physicalKizIdentity(kiz), ...evidence })) } });
-      if (evidence.decision === 'ALLOW') return null;
-      if (evidence.decision === 'REVIEW') throw new BadRequestException(kizReuseMessage('REVIEW'));
+      const decision = await queueKizReview(this.prisma,clientId,kiz,excludedAssemblyId,evidence);
+      if (decision === 'ALLOW') return null;
+      if (decision === 'REVIEW') throw new BadRequestException(kizReviewEnabled()
+        ? 'КИЗ передан администратору в «Проверку КИЗов». После решения повторите сканирование.' : kizReuseMessage('REVIEW'));
       const first = evidence.history[0];
       return { source: 'SHIPMENT' as const, orderId: first?.orderId ?? null, requestId: first?.requestId ?? '', shippedAt: first?.at ?? null };
     }

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { FbsTsdAssembly, Prisma, StockStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
+import { approvedUnitRelabel, finishKizReview, assertUnusedReplacement } from '../../common/kiz-review-queue';
 
 const ACTION = 'FBS_PHYSICAL_KIZ_RELABEL';
 const CLOSED = ['DONE', 'CANCELLED', 'REJECTED'];
@@ -58,10 +59,12 @@ async function source(tx: Tx, task: Task, oldKiz: string) {
       mark.boxId !== task.boxId || mark.status !== 'AVAILABLE') {
     throw new BadRequestException('Старый КИЗ не подтверждён в доступном остатке выбранного короба и товара. Нужна проверка короба.');
   }
+  // FIX: an administrator-approved physical unit does not require a complete box recount.
+  const unitApproved = await approvedUnitRelabel(tx,task,oldKiz);
   const [balance, count, picked, linked] = await Promise.all([
     tx.stockBalance.aggregate({where: {clientId: task.clientId, warehouseId: box.warehouseId, skuId,
       boxId: task.boxId, status: 'AVAILABLE'}, _sum: {quantity: true}}),
-    tx.productMark.count({where: {clientId: task.clientId, skuId, boxId: task.boxId, status: 'AVAILABLE'}}),
+    unitApproved ? Promise.resolve(1) : tx.productMark.count({where: {clientId: task.clientId, skuId, boxId: task.boxId, status: 'AVAILABLE'}}),
     tx.stockMovement.findFirst({where: {idempotencyKey: {startsWith: `fbs-sticker-pick:${task.id}:`}, quantity: {lt: 0}}}),
     tx.fbsTsdAssembly.findMany({where: {id: {not: task.id}, clientId: task.clientId,
       kiz: {equals: oldKiz, mode: 'insensitive'}, status: {in: ['IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED']}},
@@ -80,7 +83,7 @@ async function source(tx: Tx, task: Task, oldKiz: string) {
   // RETURN_REQUIRED unit is physically available again. Keep its old task/KIZ intact;
   // this proof permits replacement, never reuse, and is rechecked on application.
   const returns = linked.filter(t => t.status === 'RETURN_REQUIRED');
-  if (returns.length) {
+  if (returns.length && !unitApproved) {
     const movement = mark.stockMovementId
       ? await tx.stockMovement.findUnique({where: {id: mark.stockMovementId}}) : null;
     const sessionId = movement?.sourceDocument?.match(/^PALLET_SORTING:(.+)$/)?.[1];
@@ -128,6 +131,7 @@ export async function applyPhysicalKizRelabel(tx: Tx, task: Task, user: AuthUser
   if (sameKiz(previous.intent.oldKiz, newKiz)) throw new BadRequestException('Отсканируйте новый КИЗ после переклейки, а не старый.');
   const old = await source(tx, fresh, previous.intent.oldKiz);
   if (old.id !== previous.intent.oldMarkId) throw new ConflictException('Запись исходного КИЗ изменилась.');
+  if(await approvedUnitRelabel(tx,fresh,previous.intent.oldKiz)) await assertUnusedReplacement(tx,newKiz);
   const [registered, taskUsage, shipped] = await Promise.all([
     tx.productMark.findFirst({where: {value: {equals: newKiz, mode: 'insensitive'}}}),
     tx.fbsTsdAssembly.findFirst({where: {kiz: {equals: newKiz, mode: 'insensitive'}}}),
@@ -160,6 +164,7 @@ export async function applyPhysicalKizRelabel(tx: Tx, task: Task, user: AuthUser
     value: newKiz, status: 'AVAILABLE', sourceDocument: `Переклейка КИЗ FBS, заказ ${fresh.orderId}; исходная запись ${old.id}`}});
   const updated = await tx.fbsTsdAssembly.update({where: {id: fresh.id}, data: {kiz: newKiz, wbMetaStatus: 'PENDING', errorMessage: null,
     ...(sizeRelabel?{relabelConfirmedAt:new Date()}: {})}});
+  await finishKizReview(tx,fresh,previous.intent.oldKiz,'RELABEL');
   await tx.auditLog.create({data: {userId: user.id, action: ACTION, entity: 'FbsTsdAssembly', entityId: fresh.id,
     payload: {...previous.intent, stage: 'APPLIED', proposalId, newKiz, newMarkId: mark.id,
       oldMark: JSON.parse(JSON.stringify(old)), clientId: fresh.clientId, requestId: fresh.requestId, orderId: fresh.orderId,

@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 200 // FIX: verified KIZ reuse history in our TSD flavor.
-            versionName = "0.1.200-kiz-history"
+            versionCode = 201 // FIX: verified KIZ reuse history in our TSD flavor.
+            versionName = "0.1.201-kiz-review"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

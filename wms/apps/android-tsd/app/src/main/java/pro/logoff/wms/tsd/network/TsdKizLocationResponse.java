@@ -7,6 +7,13 @@ public class TsdKizLocationResponse {
     public boolean ambiguous;
     public String identity;
     public List<Match> matches;
+    public List<Review> reviews;
+    public static class Review {
+        public String id, kizIdentity, status, decision, resolution, reason, decidedByName;
+        public boolean active;
+        public Snapshot snapshot;
+    }
+    public static class Snapshot { public int requestNumber; public String orderId, productName, boxCode, workerName; }
     public static class Match {
         public String id, client, status, boxCode, boxStatus, palletCode, room, warehouse, locationWarning;
         public Product product;
