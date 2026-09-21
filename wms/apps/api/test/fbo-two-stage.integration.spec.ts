@@ -9,6 +9,7 @@ import { StockBalancesService } from '../src/modules/stock/stock-balances.servic
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 import { ClientRequestMarketplaceFilesService } from '../src/modules/client-requests/client-request-marketplace-files.service';
 import { wbReservationQuantities } from '../src/common/stock/wb-order-stock-lifecycle';
+import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 const url = process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/codex_tests@127\.0\.0\.1:55469\/kiz_duplicate_tests/.test(url))
@@ -76,10 +77,19 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
     // TEST: splitting a partial pick conserves demand, marks and stock, and retries do not create another child.
     it('transfers only unpicked demand into a linked child and allows parent packing', async () => {
         vi.stubEnv('WMS_FBO_REMAINDER_TRANSFER_ENABLED', 'true');
+        vi.stubEnv('WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED', 'true');
+        // TEST: exercise the WB publication calculator without making marketplace API calls.
+        await p.client.update({ where: { id: client }, data: { stockBalanceMode: 'BOXES' } });
+        await p.sku.update({ where: { id: sku }, data: { marketplaceProductId: '123:456' } });
+        const wb = Object.assign(Object.create(MarketplaceConnectionsService.prototype), {
+            prisma: p, fbsOrdersCache: new Map([[client, { value: { orders: [] }, expiresAt: Date.now() + 60000 }]]),
+        }) as MarketplaceConnectionsService;
         await act('START');
         await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
         const before = await p.stockBalance.findMany({ where: { clientId: client }, orderBy: { id: 'asc' } });
         const reservedBefore = await wbReservationQuantities(p, client, [sku], wh);
+        const wbBefore = await wb.calculateFbsStockQuantities(client, [sku], wh);
+        expect(wbBefore.get(sku)).toMatchObject({ available: 3, reserved: 4, sellable: 0 });
         const operationId = randomUUID();
         const result = await act('TRANSFER_REMAINDER', { operationId });
         expect(result).toMatchObject({ phase: 'PACKING', needed: 2, picked: 2, compositionChanged: false });
@@ -92,6 +102,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         expect(await p.stockBalance.findMany({ where: { clientId: client }, orderBy: { id: 'asc' } })).toEqual(before);
         expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(2);
         expect(await wbReservationQuantities(p, client, [sku], wh)).toEqual(reservedBefore);
+        expect(await wb.calculateFbsStockQuantities(client, [sku], wh)).toEqual(wbBefore);
         await act('TRANSFER_REMAINDER', { operationId });
         expect(await p.clientRequest.count({ where: { clientId: client } })).toBe(2);
         expect(await svc.plan(child.id, user)).toMatchObject({ needed: 2, picked: 0, parentRequest: { id: request } });
@@ -102,6 +113,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         const next = await svc.act(child.id, { action: 'TRANSFER_REMAINDER', operationId: randomUUID() }, user);
         expect(next.childRequests).toMatchObject([{ fboRequestCode: `${root.number}_02` }]);
         expect((await p.clientRequest.findUniqueOrThrow({ where: { id: request } })).fboRemainderSequence).toBe(2);
+        expect((await wb.calculateFbsStockQuantities(client, [sku], wh)).get(sku)).toMatchObject({ available: 2, reserved: 4, sellable: 0 });
     });
     // TEST: two simultaneous button presses create one branch, and untouched lines move entirely.
     it('serializes remainder transfers and removes untouched lines from the parent', async () => {
