@@ -1,0 +1,1174 @@
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -231,7 +231,7 @@
+       '/marketplace-connections/fbs/size-substitution', '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
+       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/marketplace-connections/allocation', '/marketplace-connections/duplicate-groups'],
+     // FIX: preserve delivery-options plus six reshipment handlers; aliases count once.
+-    routeCount: 124, // FIX: includes read-only WB stock verification.
++    routeCount: 125, // FIX: includes read-only WB stock verification.
+     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+     logic: ['Перенос из доставки через расширение: после подтверждения выдаёт одну команду кабинету WB, затем независимо проверяет поставки и новый стикер; токены кабинета остаются в браузере.', 'Учёт по статусу WB: решение менеджера после проверки WB; точная пара КИЗ–ШК списывается и сохраняется в истории отгрузок, неизвестный источник — без короба.', 'Замена размера WB: ADMIN/OWNER подтверждает переклейку, создаётся локальная заявка без списания до отбора.', 'Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
+     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
+--- a/wms/apps/api/src/modules/marketplace-connections/duplicate-stock-groups.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/duplicate-stock-groups.service.ts
+@@ -1,165 +1,223 @@
+-import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+-import { Prisma } from '@prisma/client';
+-import { PrismaService } from '../../common/prisma/prisma.service';
+-import { ClientScopeService } from '../auth/client-scope.service';
+-import type { AuthUser } from '../auth/auth.types';
+-import { MarketplaceConnectionsService } from './marketplace-connections.service';
+-import { calculateDuplicateStockPlan } from './duplicate-stock-plan';
+-import { assertNoDuplicateGroupOverlap, duplicateGroupsEnabled, duplicateGroupSkuIds, validateDuplicateGroup, type DuplicateGroup } from './duplicate-stock-groups';
+-import { splitMarketplaceStock, validateAllocationDraft } from './marketplace-allocation';
+-import { activeDuplicateGroups, commonDuplicateReserve, duplicatePublicationEnabled, duplicateVariantBudget } from './duplicate-stock-runtime';
+-
+-const prefix = 'marketplace.duplicates.groups.';
+-const select = { id: true, article: true, clientSku: true, internalSku: true, name: true, size: true, color: true, marketplaceProductId: true,
+-  barcodes: { select: { value: true }, orderBy: [{ isPrimary: 'desc' as const }, { value: 'asc' as const }] } };
+-const norm = (s: string | null) => s?.trim().toLowerCase() ?? '';
+-@Injectable()
+-export class DuplicateStockGroupsService {
+-  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly marketplaces: MarketplaceConnectionsService) {}
+-  capabilities() { return { enabled: duplicateGroupsEnabled(), publicationEnabled: duplicatePublicationEnabled() }; }
+-  private authorize(id: string, user: AuthUser, write = false) {
+-    if (!duplicateGroupsEnabled() || user.isDemo) throw new ForbiddenException('Распределение между артикулами недоступно.');
+-    if (!id?.trim()) throw new BadRequestException('Выберите клиента.');
+-    this.scopes.requireClientAccess(user, id, write && !user.roleCodes.includes('CLIENT') ? 'write' : 'read');
+-  }
+-  private connections(clientId: string, db: Prisma.TransactionClient = this.prisma) {
+-    return db.clientMarketplaceConnection.findMany({ where: { clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } },
+-      select: { id: true, marketplace: true, accountName: true, isActive: true, fbsExecutionWarehouseId: true }, orderBy: { id: 'asc' } });
+-  }
+-  private decode(value?: Prisma.JsonValue): DuplicateGroup[] {
+-    if (value === undefined) return [];
+-    const data = value as unknown as { version: number; groups: unknown[] };
+-    if (data?.version !== 1 || !Array.isArray(data.groups)) throw new ConflictException('Формат групп требует проверки администратора.');
+-    try { return data.groups.map(validateDuplicateGroup); } catch { throw new ConflictException('Сохранённые группы требуют проверки администратора.'); }
+-  }
+-  async read(clientId: string, user: AuthUser) {
+-    this.authorize(clientId, user);
+-    const [setting, connections, mappings, client] = await Promise.all([
+-      this.prisma.systemSetting.findUnique({ where: { key: prefix + clientId } }), this.connections(clientId),
+-      this.prisma.clientArticleMapping.findMany({ where: { clientId }, select: { id: true, sourceArticle: true, targetArticle: true } }),
+-      this.prisma.client.findUnique({ where: { id: clientId }, select: { relabelingEnabled: true } }),
+-    ]);
+-    return { groups: this.decode(setting?.value), revision: setting?.updatedAt.toISOString() ?? null, mappings,
+-      commonReserve: await commonDuplicateReserve(this.prisma, clientId), activeGroupIds: (await activeDuplicateGroups(this.prisma, clientId)).map(g => g.id),
+-      relabelingEnabled: Boolean(client?.relabelingEnabled), connections: connections.filter(c => c.marketplace === 'WILDBERRIES'), publicationEnabled: duplicatePublicationEnabled() };
+-  }
+-  async catalog(clientId: string, body: { search?: unknown; ids?: unknown; page?: unknown }, user: AuthUser) {
+-    this.authorize(clientId, user);
+-    if (!body || (body.search !== undefined && typeof body.search !== 'string') || (body.page !== undefined && (!Number.isSafeInteger(body.page) || Number(body.page) < 1))) throw new BadRequestException('Некорректные параметры поиска.');
+-    if (body.ids !== undefined && (!Array.isArray(body.ids) || body.ids.length > 600 || body.ids.some(id => typeof id !== 'string'))) throw new BadRequestException('Некорректный список карточек.');
+-    const search = String(body.search ?? '').trim().slice(0, 150), page = Number(body.page ?? 1);
+-    const where: Prisma.SkuWhereInput = { clientId, marketplace: 'WILDBERRIES', marketplaceProductId: { not: null }, isDraft: false,
+-      ...(body.ids ? { id: { in: body.ids as string[] } } : search ? { OR: [{ article: { contains: search, mode: 'insensitive' } },
+-        { clientSku: { contains: search, mode: 'insensitive' } }, { internalSku: { contains: search, mode: 'insensitive' } },
+-        { name: { contains: search, mode: 'insensitive' } }, { barcodes: { some: { value: { contains: search } } } }] } : {}) };
+-    const rows = await this.prisma.sku.findMany({ where, select, orderBy: [{ article: 'asc' }, { size: 'asc' }, { id: 'asc' }],
+-      skip: body.ids ? 0 : (page - 1) * 50, take: body.ids ? 600 : 51 });
+-    return { rows: body.ids ? rows : rows.slice(0, 50), page, hasMore: !body.ids && rows.length > 50 };
+-  }
+-  private async validate(clientId: string, raw: unknown, user: AuthUser, db: Prisma.TransactionClient = this.prisma) {
+-    let group: DuplicateGroup;
+-    try { group = validateDuplicateGroup(raw); } catch (e) { throw new BadRequestException((e as Error).message); }
+-    const connections = await this.connections(clientId, db);
+-    const connection = connections.find(c => c.id === group.connectionId && c.marketplace === 'WILDBERRIES');
+-    if (!connection?.fbsExecutionWarehouseId) throw new BadRequestException('Выберите активный кабинет WB с настроенным складом исполнения.');
+-    const warehouseId = connection.fbsExecutionWarehouseId;
+-    if (!user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin')
+-      && (user.activeWarehouseId !== warehouseId || (user.warehouseIds && !user.warehouseIds.includes(warehouseId)))) throw new ForbiddenException('Выберите доступный филиал исполнения кабинета.');
+-    const ids = duplicateGroupSkuIds(group);
+-    const [skus, mappings, client] = await Promise.all([
+-      db.sku.findMany({ where: { clientId, id: { in: ids }, marketplace: 'WILDBERRIES', marketplaceProductId: { not: null }, isDraft: false }, select }),
+-      db.clientArticleMapping.findMany({ where: { clientId }, select: { sourceArticle: true, targetArticle: true } }),
+-      db.client.findUnique({ where: { id: clientId }, select: { relabelingEnabled: true } }),
+-    ]);
+-    if (!client?.relabelingEnabled) throw new BadRequestException('Сначала включите клиенту действующий механизм переклейки.');
+-    if (skus.length !== ids.length) throw new BadRequestException('Карточки должны принадлежать этому клиенту и быть доступны. Обновите выбор.');
+-    const byId = new Map(skus.map(s => [s.id, s]));
+-    for (const v of group.variants) for (const t of v.targets) {
+-      const source = byId.get(v.sourceSkuId)!, target = byId.get(t.targetId)!;
+-      if (!norm(source.size) || norm(source.size) !== norm(target.size)) throw new BadRequestException('Выберите одинаковые непустые размеры исходного и целевого товара.');
+-      if (!source.barcodes.length || !target.barcodes.length) throw new BadRequestException('У обеих карточек должен быть ШК.');
+-      // FIX: share settings cannot create a parallel source mapping different from the picking workflow.
+-      if (t.requiresRelabel && !mappings.some(m => [target.article, target.clientSku].some(a => norm(a) === norm(m.targetArticle))
+-        && ([source.article, source.clientSku, source.internalSku].some(a => norm(a) === norm(m.sourceArticle)) || norm(source.internalSku).startsWith(norm(m.sourceArticle) + '-')))) {
+-        throw new BadRequestException('Эта пара не настроена в меню «Переклейка». Сначала добавьте там соответствие артикулов.');
+-      }
+-    }
+-    return { group, connections, warehouseId, skus, mappings };
+-  }
+-  async save(clientId: string, body: { group?: unknown; revision?: unknown; deleteId?: unknown }, user: AuthUser) {
+-    this.authorize(clientId, user, true);
+-    if (!body || (body.revision !== null && typeof body.revision !== 'string') || (body.deleteId !== undefined && (typeof body.deleteId !== 'string' || body.group !== undefined))) throw new BadRequestException('Передайте группу и версию настроек.');
+-    const key = prefix + clientId;
+-    return this.prisma.$transaction(async tx => {
+-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+-      const old = await tx.systemSetting.findUnique({ where: { key } });
+-      if ((old?.updatedAt.toISOString() ?? null) !== body.revision) throw new ConflictException('Группы изменены другим пользователем. Обновите список.');
+-      const groups = this.decode(old?.value);
+-      // FIX: active rules must be changed through a controlled publication transition.
+-      const active = await activeDuplicateGroups(tx, clientId);
+-      const changedId = body.deleteId ?? (body.group as { id?: string } | undefined)?.id;
+-      if (active.some(g => g.id === changedId)) throw new ConflictException('Группа уже управляет остатками WB. Для изменения требуется пересчёт и переключение действующей публикации.');
+-      if (body.deleteId !== undefined) { if (!groups.some(g => g.id === body.deleteId)) throw new BadRequestException('Группа не найдена.'); }
+-      else {
+-        const { group } = await this.validate(clientId, body.group, user, tx);
+-        try { assertNoDuplicateGroupOverlap(group, groups); } catch (e) { throw new BadRequestException((e as Error).message); }
+-        const index = groups.findIndex(g => g.id === group.id);
+-        if (index < 0) { if (groups.length >= 100) throw new BadRequestException('Достигнут предел 100 групп.'); groups.push(group); } else groups[index] = group;
+-      }
+-      const value = { version: 1, groups: groups.filter(g => g.id !== body.deleteId) } as unknown as Prisma.InputJsonValue;
+-      const saved = await tx.systemSetting.upsert({ where: { key }, create: { key, value, updatedByUserId: user.id }, update: { value, updatedByUserId: user.id,
+-        updatedAt: new Date(Math.max(Date.now(), (old?.updatedAt.getTime() ?? 0) + 1)) } });
+-      await tx.auditLog.create({ data: { userId: user.id, action: 'duplicate.stock.groups.saved', entity: 'Client', entityId: clientId, payload: { before: old?.value ?? null, after: value, publicationEnabled: false } } });
+-      return { groups: this.decode(saved.value), revision: saved.updatedAt.toISOString(), publicationEnabled: false };
+-    });
+-  }
+-  async preview(clientId: string, body: { group?: unknown }, user: AuthUser) {
+-    this.authorize(clientId, user);
+-    const { group, connections, warehouseId, skus, mappings } = await this.validate(clientId, body?.group, user);
+-    const existing = await this.prisma.systemSetting.findUnique({ where: { key: prefix + clientId } });
+-    try { assertNoDuplicateGroupOverlap(group, this.decode(existing?.value)); } catch (e) { throw new BadRequestException((e as Error).message); }
+-    let wbPercent = 100;
+-    if (connections.some(c => c.marketplace === 'OZON')) {
+-      const allocation = await this.prisma.systemSetting.findUnique({ where: { key: 'marketplace.allocation.draft.' + clientId } });
+-      try { const draft = validateAllocationDraft(allocation?.value, connections);
+-        if (draft.wbConnectionId !== group.connectionId || connections.find(c => c.id === draft.ozonConnectionId)?.fbsExecutionWarehouseId !== warehouseId) throw new Error();
+-        wbPercent = draft.wbPercent;
+-      } catch { throw new BadRequestException('Сначала настройте доли WB/Ozon для выбранного кабинета и общего склада исполнения.'); }
+-    }
+-    const quantities = await this.marketplaces.calculateFbsStockQuantities(clientId, duplicateGroupSkuIds(group), warehouseId, group.connectionId);
+-    const reserveRule = group.reserve.mode === 'COMMON' ? await commonDuplicateReserve(this.prisma, clientId) : { mode: group.reserve.mode as 'UNITS' | 'PERCENT', value: group.reserve.value };
+-    const stocks = group.variants.map(v => {
+-      const q = quantities.get(v.sourceSkuId);
+-      if (!q) throw new BadRequestException('Не удалось рассчитать исходный SKU. Проверьте ID размера WB.');
+-      const budget = duplicateVariantBudget(v, quantities, reserveRule);
+-      return { ...v, size: skus.find(s => s.id === v.sourceSkuId)!.size!, available: budget.sourceBudget,
+-        marketplaceBudget: splitMarketplaceStock(budget.sourceBudget, wbPercent).wb, total: budget.totalAvailable, reserved: budget.totalReserved,
+-        freeBeforeSafety: budget.freeBeforeSafety, safetyReserve: budget.safetyReserve, ownByTarget: budget.ownByTarget };
+-    });
+-    const plan = calculateDuplicateStockPlan(group, stocks);
+-    const publications = await this.prisma.fbsStockPublication.findMany({ where: { clientId, connectionId: group.connectionId, skuId: { in: duplicateGroupSkuIds(group) } },
+-      select: { skuId: true, enabled: true, saleLimit: true, relabelManualAmount: true } });
+-    // FIX: the current picking resolver may choose another source of the same size.
+-    // Draft percentages must not imply that the resolver already obeys exact SKU pairs.
+-    const relevantMappings = mappings.filter(m => skus.some(s => [s.article, s.clientSku].some(a => norm(a) === norm(m.targetArticle))));
+-    const candidates = relevantMappings.length ? await this.prisma.sku.findMany({ where: { clientId,
+-      OR: relevantMappings.flatMap(m => [
+-        { article: { equals: m.sourceArticle, mode: 'insensitive' as const } },
+-        { clientSku: { equals: m.sourceArticle, mode: 'insensitive' as const } },
+-        { internalSku: { equals: m.sourceArticle, mode: 'insensitive' as const } },
+-        { internalSku: { startsWith: m.sourceArticle + '-', mode: 'insensitive' as const } },
+-      ]) }, select: { id: true, article: true, clientSku: true, internalSku: true, size: true } }) : [];
+-    const pickingWarnings = group.variants.flatMap(v => v.targets.filter(t => t.requiresRelabel).flatMap(t => {
+-      const target = skus.find(s => s.id === t.targetId)!;
+-      const rules = relevantMappings.filter(m => [target.article, target.clientSku].some(a => norm(a) === norm(m.targetArticle)));
+-      const matches = candidates.filter(s => norm(s.size) === norm(target.size) && rules.some(m =>
+-        [s.article, s.clientSku, s.internalSku].some(a => norm(a) === norm(m.sourceArticle)) || norm(s.internalSku).startsWith(norm(m.sourceArticle) + '-')));
+-      return matches.some(s => s.id !== v.sourceSkuId) ? [{ sourceSkuId: v.sourceSkuId, targetSkuId: t.targetId,
+-        message: `Для ${target.article || target.clientSku || target.id}, размер ${target.size}, переклейка допускает несколько исходных SKU. Перед включением долей нужно согласовать точную выдачу на сборку.` }] : [];
+-    }));
+-    return { ...plan, generatedAt: new Date().toISOString(), warehouseId, wbPercent, publicationEnabled: false, publications, pickingWarnings,
+-      rows: plan.rows.map((r, i) => ({ ...r, total: stocks[i].total, reserved: stocks[i].reserved, freeBeforeSafety: stocks[i].freeBeforeSafety,
+-        safetyReserve: stocks[i].safetyReserve, source: skus.find(s => s.id === r.sourceSkuId)!,
+-        targets: r.targets.map(t => ({ ...t, card: skus.find(s => s.id === t.targetId)!, ownStock: stocks[i].ownByTarget.get(t.targetId) ?? 0 })) })) };
+-  }
+-}
++import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
++import { createHash } from 'node:crypto';
++import { Prisma } from '@prisma/client';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import { ClientScopeService } from '../auth/client-scope.service';
++import type { AuthUser } from '../auth/auth.types';
++import { MarketplaceConnectionsService } from './marketplace-connections.service';
++import { calculateDuplicateStockPlan } from './duplicate-stock-plan';
++import { assertNoDuplicateGroupOverlap, duplicateGroupsEnabled, duplicateGroupSkuIds, validateDuplicateGroup, type DuplicateGroup } from './duplicate-stock-groups';
++import { splitMarketplaceStock, validateAllocationDraft } from './marketplace-allocation';
++import { activeDuplicateGroups, commonDuplicateReserve, duplicatePublicationEnabled, duplicateVariantBudget } from './duplicate-stock-runtime';
++
++const selfServiceEnabled = () => process.env.WMS_DUPLICATE_STOCK_SELF_SERVICE_ENABLED === 'true';
++const previewKey = (group: DuplicateGroup, revision: string | null) => createHash('sha256').update(JSON.stringify({ group, revision })).digest('hex');
++const prefix = 'marketplace.duplicates.groups.';
++const select = { id: true, article: true, clientSku: true, internalSku: true, name: true, size: true, color: true, marketplaceProductId: true,
++  barcodes: { select: { value: true }, orderBy: [{ isPrimary: 'desc' as const }, { value: 'asc' as const }] } };
++const norm = (s: string | null) => s?.trim().toLowerCase() ?? '';
++@Injectable()
++export class DuplicateStockGroupsService {
++  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly marketplaces: MarketplaceConnectionsService) {}
++  capabilities() { return { enabled: duplicateGroupsEnabled(), publicationEnabled: duplicatePublicationEnabled(), selfServiceEnabled: selfServiceEnabled() }; }
++  private authorize(id: string, user: AuthUser, write = false) {
++    if (!duplicateGroupsEnabled() || user.isDemo) throw new ForbiddenException('Распределение между артикулами недоступно.');
++    if (!id?.trim()) throw new BadRequestException('Выберите клиента.');
++    this.scopes.requireClientAccess(user, id, write && !user.roleCodes.includes('CLIENT') ? 'write' : 'read');
++  }
++  private connections(clientId: string, db: Prisma.TransactionClient = this.prisma) {
++    return db.clientMarketplaceConnection.findMany({ where: { clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } },
++      select: { id: true, marketplace: true, accountName: true, isActive: true, fbsExecutionWarehouseId: true }, orderBy: { id: 'asc' } });
++  }
++  private decode(value?: Prisma.JsonValue): DuplicateGroup[] {
++    if (value === undefined) return [];
++    const data = value as unknown as { version: number; groups: unknown[] };
++    if (data?.version !== 1 || !Array.isArray(data.groups)) throw new ConflictException('Формат групп требует проверки администратора.');
++    try { return data.groups.map(validateDuplicateGroup); } catch { throw new ConflictException('Сохранённые группы требуют проверки администратора.'); }
++  }
++  async read(clientId: string, user: AuthUser) {
++    this.authorize(clientId, user);
++    const [setting, connections, mappings, client] = await Promise.all([
++      this.prisma.systemSetting.findUnique({ where: { key: prefix + clientId } }), this.connections(clientId),
++      this.prisma.clientArticleMapping.findMany({ where: { clientId }, select: { id: true, sourceArticle: true, targetArticle: true } }),
++      this.prisma.client.findUnique({ where: { id: clientId }, select: { relabelingEnabled: true } }),
++    ]);
++    return { groups: this.decode(setting?.value), revision: setting?.updatedAt.toISOString() ?? null, mappings,
++      commonReserve: await commonDuplicateReserve(this.prisma, clientId), activeGroupIds: (await activeDuplicateGroups(this.prisma, clientId)).map(g => g.id),
++      relabelingEnabled: Boolean(client?.relabelingEnabled), connections: connections.filter(c => c.marketplace === 'WILDBERRIES'), publicationEnabled: duplicatePublicationEnabled(), selfServiceEnabled: selfServiceEnabled() };
++  }
++  async catalog(clientId: string, body: { search?: unknown; ids?: unknown; page?: unknown }, user: AuthUser) {
++    this.authorize(clientId, user);
++    if (!body || (body.search !== undefined && typeof body.search !== 'string') || (body.page !== undefined && (!Number.isSafeInteger(body.page) || Number(body.page) < 1))) throw new BadRequestException('Некорректные параметры поиска.');
++    if (body.ids !== undefined && (!Array.isArray(body.ids) || body.ids.length > 600 || body.ids.some(id => typeof id !== 'string'))) throw new BadRequestException('Некорректный список карточек.');
++    const search = String(body.search ?? '').trim().slice(0, 150), page = Number(body.page ?? 1);
++    const where: Prisma.SkuWhereInput = { clientId, marketplace: 'WILDBERRIES', marketplaceProductId: { not: null }, isDraft: false,
++      ...(body.ids ? { id: { in: body.ids as string[] } } : search ? { OR: [{ article: { contains: search, mode: 'insensitive' } },
++        { clientSku: { contains: search, mode: 'insensitive' } }, { internalSku: { contains: search, mode: 'insensitive' } },
++        { name: { contains: search, mode: 'insensitive' } }, { barcodes: { some: { value: { contains: search } } } }] } : {}) };
++    const rows = await this.prisma.sku.findMany({ where, select, orderBy: [{ article: 'asc' }, { size: 'asc' }, { id: 'asc' }],
++      skip: body.ids ? 0 : (page - 1) * 50, take: body.ids ? 600 : 51 });
++    return { rows: body.ids ? rows : rows.slice(0, 50), page, hasMore: !body.ids && rows.length > 50 };
++  }
++  private async validate(clientId: string, raw: unknown, user: AuthUser, db: Prisma.TransactionClient = this.prisma, allowNewMappings = false) {
++    let group: DuplicateGroup;
++    try { group = validateDuplicateGroup(raw); } catch (e) { throw new BadRequestException((e as Error).message); }
++    const connections = await this.connections(clientId, db);
++    const connection = connections.find(c => c.id === group.connectionId && c.marketplace === 'WILDBERRIES');
++    if (!connection?.fbsExecutionWarehouseId) throw new BadRequestException('Выберите активный кабинет WB с настроенным складом исполнения.');
++    const warehouseId = connection.fbsExecutionWarehouseId;
++    if (!user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin')
++      && (user.activeWarehouseId !== warehouseId || (user.warehouseIds && !user.warehouseIds.includes(warehouseId)))) throw new ForbiddenException('Выберите доступный филиал исполнения кабинета.');
++    const ids = duplicateGroupSkuIds(group);
++    const [skus, mappings, client] = await Promise.all([
++      db.sku.findMany({ where: { clientId, id: { in: ids }, marketplace: 'WILDBERRIES', marketplaceProductId: { not: null }, isDraft: false }, select }),
++      db.clientArticleMapping.findMany({ where: { clientId }, select: { sourceArticle: true, targetArticle: true } }),
++      db.client.findUnique({ where: { id: clientId }, select: { relabelingEnabled: true } }),
++    ]);
++    if (!client?.relabelingEnabled) throw new BadRequestException('Сначала включите клиенту действующий механизм переклейки.');
++    if (skus.length !== ids.length) throw new BadRequestException('Карточки должны принадлежать этому клиенту и быть доступны. Обновите выбор.');
++    const byId = new Map(skus.map(s => [s.id, s]));
++    const missingMappings: Array<{ sourceArticle: string; targetArticle: string }> = [];
++    for (const v of group.variants) for (const t of v.targets) {
++      const source = byId.get(v.sourceSkuId)!, target = byId.get(t.targetId)!;
++      if (!norm(source.size) || norm(source.size) !== norm(target.size)) throw new BadRequestException('Выберите одинаковые непустые размеры исходного и целевого товара.');
++      if (!source.barcodes.length || !target.barcodes.length) throw new BadRequestException('У обеих карточек должен быть ШК.');
++      // FIX: share settings cannot create a parallel source mapping different from the picking workflow.
++      if (t.requiresRelabel && !mappings.some(m => [target.article, target.clientSku].some(a => norm(a) === norm(m.targetArticle))
++        && ([source.article, source.clientSku, source.internalSku].some(a => norm(a) === norm(m.sourceArticle)) || norm(source.internalSku).startsWith(norm(m.sourceArticle) + '-')))) {
++        if (!allowNewMappings || !selfServiceEnabled()) throw new BadRequestException('Эта пара не настроена в меню «Переклейка». Сначала добавьте там соответствие артикулов.');
++        const sourceArticle = source.article?.trim() || source.clientSku?.trim(), targetArticle = target.article?.trim() || target.clientSku?.trim();
++        if (!sourceArticle || !targetArticle || norm(sourceArticle) === norm(targetArticle)) throw new BadRequestException('Выберите два разных артикула.');
++        // FIX: do not silently replace another source or create relabel chains/cycles.
++        const all = [...mappings, ...missingMappings];
++        if (all.some(m => norm(m.targetArticle) === norm(targetArticle) && norm(m.sourceArticle) !== norm(sourceArticle))
++          || all.some(m => norm(m.targetArticle) === norm(sourceArticle) || norm(m.sourceArticle) === norm(targetArticle)))
++          throw new ConflictException('Соответствие конфликтует с существующей переклейкой. Проверьте исходный артикул.');
++        if (!missingMappings.some(m => norm(m.sourceArticle) === norm(sourceArticle) && norm(m.targetArticle) === norm(targetArticle))) missingMappings.push({ sourceArticle, targetArticle });
++      }
++    }
++    return { group, connections, warehouseId, skus, mappings, missingMappings };
++  }
++  async save(clientId: string, body: { group?: unknown; revision?: unknown; deleteId?: unknown }, user: AuthUser) {
++    this.authorize(clientId, user, true);
++    if (!body || (body.revision !== null && typeof body.revision !== 'string') || (body.deleteId !== undefined && (typeof body.deleteId !== 'string' || body.group !== undefined))) throw new BadRequestException('Передайте группу и версию настроек.');
++    const key = prefix + clientId;
++    return this.prisma.$transaction(async tx => {
++      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
++      const old = await tx.systemSetting.findUnique({ where: { key } });
++      if ((old?.updatedAt.toISOString() ?? null) !== body.revision) throw new ConflictException('Группы изменены другим пользователем. Обновите список.');
++      const groups = this.decode(old?.value);
++      // FIX: active rules must be changed through a controlled publication transition.
++      const active = await activeDuplicateGroups(tx, clientId);
++      const changedId = body.deleteId ?? (body.group as { id?: string } | undefined)?.id;
++      if (active.some(g => g.id === changedId)) throw new ConflictException('Группа уже управляет остатками WB. Для изменения требуется пересчёт и переключение действующей публикации.');
++      if (body.deleteId !== undefined) { if (!groups.some(g => g.id === body.deleteId)) throw new BadRequestException('Группа не найдена.'); }
++      else {
++        const { group } = await this.validate(clientId, body.group, user, tx, true);
++        try { assertNoDuplicateGroupOverlap(group, groups); } catch (e) { throw new BadRequestException((e as Error).message); }
++        const index = groups.findIndex(g => g.id === group.id);
++        if (index < 0) { if (groups.length >= 100) throw new BadRequestException('Достигнут предел 100 групп.'); groups.push(group); } else groups[index] = group;
++      }
++      const value = { version: 1, groups: groups.filter(g => g.id !== body.deleteId) } as unknown as Prisma.InputJsonValue;
++      const saved = await tx.systemSetting.upsert({ where: { key }, create: { key, value, updatedByUserId: user.id }, update: { value, updatedByUserId: user.id,
++        updatedAt: new Date(Math.max(Date.now(), (old?.updatedAt.getTime() ?? 0) + 1)) } });
++      await tx.auditLog.create({ data: { userId: user.id, action: 'duplicate.stock.groups.saved', entity: 'Client', entityId: clientId, payload: { before: old?.value ?? null, after: value, publicationEnabled: false } } });
++      return { groups: this.decode(saved.value), revision: saved.updatedAt.toISOString(), publicationEnabled: false };
++    });
++  }
++  // FIX: settings + relabel mappings + durable queue event commit atomically under the publisher lock.
++  async apply(clientId: string, body: { group?: unknown; revision?: unknown; previewKey?: unknown }, user: AuthUser) {
++    this.authorize(clientId, user, true);
++    if (!selfServiceEnabled() || !duplicatePublicationEnabled() || process.env.WMS_WB_URGENT_STOCK_SYNC !== 'true') throw new ForbiddenException('Применение распределения пока недоступно.');
++    if (!body || (body.revision !== null && typeof body.revision !== 'string')) throw new BadRequestException('Передайте версию настроек.');
++    // A fresh calculation verifies catalogue completeness; the worker recalculates again before sending.
++    const checked = await this.preview(clientId, { group: body.group }, user);
++    if (body.previewKey !== checked.previewKey) throw new ConflictException('Настройки изменились. Повторите предпросмотр.');
++    return this.prisma.$transaction(async tx => {
++      const key = prefix + clientId;
++      const requested = validateDuplicateGroup(body.group);
++      const lock = await tx.$queryRaw<Array<{ acquired: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${'wb.stock.publish.' + requested.connectionId})) AS acquired`;
++      if (!lock[0]?.acquired) throw new ConflictException('Сейчас выполняется отправка WB. Повторите применение после её завершения.');
++      const { group, connections, warehouseId, missingMappings } = await this.validate(clientId, body.group, user, tx, true);
++      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
++      const old = await tx.systemSetting.findUnique({ where: { key } });
++      if ((old?.updatedAt.toISOString() ?? null) !== body.revision) throw new ConflictException('Группы изменены другим пользователем. Обновите список.');
++      if (body.previewKey !== previewKey(group, old?.updatedAt.toISOString() ?? null)) throw new ConflictException('Повторите предпросмотр.');
++      if (connections.length !== 1 || connections[0].marketplace !== 'WILDBERRIES') throw new BadRequestException('Применение дублей сейчас доступно для одного кабинета WB.');
++      if (process.env.WMS_WB_STOCK_FINE_SETTINGS !== 'true' || process.env.WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED !== 'true') throw new BadRequestException('Не включён единый учёт и подтверждение остатков WB.');
++      const control = await tx.systemSetting.findUnique({ where: { key: 'marketplace.stockControl.client.' + clientId } });
++      if (control && control.value !== true) throw new BadRequestException('Включите управление остатками клиента.');
++      const groups = this.decode(old?.value), active = await activeDuplicateGroups(tx, clientId);
++      const previous = active.find(g => g.id === group.id);
++      // Changing percentages is safe. Replacing a live physical source requires a separate migration of outstanding picks.
++      if (previous && JSON.stringify(previous.variants) !== JSON.stringify(group.variants)) throw new ConflictException('У действующей группы можно менять доли. Смена артикулов и состава размеров требует завершения и проверки текущих сборок.');
++      try { assertNoDuplicateGroupOverlap(group, groups); } catch (e) { throw new BadRequestException((e as Error).message); }
++      const ids = duplicateGroupSkuIds(group);
++      const policy = await tx.fbsStockAllocationPolicy.findFirst({ where: { clientId, connectionId: group.connectionId, enabled: true }, include: { overrides: true } });
++      if (!policy) throw new BadRequestException('Включите распределение WB по складам.');
++      if (policy.overrides.some(o => ids.includes(o.skuId))) throw new ConflictException('У товаров есть индивидуальные лимиты распределения по складам. Сначала согласуйте их с долями.');
++      const publications = await tx.fbsStockPublication.findMany({ where: { clientId, connectionId: group.connectionId, skuId: { in: ids } } });
++      if (publications.some(p => !p.enabled || p.saleLimit !== null || p.relabelManualAmount !== null)) throw new ConflictException('У товаров есть отключённая публикация или ручные лимиты. Сначала снимите конфликтующие настройки.');
++      const index = groups.findIndex(g => g.id === group.id);
++      if (index < 0) { if (groups.length >= 100) throw new BadRequestException('Достигнут предел 100 групп.'); groups.push(group); } else groups[index] = group;
++      for (const mapping of missingMappings) await tx.clientArticleMapping.upsert({ where: { clientId_sourceArticle_targetArticle: { clientId, ...mapping } }, create: { clientId, ...mapping }, update: {} });
++      const value = { version: 1, groups } as unknown as Prisma.InputJsonValue;
++      const saved = await tx.systemSetting.upsert({ where: { key }, create: { key, value, updatedByUserId: user.id }, update: { value, updatedByUserId: user.id, updatedAt: new Date(Math.max(Date.now(), (old?.updatedAt.getTime() ?? 0) + 1)) } });
++      const activeKey = 'marketplace.duplicates.active.' + clientId;
++      const activeValue = { version: 1, groupIds: [...new Set([...active.map(g => g.id), group.id])], connectionId: group.connectionId, warehouseId };
++      await tx.systemSetting.upsert({ where: { key: activeKey }, create: { key: activeKey, value: activeValue, updatedByUserId: user.id }, update: { value: activeValue, updatedByUserId: user.id } });
++      await tx.$executeRaw`INSERT INTO "WbStockSyncEvent" ("clientId", "skuIds", "allSkus") VALUES (${clientId}, ${ids}::text[], false)`;
++      await tx.auditLog.create({ data: { userId: user.id, action: 'duplicate.stock.groups.applied', entity: 'Client', entityId: clientId, payload: { before: old?.value ?? null, after: value, createdMappings: missingMappings, active: activeValue } } });
++      return { groups: this.decode(saved.value), revision: saved.updatedAt.toISOString(), activeGroupIds: activeValue.groupIds, queued: true, mappingsCreated: missingMappings.length };
++    }, { timeout: 30000 });
++  }
++  async preview(clientId: string, body: { group?: unknown }, user: AuthUser) {
++    this.authorize(clientId, user);
++    const { group, connections, warehouseId, skus, mappings, missingMappings } = await this.validate(clientId, body?.group, user, this.prisma, true);
++    const existing = await this.prisma.systemSetting.findUnique({ where: { key: prefix + clientId } });
++    try { assertNoDuplicateGroupOverlap(group, this.decode(existing?.value)); } catch (e) { throw new BadRequestException((e as Error).message); }
++    let wbPercent = 100;
++    if (connections.some(c => c.marketplace === 'OZON')) {
++      const allocation = await this.prisma.systemSetting.findUnique({ where: { key: 'marketplace.allocation.draft.' + clientId } });
++      try { const draft = validateAllocationDraft(allocation?.value, connections);
++        if (draft.wbConnectionId !== group.connectionId || connections.find(c => c.id === draft.ozonConnectionId)?.fbsExecutionWarehouseId !== warehouseId) throw new Error();
++        wbPercent = draft.wbPercent;
++      } catch { throw new BadRequestException('Сначала настройте доли WB/Ozon для выбранного кабинета и общего склада исполнения.'); }
++    }
++    const quantities = await this.marketplaces.calculateFbsStockQuantities(clientId, duplicateGroupSkuIds(group), warehouseId, group.connectionId);
++    const reserveRule = group.reserve.mode === 'COMMON' ? await commonDuplicateReserve(this.prisma, clientId) : { mode: group.reserve.mode as 'UNITS' | 'PERCENT', value: group.reserve.value };
++    const stocks = group.variants.map(v => {
++      const q = quantities.get(v.sourceSkuId);
++      if (!q) throw new BadRequestException('Не удалось рассчитать исходный SKU. Проверьте ID размера WB.');
++      const budget = duplicateVariantBudget(v, quantities, reserveRule);
++      return { ...v, size: skus.find(s => s.id === v.sourceSkuId)!.size!, available: budget.sourceBudget,
++        marketplaceBudget: splitMarketplaceStock(budget.sourceBudget, wbPercent).wb, total: budget.totalAvailable, reserved: budget.totalReserved,
++        freeBeforeSafety: budget.freeBeforeSafety, safetyReserve: budget.safetyReserve, ownByTarget: budget.ownByTarget };
++    });
++    const plan = calculateDuplicateStockPlan(group, stocks);
++    const publications = await this.prisma.fbsStockPublication.findMany({ where: { clientId, connectionId: group.connectionId, skuId: { in: duplicateGroupSkuIds(group) } },
++      select: { skuId: true, enabled: true, saleLimit: true, relabelManualAmount: true } });
++    // FIX: the current picking resolver may choose another source of the same size.
++    // Draft percentages must not imply that the resolver already obeys exact SKU pairs.
++    const relevantMappings = mappings.filter(m => skus.some(s => [s.article, s.clientSku].some(a => norm(a) === norm(m.targetArticle))));
++    const candidates = relevantMappings.length ? await this.prisma.sku.findMany({ where: { clientId,
++      OR: relevantMappings.flatMap(m => [
++        { article: { equals: m.sourceArticle, mode: 'insensitive' as const } },
++        { clientSku: { equals: m.sourceArticle, mode: 'insensitive' as const } },
++        { internalSku: { equals: m.sourceArticle, mode: 'insensitive' as const } },
++        { internalSku: { startsWith: m.sourceArticle + '-', mode: 'insensitive' as const } },
++      ]) }, select: { id: true, article: true, clientSku: true, internalSku: true, size: true } }) : [];
++    const pickingWarnings = group.variants.flatMap(v => v.targets.filter(t => t.requiresRelabel).flatMap(t => {
++      const target = skus.find(s => s.id === t.targetId)!;
++      const rules = relevantMappings.filter(m => [target.article, target.clientSku].some(a => norm(a) === norm(m.targetArticle)));
++      const matches = candidates.filter(s => norm(s.size) === norm(target.size) && rules.some(m =>
++        [s.article, s.clientSku, s.internalSku].some(a => norm(a) === norm(m.sourceArticle)) || norm(s.internalSku).startsWith(norm(m.sourceArticle) + '-')));
++      return matches.some(s => s.id !== v.sourceSkuId) ? [{ sourceSkuId: v.sourceSkuId, targetSkuId: t.targetId,
++        message: `Для ${target.article || target.clientSku || target.id}, размер ${target.size}, переклейка допускает несколько исходных SKU. Перед включением долей нужно согласовать точную выдачу на сборку.` }] : [];
++    }));
++    return { ...plan, missingMappings, previewKey: previewKey(group, existing?.updatedAt.toISOString() ?? null), generatedAt: new Date().toISOString(), warehouseId, wbPercent, publicationEnabled: false, publications, pickingWarnings,
++      rows: plan.rows.map((r, i) => ({ ...r, total: stocks[i].total, reserved: stocks[i].reserved, freeBeforeSafety: stocks[i].freeBeforeSafety,
++        safetyReserve: stocks[i].safetyReserve, source: skus.find(s => s.id === r.sourceSkuId)!,
++        targets: r.targets.map(t => ({ ...t, card: skus.find(s => s.id === t.targetId)!, ownStock: stocks[i].ownByTarget.get(t.targetId) ?? 0 })) })) };
++  }
++}
+--- a/wms/apps/api/src/modules/marketplace-connections/duplicate-stock-groups.controller.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/duplicate-stock-groups.controller.ts
+@@ -1,17 +1,20 @@
+-import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
+-import { CurrentUser } from '../auth/decorators/current-user.decorator';
+-import { RequireAnyPermissions } from '../auth/decorators/require-permissions.decorator';
+-import type { AuthUser } from '../auth/auth.types';
+-import { DuplicateStockGroupsService } from './duplicate-stock-groups.service';
+-@Controller('marketplace-connections/duplicate-groups')
+-@RequireAnyPermissions('clients:read', 'clients:write', 'client-requests:read', 'client-requests:write')
+-export class DuplicateStockGroupsController {
+-  constructor(private readonly groups: DuplicateStockGroupsService) {}
+-  @Get('capabilities') capabilities() { return this.groups.capabilities(); }
+-  @Get(':clientId') read(@Param('clientId') id: string, @CurrentUser() user: AuthUser) { return this.groups.read(id, user); }
+-  @Post(':clientId/catalog') catalog(@Param('clientId') id: string, @Body() body: { search?: unknown; ids?: unknown; page?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.catalog(id, body, user); }
+-  @Post(':clientId/preview') preview(@Param('clientId') id: string, @Body() body: { group?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.preview(id, body, user); }
+-  @Put(':clientId')
+-  @RequireAnyPermissions('clients:write', 'client-requests:write')
+-  save(@Param('clientId') id: string, @Body() body: { group?: unknown; revision?: unknown; deleteId?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.save(id, body, user); }
+-}
++import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequireAnyPermissions } from '../auth/decorators/require-permissions.decorator';
++import type { AuthUser } from '../auth/auth.types';
++import { DuplicateStockGroupsService } from './duplicate-stock-groups.service';
++@Controller('marketplace-connections/duplicate-groups')
++@RequireAnyPermissions('clients:read', 'clients:write', 'client-requests:read', 'client-requests:write')
++export class DuplicateStockGroupsController {
++  constructor(private readonly groups: DuplicateStockGroupsService) {}
++  @Get('capabilities') capabilities() { return this.groups.capabilities(); }
++  @Get(':clientId') read(@Param('clientId') id: string, @CurrentUser() user: AuthUser) { return this.groups.read(id, user); }
++  @Post(':clientId/catalog') catalog(@Param('clientId') id: string, @Body() body: { search?: unknown; ids?: unknown; page?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.catalog(id, body, user); }
++  @Post(':clientId/preview') preview(@Param('clientId') id: string, @Body() body: { group?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.preview(id, body, user); }
++  @Post(':clientId/apply')
++  @RequireAnyPermissions('clients:write', 'client-requests:write')
++  apply(@Param('clientId') id: string, @Body() body: { group?: unknown; revision?: unknown; previewKey?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.apply(id, body, user); }
++  @Put(':clientId')
++  @RequireAnyPermissions('clients:write', 'client-requests:write')
++  save(@Param('clientId') id: string, @Body() body: { group?: unknown; revision?: unknown; deleteId?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.save(id, body, user); }
++}
+--- a/wms/apps/api/test/duplicate-stock-groups.service.spec.ts
++++ b/wms/apps/api/test/duplicate-stock-groups.service.spec.ts
+@@ -0,0 +1,133 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { DuplicateStockGroupsService } from '../src/modules/marketplace-connections/duplicate-stock-groups.service';
++import { ClientScopeService } from '../src/modules/auth/client-scope.service';
++import type { AuthUser } from '../src/modules/auth/auth.types';
++import type { DuplicateGroup } from '../src/modules/marketplace-connections/duplicate-stock-groups';
++const user = { id: 'u', roleCodes: ['CLIENT'], permissionCodes: ['clients:write'], clientIds: ['client'], writableClientIds: ['client'], clientScopeMode: 'LIMITED' } as AuthUser;
++function fixture() {
++  vi.stubEnv('WMS_DUPLICATE_STOCK_GROUPS_ENABLED', 'true');
++  vi.stubEnv('WMS_DUPLICATE_STOCK_PUBLICATION_ENABLED', 'false');
++  vi.stubEnv('WMS_DUPLICATE_STOCK_SELF_SERVICE_ENABLED', 'false');
++  const group: DuplicateGroup = { id: 'g', name: 'Графит → чёрный', connectionId: 'wb', reserve: { mode: 'UNITS', value: 10 },
++    shares: [{ targetKey: 'original', label: 'Графит', percent: 50 }, { targetKey: 'duplicate', label: 'Чёрный', percent: 50 }],
++    variants: [{ sourceSkuId: 'source', targets: [{ targetKey: 'original', targetId: 'source', confirmed: true, requiresRelabel: false },
++      { targetKey: 'duplicate', targetId: 'target', confirmed: true, requiresRelabel: true }] }], overrides: [] };
++  const skus = ['source', 'target'].map(id => ({ id, article: id, clientSku: null, internalSku: id, name: id, color: id === 'source' ? 'Графит' : 'Чёрный', size: 'M', marketplaceProductId: '1:2', barcodes: [{ value: id }] }));
++  const db: any = { systemSetting: { findUnique: vi.fn().mockResolvedValue(null), upsert: vi.fn().mockImplementation(({ create, update }) => ({ value: create.value, updatedAt: update.updatedAt })) },
++    sku: { findMany: vi.fn().mockResolvedValue(skus) }, client: { findUnique: vi.fn().mockResolvedValue({ relabelingEnabled: true }) },
++    clientMarketplaceConnection: { findMany: vi.fn().mockResolvedValue([{ id: 'wb', marketplace: 'WILDBERRIES', isActive: true, fbsExecutionWarehouseId: 'warehouse' }]) },
++    clientArticleMapping: { findMany: vi.fn().mockResolvedValue([{ sourceArticle: 'source', targetArticle: 'target' }]) },
++    fbsStockPublication: { findMany: vi.fn().mockResolvedValue([]) }, auditLog: { create: vi.fn() }, $executeRaw: vi.fn() };
++  db.$transaction = vi.fn(fn => fn(db));
++  const marketplaces: any = { calculateFbsStockQuantities: vi.fn().mockResolvedValue(new Map([
++    ['source', { available: 100, reserved: 20, sellable: 80 }], ['target', { available: 5, reserved: 0, sellable: 5 }],
++  ])) };
++  return { group, db, skus, marketplaces, service: new DuplicateStockGroupsService(db, new ClientScopeService(), marketplaces) };
++}
++afterEach(() => vi.unstubAllEnvs());
++describe('duplicate stock groups API', () => {
++  // TEST: the UI uses the existing relabel mapping even when customer color labels differ.
++  it('saves confirmed relabel pairs with a revision and audit without changing publications', async () => {
++    const f = fixture(); const saved = await f.service.save('client', { group: f.group, revision: null }, user);
++    expect(saved.groups).toEqual([f.group]); expect(saved.publicationEnabled).toBe(false);
++    expect(f.db.$executeRaw).toHaveBeenCalledOnce(); expect(f.db.auditLog.create).toHaveBeenCalledOnce();
++    expect(f.marketplaces.calculateFbsStockQuantities).not.toHaveBeenCalled();
++  });
++  it('uses reserves before insurance before shares, and keeps target own stock separate', async () => {
++    const f = fixture(); const result = await f.service.preview('client', { group: f.group }, user);
++    expect(result.totalAllocated).toBe(70); expect(result.totalRelabel).toBe(35);
++    expect(result.rows[0]).toMatchObject({ total: 105, reserved: 20, safetyReserve: 10 });
++    expect(result.rows[0].targets.find(t => t.requiresRelabel)).toMatchObject({ quantity: 35, ownStock: 5 });
++  });
++  it('does not invent a second relabel mapping or accept mismatched sizes', async () => {
++    const f = fixture(); f.db.clientArticleMapping.findMany.mockResolvedValue([]);
++    await expect(f.service.save('client', { group: f.group, revision: null }, user)).rejects.toThrow('меню «Переклейка»');
++    f.skus[1].size = 'L'; await expect(f.service.preview('client', { group: f.group }, user)).rejects.toThrow('размеры');
++  });
++  it('blocks stale revisions and overlapping groups', async () => {
++    const f = fixture(); f.db.systemSetting.findUnique.mockResolvedValue({ updatedAt: new Date('2026-09-21'), value: { version: 1, groups: [{ ...f.group, id: 'other' }] } });
++    await expect(f.service.save('client', { group: f.group, revision: null }, user)).rejects.toThrow('другим пользователем');
++    await expect(f.service.save('client', { group: f.group, revision: '2026-09-21T00:00:00.000Z' }, user)).rejects.toThrow('другую группу');
++    expect(f.db.systemSetting.upsert).not.toHaveBeenCalled();
++  });
++  it('keeps disabled VM and other clients inaccessible before querying data', async () => {
++    const f = fixture(); await expect(f.service.read('other', user)).rejects.toThrow();
++    vi.stubEnv('WMS_DUPLICATE_STOCK_GROUPS_ENABLED', 'false'); await expect(f.service.read('client', user)).rejects.toThrow('недоступно');
++    expect(f.db.systemSetting.findUnique).not.toHaveBeenCalled();
++  });
++  it('checks employee warehouse scope', async () => {
++    const f = fixture(); await expect(f.service.preview('client', { group: f.group }, { ...user, roleCodes: ['MANAGER'], activeWarehouseId: 'another' })).rejects.toThrow('филиал');
++  });
++  it('requires the marketplace budget for a client with Ozon instead of using full stock twice', async () => {
++    const f = fixture(); f.db.clientMarketplaceConnection.findMany.mockResolvedValue([
++      { id: 'wb', marketplace: 'WILDBERRIES', isActive: true, fbsExecutionWarehouseId: 'warehouse' },
++      { id: 'ozon', marketplace: 'OZON', isActive: true, fbsExecutionWarehouseId: 'warehouse' },
++    ]);
++    await expect(f.service.preview('client', { group: f.group }, user)).rejects.toThrow('WB/Ozon');
++    f.db.systemSetting.findUnique.mockImplementation(({ where }) => where.key.startsWith('marketplace.allocation.draft.') ? { value: { wbConnectionId: 'wb', ozonConnectionId: 'ozon', wbPercent: 60 } } : null);
++    expect((await f.service.preview('client', { group: f.group }, user)).totalAllocated).toBe(42);
++  });
++  it('supports barcode search scoped to this client and a capped page', async () => {
++    const f = fixture(); await f.service.catalog('client', { search: '001', page: 2 }, user);
++    expect(f.db.sku.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ clientId: 'client' }), skip: 50, take: 51 }));
++  });
++  // TEST: the existing picker can choose another same-size source; do not hide this conflict.
++  it('warns when relabel picking can choose a different physical source', async () => {
++    const f = fixture();
++    f.db.sku.findMany.mockResolvedValueOnce(f.skus).mockResolvedValueOnce([
++      f.skus[0], { ...f.skus[0], id: 'alternative-source' },
++    ]);
++    const preview = await f.service.preview('client', { group: f.group }, user);
++    expect(preview.pickingWarnings).toEqual([expect.objectContaining({ sourceSkuId: 'source', targetSkuId: 'target' })]);
++    expect(preview.publicationEnabled).toBe(false);
++  });
++});
++
++// TEST: client activation, stale previews, real queue events and publication isolation.
++describe('client applies duplicate shares', () => {
++  function liveFixture() {
++    const f = fixture();
++    for (const name of ['WMS_DUPLICATE_STOCK_SELF_SERVICE_ENABLED','WMS_DUPLICATE_STOCK_PUBLICATION_ENABLED','WMS_WB_URGENT_STOCK_SYNC','WMS_WB_STOCK_FINE_SETTINGS','WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED']) vi.stubEnv(name,'true');
++    const stored=new Map<string,any>();
++    f.db.systemSetting.findUnique.mockImplementation(({where})=>stored.get(where.key)??null);
++    f.db.systemSetting.upsert.mockImplementation(({where,create,update})=>{const row={...(stored.has(where.key)?update:create),updatedAt:new Date('2026-09-22')};stored.set(where.key,row);return row;});
++    f.db.$queryRaw=vi.fn().mockResolvedValue([{acquired:true}]);
++    f.db.fbsStockAllocationPolicy={findFirst:vi.fn().mockResolvedValue({id:'p',overrides:[]})};
++    f.db.clientArticleMapping.upsert=vi.fn();f.group.reserve={mode:'COMMON',value:0};
++    const apply=async()=>{const p=await f.service.preview('client',{group:f.group},user);return f.service.apply('client',{group:f.group,revision:stored.get('marketplace.duplicates.groups.client')?.updatedAt.toISOString()??null,previewKey:p.previewKey},user);};
++    return {...f,stored,apply};
++  }
++  it('creates a missing relabel pair only on apply and enqueues durable identities',async()=>{
++    const f=liveFixture();f.db.clientArticleMapping.findMany.mockResolvedValue([]);
++    expect((await f.service.preview('client',{group:f.group},user)).missingMappings).toEqual([{sourceArticle:'source',targetArticle:'target'}]);
++    expect(f.db.clientArticleMapping.upsert).not.toHaveBeenCalled();
++    expect(await f.apply()).toMatchObject({queued:true,activeGroupIds:['g'],mappingsCreated:1});
++    expect(f.db.clientArticleMapping.upsert).toHaveBeenCalledOnce();
++    expect(f.db.$executeRaw.mock.calls.some(([sql])=>sql.join('').includes('INSERT INTO "WbStockSyncEvent"'))).toBe(true);
++  });
++  it('updates active common percentages and per-size exceptions',async()=>{
++    const f=liveFixture();f.stored.set('marketplace.duplicates.groups.client',{value:{version:1,groups:[structuredClone(f.group)]},updatedAt:new Date('2026-09-21')});
++    f.stored.set('marketplace.duplicates.active.client',{value:{version:1,groupIds:['g'],connectionId:'wb',warehouseId:'warehouse'}});
++    f.group.shares[0].percent=25;f.group.shares[1].percent=75;
++    f.group.overrides=[{sourceSkuId:'source',shares:[{targetKey:'original',percent:0},{targetKey:'duplicate',percent:100}]}];
++    expect((await f.apply()).groups[0].overrides[0].shares[1].percent).toBe(100);
++  });
++  it('rejects a changed preview without writing',async()=>{
++    const f=liveFixture();const p=await f.service.preview('client',{group:f.group},user);f.group.shares[0].percent=0;f.group.shares[1].percent=100;
++    await expect(f.service.apply('client',{group:f.group,revision:null,previewKey:p.previewKey},user)).rejects.toThrow('предпросмотр');
++    expect(f.db.systemSetting.upsert).not.toHaveBeenCalled();
++  });
++  it('rejects publisher contention and conflicting manual limits',async()=>{
++    const f=liveFixture();f.db.$queryRaw.mockResolvedValue([{acquired:false}]);await expect(f.apply()).rejects.toThrow('отправка WB');
++    f.db.$queryRaw.mockResolvedValue([{acquired:true}]);f.db.fbsStockPublication.findMany.mockResolvedValue([{enabled:true,saleLimit:5,relabelManualAmount:null}]);
++    await expect(f.apply()).rejects.toThrow('ручные лимиты');expect(f.db.systemSetting.upsert).not.toHaveBeenCalled();
++  });
++  it('rejects a conflicting relabel source without overwriting it',async()=>{
++    const f=liveFixture();f.db.clientArticleMapping.findMany.mockResolvedValue([{sourceArticle:'other',targetArticle:'target'}]);
++    await expect(f.apply()).rejects.toThrow('конфликтует');expect(f.db.clientArticleMapping.upsert).not.toHaveBeenCalled();
++  });
++  it('keeps sold VM and other clients inaccessible',async()=>{
++    const f=liveFixture();vi.stubEnv('WMS_DUPLICATE_STOCK_SELF_SERVICE_ENABLED','false');await expect(f.apply()).rejects.toThrow('недоступно');
++    await expect(f.service.apply('other',{group:f.group,revision:null},user)).rejects.toThrow();expect(f.db.systemSetting.upsert).not.toHaveBeenCalled();
++  });
++});
+--- a/wms/apps/web/src/components/fbs/DuplicateStockGroupsView.tsx
++++ b/wms/apps/web/src/components/fbs/DuplicateStockGroupsView.tsx
+@@ -1,144 +1,172 @@
+-import { useEffect, useRef, useState } from 'react';
+-import { fetchDuplicateGroups, fetchDuplicateCatalog, saveDuplicateGroup, previewDuplicateGroup, type AuthSession } from '../../lib/api';
+-import { duplicateGroupReady, effectiveDuplicateShares, matchesRelabelArticle, suggestDuplicateTarget, withDuplicateException, type DuplicateCard, type DuplicateGroup, type DuplicateMapping, type DuplicatePreview, type DuplicateSettings } from '../../lib/duplicateStockGroups';
+-
+-const label = (card?: DuplicateCard) => card ? [card.article || card.name, card.size, card.color, card.barcodes[0]?.value].filter(Boolean).join(' · ') : 'Карточка недоступна';
+-export function DuplicateStockGroupsView({ session, clientId }: { session: AuthSession; clientId: string }) {
+-  const [data, setData] = useState<DuplicateSettings | null>(null), [group, setGroup] = useState<DuplicateGroup | null>(null);
+-  const [cards, setCards] = useState<DuplicateCard[]>([]), [preview, setPreview] = useState<DuplicatePreview | null>(null);
+-  const [mappingId, setMappingId] = useState(''), [search, setSearch] = useState(''), [individual, setIndividual] = useState(false);
+-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
+-  const generation = useRef(0), [reload, setReload] = useState(0);
+-  useEffect(() => {
+-    const id = ++generation.current; setData(null); setGroup(null); setPreview(null); setCards([]); setBusy(true); setError(''); setMessage('');
+-    fetchDuplicateGroups(session.accessToken, clientId).then(r => { if (id === generation.current) setData(r); })
+-      .catch(e => { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось загрузить группы.'); })
+-      .finally(() => { if (id === generation.current) setBusy(false); });
+-    return () => { generation.current++; };
+-  }, [clientId, session.accessToken, reload]);
+-  async function run(action: () => Promise<void>) {
+-    if (busy) return; setBusy(true); setError(''); setMessage('');
+-    const id = generation.current;
+-    try { await action(); } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось выполнить действие.'); }
+-    finally { if (id === generation.current) setBusy(false); }
+-  }
+-  function change(next: DuplicateGroup) { setGroup(next); setPreview(null); setMessage(''); }
+-  async function articleCards(article: string, source = false) {
+-    const rows: DuplicateCard[] = [];
+-    for (let page = 1; page <= 12; page++) {
+-      const r = await fetchDuplicateCatalog(session.accessToken, clientId, { search: article, page }); rows.push(...r.rows);
+-      if (!r.hasMore) return rows.filter(c => matchesRelabelArticle(c, article, source));
+-    }
+-    throw new Error('Слишком много совпадений. Уточните артикул в меню «Переклейка».');
+-  }
+-  async function addMapping(mapping: DuplicateMapping, append = false) {
+-    const id = generation.current;
+-    const [sources, targets] = await Promise.all([articleCards(mapping.sourceArticle, true), articleCards(mapping.targetArticle)]);
+-    if (id !== generation.current) return;
+-    if (!sources.length || sources.length > 100 || !targets.length) throw new Error('Не найдены карточки обоих артикулов либо исходных вариантов больше 100. Проверьте синхронизацию карточек.');
+-    if (append && group && !group.variants.every(v => sources.some(s => s.id === v.sourceSkuId))) throw new Error('Дополнительный дубль должен использовать те же исходные товары.');
+-    const key = 'duplicate-' + mapping.id;
+-    if (append && group?.shares.some(s => s.targetKey === key)) throw new Error('Этот дубль уже добавлен.');
+-    setCards(old => [...new Map([...old, ...sources, ...targets].map(c => [c.id, c])).values()]);
+-    if (append && group) {
+-      change({ ...group, shares: [...group.shares, { targetKey: key, label: mapping.targetArticle, percent: 0 }],
+-        variants: group.variants.map(v => ({ ...v, targets: [...v.targets, { targetKey: key, ...suggestDuplicateTarget(sources.find(s => s.id === v.sourceSkuId)!, targets) }] })),
+-        overrides: group.overrides.map(o => ({ ...o, shares: [...o.shares, { targetKey: key, percent: 0 }] })) });
+-    } else {
+-      setIndividual(false);
+-      change({ id: crypto.randomUUID(), name: mapping.sourceArticle, connectionId: data?.connections[0]?.id ?? '', reserve: { mode: 'COMMON', value: 0 },
+-        shares: [{ targetKey: 'original', label: mapping.sourceArticle, percent: 50 }, { targetKey: key, label: mapping.targetArticle, percent: 50 }],
+-        variants: sources.map(s => ({ sourceSkuId: s.id, targets: [{ targetKey: 'original', targetId: s.id, confirmed: true, requiresRelabel: false },
+-          { targetKey: key, ...suggestDuplicateTarget(s, targets) }] })), overrides: [] });
+-    }
+-  }
+-  async function edit(selected: DuplicateGroup) {
+-    const id = generation.current;
+-    const ids = [...new Set(selected.variants.flatMap(v => [v.sourceSkuId, ...v.targets.map(t => t.targetId)]))];
+-    const result = await fetchDuplicateCatalog(session.accessToken, clientId, { ids });
+-    const alternatives = await Promise.all(selected.shares.filter(s => s.targetKey !== 'original').map(s => articleCards(s.label)));
+-    if (id !== generation.current) return;
+-    setCards([...new Map([...result.rows, ...alternatives.flat()].map(c => [c.id, c])).values()]); setIndividual(selected.overrides.length > 0); change(structuredClone(selected));
+-  }
+-  async function persist(deleteId?: string) {
+-    if (!data || (!group && !deleteId)) return;
+-    const id = generation.current;
+-    const result = await saveDuplicateGroup(session.accessToken, clientId, { ...(deleteId ? { deleteId } : { group: group! }), revision: data.revision });
+-    if (id !== generation.current) return;
+-    setData({ ...data, groups: result.groups, revision: result.revision });
+-    if (deleteId) { setGroup(null); setPreview(null); }
+-    setMessage(deleteId ? 'Группа удалена.' : 'Правило сохранено. Отправка остатков не включена.');
+-  }
+-  const selectedMapping = data?.mappings.find(m => m.id === mappingId);
+-  return <section className="fbs-allocation">
+-    <h3>Между артикулами</h3>
+-    <p>Группы используют соответствия из меню «Переклейка». Доли делят общий остаток каждого размера после резервов заказов и страхового резерва.</p>
+-    <p><strong>Настройка и предпросмотр.</strong> {data?.activeGroupIds.length ? 'Отмеченные группы участвуют в автоматической отправке WB. Остальные группы — черновики.' : 'Автоматическая отправка групп ещё не включена.'}</p>
+-    {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
+-    <button disabled={busy} onClick={() => { if (!group || window.confirm('Обновить список? Несохранённые изменения будут потеряны.')) setReload(n => n + 1); }}>Обновить список</button>
+-    {!data ? <p>{busy ? 'Загрузка групп…' : 'Не удалось загрузить группы.'}</p> : <>
+-      {!data.relabelingEnabled && <p role="alert">У клиента выключена переклейка. Включите её перед настройкой групп.</p>}
+-      <label>Поиск групп <input value={search} onChange={e => setSearch(e.target.value)} /></label>
+-      <ul>{data.groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase())).map(g => <li key={g.id}>
+-        <button disabled={busy} onClick={() => { if (!group || window.confirm('Открыть другую группу без сохранения текущих изменений?')) void run(() => edit(g)); }}>{g.name}</button>
+-        {' — '}{g.variants.length} размеров/вариантов · {g.shares.map(s => `${s.percent}%`).join(' / ')}
+-        {data.activeGroupIds.includes(g.id) && <strong> · Отправляется в WB</strong>}
+-      </li>)}</ul>
+-      {!data.groups.length && <p>Сохранённых групп пока нет.</p>}
+-      <fieldset disabled={busy || !data.relabelingEnabled}><legend>Соответствия из «Переклейки»</legend>
+-        <select aria-label="Соответствие переклейки" value={mappingId} onChange={e => setMappingId(e.target.value)}><option value="">Выберите исходный артикул → дубль</option>
+-          {data.mappings.map(m => <option key={m.id} value={m.id}>{m.sourceArticle} → {m.targetArticle}</option>)}
+-        </select>
+-        <button disabled={!selectedMapping} onClick={() => { if (selectedMapping && (!group || window.confirm('Создать новую группу без сохранения текущих изменений?'))) void run(() => addMapping(selectedMapping)); }}>Создать группу</button>
+-        {group && <button disabled={!selectedMapping || group.shares.length >= 6} onClick={() => selectedMapping && void run(() => addMapping(selectedMapping, true))}>Добавить ещё дубль</button>}
+-        {!data.mappings.length && <p>Сначала добавьте соответствия артикулов в меню «Переклейка».</p>}
+-      </fieldset>
+-    </>}
+-    {group && <fieldset disabled={busy}><legend>Правило распределения</legend>
+-      <label>Название группы <input value={group.name} onChange={e => change({ ...group, name: e.target.value })} /></label>
+-      <label>Кабинет WB <select value={group.connectionId} onChange={e => change({ ...group, connectionId: e.target.value })}><option value="">Выберите кабинет</option>
+-        {data?.connections.map(c => <option key={c.id} value={c.id}>{c.accountName || c.id}{!c.fbsExecutionWarehouseId ? ' — склад не задан' : ''}</option>)}</select></label>
+-      <h4>Общие доли для каждого размера</h4>
+-      {group.shares.map(s => <label key={s.targetKey}>{s.label}, % <input type="number" min="0" max="100" step="1" value={Number.isFinite(s.percent) ? s.percent : ''}
+-        onChange={e => change({ ...group, shares: group.shares.map(x => x.targetKey === s.targetKey ? { ...x, percent: e.target.value === '' ? NaN : Number(e.target.value) } : x) })} /></label>)}
+-      <p>Сумма долей: {group.shares.reduce((sum, s) => sum + (s.percent || 0), 0)}%. Должно быть 100%.</p>
+-      <button onClick={() => change({ ...group, shares: group.shares.map((s, i) => ({ ...s, percent: Math.floor(100 / group.shares.length) + (i < 100 % group.shares.length ? 1 : 0) })) })}>Поровну</button>
+-      <label>Страховой резерв <select value={group.reserve.mode} onChange={e => change({ ...group, reserve: { mode: e.target.value as 'COMMON' | 'UNITS' | 'PERCENT', value: 0 } })}><option value="COMMON">Из общих настроек клиента</option><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option></select>
+-        <input disabled={group.reserve.mode === 'COMMON'} aria-label="Величина страхового резерва" type="number" min="0" max={group.reserve.mode === 'PERCENT' ? 100 : 1_000_000} step="1" value={Number.isFinite(group.reserve.value) ? group.reserve.value : ''}
+-          onChange={e => change({ ...group, reserve: { ...group.reserve, value: e.target.value === '' ? NaN : Number(e.target.value) } })} /></label>
+-      <p>Один резерв на исходный размер/цвет, до долей WB/Ozon и дублей. Процент округляется вверх.</p>
+-      {group.reserve.mode === 'COMMON' && data && <p>Общий резерв: {data.commonReserve.value}{data.commonReserve.mode === 'PERCENT' ? '%' : ' шт.'}{data.commonReserve.lowStock && `; при остатке меньше ${data.commonReserve.lowStock.threshold} — ${data.commonReserve.lowStock.reserveUnits} шт.`}. Изменения общих настроек применяются автоматически.</p>}
+-      <label><input type="checkbox" checked={individual} onChange={e => { const on = e.target.checked; if (!on && group.overrides.length && !window.confirm('Удалить исключения и вернуть общие доли всем размерам?')) return; setIndividual(on); if (!on) change({ ...group, overrides: [] }); }} /> Индивидуальное распределение по размерам</label>
+-      {group.variants.map(v => {
+-        const source = cards.find(c => c.id === v.sourceSkuId), override = group.overrides.find(o => o.sourceSkuId === v.sourceSkuId);
+-        return <fieldset key={v.sourceSkuId}><legend>{label(source)}</legend>
+-          {v.targets.filter(t => t.targetId !== v.sourceSkuId).map(t => {
+-            const selected = cards.find(c => c.id === t.targetId), slot = group.shares.find(s => s.targetKey === t.targetKey)!;
+-            const options = cards.filter(c => c.id === t.targetId || (matchesRelabelArticle(c, slot.label) && c.size?.trim().toLowerCase() === source?.size?.trim().toLowerCase()));
+-            return <div key={t.targetKey}><label>Целевая карточка: {slot.label} <select value={t.targetId} onChange={e => change({ ...group, variants: group.variants.map(x => x.sourceSkuId === v.sourceSkuId ? { ...x, targets: x.targets.map(y => y.targetKey === t.targetKey ? { ...y, targetId: e.target.value, confirmed: false } : y) } : x) })}>
+-              <option value="">Укажите соответствие</option>{options.map(c => <option value={c.id} key={c.id}>{label(c)}</option>)}</select></label>
+-              <label><input type="checkbox" checked={t.confirmed} disabled={!selected} onChange={e => change({ ...group, variants: group.variants.map(x => x.sourceSkuId === v.sourceSkuId ? { ...x, targets: x.targets.map(y => y.targetKey === t.targetKey ? { ...y, confirmed: e.target.checked } : y) } : x) })} /> Подтверждаю соответствие и переклейку на {selected?.barcodes[0]?.value || 'целевой ШК'}</label>
+-            </div>;
+-          })}
+-          {individual && <label><input type="checkbox" checked={Boolean(override)} onChange={e => change(withDuplicateException(group, v.sourceSkuId, e.target.checked))} /> Отдельные доли для этого размера</label>}
+-          {override ? override.shares.map(s => <label key={s.targetKey}>{group.shares.find(x => x.targetKey === s.targetKey)?.label}, % <input type="number" min="0" max="100" value={Number.isFinite(s.percent) ? s.percent : ''} onChange={e => change({ ...group, overrides: group.overrides.map(o => o.sourceSkuId === v.sourceSkuId ? { ...o, shares: o.shares.map(x => x.targetKey === s.targetKey ? { ...x, percent: e.target.value === '' ? NaN : Number(e.target.value) } : x) } : o) })} /></label>)
+-            : <small>Общие доли: {effectiveDuplicateShares(group, v.sourceSkuId).map(s => s.percent + '%').join(' / ')}</small>}
+-          <button onClick={() => change({ ...group, variants: group.variants.filter(x => x.sourceSkuId !== v.sourceSkuId), overrides: group.overrides.filter(o => o.sourceSkuId !== v.sourceSkuId) })}>Исключить размер из группы</button>
+-        </fieldset>;
+-      })}
+-      <button disabled={!duplicateGroupReady(group) || data?.activeGroupIds.includes(group.id)} onClick={() => void run(() => persist())}>Сохранить правило</button>
+-      <button disabled={!duplicateGroupReady(group)} onClick={() => void run(async () => { const id = generation.current; const result = await previewDuplicateGroup(session.accessToken, clientId, group); if (id === generation.current) setPreview(result); })}>Рассчитать предпросмотр</button>
+-      {data?.groups.some(g => g.id === group.id) && <button disabled={data.activeGroupIds.includes(group.id)} onClick={() => { if (window.confirm('Удалить сохранённую группу? Действующие настройки WB не изменятся.')) void run(() => persist(group.id)); }}>Удалить группу</button>}
+-      {data?.activeGroupIds.includes(group.id) && <p>Для изменения действующего правила требуется пересчёт и переключение публикации администратором.</p>}
+-      {!duplicateGroupReady(group) && <p>Проверьте доли, резерв и подтвердите все соответствия размеров.</p>}
+-    </fieldset>}
+-    {preview && <section><h4>Предпросмотр на {new Date(preview.generatedAt).toLocaleString('ru-RU')}</h4>
+-      {preview.pickingWarnings.map(w => <p role="alert" key={w.sourceSkuId + ':' + w.targetSkuId}>{w.message}</p>)}
+-      <p>Доля WB: {preview.wbPercent}%. Из общего пула: {preview.totalAllocated} шт., из них с переклейкой: {preview.totalRelabel} шт.</p>
+-      {preview.publications.length > 0 && <p role="alert">Есть действующие настройки публикации WB. Перед включением процентных правил потребуется согласовать их с новым распределением.</p>}
+-      <div className="fbs-allocation__table-wrap"><table><thead><tr><th>Исходный товар</th><th>Остаток AVAILABLE</th><th>Резерв заказов</th><th>Страховой резерв</th><th>К распределению</th><th>Карточка</th><th>Доля</th><th>Из общего пула</th><th>Свой остаток дубля</th></tr></thead>
+-        <tbody>{preview.rows.flatMap(r => r.targets.map(t => <tr key={r.sourceSkuId + t.targetKey}><td>{label(r.source)}</td><td>{r.total}</td><td>{r.reserved}</td><td>{r.safetyReserve}</td><td>{r.marketplaceBudget}</td><td>{label(t.card)}{t.requiresRelabel && ' · переклейка'}</td><td>{t.percent}%{r.individual && ' · исключение'}</td><td>{t.quantity}</td><td>{t.targetId === r.sourceSkuId ? '—' : t.ownStock ?? 'Нет данных'}</td></tr>))}</tbody></table></div>
+-      <p>Свой уже переклеенный остаток показан отдельно и не включён повторно в исходный пул. Это расчёт, а не отправленные на WB количества.</p>
+-    </section>}
+-  </section>;
+-}
++import { useEffect, useRef, useState } from 'react';
++import './DuplicateStockGroupsView.css';
++import { DuplicateArticlePicker } from './DuplicateArticlePicker';
++import { applyDuplicateGroup, fetchDuplicateGroups, fetchDuplicateCatalog, saveDuplicateGroup, previewDuplicateGroup, type AuthSession } from '../../lib/api';
++import { duplicateGroupReady, effectiveDuplicateShares, matchesRelabelArticle, suggestDuplicateTarget, withDuplicateException, type DuplicateCard, type DuplicateGroup, type DuplicateMapping, type DuplicatePreview, type DuplicateSettings } from '../../lib/duplicateStockGroups';
++
++const label = (card?: DuplicateCard) => card ? [card.article || card.name, card.size, card.color, card.barcodes[0]?.value].filter(Boolean).join(' · ') : 'Карточка недоступна';
++export function DuplicateStockGroupsView({ session, clientId }: { session: AuthSession; clientId: string }) {
++  const [data, setData] = useState<DuplicateSettings | null>(null), [group, setGroup] = useState<DuplicateGroup | null>(null);
++  const [cards, setCards] = useState<DuplicateCard[]>([]), [preview, setPreview] = useState<DuplicatePreview | null>(null);
++  const [sourceArticle, setSourceArticle] = useState(''), [targetArticle, setTargetArticle] = useState('');
++  const [mappingId, setMappingId] = useState(''), [search, setSearch] = useState(''), [individual, setIndividual] = useState(false);
++  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
++  const generation = useRef(0), [reload, setReload] = useState(0);
++  useEffect(() => {
++    const id = ++generation.current; setData(null); setGroup(null); setPreview(null); setCards([]); setSourceArticle(''); setTargetArticle(''); setMappingId(''); setBusy(true); setError(''); setMessage('');
++    fetchDuplicateGroups(session.accessToken, clientId).then(r => { if (id === generation.current) setData(r); })
++      .catch(e => { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось загрузить группы.'); })
++      .finally(() => { if (id === generation.current) setBusy(false); });
++    return () => { generation.current++; };
++  }, [clientId, session.accessToken, reload]);
++  async function run(action: () => Promise<void>) {
++    if (busy) return; setBusy(true); setError(''); setMessage('');
++    const id = generation.current;
++    try { await action(); } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось выполнить действие.'); }
++    finally { if (id === generation.current) setBusy(false); }
++  }
++  function change(next: DuplicateGroup) { setGroup(next); setPreview(null); setMessage(''); }
++  async function articleCards(article: string, source = false) {
++    const rows: DuplicateCard[] = [];
++    for (let page = 1; page <= 12; page++) {
++      const r = await fetchDuplicateCatalog(session.accessToken, clientId, { search: article, page }); rows.push(...r.rows);
++      if (!r.hasMore) return rows.filter(c => matchesRelabelArticle(c, article, source));
++    }
++    throw new Error('Слишком много совпадений. Уточните артикул в меню «Переклейка».');
++  }
++  async function addMapping(mapping: DuplicateMapping, append = false) {
++    const id = generation.current;
++    const [sources, targets] = await Promise.all([articleCards(mapping.sourceArticle, true), articleCards(mapping.targetArticle)]);
++    if (id !== generation.current) return;
++    if (!sources.length || sources.length > 100 || !targets.length) throw new Error('Не найдены карточки обоих артикулов либо исходных вариантов больше 100. Проверьте синхронизацию карточек.');
++    if (append && group && !group.variants.every(v => sources.some(s => s.id === v.sourceSkuId))) throw new Error('Дополнительный дубль должен использовать те же исходные товары.');
++    const key = 'duplicate-' + mapping.id;
++    if (append && group?.shares.some(s => s.targetKey === key)) throw new Error('Этот дубль уже добавлен.');
++    setCards(old => [...new Map([...old, ...sources, ...targets].map(c => [c.id, c])).values()]);
++    if (append && group) {
++      change({ ...group, shares: [...group.shares, { targetKey: key, label: mapping.targetArticle, percent: 0 }],
++        variants: group.variants.map(v => ({ ...v, targets: [...v.targets, { targetKey: key, ...suggestDuplicateTarget(sources.find(s => s.id === v.sourceSkuId)!, targets) }] })),
++        overrides: group.overrides.map(o => ({ ...o, shares: [...o.shares, { targetKey: key, percent: 0 }] })) });
++    } else {
++      setIndividual(false);
++      change({ id: crypto.randomUUID(), name: mapping.sourceArticle, connectionId: data?.connections[0]?.id ?? '', reserve: { mode: 'COMMON', value: 0 },
++        shares: [{ targetKey: 'original', label: mapping.sourceArticle, percent: 50 }, { targetKey: key, label: mapping.targetArticle, percent: 50 }],
++        variants: sources.map(s => ({ sourceSkuId: s.id, targets: [{ targetKey: 'original', targetId: s.id, confirmed: true, requiresRelabel: false },
++          { targetKey: key, ...suggestDuplicateTarget(s, targets) }] })), overrides: [] });
++    }
++  }
++  async function edit(selected: DuplicateGroup) {
++    const id = generation.current;
++    const ids = [...new Set(selected.variants.flatMap(v => [v.sourceSkuId, ...v.targets.map(t => t.targetId)]))];
++    const result = await fetchDuplicateCatalog(session.accessToken, clientId, { ids });
++    const alternatives = await Promise.all(selected.shares.filter(s => s.targetKey !== 'original').map(s => articleCards(s.label)));
++    if (id !== generation.current) return;
++    setCards([...new Map([...result.rows, ...alternatives.flat()].map(c => [c.id, c])).values()]); setIndividual(selected.overrides.length > 0); change(structuredClone(selected));
++  }
++  async function persist(deleteId?: string) {
++    if (!data || (!group && !deleteId)) return;
++    const id = generation.current;
++    const result = await saveDuplicateGroup(session.accessToken, clientId, { ...(deleteId ? { deleteId } : { group: group! }), revision: data.revision });
++    if (id !== generation.current) return;
++    setData({ ...data, groups: result.groups, revision: result.revision });
++    if (deleteId) { setGroup(null); setPreview(null); }
++    setMessage(deleteId ? 'Группа удалена.' : 'Правило сохранено. Отправка остатков не включена.');
++  }
++  const active = Boolean(group && data?.activeGroupIds.includes(group.id));
++  async function apply() {
++    if (!data || !group || !preview) return;
++    const id = generation.current;
++    const result = await applyDuplicateGroup(session.accessToken, clientId, { group, revision: data.revision, previewKey: preview.previewKey });
++    if (id !== generation.current) return;
++    setData({ ...data, groups: result.groups, revision: result.revision, activeGroupIds: result.activeGroupIds });
++    setPreview(null);
++    setMessage('Правило применено. Остатки поставлены в очередь пересчёта и проверки WB. Подтверждение отправки смотрите в разделе «Подтверждение WB».');
++  }
++  const selectedMapping = data?.mappings.find(m => m.id === mappingId);
++  return <section className="fbs-allocation duplicate-stock">
++    <h3>Между артикулами</h3>
++    <p>Выберите исходный артикул и дубль, задайте доли и проверьте расчёт. Соответствие для сборки появится в «Переклейке» при применении. Резерв вычитается один раз до распределения.</p>
++    <p><strong>Настройка и предпросмотр.</strong> {data?.activeGroupIds.length ? 'Отмеченные группы участвуют в автоматической отправке WB. Остальные группы — черновики.' : 'Автоматическая отправка групп ещё не включена.'}</p>
++    {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
++    <button disabled={busy} onClick={() => { if (!group || window.confirm('Обновить список? Несохранённые изменения будут потеряны.')) setReload(n => n + 1); }}>Обновить список</button>
++    {!data ? <p>{busy ? 'Загрузка групп…' : 'Не удалось загрузить группы.'}</p> : <>
++      {!data.relabelingEnabled && <p role="alert">У клиента выключена переклейка. Включите её перед настройкой групп.</p>}
++      <label>Поиск групп <input value={search} onChange={e => setSearch(e.target.value)} /></label>
++      <ul>{data.groups.filter(g => g.name.toLowerCase().includes(search.toLowerCase())).map(g => <li key={g.id}>
++        <button disabled={busy} onClick={() => { if (!group || window.confirm('Открыть другую группу без сохранения текущих изменений?')) void run(() => edit(g)); }}>{g.name} · Настроить</button>
++        {' — '}{g.variants.length} размеров/вариантов · {g.shares.map(s => `${s.percent}%`).join(' / ')}
++        {data.activeGroupIds.includes(g.id) && <strong> · Автораспределение включено</strong>}
++      </li>)}</ul>
++      {!data.groups.length && <p>Сохранённых групп пока нет.</p>}
++      {data.selfServiceEnabled && <section className="duplicate-stock__new"><h4>Новое распределение</h4><p>1. Выберите два артикула клиента. На следующем шаге подтвердите соответствия размеров.</p>
++        <div className="duplicate-stock__pair">
++          <DuplicateArticlePicker title="Исходный артикул" accessToken={session.accessToken} clientId={clientId} value={sourceArticle} onChange={setSourceArticle} disabled={busy || !data.relabelingEnabled} />
++          <DuplicateArticlePicker title="Артикул дубля" accessToken={session.accessToken} clientId={clientId} value={targetArticle} onChange={setTargetArticle} disabled={busy || !data.relabelingEnabled} />
++        </div>
++        <button disabled={busy || !data.relabelingEnabled || !sourceArticle || !targetArticle || sourceArticle === targetArticle} onClick={() => {
++          if (!group || window.confirm('Перейти к новой паре? Несохранённые изменения текущей группы будут потеряны.')) void run(() => addMapping({ id: 'selected', sourceArticle, targetArticle }));
++        }}>Настроить доли и размеры</button>
++      </section>}
++      <details><summary>Использовать готовое соответствие из «Переклейки»</summary>
++      <fieldset disabled={busy || !data.relabelingEnabled}><legend>Соответствия из «Переклейки»</legend>
++        <select aria-label="Соответствие переклейки" value={mappingId} onChange={e => setMappingId(e.target.value)}><option value="">Выберите исходный артикул → дубль</option>
++          {data.mappings.map(m => <option key={m.id} value={m.id}>{m.sourceArticle} → {m.targetArticle}</option>)}
++        </select>
++        <button disabled={!selectedMapping} onClick={() => { if (selectedMapping && (!group || window.confirm('Создать новую группу без сохранения текущих изменений?'))) void run(() => addMapping(selectedMapping)); }}>Создать группу</button>
++        {group && <button disabled={active || !selectedMapping || group.shares.length >= 6} onClick={() => selectedMapping && void run(() => addMapping(selectedMapping, true))}>Добавить ещё дубль</button>}
++        {!data.mappings.length && <p>Сначала добавьте соответствия артикулов в меню «Переклейка».</p>}
++      </fieldset></details>
++    </>}
++    {group && <fieldset disabled={busy}><legend>2. Доли и соответствия размеров</legend>
++      <label>Название группы <input value={group.name} onChange={e => change({ ...group, name: e.target.value })} /></label>
++      <label>Кабинет WB <select disabled={active} value={group.connectionId} onChange={e => change({ ...group, connectionId: e.target.value })}><option value="">Выберите кабинет</option>
++        {data?.connections.map(c => <option key={c.id} value={c.id}>{c.accountName || c.id}{!c.fbsExecutionWarehouseId ? ' — склад не задан' : ''}</option>)}</select></label>
++      <h4>Общие доли для каждого размера</h4>
++      {group.shares.map(s => <label key={s.targetKey}>{s.label}, % <input type="number" min="0" max="100" step="1" value={Number.isFinite(s.percent) ? s.percent : ''}
++        onChange={e => change({ ...group, shares: group.shares.map(x => x.targetKey === s.targetKey ? { ...x, percent: e.target.value === '' ? NaN : Number(e.target.value) } : x) })} /></label>)}
++      <p>Сумма долей: {group.shares.reduce((sum, s) => sum + (s.percent || 0), 0)}%. Должно быть 100%.</p>
++      <button onClick={() => change({ ...group, shares: group.shares.map((s, i) => ({ ...s, percent: Math.floor(100 / group.shares.length) + (i < 100 % group.shares.length ? 1 : 0) })) })}>Поровну</button>
++      <label>Страховой резерв <select value={group.reserve.mode} onChange={e => change({ ...group, reserve: { mode: e.target.value as 'COMMON' | 'UNITS' | 'PERCENT', value: 0 } })}><option value="COMMON">Из общих настроек клиента</option><option value="UNITS">В штуках</option><option value="PERCENT">В процентах</option></select>
++        <input disabled={group.reserve.mode === 'COMMON'} aria-label="Величина страхового резерва" type="number" min="0" max={group.reserve.mode === 'PERCENT' ? 100 : 1_000_000} step="1" value={Number.isFinite(group.reserve.value) ? group.reserve.value : ''}
++          onChange={e => change({ ...group, reserve: { ...group.reserve, value: e.target.value === '' ? NaN : Number(e.target.value) } })} /></label>
++      <p>Один резерв на исходный размер/цвет, до долей WB/Ozon и дублей. Процент округляется вверх.</p>
++      {group.reserve.mode === 'COMMON' && data && <p>Общий резерв: {data.commonReserve.value}{data.commonReserve.mode === 'PERCENT' ? '%' : ' шт.'}{data.commonReserve.lowStock && `; при остатке меньше ${data.commonReserve.lowStock.threshold} — ${data.commonReserve.lowStock.reserveUnits} шт.`}. Изменения общих настроек применяются автоматически.</p>}
++      <label><input type="checkbox" checked={individual} onChange={e => { const on = e.target.checked; if (!on && group.overrides.length && !window.confirm('Удалить исключения и вернуть общие доли всем размерам?')) return; setIndividual(on); if (!on) change({ ...group, overrides: [] }); }} /> Индивидуальное распределение по размерам</label>
++      {group.variants.map(v => {
++        const source = cards.find(c => c.id === v.sourceSkuId), override = group.overrides.find(o => o.sourceSkuId === v.sourceSkuId);
++        return <fieldset key={v.sourceSkuId}><legend>{label(source)}</legend>
++          {v.targets.filter(t => t.targetId !== v.sourceSkuId).map(t => {
++            const selected = cards.find(c => c.id === t.targetId), slot = group.shares.find(s => s.targetKey === t.targetKey)!;
++            const options = cards.filter(c => c.id === t.targetId || (matchesRelabelArticle(c, slot.label) && c.size?.trim().toLowerCase() === source?.size?.trim().toLowerCase()));
++            return <div key={t.targetKey}><label>Целевая карточка: {slot.label} <select disabled={active} value={t.targetId} onChange={e => change({ ...group, variants: group.variants.map(x => x.sourceSkuId === v.sourceSkuId ? { ...x, targets: x.targets.map(y => y.targetKey === t.targetKey ? { ...y, targetId: e.target.value, confirmed: false } : y) } : x) })}>
++              <option value="">Укажите соответствие</option>{options.map(c => <option value={c.id} key={c.id}>{label(c)}</option>)}</select></label>
++              <label><input type="checkbox" checked={t.confirmed} disabled={active || !selected} onChange={e => change({ ...group, variants: group.variants.map(x => x.sourceSkuId === v.sourceSkuId ? { ...x, targets: x.targets.map(y => y.targetKey === t.targetKey ? { ...y, confirmed: e.target.checked } : y) } : x) })} /> Подтверждаю соответствие и переклейку на {selected?.barcodes[0]?.value || 'целевой ШК'}</label>
++            </div>;
++          })}
++          {individual && <label><input type="checkbox" checked={Boolean(override)} onChange={e => change(withDuplicateException(group, v.sourceSkuId, e.target.checked))} /> Отдельные доли для этого размера</label>}
++          {override ? override.shares.map(s => <label key={s.targetKey}>{group.shares.find(x => x.targetKey === s.targetKey)?.label}, % <input type="number" min="0" max="100" value={Number.isFinite(s.percent) ? s.percent : ''} onChange={e => change({ ...group, overrides: group.overrides.map(o => o.sourceSkuId === v.sourceSkuId ? { ...o, shares: o.shares.map(x => x.targetKey === s.targetKey ? { ...x, percent: e.target.value === '' ? NaN : Number(e.target.value) } : x) } : o) })} /></label>)
++            : <small>Общие доли: {effectiveDuplicateShares(group, v.sourceSkuId).map(s => s.percent + '%').join(' / ')}</small>}
++          <button disabled={active} onClick={() => change({ ...group, variants: group.variants.filter(x => x.sourceSkuId !== v.sourceSkuId), overrides: group.overrides.filter(o => o.sourceSkuId !== v.sourceSkuId) })}>Исключить размер из группы</button>
++        </fieldset>;
++      })}
++      <button disabled={!duplicateGroupReady(group) || data?.activeGroupIds.includes(group.id)} onClick={() => void run(() => persist())}>Сохранить черновик</button>
++      <button disabled={!duplicateGroupReady(group)} onClick={() => void run(async () => { const id = generation.current; const result = await previewDuplicateGroup(session.accessToken, clientId, group); if (id === generation.current) setPreview(result); })}>Рассчитать предпросмотр</button>
++      {data?.groups.some(g => g.id === group.id) && <button disabled={data.activeGroupIds.includes(group.id)} onClick={() => { if (window.confirm('Удалить сохранённую группу? Действующие настройки WB не изменятся.')) void run(() => persist(group.id)); }}>Удалить группу</button>}
++      {active && <p>Группа действует: можно менять общие проценты и исключения по размерам. Состав пары закреплён за текущими сборками.</p>}
++      {data?.selfServiceEnabled && <button className="duplicate-stock__apply" disabled={!duplicateGroupReady(group) || !preview} onClick={() => {
++        if (window.confirm('Применить показанное правило? Система сохранит соответствия переклейки и пересчитает остатки WB.')) void run(apply);
++      }}>Сохранить и применить в WB</button>}
++      {!preview && data?.selfServiceEnabled && <p>Перед применением нажмите «Рассчитать предпросмотр». После изменения настроек расчёт нужно повторить.</p>}
++      {!duplicateGroupReady(group) && <p>Проверьте доли, резерв и подтвердите все соответствия размеров.</p>}
++    </fieldset>}
++    {preview && <section><h4>3. Предпросмотр на {new Date(preview.generatedAt).toLocaleString('ru-RU')}</h4>
++      {preview.pickingWarnings.map(w => <p role="alert" key={w.sourceSkuId + ':' + w.targetSkuId}>{w.message}</p>)}
++      <p>Доля WB: {preview.wbPercent}%. Из общего пула: {preview.totalAllocated} шт., из них с переклейкой: {preview.totalRelabel} шт.</p>
++      {preview.publications.some(p => !p.enabled || p.saleLimit !== null || p.relabelManualAmount !== null) && <p role="alert">Есть действующие настройки публикации WB. Перед включением процентных правил потребуется согласовать их с новым распределением.</p>}
++      {preview.missingMappings?.length > 0 && <p>При применении добавим в «Переклейку»: {preview.missingMappings.map(m => `${m.sourceArticle} → ${m.targetArticle}`).join("; ")}.</p>}
++      <div className="fbs-allocation__table-wrap"><table><thead><tr><th>Исходный товар</th><th>Остаток AVAILABLE</th><th>Резерв заказов</th><th>Страховой резерв</th><th>К распределению</th><th>Карточка</th><th>Доля</th><th>Из общего пула</th><th>Свой остаток дубля</th></tr></thead>
++        <tbody>{preview.rows.flatMap(r => r.targets.map(t => <tr key={r.sourceSkuId + t.targetKey}><td>{label(r.source)}</td><td>{r.total}</td><td>{r.reserved}</td><td>{r.safetyReserve}</td><td>{r.marketplaceBudget}</td><td>{label(t.card)}{t.requiresRelabel && ' · переклейка'}</td><td>{t.percent}%{r.individual && ' · исключение'}</td><td>{t.quantity}</td><td>{t.targetId === r.sourceSkuId ? '—' : t.ownStock ?? 'Нет данных'}</td></tr>))}</tbody></table></div>
++      <p>Свой уже переклеенный остаток показан отдельно и не включён повторно в исходный пул. Это расчёт, а не отправленные на WB количества.</p>
++    </section>}
++  </section>;
++}
+--- a/wms/apps/web/src/components/fbs/DuplicateStockGroupsView.css
++++ b/wms/apps/web/src/components/fbs/DuplicateStockGroupsView.css
+@@ -0,0 +1,30 @@
++.duplicate-stock { display: grid; gap: 16px; color: #18283b; }
++.duplicate-stock h3, .duplicate-stock h4, .duplicate-stock p { margin: 0; }
++.duplicate-stock h3 { font-size: 22px; }
++.duplicate-stock h4 { font-size: 17px; margin-bottom: 8px; }
++.duplicate-stock > ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
++.duplicate-stock > ul > li { padding: 12px; border: 1px solid #dce3ec; border-radius: 10px; background: #f8fafc; }
++.duplicate-stock button { padding: 9px 14px; border: 1px solid #cbd5e1; border-radius: 7px; background: white; color: #1e3a5f; cursor: pointer; font: inherit; width: auto; }
++.duplicate-stock button:disabled { opacity: .5; cursor: default; }
++.duplicate-stock fieldset { border: 1px solid #dce3ec; border-radius: 10px; padding: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; min-width: 0; }
++.duplicate-stock fieldset > fieldset { flex-basis: 100%; background: #f8fafc; }
++.duplicate-stock legend { font-weight: 600; padding: 0 6px; }
++.duplicate-stock label { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
++.duplicate-stock input:not([type=checkbox]), .duplicate-stock select { padding: 9px; border: 1px solid #cbd5e1; border-radius: 6px; font: inherit; background: white; max-width: 100%; min-width: 0; }
++.duplicate-stock input[type=number] { width: 85px; }
++.duplicate-stock input[type=checkbox] { width: 17px; height: 17px; }
++.duplicate-stock__new { padding: 18px; background: #f1f6fd; border: 1px solid #cbdcf4; border-radius: 12px; }
++.duplicate-stock__pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0; }
++.duplicate-stock__pair fieldset { display: grid; background: white; }
++.duplicate-stock__search { display: flex; gap: 8px; }
++.duplicate-stock__search input { flex: 1; }
++.duplicate-stock .duplicate-stock__apply { background: #2459a6; border-color: #2459a6; color: white; }
++.duplicate-stock summary { cursor: pointer; padding: 8px 0; }
++.duplicate-stock [role=alert] { color: #a12727; background: #fff4f4; padding: 12px; border-radius: 8px; }
++.duplicate-stock [role=status] { padding: 10px; }
++.duplicate-stock table { width: 100%; border-collapse: collapse; }
++.duplicate-stock td, .duplicate-stock th { padding: 9px; border-bottom: 1px solid #dce3ec; text-align: left; }
++.duplicate-stock .fbs-allocation__table-wrap { overflow-x: auto; }
++@media(max-width: 800px) { .duplicate-stock__pair { grid-template-columns: 1fr; } }
++
++.duplicate-stock fieldset > h4, .duplicate-stock fieldset > p { flex-basis: 100%; }
+--- a/wms/apps/web/src/components/fbs/DuplicateArticlePicker.tsx
++++ b/wms/apps/web/src/components/fbs/DuplicateArticlePicker.tsx
+@@ -0,0 +1,28 @@
++import { useEffect, useRef, useState } from 'react';
++import { fetchDuplicateCatalog } from '../../lib/api';
++import { duplicateArticleOptions } from '../../lib/duplicateStockGroups';
++
++export function DuplicateArticlePicker({ title, accessToken, clientId, value, onChange, disabled }: {
++  title: string; accessToken: string; clientId: string; value: string; onChange: (value: string) => void; disabled: boolean;
++}) {
++  const [query, setQuery] = useState(''), [options, setOptions] = useState<string[]>([]), [busy, setBusy] = useState(false), [error, setError] = useState('');
++  const generation = useRef(0);
++  useEffect(() => { generation.current++; setQuery(''); setOptions([]); setError(''); setBusy(false); return () => { generation.current++; }; }, [clientId, accessToken]);
++  async function search() {
++    const id = ++generation.current; setBusy(true); setError('');
++    try {
++      const result = await fetchDuplicateCatalog(accessToken, clientId, { search: query.trim(), page: 1 });
++      if (id !== generation.current) return;
++      setOptions(duplicateArticleOptions(result.rows));
++      if (result.hasMore) setError('Показаны первые совпадения. Уточните артикул или ШК.');
++      else if (!result.rows.length) setError('Карточки не найдены. Проверьте поиск и синхронизацию.');
++    } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось найти карточки.'); }
++    finally { if (id === generation.current) setBusy(false); }
++  }
++  return <fieldset disabled={disabled}><legend>{title}</legend>
++    <div className="duplicate-stock__search"><input aria-label={`Поиск: ${title}`} placeholder="Артикул, название или штрихкод" value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && query.trim() && !busy) { e.preventDefault(); void search(); } }} />
++      <button type="button" disabled={!query.trim() || busy} onClick={() => void search()}>{busy ? 'Поиск…' : 'Найти'}</button></div>
++    <select aria-label={title} value={value} onChange={e => onChange(e.target.value)}><option value="">Выберите артикул</option>{[...new Set([...(value ? [value] : []), ...options])].map(a => <option key={a} value={a}>{a}</option>)}</select>
++    {error && <small role="status">{error}</small>}
++  </fieldset>;
++}
+--- a/wms/apps/web/src/components/fbs/DuplicateStockGroupsView.spec.tsx
++++ b/wms/apps/web/src/components/fbs/DuplicateStockGroupsView.spec.tsx
+@@ -1,44 +1,53 @@
+-import { afterEach, describe, expect, it, vi } from 'vitest';
+-import { fetchDuplicateCatalog, previewDuplicateGroup, saveDuplicateGroup } from '../../lib/api';
+-import { duplicateGroupReady, effectiveDuplicateShares, matchesRelabelArticle, suggestDuplicateTarget, withDuplicateException, type DuplicateGroup } from '../../lib/duplicateStockGroups';
+-const group = (): DuplicateGroup => ({ id: 'g', name: 'Группа', connectionId: 'wb', reserve: { mode: 'PERCENT', value: 10 },
+-  shares: [{ targetKey: 'original', label: 'Основная', percent: 75 }, { targetKey: 'duplicate', label: 'Дубль', percent: 25 }],
+-  variants: [{ sourceSkuId: 's', targets: [{ targetKey: 'original', targetId: 's', confirmed: true, requiresRelabel: false }, { targetKey: 'duplicate', targetId: 't', confirmed: true, requiresRelabel: true }] }], overrides: [] });
+-afterEach(() => vi.unstubAllGlobals());
+-describe('duplicate groups editor', () => {
+-  // TEST: article aliases must match relabeling, without accepting arbitrary name matches.
+-  it('recognizes client and internal article aliases with source-only suffixes', () => {
+-    const card = { id: 's', article: 'WB-123', clientSku: 'Корея', internalSku: 'KOREA-M', name: 'name', size: 'M', color: '', barcodes: [] };
+-    expect(matchesRelabelArticle(card, ' корея ')).toBe(true);
+-    expect(matchesRelabelArticle(card, 'korea', true)).toBe(true);
+-    expect(matchesRelabelArticle(card, 'korea')).toBe(false);
+-    expect(matchesRelabelArticle(card, 'name', true)).toBe(false);
+-    expect(matchesRelabelArticle(card, '', true)).toBe(false);
+-  });
+-  // TEST: changing common percentages updates every size without a saved override.
+-  it('inherits new common shares and restores them when exception is removed', () => {
+-    let g = withDuplicateException(group(), 's', true);
+-    g.shares[0].percent = 0; g.shares[1].percent = 100;
+-    expect(effectiveDuplicateShares(g, 's').map(s => s.percent)).toEqual([75, 25]);
+-    expect(effectiveDuplicateShares(g, 'another-size').map(s => s.percent)).toEqual([0, 100]);
+-    g = withDuplicateException(g, 's', false);
+-    expect(effectiveDuplicateShares(g, 's').map(s => s.percent)).toEqual([0, 100]);
+-  });
+-  it('requires confirmation even for one matching size and does not guess ambiguous variants', () => {
+-    const card = (id: string) => ({ id, article: id, name: id, size: 'M', color: '', barcodes: [{ value: '001' }] });
+-    expect(suggestDuplicateTarget(card('s'), [card('t')])).toMatchObject({ targetId: 't', confirmed: false });
+-    expect(suggestDuplicateTarget(card('s'), [card('t'), card('u')]).targetId).toBe('');
+-    const g = group(); g.variants[0].targets[1].confirmed = false; expect(duplicateGroupReady(g)).toBe(false);
+-  });
+-  it('uses draft-only endpoints with revision and unchanged barcode text', async () => {
+-    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })));
+-    vi.stubGlobal('fetch', fetch);
+-    await fetchDuplicateCatalog('token', 'client/1', { search: '001' });
+-    await saveDuplicateGroup('token', 'client/1', { group: group(), revision: 'v1' });
+-    await previewDuplicateGroup('token', 'client/1', group());
+-    expect(fetch.mock.calls[0][0]).toContain('client%2F1/catalog');
+-    expect(JSON.parse(fetch.mock.calls[0][1].body).search).toBe('001');
+-    expect(JSON.parse(fetch.mock.calls[1][1].body).revision).toBe('v1');
+-    expect(fetch.mock.calls.some(([url]) => url.includes('/sync'))).toBe(false);
+-  });
+-});
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { applyDuplicateGroup, fetchDuplicateCatalog, previewDuplicateGroup, saveDuplicateGroup } from '../../lib/api';
++import { duplicateArticleOptions, duplicateGroupReady, effectiveDuplicateShares, matchesRelabelArticle, suggestDuplicateTarget, withDuplicateException, type DuplicateGroup } from '../../lib/duplicateStockGroups';
++const group = (): DuplicateGroup => ({ id: 'g', name: 'Группа', connectionId: 'wb', reserve: { mode: 'PERCENT', value: 10 },
++  shares: [{ targetKey: 'original', label: 'Основная', percent: 75 }, { targetKey: 'duplicate', label: 'Дубль', percent: 25 }],
++  variants: [{ sourceSkuId: 's', targets: [{ targetKey: 'original', targetId: 's', confirmed: true, requiresRelabel: false }, { targetKey: 'duplicate', targetId: 't', confirmed: true, requiresRelabel: true }] }], overrides: [] });
++afterEach(() => vi.unstubAllGlobals());
++describe('duplicate groups editor', () => {
++  // TEST: article aliases must match relabeling, without accepting arbitrary name matches.
++  it('recognizes client and internal article aliases with source-only suffixes', () => {
++    const card = { id: 's', article: 'WB-123', clientSku: 'Корея', internalSku: 'KOREA-M', name: 'name', size: 'M', color: '', barcodes: [] };
++    expect(matchesRelabelArticle(card, ' корея ')).toBe(true);
++    expect(matchesRelabelArticle(card, 'korea', true)).toBe(true);
++    expect(matchesRelabelArticle(card, 'korea')).toBe(false);
++    expect(matchesRelabelArticle(card, 'name', true)).toBe(false);
++    expect(matchesRelabelArticle(card, '', true)).toBe(false);
++  });
++  // TEST: changing common percentages updates every size without a saved override.
++  it('inherits new common shares and restores them when exception is removed', () => {
++    let g = withDuplicateException(group(), 's', true);
++    g.shares[0].percent = 0; g.shares[1].percent = 100;
++    expect(effectiveDuplicateShares(g, 's').map(s => s.percent)).toEqual([75, 25]);
++    expect(effectiveDuplicateShares(g, 'another-size').map(s => s.percent)).toEqual([0, 100]);
++    g = withDuplicateException(g, 's', false);
++    expect(effectiveDuplicateShares(g, 's').map(s => s.percent)).toEqual([0, 100]);
++  });
++  it('requires confirmation even for one matching size and does not guess ambiguous variants', () => {
++    const card = (id: string) => ({ id, article: id, name: id, size: 'M', color: '', barcodes: [{ value: '001' }] });
++    expect(suggestDuplicateTarget(card('s'), [card('t')])).toMatchObject({ targetId: 't', confirmed: false });
++    expect(suggestDuplicateTarget(card('s'), [card('t'), card('u')]).targetId).toBe('');
++    const g = group(); g.variants[0].targets[1].confirmed = false; expect(duplicateGroupReady(g)).toBe(false);
++  });
++  it('uses draft-only endpoints with revision and unchanged barcode text', async () => {
++    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })));
++    vi.stubGlobal('fetch', fetch);
++    await fetchDuplicateCatalog('token', 'client/1', { search: '001' });
++    await saveDuplicateGroup('token', 'client/1', { group: group(), revision: 'v1' });
++    await previewDuplicateGroup('token', 'client/1', group());
++    expect(fetch.mock.calls[0][0]).toContain('client%2F1/catalog');
++    expect(JSON.parse(fetch.mock.calls[0][1].body).search).toBe('001');
++    expect(JSON.parse(fetch.mock.calls[1][1].body).revision).toBe('v1');
++    expect(fetch.mock.calls.some(([url]) => url.includes('/sync'))).toBe(false);
++  });
++});
++
++// TEST: barcode matches select an article across sizes, then apply a reviewed rule.
++it('selects articles across sizes and sends an explicit reviewed apply request',async()=>{
++  const cards=['M','L'].map(size=>({id:size,article:'Корея',name:'Костюм',size,color:'',barcodes:[{value:'001'}]}));
++  expect(duplicateArticleOptions(cards)).toEqual(['Корея']);
++  const fetch=vi.fn().mockResolvedValue(new Response('{}',{status:200,headers:{'Content-Type':'application/json'}}));vi.stubGlobal('fetch',fetch);
++  await applyDuplicateGroup('token','client/1',{group:group(),revision:'v1',previewKey:'reviewed'});
++  expect(fetch.mock.calls[0][0]).toContain('client%2F1/apply');expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({revision:'v1',previewKey:'reviewed'});
++});
+--- a/wms/apps/web/src/lib/duplicateStockGroups.ts
++++ b/wms/apps/web/src/lib/duplicateStockGroups.ts
+@@ -1,47 +1,52 @@
+-export type DuplicateShare = { targetKey: string; label: string; percent: number };
+-export type DuplicateGroup = {
+-  id: string; name: string; connectionId: string; shares: DuplicateShare[];
+-  reserve: { mode: 'COMMON' | 'UNITS' | 'PERCENT'; value: number };
+-  variants: Array<{ sourceSkuId: string; targets: Array<{ targetKey: string; targetId: string; confirmed: boolean; requiresRelabel: boolean }> }>;
+-  overrides: Array<{ sourceSkuId: string; shares: Array<{ targetKey: string; percent: number }> }>;
+-};
+-export type DuplicateCard = { id: string; article: string | null; clientSku?: string | null; internalSku?: string | null; name: string; size: string | null; color: string | null; barcodes: Array<{ value: string }> };
+-// FIX: use the same article aliases as the existing relabel picking workflow.
+-export function matchesRelabelArticle(card: DuplicateCard, article: string, source = false) {
+-  const key = article.trim().toLowerCase();
+-  if (!key) return false;
+-  const refs = source ? [card.article, card.clientSku, card.internalSku] : [card.article, card.clientSku];
+-  return refs.some(value => value?.trim().toLowerCase() === key)
+-    || (source && Boolean(card.internalSku?.trim().toLowerCase().startsWith(key + '-')));
+-}
+-export type DuplicateMapping = { id: string; sourceArticle: string; targetArticle: string };
+-export type DuplicateSettings = { groups: DuplicateGroup[]; revision: string | null; publicationEnabled: boolean; relabelingEnabled: boolean;
+-  activeGroupIds: string[]; commonReserve: { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
+-  mappings: DuplicateMapping[]; connections: Array<{ id: string; accountName: string | null; fbsExecutionWarehouseId: string | null }> };
+-export type DuplicatePreview = { generatedAt: string; totalAllocated: number; totalRelabel: number; wbPercent: number; publicationEnabled: boolean;
+-  pickingWarnings: Array<{ sourceSkuId: string; targetSkuId: string; message: string }>;
+-  publications: Array<{ skuId: string; enabled: boolean; saleLimit: number | null; relabelManualAmount: number | null }>;
+-  rows: Array<{ sourceSkuId: string; source: DuplicateCard; size: string; total: number; reserved: number; freeBeforeSafety: number; safetyReserve: number;
+-    available: number; marketplaceBudget: number; outsideMarketplace: number; individual: boolean;
+-    targets: Array<{ targetKey: string; targetId: string; percent: number; quantity: number; requiresRelabel: boolean; card: DuplicateCard; ownStock: number | null }> }> };
+-export function effectiveDuplicateShares(group: DuplicateGroup, sourceSkuId: string) {
+-  return group.overrides.find(o => o.sourceSkuId === sourceSkuId)?.shares ?? group.shares;
+-}
+-// FIX: a missing per-size exception inherits the current common shares; it is not copied once.
+-export function withDuplicateException(group: DuplicateGroup, sourceSkuId: string, enabled: boolean): DuplicateGroup {
+-  const overrides = group.overrides.filter(o => o.sourceSkuId !== sourceSkuId);
+-  if (enabled) overrides.push({ sourceSkuId, shares: effectiveDuplicateShares(group, sourceSkuId).map(s => ({ targetKey: s.targetKey, percent: s.percent })) });
+-  return { ...group, overrides };
+-}
+-export function suggestDuplicateTarget(source: DuplicateCard, candidates: DuplicateCard[]) {
+-  const size = source.size?.trim().toLowerCase();
+-  const matches = size ? candidates.filter(c => c.size?.trim().toLowerCase() === size && c.id !== source.id) : [];
+-  return { targetId: matches.length === 1 ? matches[0].id : '', confirmed: false, requiresRelabel: true };
+-}
+-export function duplicateGroupReady(group: DuplicateGroup) {
+-  const validShares = (shares: Array<{ percent: number }>) => shares.every(s => Number.isInteger(s.percent) && s.percent >= 0 && s.percent <= 100) && shares.reduce((sum, s) => sum + s.percent, 0) === 100;
+-  return Boolean(group.name.trim() && group.connectionId && group.variants.length && validShares(group.shares)
+-    && group.overrides.every(o => validShares(o.shares)) && Number.isSafeInteger(group.reserve.value) && group.reserve.value >= 0
+-    && group.reserve.value <= (group.reserve.mode === 'PERCENT' ? 100 : 1_000_000)
+-    && group.variants.every(v => v.targets.length === group.shares.length && v.targets.every(t => t.targetId && t.confirmed)));
+-}
++export type DuplicateShare = { targetKey: string; label: string; percent: number };
++export type DuplicateGroup = {
++  id: string; name: string; connectionId: string; shares: DuplicateShare[];
++  reserve: { mode: 'COMMON' | 'UNITS' | 'PERCENT'; value: number };
++  variants: Array<{ sourceSkuId: string; targets: Array<{ targetKey: string; targetId: string; confirmed: boolean; requiresRelabel: boolean }> }>;
++  overrides: Array<{ sourceSkuId: string; shares: Array<{ targetKey: string; percent: number }> }>;
++};
++export type DuplicateCard = { id: string; article: string | null; clientSku?: string | null; internalSku?: string | null; name: string; size: string | null; color: string | null; barcodes: Array<{ value: string }> };
++// FIX: use the same article aliases as the existing relabel picking workflow.
++export function matchesRelabelArticle(card: DuplicateCard, article: string, source = false) {
++  const key = article.trim().toLowerCase();
++  if (!key) return false;
++  const refs = source ? [card.article, card.clientSku, card.internalSku] : [card.article, card.clientSku];
++  return refs.some(value => value?.trim().toLowerCase() === key)
++    || (source && Boolean(card.internalSku?.trim().toLowerCase().startsWith(key + '-')));
++}
++export type DuplicateMapping = { id: string; sourceArticle: string; targetArticle: string };
++export type DuplicateSettings = { groups: DuplicateGroup[]; revision: string | null; publicationEnabled: boolean; relabelingEnabled: boolean;
++  selfServiceEnabled?: boolean; activeGroupIds: string[]; commonReserve: { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
++  mappings: DuplicateMapping[]; connections: Array<{ id: string; accountName: string | null; fbsExecutionWarehouseId: string | null }> };
++export type DuplicatePreview = { previewKey: string; missingMappings: Array<{ sourceArticle: string; targetArticle: string }>; generatedAt: string; totalAllocated: number; totalRelabel: number; wbPercent: number; publicationEnabled: boolean;
++  pickingWarnings: Array<{ sourceSkuId: string; targetSkuId: string; message: string }>;
++  publications: Array<{ skuId: string; enabled: boolean; saleLimit: number | null; relabelManualAmount: number | null }>;
++  rows: Array<{ sourceSkuId: string; source: DuplicateCard; size: string; total: number; reserved: number; freeBeforeSafety: number; safetyReserve: number;
++    available: number; marketplaceBudget: number; outsideMarketplace: number; individual: boolean;
++    targets: Array<{ targetKey: string; targetId: string; percent: number; quantity: number; requiresRelabel: boolean; card: DuplicateCard; ownStock: number | null }> }> };
++export function effectiveDuplicateShares(group: DuplicateGroup, sourceSkuId: string) {
++  return group.overrides.find(o => o.sourceSkuId === sourceSkuId)?.shares ?? group.shares;
++}
++// FIX: a missing per-size exception inherits the current common shares; it is not copied once.
++export function withDuplicateException(group: DuplicateGroup, sourceSkuId: string, enabled: boolean): DuplicateGroup {
++  const overrides = group.overrides.filter(o => o.sourceSkuId !== sourceSkuId);
++  if (enabled) overrides.push({ sourceSkuId, shares: effectiveDuplicateShares(group, sourceSkuId).map(s => ({ targetKey: s.targetKey, percent: s.percent })) });
++  return { ...group, overrides };
++}
++export function suggestDuplicateTarget(source: DuplicateCard, candidates: DuplicateCard[]) {
++  const size = source.size?.trim().toLowerCase();
++  const matches = size ? candidates.filter(c => c.size?.trim().toLowerCase() === size && c.id !== source.id) : [];
++  return { targetId: matches.length === 1 ? matches[0].id : '', confirmed: false, requiresRelabel: true };
++}
++export function duplicateGroupReady(group: DuplicateGroup) {
++  const validShares = (shares: Array<{ percent: number }>) => shares.every(s => Number.isInteger(s.percent) && s.percent >= 0 && s.percent <= 100) && shares.reduce((sum, s) => sum + s.percent, 0) === 100;
++  return Boolean(group.name.trim() && group.connectionId && group.variants.length && validShares(group.shares)
++    && group.overrides.every(o => validShares(o.shares)) && Number.isSafeInteger(group.reserve.value) && group.reserve.value >= 0
++    && group.reserve.value <= (group.reserve.mode === 'PERCENT' ? 100 : 1_000_000)
++    && group.variants.every(v => v.targets.length === group.shares.length && v.targets.every(t => t.targetId && t.confirmed)));
++}
++
++// FIX: barcode/name searches select an article, never silently a single size.
++export function duplicateArticleOptions(cards: DuplicateCard[]) {
++  return [...new Set(cards.map(c => c.article?.trim() || c.clientSku?.trim()).filter((s): s is string => Boolean(s)))].sort((a,b) => a.localeCompare(b));
++}
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -12631,3 +12631,8 @@
+ export function previewDuplicateGroup(accessToken: string, clientId: string, group: import('./duplicateStockGroups').DuplicateGroup) {
+   return request<import('./duplicateStockGroups').DuplicatePreview>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/preview`, { accessToken, method: 'POST', body: { group } });
+ }
++
++// FIX: explicit reviewed activation uses the same durable WB publisher.
++export function applyDuplicateGroup(accessToken: string, clientId: string, body: { group: import('./duplicateStockGroups').DuplicateGroup; revision: string | null; previewKey: string }) {
++  return request<{ groups: import('./duplicateStockGroups').DuplicateGroup[]; revision: string; activeGroupIds: string[]; queued: boolean; mappingsCreated: number }>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/apply`, { accessToken, method: 'POST', body });
++}

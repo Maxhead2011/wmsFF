@@ -11,6 +11,9 @@ export class DuplicateStockGroupsController {
   @Get(':clientId') read(@Param('clientId') id: string, @CurrentUser() user: AuthUser) { return this.groups.read(id, user); }
   @Post(':clientId/catalog') catalog(@Param('clientId') id: string, @Body() body: { search?: unknown; ids?: unknown; page?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.catalog(id, body, user); }
   @Post(':clientId/preview') preview(@Param('clientId') id: string, @Body() body: { group?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.preview(id, body, user); }
+  @Post(':clientId/apply')
+  @RequireAnyPermissions('clients:write', 'client-requests:write')
+  apply(@Param('clientId') id: string, @Body() body: { group?: unknown; revision?: unknown; previewKey?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.apply(id, body, user); }
   @Put(':clientId')
   @RequireAnyPermissions('clients:write', 'client-requests:write')
   save(@Param('clientId') id: string, @Body() body: { group?: unknown; revision?: unknown; deleteId?: unknown }, @CurrentUser() user: AuthUser) { return this.groups.save(id, body, user); }

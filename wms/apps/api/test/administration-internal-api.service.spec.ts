@@ -24,7 +24,7 @@ describe('AdministrationInternalApiService', () => {
     expect(definition.prefixes).toContain('/marketplace-connections/fbs/reshipment');
     expect(definition.prefixes).toContain('/marketplace-connection/fbs/reshipment');
     // TEST: merged live delivery-options and all six reshipment handlers coexist.
-    expect(definition.routeCount).toBe(120); // TEST: includes five duplicate group draft/preview handlers.
+    expect(definition.routeCount).toBe(121); // TEST: includes five duplicate group draft/preview handlers.
     expect(definition.prefixes).toContain('/marketplace-connections/duplicate-groups');
     expect(definition.prefixes).toContain('/marketplace-connections/allocation');
     const controller = readFileSync(join(__dirname, '../src/modules/marketplace-connections/fbs-reshipment.controller.ts'), 'utf8');

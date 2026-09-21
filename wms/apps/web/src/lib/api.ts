@@ -12434,3 +12434,8 @@ async function responseError(response: Response) {
     return `HTTP ${response.status}`;
   }
 }
+
+// FIX: explicit reviewed activation uses the same durable WB publisher.
+export function applyDuplicateGroup(accessToken: string, clientId: string, body: { group: import('./duplicateStockGroups').DuplicateGroup; revision: string | null; previewKey: string }) {
+  return request<{ groups: import('./duplicateStockGroups').DuplicateGroup[]; revision: string; activeGroupIds: string[]; queued: boolean; mappingsCreated: number }>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/apply`, { accessToken, method: 'POST', body });
+}
