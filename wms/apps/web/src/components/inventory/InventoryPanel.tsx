@@ -686,23 +686,19 @@ export function Reconciliation({
     .filter((box) => box.status !== 'COUNTING');
   const matchedBoxes = checkedBoxes.filter((box) => box.status === 'MATCHED' && !box.kizReview?.required).length;
   const visibleReviews = history
-    .map((review) => {
+    .flatMap((review) => {
       const visibleBoxes = review.type === 'BOX_CHECK'
         ? review.boxes.filter((box) => box.kizReview?.required || box.lines.some(
           (line) => line.countedQuantity !== line.expectedQuantity,
         ))
         : review.boxes;
-      return {
-        review,
-        boxes: [...visibleBoxes].sort(
-          (left, right) => Number(Boolean(right.kizReview?.required) || boxNeedsResolution(right)) - Number(Boolean(left.kizReview?.required) || boxNeedsResolution(left)),
-        ),
-      };
+      // FIX: sort individual checks globally, including boxes from the same inventory.
+      return visibleBoxes.map((box) => ({ review, boxes: [box] }));
     })
-    .filter(({ review, boxes }) => review.type !== 'BOX_CHECK' || boxes.length > 0)
     .sort(
       (left, right) =>
-        Number(right.boxes.some(box => box.kizReview?.required || boxNeedsResolution(box))) - Number(left.boxes.some(box => box.kizReview?.required || boxNeedsResolution(box))),
+        Date.parse(right.boxes[0].completedAt ?? right.boxes[0].startedAt) -
+        Date.parse(left.boxes[0].completedAt ?? left.boxes[0].startedAt),
     );
 
   async function resolveLine(lineId: string, action: InventoryResolutionAction) {
@@ -777,7 +773,7 @@ export function Reconciliation({
         </div>
       ) : null}
       {visibleReviews.map(({ review, boxes }) => (
-        <article className="inventory-review" key={review.id}>
+        <article className="inventory-review" key={`${review.id}:${boxes[0].id}`}>
           {boxes.map((box) => {
             const mismatches = box.lines.filter((line) => line.countedQuantity !== line.expectedQuantity);
             const missingQuantity = mismatches.reduce(
