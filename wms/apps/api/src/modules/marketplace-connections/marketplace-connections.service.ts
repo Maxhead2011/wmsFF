@@ -26548,6 +26548,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
+    // FIX: a WB directory outage must not erase known labels. Use only this
+    // cabinet's saved routes; live names always win. Sold VM stays opt-out.
+    const savedWarehouseNames = new Map<string, string>();
+    if (process.env.WMS_WB_WAREHOUSE_NAME_FALLBACK_ENABLED === 'true') {
+      const missingWarehouseIds = uniqueStrings(
+        [...ordersById.values()]
+          .map((order) => textValue(order.warehouseId))
+          .filter((id) => id && !sellerWarehouseById.get(id)?.name?.trim()),
+      );
+      if (missingWarehouseIds.length > 0) {
+        const routes = await this.prisma.fbsWarehouseRoutingRule.findMany({
+          where: { connectionId: connection.id, marketplaceWarehouseId: { in: missingWarehouseIds } },
+          select: { marketplaceWarehouseId: true, marketplaceWarehouseName: true },
+        });
+        for (const route of routes) {
+          const name = route.marketplaceWarehouseName?.trim();
+          if (name) savedWarehouseNames.set(route.marketplaceWarehouseId, name);
+        }
+      }
+    }
+
     const ids = [...ordersById.keys()]
       .map((id) => Number(id))
       .filter((id) => Number.isSafeInteger(id) && id > 0);
@@ -26594,7 +26615,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const sellerWarehouse = sellerWarehouseById.get(textValue(order.warehouseId));
       return {
         ...order,
-        warehouseName: sellerWarehouse?.name ?? null,
+        warehouseName: sellerWarehouse?.name?.trim() || savedWarehouseNames.get(textValue(order.warehouseId)) || null,
         connectionId: connection.id,
         accountName: connection.accountName,
         marketplace: MarketplaceType.WILDBERRIES,
