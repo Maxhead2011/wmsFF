@@ -6,6 +6,7 @@ vi.mock('../src/common/stock/wb-order-stock-lifecycle', async importOriginal => 
 }));
 const original = { flag: process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED, lifecycle: process.env.WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED };
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const [key, value] of [['WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED', original.flag], ['WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED', original.lifecycle]]) {
     if (value === undefined) delete process.env[key!]; else process.env[key!] = value;
   }
@@ -24,6 +25,22 @@ function fixture() {
 }
 // TEST: only 3 located free units reach client JSON/Excel, not 44 PACKING or unlocated stock.
 describe('client pallet-sort free stock', () => {
+  // TEST: Noginsk uses BOXES; a pallet is not required, but reservations still apply.
+  it.each([['noginsk', 'noginsk', 1], ['moscow', 'noginsk', 0], ['noginsk', '', 0]])('branch %s with allowlist %s returns %s rows', async (warehouseId, allowed, expected) => {
+    process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED = 'true';
+    vi.stubEnv('WMS_CLIENT_BOX_STOCK_WAREHOUSE_IDS', allowed);
+    const db = {
+      client: { findMany: vi.fn(async () => [{ id: 'client', storesWithoutBoxes: false, stockBalanceMode: 'BOXES' }]) },
+      stockBalance: { findMany: vi.fn(async () => [
+        { id: 'a', clientId: 'client', skuId: 'sku', warehouseId, status: 'AVAILABLE', quantity: 5,
+          box: { warehouseId, storagePlacement: null } },
+        { id: 'b', clientId: 'client', skuId: 'sku', warehouseId: 'noginsk', status: 'PACKING', quantity: 7, box: null },
+      ]) },
+    };
+    const service = new StockBalancesService(db as never, { resolveClientFilter: () => 'client' } as never);
+    expect(await service.list({}, { roleCodes: ['CLIENT'], permissionCodes: [] } as never))
+      .toEqual(expected ? [expect.objectContaining({ id: 'a', quantity: 3, freeQuantity: 3 })] : []);
+  });
   it('excludes nonavailable/unlocated/mismatched stock and deducts reservations once', async () => {
     process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED = 'true';
     process.env.WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED = 'true';
