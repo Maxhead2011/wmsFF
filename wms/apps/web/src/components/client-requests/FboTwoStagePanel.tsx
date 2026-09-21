@@ -12,6 +12,7 @@ export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:st
 export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void}) {
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
   const [pallet,setPallet]=useState('');
+  const [confirmRemainder,setConfirmRemainder]=useState(false);
   const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState<FboAction|null>(()=>{
     try{return JSON.parse(localStorage.getItem(storageKey)||'null');}catch{return null;}
@@ -27,6 +28,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       if(!next.route.some(r=>r.pallet===pallet))setPallet('');
       if(!next.boxes.some(b=>b.code===target&&!b.closed) || next.phase!=='PACKING')setTarget('');
       if(dto.action==='OPEN_BOX')setTarget(dto.targetBoxCode??'');
+      if(dto.action==='TRANSFER_REMAINDER')setConfirmRemainder(false);
       // FIX: keep both files on the completed request for explicit download.
     }catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить операцию.');if((e as {rejected?:boolean}).rejected){localStorage.removeItem(storageKey);setPending(null);}}
     finally{inFlight.current=false;setBusy(false);setTimeout(()=>field.current?.focus(),0);}
@@ -47,6 +49,9 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
   return <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     <h2>ФБО · {plan.title}</h2><p>Нужно {plan.needed} · Отобрано {plan.picked} · Упаковано {plan.packed}</p>
+    {/* FIX: keep the parent/child chain visible after retries and page reloads. */}
+    {plan.parentRequest&&<p>Исходная заявка: №{plan.parentRequest.fboRequestCode ?? plan.parentRequest.number}</p>}
+    {!!plan.childRequests?.length&&<p>Неотобранное перенесено в заявки: {plan.childRequests.map(r=>`№${r.fboRequestCode ?? r.number}`).join(', ')}. Их можно открыть в разделе «Заявки».</p>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
@@ -59,6 +64,13 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
       <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setSource('');setBarcode('');}}>Другой исходный короб</button></div>}
     {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.picked!==plan.needed||!canWrite} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>
+      {plan.remainderTransferEnabled&&plan.picked>0&&plan.picked<plan.needed&&<div>
+        {!confirmRemainder?<button className="icon-text-button" disabled={busy||!!pending||!canWrite} onClick={()=>setConfirmRemainder(true)}>Перенести неотобранное</button>:<>
+          <p>В новую заявку перейдёт {plan.needed-plan.picked} шт. В основной останется {plan.picked} шт. и начнётся упаковка.</p>
+          <button className="icon-text-button" disabled={busy||!!pending||!canWrite} onClick={()=>void command('TRANSFER_REMAINDER')}>Перенести остаток и перейти к упаковке</button>
+          <button className="icon-text-button" disabled={busy||!!pending} onClick={()=>setConfirmRemainder(false)}>Продолжить отбор</button>
+        </>}
+      </div>}
       {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
       {!pallet&&<ul>{[...new Set(plan.route.map(r=>r.pallet).filter(Boolean))].map(p=><li key={p}>{p} · Нужных коробов: {plan.route.filter(r=>r.pallet===p).length}</li>)}</ul>}
       <div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Паллет / зона</th><th>Нужный короб</th><th>Отобрать</th></tr></thead><tbody>{plan.route.filter(r=>r.pallet===pallet).map(r=><tr key={r.boxCode}><td>{r.pallet||'Без паллета'} · {r.zone}</td><td>{r.boxCode}</td><td>{r.tasks.map(t=>`${t.name}: ${t.quantity}`).join('; ')}</td></tr>)}</tbody></table></div></>}

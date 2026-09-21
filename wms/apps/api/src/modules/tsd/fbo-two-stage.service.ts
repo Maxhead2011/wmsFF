@@ -13,6 +13,7 @@ import { StockOperationsService } from '../stock/stock-operations.service';
 import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
 import { FboActionDto } from './dto/fbo-action.dto';
 const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
+    parentRequest: { select: { id: true, number: true, fboRequestCode: true } }, childRequests: { select: { id: true, number: true, status: true, fboRequestCode: true } },
     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
 type Request = Prisma.ClientRequestGetPayload<{
     include: typeof include;
@@ -112,7 +113,8 @@ export class FboTwoStageService {
                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
-        return { manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+        return { remainderTransferEnabled: process.env.WMS_FBO_REMAINDER_TRANSFER_ENABLED === 'true', parentRequest: r.parentRequest, childRequests: r.childRequests,
+            manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
@@ -123,6 +125,8 @@ export class FboTwoStageService {
     async act(id: string, dto: FboActionDto, user: AuthUser) {
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
+        if (dto.action === 'TRANSFER_REMAINDER' && process.env.WMS_FBO_REMAINDER_TRANSFER_ENABLED !== 'true')
+            throw new BadRequestException('Перенос остатка ФБО выключен.');
         // FIX: explicitly enabled only for our deployment; old clients and sold VMs retain their behavior.
         if (dto.action.startsWith('MANUAL_') && process.env.WMS_FBO_MANUAL_PACKING_ENABLED !== 'true')
             throw new BadRequestException('Ручное добавление при упаковке выключено.');
@@ -227,6 +231,54 @@ export class FboTwoStageService {
                             markId: pick.mark?.id, activeMarkId: pick.mark?.id, kiz: pick.mark?.value, sourceBoxId: source.id, sourceBoxCode: source.code, wholeBox: whole, pickedByUserId: user.id } });
                 }
                 await this.releaseDisplacedRoutes(tx, source.id, source.code, [...new Set(chosen.map(p => p.skuId))]);
+            }
+            // FIX: parent demand shrinks in the same transaction that creates child demand.
+            // Physical units, marks and stock movements remain owned by the original request.
+            else if (dto.action === 'TRANSFER_REMAINDER') {
+                requirePhase('PICKING');
+                if (!lines.some(l => l.picked)) throw new ConflictException('Сначала отберите хотя бы одну единицу товара.');
+                const remainder = lines.filter(l => l.remaining > 0);
+                if (!remainder.length) throw new ConflictException('Неотобранного остатка нет.');
+                if (lines.some(l => l.picked > l.quantity)) throw new ConflictException('Отобрано больше состава заявки. Требуется сверка.');
+                const quantity = remainder.reduce((sum, l) => sum + l.remaining, 0);
+                // FIX: lock the root counter so sibling and grandchild branches share one durable sequence.
+                let root: { id: string; parentRequestId: string | null; number: number } = r;
+                const visited = new Set<string>();
+                while (root.parentRequestId) {
+                    if (visited.has(root.id)) throw new ConflictException('Нарушена связь основной заявки.');
+                    visited.add(root.id);
+                    const parent = await tx.clientRequest.findUniqueOrThrow({ where: { id: root.parentRequestId } });
+                    if (parent.clientId !== r.clientId || parent.warehouseId !== r.warehouseId)
+                        throw new ConflictException('Филиал или клиент основной заявки изменён.');
+                    root = parent;
+                }
+                await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${root.id} FOR UPDATE`;
+                const counter = await tx.clientRequest.update({ where: { id: root.id }, data: { fboRemainderSequence: { increment: 1 } } });
+                const fboRequestCode = `${root.number}_${String(counter.fboRemainderSequence).padStart(2, '0')}`;
+                const parentLabel = r.fboRequestCode ?? String(r.number);
+                const child = await tx.clientRequest.create({ data: {
+                    fboRequestCode,
+                    parentRequestId: id, clientId: r.clientId, warehouseId: r.warehouseId,
+                    type: r.type, status: 'SUBMITTED', priority: r.priority,
+                    title: `ФБО №${fboRequestCode} — остаток заявки №${parentLabel}`,
+                    comment: `Неотобранный остаток заявки №${parentLabel}: ${quantity} шт.`,
+                    destinationCity: r.destinationCity, deliveryAddress: r.deliveryAddress, desiredDate: r.desiredDate,
+                    contactName: r.contactName, contactPhone: r.contactPhone, createdByUserId: user.id,
+                    items: { create: remainder.map(l => ({ skuId: l.skuId, barcode: l.barcode,
+                        name: l.name, comment: l.comment, quantity: l.remaining })) },
+                } });
+                for (const l of remainder) {
+                    if (l.picked) await tx.clientRequestItem.update({ where: { id: l.id }, data: { quantity: l.picked } });
+                    else await tx.clientRequestItem.delete({ where: { id: l.id } });
+                }
+                const remainingItems = await tx.clientRequestItem.findMany({ where: { requestId: id } });
+                await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING', compositionHash: composition({ ...r, items: remainingItems } as Request) } });
+                await tx.clientRequestEvent.createMany({ data: [
+                    { requestId: id, clientId: r.clientId, eventType: 'COMMENT', title: 'Остаток ФБО перенесён',
+                        body: `${quantity} шт. перенесено в заявку №${fboRequestCode}. Отобранный товар оставлен для упаковки.`, createdByUserId: user.id },
+                    { requestId: child.id, clientId: r.clientId, eventType: 'CREATED', title: 'Неотобранный остаток ФБО',
+                        body: `${quantity} шт. из заявки №${parentLabel}.`, statusTo: 'SUBMITTED', createdByUserId: user.id },
+                ] });
             }
             else if (dto.action === 'FINISH_PICK') {
                 requirePhase('PICKING');

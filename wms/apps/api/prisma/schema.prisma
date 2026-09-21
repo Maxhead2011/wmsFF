@@ -1595,6 +1595,12 @@ model InventoryBoxRescanRequest {
 
 model ClientRequest {
   id                           String                     @id @default(uuid())
+  // FIX: a remainder request retains its direct parent for incremental FBO fulfillment.
+  parentRequestId              String?
+  fboRequestCode               String?                    @unique
+  fboRemainderSequence         Int                        @default(0)
+  parentRequest                ClientRequest?             @relation("FboRemainderRequests", fields: [parentRequestId], references: [id], onDelete: Restrict)
+  childRequests                ClientRequest[]            @relation("FboRemainderRequests")
   number                       Int                        @unique @default(autoincrement())
   clientId                     String
   warehouseId                  String?
@@ -1642,6 +1648,7 @@ model ClientRequest {
   @@index([type, status])
   @@index([createdByUserId])
   @@index([assignedToUserId])
+  @@index([parentRequestId])
 }
 
 model SkuCollectionSource {

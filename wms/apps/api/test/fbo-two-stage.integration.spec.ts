@@ -8,6 +8,7 @@ import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
 import { StockBalancesService } from '../src/modules/stock/stock-balances.service';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 import { ClientRequestMarketplaceFilesService } from '../src/modules/client-requests/client-request-marketplace-files.service';
+import { wbReservationQuantities } from '../src/common/stock/wb-order-stock-lifecycle';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 const url = process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/codex_tests@127\.0\.0\.1:55469\/kiz_duplicate_tests/.test(url))
@@ -47,16 +48,18 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
     });
     afterEach(async () => {
         vi.restoreAllMocks();
+        const requestIds = (await p.clientRequest.findMany({ where: { clientId: client }, select: { id: true } })).map(r => r.id);
         await p.fbsTsdAssembly.deleteMany({ where: { clientId: client } });
-        await p.auditLog.deleteMany({ where: { entityId: request } });
+        await p.auditLog.deleteMany({ where: { entityId: { in: requestIds } } });
         await p.tsdOperation.deleteMany({ where: { payload: { path: ['requestId'], equals: request } } });
-        await p.fboAssemblyAction.deleteMany({ where: { requestId: request } });
-        await p.fboAssemblyUnit.deleteMany({ where: { requestId: request } });
-        await p.fboAssemblyBox.deleteMany({ where: { requestId: request } });
-        await p.fboAssembly.deleteMany({ where: { requestId: request } });
+        await p.fboAssemblyAction.deleteMany({ where: { requestId: { in: requestIds } } });
+        await p.fboAssemblyUnit.deleteMany({ where: { requestId: { in: requestIds } } });
+        await p.fboAssemblyBox.deleteMany({ where: { requestId: { in: requestIds } } });
+        await p.fboAssembly.deleteMany({ where: { requestId: { in: requestIds } } });
         await p.billingCharge.deleteMany({ where: { requestId: request } });
         await p.clientBillingService.deleteMany({ where: { clientId: client } });
-        await p.clientRequest.deleteMany({ where: { id: request } });
+        await p.clientRequest.updateMany({ where: { clientId: client }, data: { parentRequestId: null } });
+        await p.clientRequest.deleteMany({ where: { clientId: client } });
         await p.productMark.deleteMany({ where: { clientId: client } });
         await p.stockMovement.deleteMany({ where: { clientId: client } });
         await p.stockBalance.deleteMany({ where: { clientId: client } });
@@ -70,6 +73,73 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: splitting a partial pick conserves demand, marks and stock, and retries do not create another child.
+    it('transfers only unpicked demand into a linked child and allows parent packing', async () => {
+        vi.stubEnv('WMS_FBO_REMAINDER_TRANSFER_ENABLED', 'true');
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const before = await p.stockBalance.findMany({ where: { clientId: client }, orderBy: { id: 'asc' } });
+        const reservedBefore = await wbReservationQuantities(p, client, [sku], wh);
+        const operationId = randomUUID();
+        const result = await act('TRANSFER_REMAINDER', { operationId });
+        expect(result).toMatchObject({ phase: 'PACKING', needed: 2, picked: 2, compositionChanged: false });
+        const child = await p.clientRequest.findFirstOrThrow({ where: { clientId: client, id: { not: request } }, include: { items: true } });
+        expect(child).toMatchObject({ parentRequestId: request, status: 'SUBMITTED', warehouseId: wh });
+        const root = await p.clientRequest.findUniqueOrThrow({ where: { id: request } });
+        expect(child.fboRequestCode).toBe(`${root.number}_01`);
+        expect(child.items.map(i => i.quantity)).toEqual([2]);
+        expect(await p.clientRequestItem.findUnique({ where: { id: line } })).toMatchObject({ quantity: 2 });
+        expect(await p.stockBalance.findMany({ where: { clientId: client }, orderBy: { id: 'asc' } })).toEqual(before);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request } })).toBe(2);
+        expect(await wbReservationQuantities(p, client, [sku], wh)).toEqual(reservedBefore);
+        await act('TRANSFER_REMAINDER', { operationId });
+        expect(await p.clientRequest.count({ where: { clientId: client } })).toBe(2);
+        expect(await svc.plan(child.id, user)).toMatchObject({ needed: 2, picked: 0, parentRequest: { id: request } });
+        await expect(act('TRANSFER_REMAINDER')).rejects.toThrow();
+        await svc.act(child.id, { action: 'START', operationId: randomUUID() }, user);
+        await svc.act(child.id, { action: 'PICK_UNIT', operationId: randomUUID(), sourceBoxCode: 'FFL_' + partial,
+            barcode: '2051234567890', kiz: marks[2].value }, user);
+        const next = await svc.act(child.id, { action: 'TRANSFER_REMAINDER', operationId: randomUUID() }, user);
+        expect(next.childRequests).toMatchObject([{ fboRequestCode: `${root.number}_02` }]);
+        expect((await p.clientRequest.findUniqueOrThrow({ where: { id: request } })).fboRemainderSequence).toBe(2);
+    });
+    // TEST: two simultaneous button presses create one branch, and untouched lines move entirely.
+    it('serializes remainder transfers and removes untouched lines from the parent', async () => {
+        vi.stubEnv('WMS_FBO_REMAINDER_TRANSFER_ENABLED', 'true');
+        await p.clientRequestItem.create({ data: { requestId: request, skuId: other, barcode: '2051234567883', quantity: 1 } });
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const results = await Promise.allSettled([act('TRANSFER_REMAINDER'), act('TRANSFER_REMAINDER')]);
+        expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+        const children = await p.clientRequest.findMany({ where: { parentRequestId: request }, include: { items: true } });
+        expect(children).toHaveLength(1);
+        expect(children[0].items.reduce((sum, i) => sum + i.quantity, 0)).toBe(3);
+        expect(await p.clientRequestItem.count({ where: { requestId: request, skuId: other } })).toBe(0);
+    });
+    // TEST: an audit failure rolls back the child, sequence, composition and quantity edits together.
+    it('rolls back a remainder transfer when event recording fails', async () => {
+        vi.stubEnv('WMS_FBO_REMAINDER_TRANSFER_ENABLED', 'true');
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const transaction = p.$transaction.bind(p);
+        (svc as unknown as { prisma: unknown }).prisma = { $transaction: (callback: any, options: any) => transaction(async (tx: any) => {
+            tx.clientRequestEvent.createMany = async () => { throw Error('event unavailable'); };
+            return callback(tx);
+        }, options) };
+        await expect(act('TRANSFER_REMAINDER')).rejects.toThrow('event unavailable');
+        expect(await p.clientRequest.count({ where: { clientId: client } })).toBe(1);
+        expect(await p.clientRequestItem.findUnique({ where: { id: line } })).toMatchObject({ quantity: 4 });
+        expect(await p.clientRequest.findUnique({ where: { id: request } })).toMatchObject({ fboRemainderSequence: 0 });
+        expect(await p.fboAssembly.findUnique({ where: { requestId: request } })).toMatchObject({ phase: 'PICKING' });
+    });
+    // TEST: opt-in rollout and an empty pick cannot silently move an entire request.
+    it('rejects remainder transfer with the flag off or before any physical pick', async () => {
+        await act('START');
+        await expect(act('TRANSFER_REMAINDER')).rejects.toThrow();
+        vi.stubEnv('WMS_FBO_REMAINDER_TRANSFER_ENABLED', 'true');
+        await expect(act('TRANSFER_REMAINDER')).rejects.toThrow('отберите');
+        expect(await p.clientRequest.count({ where: { clientId: client } })).toBe(1);
+    });
     async function manualReady() {
         vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
         await picked();
