@@ -1,3 +1,5 @@
+import { ArrowLeft } from 'lucide-react';
+import { StockManagementMenu } from './StockManagementMenu';
 import { useEffect, useState, type ReactNode } from 'react';
 import { fetchDuplicateGroupCapabilities, fetchMarketplaceAllocationCapabilities, fetchMarketplaceAllocation, fetchMarketplaceConnections, type AuthSession } from '../../lib/api';
 import { FbsStockAllocationView } from './FbsStockAllocationView';
@@ -44,13 +46,8 @@ export function StockManagementView({ session, clientId, connectionId, renderSto
   if (!enabled) return <FbsStockAllocationView session={session} clientId={clientId} connectionId={wbConnectionId} />;
   return <section>
     <h3>Управление остатками</h3>
-    {section ? <button type="button" onClick={() => setSection('')}>← Все разделы</button> : <div className="fbs-allocation" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-      <button type="button" onClick={() => setSection('marketplaces')}>Между маркетплейсами<br /><small>{cabinetMessage}</small></button>
-      <button type="button" onClick={() => setSection('stocks')}>Резервы и предпросмотр<br /><small>Текущие настройки остатков WB</small></button>
-      <button type="button" disabled={!duplicatesEnabled} onClick={() => setSection('duplicates')}>Между артикулами<br /><small>{duplicatesEnabled ? 'Доли, размеры и страховой резерв' : 'Раздел ещё не включён'}</small></button>
-      <button type="button" onClick={() => setSection('warehouses')}>Между складами<br /><small>Действующее распределение WB</small></button>
-      <button type="button" disabled>Подтверждение остатков WB<br /><small>Отдельная статистика — следующий этап</small></button>
-    </div>}
+    {section ? <button type="button" className="icon-text-button stock-management-back" onClick={() => setSection('')}><ArrowLeft size={18} aria-hidden="true" /> Все разделы</button>
+      : <StockManagementMenu cabinetMessage={cabinetMessage} duplicatesEnabled={duplicatesEnabled} onSelect={setSection} />}
     {section === 'marketplaces' && <MarketplaceAllocationView key={clientId} session={session} clientId={clientId} />}
     {section === 'duplicates' && duplicatesEnabled && <DuplicateStockGroupsView key={clientId} session={session} clientId={clientId} />}
     {section === 'stocks' && renderStocks()}
