@@ -47,6 +47,7 @@ public final class PalletSortingScreen {
     private Map<String, Object> state;
     private List<Map<String, Object>> sessions = new ArrayList<>();
     private EditText input, palletInput, sourceInput;
+    private String scanMode = PalletSortingScanMode.BARCODE_KIZ;
     private String barcode = "", pallet = "", source = "", message = "";
     private boolean busy, closed, confirming;
     private LinearLayout root;
@@ -77,8 +78,19 @@ public final class PalletSortingScreen {
             button("Повторить тот же запрос", this::sendPending, true);
         }
         if (state == null) {
+            android.widget.RadioGroup modes = new android.widget.RadioGroup(activity);
+            android.widget.RadioButton kizMode = new android.widget.RadioButton(activity);
+            kizMode.setId(View.generateViewId()); kizMode.setText("ШК + КИЗ");
+            android.widget.RadioButton barcodeMode = new android.widget.RadioButton(activity);
+            barcodeMode.setId(View.generateViewId()); barcodeMode.setText("Только ШК — один скан, одна единица");
+            modes.addView(kizMode); modes.addView(barcodeMode);
+            modes.check(PalletSortingScanMode.BARCODE_ONLY.equals(scanMode) ? barcodeMode.getId() : kizMode.getId());
+            kizMode.setEnabled(!busy && !command.pending()); barcodeMode.setEnabled(!busy && !command.pending());
+            modes.setOnCheckedChangeListener((group, checked) -> scanMode = checked == barcodeMode.getId() ? PalletSortingScanMode.BARCODE_ONLY : PalletSortingScanMode.BARCODE_KIZ);
+            root.addView(modes);
             for (Map<String, Object> row : sessions) button("Продолжить " + text(row, "sourceCode"), () -> open(text(row, "id")), true);
         } else {
+            label(PalletSortingScanMode.barcodeOnly(state) ? "Только ШК — один скан, одна единица" : "ШК + КИЗ", 18);
             label(text(state, "sourceCode") + " · " + ("CHECKING".equals(stage()) ? "Сверка коробов" : "FORMING".equals(stage()) ? "Формирование новых коробов" : "Завершено"), 21);
             // FIX: found stock is a +1 adjustment, not a balanced movement from a fictional box.
             int recovered = PalletSortingProblemFormatter.recovered(state);
@@ -100,8 +112,8 @@ public final class PalletSortingScreen {
         }
         if (target != null) {
             label("Заполняется " + text(target, "code") + " · " + number(target, "quantity") + " ед.", 20);
-            sourceInput = field("Исходный короб (если КИЗ ещё не привязан)", source);
-            label("Для учтённого КИЗа исходный короб не нужен. Если КИЗ ещё не привязан, укажите фактический короб; совпадение с исходным паллетом не требуется.", 15);
+            sourceInput = field(PalletSortingScanMode.barcodeOnly(state) ? "Исходный короб — обязательно" : "Исходный короб (если КИЗ ещё не привязан)", source);
+            label(PalletSortingScanMode.barcodeOnly(state) ? "Отсканируйте исходный короб, затем ШК каждой единицы товара." : "Для учтённого КИЗа исходный короб не нужен. Если КИЗ ещё не привязан, укажите фактический короб; совпадение с исходным паллетом не требуется.", 15);
             sourceInput.setOnEditorActionListener((v, id, event) -> { source = sourceInput.getText().toString().trim(); if (input != null) input.requestFocus(); return true; });
         }
         if (!"COMPLETED".equals(stage())) {
@@ -169,10 +181,14 @@ public final class PalletSortingScreen {
         if (value.isEmpty()) return;
         Map<String, Object> body = new LinkedHashMap<>();
         if (state == null) {
-            body.put("id", UUID.randomUUID().toString()); body.put("code", value);
+            body.put("id", UUID.randomUUID().toString()); body.put("code", value); body.put("scanMode", scanMode);
             if (command.begin("", body)) sendPending();
         } else if ("CHECKING".equals(stage())) { body.put("code", value); action("SCAN_SOURCE", body); }
         else if (target() == null) { body.put("code", value); body.put("palletCode", pallet); action("OPEN_TARGET", body); }
+        else if (PalletSortingScanMode.barcodeOnly(state)) {
+            try { action("MOVE", PalletSortingScanMode.barcodeMove(value, source)); }
+            catch (IllegalArgumentException error) { message = error.getMessage(); render(); }
+        }
         else if (barcode.isEmpty()) { barcode = value; render(); }
         else {
             body.put("barcode", barcode); body.put("kiz", value);

@@ -10454,6 +10454,22 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
+  // FIX: relabeling must never repair a foreign-box KIZ by changing its SKU first.
+  // Isolated rollout: the sold VM retains its existing behavior without this flag.
+  private requireFbsRelabelSourceBox(
+    task: Pick<FbsTsdAssemblyRecord, 'relabelRequired' | 'boxId' | 'boxCode'>,
+    mark: { boxId: string | null; box?: { code: string } | null },
+  ) {
+    if (process.env.WMS_FBS_RELABEL_SOURCE_BOX_GUARD !== 'true' || !task.relabelRequired) return;
+    if (mark.boxId !== task.boxId) {
+      throw new BadRequestException(
+        `КИЗ относится к другому исходному коробу: ${mark.box?.code ?? 'без короба'}. ` +
+        `В сборке выбран ${task.boxCode ?? 'товар без короба'}. ` +
+        'Сверьте короб и товар с администратором. Перенос КИЗа без количества при переклейке запрещён.',
+      );
+    }
+  }
+
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
@@ -10517,6 +10533,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (mark && mark.clientId !== task.clientId) {
       throw new BadRequestException('Этот КИЗ уже зарегистрирован в WMS у другого клиента. Передайте товар менеджеру.');
     }
+    if (mark) this.requireFbsRelabelSourceBox(task, mark);
     if (
       mark &&
       mark.skuId !== task.skuId &&
@@ -10525,7 +10542,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       task.sourceSkuId === mark.skuId
     ) {
       mark = await this.prisma.productMark.update({
-        where: { id: mark.id },
+        // FIX: reject a concurrent box/SKU/status change instead of reclassifying a stale mark.
+        where: { id: mark.id, ...(process.env.WMS_FBS_RELABEL_SOURCE_BOX_GUARD === 'true'
+          ? { boxId: mark.boxId, skuId: mark.skuId, status: mark.status, clientId: task.clientId }
+          : {}) },
         data: {
           skuId: task.skuId,
           sourceDocument: `Переклейка FBS, заказ ${task.orderId}: ${task.sourceArticle ?? task.sourceProductName ?? task.sourceSkuId} → ${task.article ?? task.productName}`,
@@ -13924,6 +13944,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!freshMark || freshMark.clientId !== freshTask.clientId || freshMark.skuId !== freshTask.skuId) {
         throw new BadRequestException('Данные КИЗа изменились. Обновите задание и повторите сканирование.');
       }
+      // FIX: recheck inside the movement transaction, including retries and other callers.
+      this.requireFbsRelabelSourceBox(freshTask, freshMark);
       if (freshMark.status !== StockStatus.AVAILABLE) {
         throw new BadRequestException('Этот КИЗ уже находится в сборке или был отгружен. Возьмите другую единицу.');
       }
