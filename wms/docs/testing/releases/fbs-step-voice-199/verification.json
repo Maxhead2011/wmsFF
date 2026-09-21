@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 199,
+  "versionName": "0.1.199-fbs-step-voice",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "8ef7247e86531a44a41155b065620d39f21dbf31387aace6f677b1e9a2f8e828"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 187,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 187,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 187,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 187,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 187,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 187,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "4fac4edb60a0396fad77558a47cdd35e6ca36c52d653df909414bc27d4bae2b3",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

@@ -1,0 +1,179 @@
+{
+  "passed": true,
+  "before": {
+    "images": {
+      "api": "sha256:bd3147ec46a09aff2fa8419c7e36751a4db8af95e7dfe204220dbf962c424c77",
+      "web": "sha256:6a4e621f60fc620257c465926734443b419f17b85b6c8352f6d8b39b4f695403"
+    },
+    "metadata": {
+      "versionCode": 198,
+      "versionName": "0.1.198-eleonora-events",
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-eleonora-screen-voice-198.apk",
+      "sha256": "a1ef1ae6ae3bfc76d898c9ca10e74037a069c195ab73f2f22cbaa79c473e9941",
+      "size": 5235039,
+      "releasedAt": "2026-09-19T13:03:47.650795+00:00",
+      "releaseNotes": "Six personal screen and FBS status recordings for Eleonora; completion and unavailable orders are distinguished. Other users unchanged. Install over the existing app without deleting data."
+    },
+    "releases": [
+      {
+        "path": "/opt/logoff-wms-releases/inventory-newest-first",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/client-report-summary",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-unconfirmed-stock-retry",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/dovoz-relabel-20260917",
+        "sources": [
+          "1083-list-source.txt",
+          "pick-1195-cambridge-source.cjs"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/historical-packing-publish-237",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/size-substitution-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/historical-packing-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/notification-navigation-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-shortage-kiz-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-manager-decision-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-stock-independent-events",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-stock-urgent-sync",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/done-packing-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-ozon-isolation",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-zero-stock-history",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/eleonora-screen-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/eleonora-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-released-kiz",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-voice-focus",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-whole-repack",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-packing-recovery",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-completion-220",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-manual-219",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-mixed-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/relabel-source-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-packing-215",
+        "sources": [
+          "next-android-source.tar.gz",
+          "published-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-stock-load-20260918",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-coalesce-20260918",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-batch-20260918",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-index-20260918",
+        "sources": []
+      }
+    ],
+    "apiDiff": "C /tmp\nA /tmp/repeat-writeoff-230-before.json\nA /tmp/repeat-writeoff-230.cjs\nA /tmp/trof-cause.cjs\nA /tmp/check-trof.cjs\nA /tmp/restore-trof-publication.cjs\nA /tmp/trof-audit.cjs\nA /tmp/verify-stock-retry.cjs\nA /tmp/wake-stock-queue.cjs\n",
+    "webDiff": "C /etc\nC /etc/nginx\nC /etc/nginx/conf.d\nC /etc/nginx/conf.d/default.conf\nC /run\nA /run/nginx.pid\nC /var\nC /var/cache\nC /var/cache/nginx\nA /var/cache/nginx/uwsgi_temp\nA /var/cache/nginx/client_temp\nA /var/cache/nginx/fastcgi_temp\nA /var/cache/nginx/proxy_temp\nA /var/cache/nginx/scgi_temp\n"
+  },
+  "webImage": "sha256:eeec7b356f89fe13d322bb3598e56af9c64b538eb820df7ac3e445144c5657f0",
+  "metadata": {
+    "versionCode": 199,
+    "versionName": "0.1.199-fbs-step-voice",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbs-step-voice-199.apk",
+    "sha256": "a500a9fcb7ac60197b7ab77b9dcb6130d03e4e86d74cc1512fba0109303ec2ba",
+    "size": 5362071,
+    "releasedAt": "2026-09-21T11:47:18.661503+00:00",
+    "releaseNotes": "FBS WB/Ozon step prompts; user recording for the new barcode, including Eleonora. Install over the existing app without deleting data."
+  },
+  "changes": [
+    "/usr/share/nginx/html/downloads/logoff-tsd-fbs-step-voice-199.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.json"
+  ],
+  "signatureMatches": true,
+  "signedContentsMatch": true,
+  "existingAssetsAndPrintAgentsPreserved": true,
+  "builderAssetsVerified": true
+}

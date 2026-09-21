@@ -40,6 +40,8 @@ interface FboScanFeedback {
                 prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, (personal.personal?R.raw.eleonora_box:R.raw.fbo_pack_box), 1));
                 prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, (personal.personal?R.raw.eleonora_barcode:R.raw.fbo_pack_barcode), 1));
                 prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, (personal.personal?R.raw.eleonora_kiz:R.raw.fbo_pack_kiz), 1));
+                // FIX: the user-provided new-barcode recording also fills Eleonora's missing cue.
+                prompts.put(FboPackingVoice.Cue.NEW_BARCODE, pool.load(context, R.raw.fbs_new_barcode, 1));
                 prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, (personal.personal?R.raw.eleonora_put:R.raw.fbo_pack_put), 1));
                 prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, (personal.personal?R.raw.eleonora_error:R.raw.fbo_pack_error), 1));
                 prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, (personal.personal?R.raw.eleonora_closed:R.raw.fbo_pack_closed), 1));

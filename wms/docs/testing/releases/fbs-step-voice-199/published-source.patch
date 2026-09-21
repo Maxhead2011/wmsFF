@@ -1,0 +1,179 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 198 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.198-eleonora-events"
++            versionCode = 199 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.199-fbs-step-voice"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboPackingVoice.java
+@@ -2,7 +2,7 @@
+ 
+ // FIX: announce transitions, not redraws; acceptance must come from the server.
+ final class FboPackingVoice {
+-    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR, CLOSED }
++    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR, CLOSED, NEW_BARCODE } // FIX: FBS relabel recording.
+     private Cue last;
+     private String acceptedId;
+     Cue step(boolean active, boolean ready, String target, String barcode) {
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboScanFeedback.java
+@@ -40,6 +40,8 @@
+                 prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, (personal.personal?R.raw.eleonora_box:R.raw.fbo_pack_box), 1));
+                 prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, (personal.personal?R.raw.eleonora_barcode:R.raw.fbo_pack_barcode), 1));
+                 prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, (personal.personal?R.raw.eleonora_kiz:R.raw.fbo_pack_kiz), 1));
++                // FIX: the user-provided new-barcode recording also fills Eleonora's missing cue.
++                prompts.put(FboPackingVoice.Cue.NEW_BARCODE, pool.load(context, R.raw.fbs_new_barcode, 1));
+                 prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, (personal.personal?R.raw.eleonora_put:R.raw.fbo_pack_put), 1));
+                 prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, (personal.personal?R.raw.eleonora_error:R.raw.fbo_pack_error), 1));
+                 prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, (personal.personal?R.raw.eleonora_closed:R.raw.fbo_pack_closed), 1));
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FbsStepVoice.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FbsStepVoice.java
+@@ -0,0 +1,19 @@
++package pro.logoff.wms.tsd;
++
++// FIX: speak confirmed FBS stages once, sharing WB/Ozon and preserving sold flavors.
++final class FbsStepVoice {
++    private String last;
++
++    FboPackingVoice.Cue step(String flavor, boolean ready, String owner, String task, String state) {
++        if (!"logoff".equals(flavor) || !ready || task == null) return null;
++        String key = owner + ":" + task + ":" + state;
++        if (key.equals(last)) return null;
++        last = key;
++        if ("SCAN_BARCODE".equals(state) || "SCAN_SOURCE_BARCODE".equals(state))
++            return FboPackingVoice.Cue.BARCODE;
++        if ("SCAN_RELABEL_BARCODE".equals(state)) return FboPackingVoice.Cue.NEW_BARCODE;
++        if ("SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state)) return FboPackingVoice.Cue.KIZ;
++        if ("READY_TO_COMPLETE".equals(state) || "READY_TO_SUBMIT".equals(state)) return FboPackingVoice.Cue.PUT;
++        return null;
++    }
++}
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
+@@ -183,6 +183,7 @@
+     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
+     private FboTwoStageScreen fboTwoStageScreen;
+     private FboScanFeedback assemblyScanVoice;
++    private final FbsStepVoice fbsStepVoice = new FbsStepVoice(); // FIX: deduplicate confirmed stage prompts.
+     private String assemblyScanVoiceOwner;
+     private boolean assemblyVoicePaused;
+     private final PersonalEventVoice personalEvents = new PersonalEventVoice();
+@@ -4691,6 +4692,9 @@
+         if ("OZON".equalsIgnoreCase(task.marketplace) && OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+             root.addView(feedbackView(ozonQuantityInstruction(task), Color.rgb(254, 240, 138)));
+         }
++        speakFbsPrompt(fbsStepVoice.step(BuildConfig.FLAVOR,
++            !fbsBusy && online && fbsFeedbackColor != BOX_NOT_NEEDED_RED && !assemblyVoicePaused,
++            fbsSessionOwnerKey(safeSession()), task.id, state));
+         boolean guidedScanDialog = FbsAssemblyUi.shouldUseGuidedScanDialog(state);
+         if (!guidedScanDialog) dismissFbsGuidedScanDialog();
+         if (!"WAIT_MARKETPLACE_LABEL".equals(state)) {
+@@ -6198,6 +6202,7 @@
+         fbsFeedbackColor = BOX_NOT_NEEDED_RED;
+         statusMessage = message;
+         playFbsError();
++        speakFbsPrompt(FboPackingVoice.Cue.ERROR); // FIX: includes locally rejected KIZ scans.
+         renderFbsAssemblyScreen();
+         showScanningErrorDialog(message);
+     }
+@@ -6213,6 +6218,19 @@
+     }
+ 
+     // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
++    private void speakFbsPrompt(FboPackingVoice.Cue cue) {
++        // FIX: never speak from a background screen, paused activity or sold application.
++        if (cue == null || screen != Screen.FBS_ASSEMBLY || assemblyVoicePaused
++            || isFinishing() || isDestroyed() || !"logoff".equals(BuildConfig.FLAVOR)) return;
++        String owner = safeSession() == null ? null : safeSession().userId;
++        if (!java.util.Objects.equals(owner, assemblyScanVoiceOwner)) closeAssemblyScanVoice();
++        if (assemblyScanVoice == null) {
++            assemblyScanVoice = new FboScanFeedback.Voice(this, owner);
++            assemblyScanVoiceOwner = owner;
++        }
++        assemblyScanVoice.prompt(cue);
++    }
++
+     private void closeAssemblyScanVoice() {
+         if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;assemblyScanVoiceOwner=null;}
+     }
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FbsStepVoiceActivityTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FbsStepVoiceActivityTest.java
+@@ -0,0 +1,39 @@
++package pro.logoff.wms.tsd;
++
++import java.util.*;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.robolectric.Robolectric;
++import org.robolectric.RobolectricTestRunner;
++import org.robolectric.annotation.Config;
++import static org.junit.Assert.*;
++
++@RunWith(RobolectricTestRunner.class) @Config(sdk=28)
++public class FbsStepVoiceActivityTest {
++    // TEST: real activity routes new-barcode/error audio, isolates sold apps and silences background callbacks.
++    @Test public void promptsRespectScreenFlavorAndLifecycle() throws Exception {
++        try(var controller=Robolectric.buildActivity(MainActivity.class).setup()) {
++            var activity=controller.get();
++            List<FboPackingVoice.Cue> spoken=new ArrayList<>();
++            var audio=MainActivity.class.getDeclaredField("assemblyScanVoice");audio.setAccessible(true);
++            audio.set(activity,new FboScanFeedback(){
++                public void play(boolean accepted) {}
++                public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}
++                public void close() {}
++            });
++            var screen=MainActivity.class.getDeclaredField("screen");screen.setAccessible(true);
++            var method=MainActivity.class.getDeclaredMethod("speakFbsPrompt",FboPackingVoice.Cue.class);method.setAccessible(true);
++            method.invoke(activity,FboPackingVoice.Cue.NEW_BARCODE);
++            assertTrue(spoken.isEmpty());
++            screen.set(activity,Enum.valueOf((Class)screen.getType(),"FBS_ASSEMBLY"));
++            method.invoke(activity,FboPackingVoice.Cue.NEW_BARCODE);
++            method.invoke(activity,FboPackingVoice.Cue.ERROR);
++            assertEquals("logoff".equals(BuildConfig.FLAVOR)
++                ? Arrays.asList(FboPackingVoice.Cue.NEW_BARCODE,FboPackingVoice.Cue.ERROR)
++                : Collections.emptyList(),spoken);
++            int count=spoken.size();controller.pause();
++            method.invoke(activity,FboPackingVoice.Cue.PUT);
++            assertEquals(count,spoken.size());
++        }
++    }
++}
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FbsStepVoiceTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FbsStepVoiceTest.java
+@@ -0,0 +1,29 @@
++package pro.logoff.wms.tsd;
++
++import org.junit.Test;
++import static org.junit.Assert.*;
++
++public class FbsStepVoiceTest {
++    // TEST: WB and Ozon use server stages, never redraws or pending requests.
++    @Test public void stepsAndRetries() {
++        FbsStepVoice v = new FbsStepVoice();
++        assertNull(v.step("logoff", false, "u", "a", "SCAN_BARCODE"));
++        assertEquals(FboPackingVoice.Cue.BARCODE, v.step("logoff", true, "u", "a", "SCAN_BARCODE"));
++        assertNull(v.step("logoff", true, "u", "a", "SCAN_BARCODE"));
++        assertEquals(FboPackingVoice.Cue.KIZ, v.step("logoff", true, "u", "a", "SCAN_KIZ"));
++        assertEquals(FboPackingVoice.Cue.PUT, v.step("logoff", true, "u", "a", "READY_TO_COMPLETE"));
++        assertNull(v.step("logoff", true, "u", "a", "READY_TO_COMPLETE"));
++        assertNull(v.step("logoff", true, "u", "a", "COMPLETED"));
++        assertEquals(FboPackingVoice.Cue.BARCODE, v.step("logoff", true, "u", "b", "SCAN_BARCODE"));
++    }
++    // TEST: relabel asks for the NEW BARCODE; confirmation proposals never imply acceptance.
++    @Test public void relabelAndSafety() {
++        FbsStepVoice v = new FbsStepVoice();
++        assertEquals(FboPackingVoice.Cue.NEW_BARCODE, v.step("logoff", true, "u", "a", "SCAN_RELABEL_BARCODE"));
++        assertNull(v.step("logoff", true, "u", "a", "CONFIRM_KIZ_MOVE"));
++        assertEquals(FboPackingVoice.Cue.KIZ, v.step("logoff", true, "u", "a", "SCAN_NEW_KIZ"));
++        for (String flavor : new String[]{"ffullhab", "platform"})
++            assertNull(v.step(flavor, true, "u", "a", "SCAN_BARCODE"));
++        assertNull(v.step("logoff", true, "u", null, "SCAN_BARCODE"));
++    }
++}

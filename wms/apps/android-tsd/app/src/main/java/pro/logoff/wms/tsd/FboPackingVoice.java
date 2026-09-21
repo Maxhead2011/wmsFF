@@ -2,7 +2,7 @@ package pro.logoff.wms.tsd;
 
 // FIX: announce transitions, not redraws; acceptance must come from the server.
 final class FboPackingVoice {
-    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR, CLOSED }
+    enum Cue { BOX, BARCODE, KIZ, PUT, ERROR, CLOSED, NEW_BARCODE } // FIX: FBS relabel recording.
     private Cue last;
     private String acceptedId;
     Cue step(boolean active, boolean ready, String target, String barcode) {
