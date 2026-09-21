@@ -1,0 +1,714 @@
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -229,9 +229,9 @@
+     name: 'Маркетплейсы и FBS',
+     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
+       '/marketplace-connections/fbs/size-substitution', '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
+-      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment'],
++      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/marketplace-connections/allocation'],
+     // FIX: preserve delivery-options plus six reshipment handlers; aliases count once.
+-    routeCount: 113, // FIX: includes read-only WB stock verification.
++    routeCount: 119, // FIX: includes read-only WB stock verification.
+     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+     logic: ['Перенос из доставки через расширение: после подтверждения выдаёт одну команду кабинету WB, затем независимо проверяет поставки и новый стикер; токены кабинета остаются в браузере.', 'Учёт по статусу WB: решение менеджера после проверки WB; точная пара КИЗ–ШК списывается и сохраняется в истории отгрузок, неизвестный источник — без короба.', 'Замена размера WB: ADMIN/OWNER подтверждает переклейку, создаётся локальная заявка без списания до отбора.', 'Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
+     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
+--- /dev/null
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-allocation.controller.ts
+@@ -0,0 +1,32 @@
++import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequireAnyPermissions } from '../auth/decorators/require-permissions.decorator';
++import type { AuthUser } from '../auth/auth.types';
++import { MarketplaceAllocationService } from './marketplace-allocation.service';
++
++// FIX: separate endpoints do not modify the legacy WB publication path.
++@Controller('marketplace-connections/allocation')
++@RequireAnyPermissions('clients:read', 'clients:write', 'client-requests:read', 'client-requests:write')
++export class MarketplaceAllocationController {
++  constructor(private readonly allocation: MarketplaceAllocationService) {}
++  @Get('capabilities') capabilities() { return this.allocation.capabilities(); }
++  @Get(':clientId') read(@Param('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.allocation.read(clientId, user); }
++  @Put(':clientId')
++  @RequireAnyPermissions('clients:write', 'client-requests:write')
++  save(@Param('clientId') clientId: string, @Body() body: { draft?: unknown; revision?: unknown }, @CurrentUser() user: AuthUser) {
++    return this.allocation.save(clientId, body, user);
++  }
++  @Post(':clientId/preview') preview(@Param('clientId') clientId: string,
++    @Body() body: { draft?: unknown; search?: string; page?: number }, @CurrentUser() user: AuthUser) {
++    return this.allocation.preview(clientId, body, user);
++  }
++  @Post(':clientId/catalog') catalog(@Param('clientId') clientId: string, @Body() body: { draft?: unknown }, @CurrentUser() user: AuthUser) {
++    return this.allocation.catalog(clientId, body, user);
++  }
++  @Put(':clientId/binding')
++  @RequireAnyPermissions('clients:write', 'client-requests:write')
++  binding(@Param('clientId') clientId: string, @Body() body: { draft?: unknown; sourceBarcode?: string;
++    wbProductId?: string; ozonProductId?: string; confirmed?: boolean; revision?: string | null }, @CurrentUser() user: AuthUser) {
++    return this.allocation.confirmBinding(clientId, body, user);
++  }
++}
+--- /dev/null
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-allocation.service.ts
+@@ -0,0 +1,175 @@
++import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
++import { Prisma } from '@prisma/client';
++import { createHash } from 'node:crypto';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import { ClientScopeService } from '../auth/client-scope.service';
++import type { AuthUser } from '../auth/auth.types';
++import { WmsStockAvailabilityService } from '../stock/wms-stock-availability.service';
++import { allocationEligibility, splitMarketplaceStock, validateAllocationDraft, type AllocationProduct } from './marketplace-allocation';
++import { MarketplaceConnectionsService } from './marketplace-connections.service';
++
++const PREFIX = 'marketplace.allocation.draft.';
++@Injectable()
++export class MarketplaceAllocationService {
++  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService,
++    private readonly availability: WmsStockAvailabilityService,
++    private readonly marketplaces: MarketplaceConnectionsService) {}
++
++  private catalogKey(clientId: string, connectionId: string) { return `marketplace.allocation.catalog.${clientId}.${connectionId}`; }
++  private bindingPrefix(clientId: string) { return `marketplace.allocation.binding.${clientId}.`; }
++
++  async catalog(clientId: string, body: { draft?: unknown }, user: AuthUser) {
++    this.authorize(clientId, user);
++    let draft;
++    try { draft = validateAllocationDraft(body?.draft, await this.connections(clientId)); }
++    catch (error) { throw new BadRequestException((error as Error).message); }
++    const [wb, ozon] = await Promise.all([
++      this.marketplaces.readAllocationCatalog(clientId, draft.wbConnectionId, user),
++      this.marketplaces.readAllocationCatalog(clientId, draft.ozonConnectionId, user),
++    ]);
++    const createdAt = new Date().toISOString();
++    // FIX: cache independent cabinet snapshots; this never runs the old SKU-upsert synchronizer.
++    for (const [connectionId, products] of [[draft.wbConnectionId, wb], [draft.ozonConnectionId, ozon]] as const) {
++      const key = this.catalogKey(clientId, connectionId);
++      const value = { createdAt, products } as unknown as Prisma.InputJsonValue;
++      await this.prisma.systemSetting.upsert({ where: { key }, create: { key, value }, update: { value } });
++    }
++    const bindings = await this.prisma.systemSetting.findMany({ where: { key: { startsWith: this.bindingPrefix(clientId) } } });
++    return { wb, ozon, createdAt, bindings: bindings.map(row => ({ ...(row.value as object), revision: row.updatedAt.toISOString() })) };
++  }
++
++  async confirmBinding(clientId: string, body: { draft?: unknown; sourceBarcode?: string; wbProductId?: string;
++    ozonProductId?: string; confirmed?: boolean; revision?: string | null }, user: AuthUser) {
++    this.authorize(clientId, user, true);
++    if (!body || body.confirmed !== true || typeof body.sourceBarcode !== 'string' || !body.sourceBarcode.trim()
++      || body.sourceBarcode.length > 150 || (body.revision !== null && typeof body.revision !== 'string')) {
++      throw new BadRequestException('Выберите исходный ШК, обе карточки и явно подтвердите соответствие.');
++    }
++    const sourceBarcode = body.sourceBarcode.trim();
++    const prefix = this.bindingPrefix(clientId);
++    const key = prefix + createHash('sha256').update(sourceBarcode).digest('hex');
++    return this.prisma.$transaction(async tx => {
++      // One lock for all source mappings prevents reusing a target card under two physical barcodes.
++      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${prefix}))`;
++      const connections = await tx.clientMarketplaceConnection.findMany({ where: { clientId, isActive: true },
++        select: { id: true, marketplace: true, isActive: true } });
++      let draft;
++      try { draft = validateAllocationDraft(body.draft, connections); }
++      catch (error) { throw new BadRequestException((error as Error).message); }
++      const source = await tx.barcode.findFirst({ where: { value: sourceBarcode, sku: { clientId } }, select: { id: true } });
++      if (!source) throw new BadRequestException('Исходный ШК отсутствует в карточках этого клиента.');
++      const readProduct = async (connectionId: string, productId: string | undefined) => {
++        const snapshot = await tx.systemSetting.findUnique({ where: { key: this.catalogKey(clientId, connectionId) } });
++        const value = snapshot?.value as unknown as { createdAt: string; products: AllocationProduct[] } | undefined;
++        if (!value || !Number.isFinite(Date.parse(value.createdAt)) || Date.now() - Date.parse(value.createdAt) > 15 * 60_000) {
++          throw new ConflictException('Обновите каталоги: срок проверки карточек истёк.');
++        }
++        const matches = value.products.filter(row => row.productId === productId);
++        if (matches.length !== 1) throw new BadRequestException('Карточка не найдена однозначно в выбранном кабинете.');
++        return matches[0];
++      };
++      const wb = await readProduct(draft.wbConnectionId, body.wbProductId);
++      const ozon = await readProduct(draft.ozonConnectionId, body.ozonProductId);
++      const current = await tx.systemSetting.findUnique({ where: { key } });
++      if ((current?.updatedAt.toISOString() ?? null) !== body.revision) throw new ConflictException('Соответствие уже изменено. Обновите каталоги.');
++      const others = await tx.systemSetting.findMany({ where: { key: { startsWith: prefix, not: key } } });
++      for (const other of others) {
++        const value = other.value as any;
++        if ((value.wbConnectionId === draft.wbConnectionId && value.wb?.productId === wb.productId)
++          || (value.ozonConnectionId === draft.ozonConnectionId && value.ozon?.productId === ozon.productId)) {
++          throw new ConflictException('Одна из карточек уже связана с другим исходным ШК.');
++        }
++      }
++      const value = { sourceBarcode, wbConnectionId: draft.wbConnectionId, ozonConnectionId: draft.ozonConnectionId,
++        wb, ozon, confirmedByUserId: user.id, confirmedAt: new Date().toISOString() };
++      const json = value as unknown as Prisma.InputJsonValue;
++      const saved = await tx.systemSetting.upsert({ where: { key }, create: { key, value: json, updatedByUserId: user.id },
++        update: { value: json, updatedByUserId: user.id, updatedAt: new Date(Math.max(Date.now(), (current?.updatedAt.getTime() ?? 0) + 1)) } });
++      await tx.auditLog.create({ data: { userId: user.id, action: 'marketplace.allocation.binding.confirmed', entity: 'Client',
++        entityId: clientId, payload: { before: current?.value ?? null, after: json } } });
++      return { ...value, revision: saved.updatedAt.toISOString() };
++    });
++  }
++
++  // FIX: default off isolates the sold VM; this stage is explicitly preparation, not publication.
++  capabilities() { return { enabled: process.env.WMS_MARKETPLACE_ALLOCATION_ENABLED === 'true', publicationEnabled: false }; }
++
++  private authorize(clientId: string, user: AuthUser, write = false) {
++    if (!this.capabilities().enabled || user.isDemo) throw new ForbiddenException('Распределение между маркетплейсами недоступно.');
++    if (!clientId?.trim()) throw new BadRequestException('Выберите клиента.');
++    this.scopes.requireClientAccess(user, clientId, write && !user.roleCodes.includes('CLIENT') ? 'write' : 'read');
++  }
++
++  private connections(clientId: string) {
++    return this.prisma.clientMarketplaceConnection.findMany({
++      where: { clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } },
++      select: { id: true, marketplace: true, isActive: true, accountName: true, fbsExecutionWarehouseId: true },
++      orderBy: [{ marketplace: 'asc' }, { id: 'asc' }],
++    });
++  }
++
++  async read(clientId: string, user: AuthUser) {
++    this.authorize(clientId, user);
++    const [connections, setting] = await Promise.all([
++      this.connections(clientId), this.prisma.systemSetting.findUnique({ where: { key: PREFIX + clientId } }),
++    ]);
++    let draft = null;
++    try { draft = validateAllocationDraft(setting?.value, connections); } catch { /* Disconnected cabinets invalidate old drafts. */ }
++    return { ...allocationEligibility(connections), connections, draft, revision: setting?.updatedAt.toISOString() ?? null,
++      publicationEnabled: false, invalidated: Boolean(setting && !draft) };
++  }
++
++  async save(clientId: string, body: { draft?: unknown; revision?: unknown }, user: AuthUser) {
++    this.authorize(clientId, user, true);
++    if (!body || typeof body !== 'object') throw new BadRequestException('Передайте настройки распределения.');
++    if (body.revision !== null && typeof body.revision !== 'string') throw new BadRequestException('Передайте версию настроек.');
++    const key = PREFIX + clientId;
++    // FIX: advisory transaction lock plus revision protects the first insert and concurrent edits.
++    return this.prisma.$transaction(async tx => {
++      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
++      const connections = await tx.clientMarketplaceConnection.findMany({ where: { clientId, isActive: true },
++        select: { id: true, marketplace: true, isActive: true } });
++      let draft;
++      try { draft = validateAllocationDraft(body.draft, connections); }
++      catch (error) { throw new BadRequestException((error as Error).message); }
++      const previous = await tx.systemSetting.findUnique({ where: { key } });
++      if ((previous?.updatedAt.toISOString() ?? null) !== body.revision) throw new ConflictException('Настройки изменились. Обновите раздел.');
++      const saved = await tx.systemSetting.upsert({ where: { key },
++        create: { key, value: draft, updatedByUserId: user.id }, update: { value: draft, updatedByUserId: user.id,
++          updatedAt: new Date(Math.max(Date.now(), (previous?.updatedAt.getTime() ?? 0) + 1)) } });
++      await tx.auditLog.create({ data: { userId: user.id, action: 'marketplace.allocation.draft.saved',
++        entity: 'Client', entityId: clientId, payload: { before: previous?.value ?? null, after: draft } as Prisma.InputJsonValue } });
++      return { draft, revision: saved.updatedAt.toISOString(), publicationEnabled: false };
++    });
++  }
++
++  async preview(clientId: string, body: { draft?: unknown; search?: string; page?: number }, user: AuthUser) {
++    this.authorize(clientId, user);
++    if (!body || typeof body !== 'object') throw new BadRequestException('Передайте параметры предпросмотра.');
++    const connections = await this.connections(clientId);
++    let draft;
++    try { draft = validateAllocationDraft(body.draft, connections); }
++    catch (error) { throw new BadRequestException((error as Error).message); }
++    const wb = connections.find(c => c.id === draft.wbConnectionId)!;
++    const ozon = connections.find(c => c.id === draft.ozonConnectionId)!;
++    // FIX: never present a combined stock from unrelated or unspecified physical warehouses.
++    if (!wb.fbsExecutionWarehouseId || wb.fbsExecutionWarehouseId !== ozon.fbsExecutionWarehouseId) {
++      throw new BadRequestException('Для общего остатка у обоих кабинетов должен быть задан один склад исполнения WMS.');
++    }
++    if (!user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin')
++      && (user.activeWarehouseId !== wb.fbsExecutionWarehouseId
++        || (user.warehouseIds && !user.warehouseIds.includes(wb.fbsExecutionWarehouseId)))) {
++      throw new ForbiddenException('Выберите доступный общий филиал исполнения этих кабинетов.');
++    }
++    if ((body.page !== undefined && (!Number.isInteger(body.page) || body.page < 1))
++      || (body.search !== undefined && typeof body.search !== 'string')) throw new BadRequestException('Неверные параметры поиска.');
++    const snapshot = await this.availability.snapshot(clientId, user, { warehouseId: wb.fbsExecutionWarehouseId });
++    const search = (body.search ?? '').trim().slice(0, 100);
++    const rows = snapshot.rows.filter(row => row.barcode.includes(search));
++    const page = body.page ?? 1, pageSize = 50;
++    return { generatedAt: snapshot.generatedAt, warehouseId: wb.fbsExecutionWarehouseId,
++      totalRows: rows.length, page, pageSize, missingBarcodeCount: snapshot.missingBarcodeCount,
++      rows: rows.slice((page - 1) * pageSize, page * pageSize).map(row => ({ ...row, ...splitMarketplaceStock(row.available, draft.wbPercent) })),
++      publicationEnabled: false };
++  }
++}
+--- /dev/null
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-allocation.ts
+@@ -0,0 +1,31 @@
++export type AllocationConnection = { id: string; marketplace: string; isActive: boolean };
++export type AllocationDraft = { wbConnectionId: string; ozonConnectionId: string; wbPercent: number };
++export type AllocationProduct = { productId: string; offerId: string; article?: string; name: string; size: string; color: string; barcodes: string[] };
++
++// FIX: eligibility is based on actual active connections, never a customer-name list.
++export function allocationEligibility(connections: AllocationConnection[]) {
++  const active = connections.filter(row => row.isActive && ['WILDBERRIES', 'OZON'].includes(row.marketplace));
++  const available = active.some(row => row.marketplace === 'WILDBERRIES') && active.some(row => row.marketplace === 'OZON');
++  return { available, count: active.length, message: available ? '' : active.length === 0
++    ? 'Нет подключённых кабинетов' : active.length === 1 ? 'Подключён только 1 кабинет'
++      : 'Для распределения нужны кабинеты Wildberries и Ozon' };
++}
++
++export function validateAllocationDraft(value: unknown, connections: AllocationConnection[]): AllocationDraft {
++  const row = value as Partial<AllocationDraft> | null;
++  if (!row || !Number.isInteger(row.wbPercent) || row.wbPercent! < 0 || row.wbPercent! > 100
++    || !connections.some(c => c.isActive && c.id === row.wbConnectionId && c.marketplace === 'WILDBERRIES')
++    || !connections.some(c => c.isActive && c.id === row.ozonConnectionId && c.marketplace === 'OZON')) {
++    throw new Error('Выберите активные кабинеты WB и Ozon этого клиента и целую долю WB от 0 до 100%.');
++  }
++  return { wbConnectionId: row.wbConnectionId!, ozonConnectionId: row.ozonConnectionId!, wbPercent: row.wbPercent! };
++}
++
++// FIX: largest remainder conserves each barcode's stock; an exact tie goes to WB.
++export function splitMarketplaceStock(available: number, wbPercent: number) {
++  if (!Number.isSafeInteger(available) || available < 0 || !Number.isInteger(wbPercent) || wbPercent < 0 || wbPercent > 100) {
++    throw new Error('Остаток и доля должны быть неотрицательными целыми числами.');
++  }
++  const wb = Number((BigInt(available) * BigInt(wbPercent) + 50n) / 100n);
++  return { wb, ozon: available - wb };
++}
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts
+@@ -1,3 +1,5 @@
++import { MarketplaceAllocationController } from './marketplace-allocation.controller';
++import { MarketplaceAllocationService } from './marketplace-allocation.service';
+ import { FbsSizeSubstitutionService } from './fbs-size-substitution.service';
+ import { FbsSizeSubstitutionController } from './fbs-size-substitution.controller';
+ import { WbSyncHealthService } from './wb-sync-health.service';
+@@ -21,8 +23,8 @@
+ 
+ @Module({
+   imports: [AuthModule, LogisticsModule],
+-  controllers: [FbsSizeSubstitutionController, WbSyncHealthController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+-  providers: [FbsSizeSubstitutionService, WbSyncHealthService,
++  controllers: [MarketplaceAllocationController, FbsSizeSubstitutionController, WbSyncHealthController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
++  providers: [MarketplaceAllocationService, FbsSizeSubstitutionService, WbSyncHealthService,
+     MarketplaceStockControlService,
+     // FIX: keep current stock-control registration when adding independent repeats.
+     FbsRepeatAssemblyService,
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -29126,6 +29126,20 @@
+     return result;
+   }
+ 
++  // FIX: allocation reads each cabinet independently; never upsert/overwrite a warehouse SKU here.
++  async readAllocationCatalog(clientId: string, connectionId: string, user: AuthUser) {
++    this.clientScopes.requireClientAccess(user, clientId, 'read');
++    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
++      where: { id: connectionId, clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } },
++      include: { client: { select: { id: true, code: true, name: true } } },
++    });
++    if (!connection) throw new NotFoundException('Активный кабинет клиента не найден.');
++    const products = await this.fetchMarketplaceProducts(connection);
++    return products.map(product => ({ productId: product.productId, offerId: product.offerId,
++      article: product.article ?? product.clientSku ?? product.offerId,
++      name: product.name, size: product.size ?? '', color: product.color ?? '', barcodes: product.barcodes }));
++  }
++
+   async checkConnection(id: string, user: AuthUser) {
+     const connection = await this.prisma.clientMarketplaceConnection.findUnique({
+       where: { id },
+--- a/wms/apps/web/src/components/fbs/FbsPanel.tsx
++++ b/wms/apps/web/src/components/fbs/FbsPanel.tsx
+@@ -119,7 +119,7 @@
+   type UpdateFbsBillingSettingsPayload,
+ } from '../../lib/api';
+ import { FbsCostCalculator } from './FbsCostCalculator';
+-import { FbsStockAllocationView } from './FbsStockAllocationView';
++import { StockManagementView } from './StockManagementView';
+ import {
+   FBS_AUTO_CANCEL_HOURS,
+   fbsActiveOrderAgeTone,
+@@ -446,6 +446,10 @@
+   const allBranches = displayMode === 'all';
+   const displayWarehouseId = allBranches ? undefined : displayMode;
+   const [activeView, setActiveView] = useState<FbsView>('active');
++  // FIX: suspend all snapshot polling while the stock panel owns the client selection.
++  const isStockManagement = activeView === 'allocation';
++  const currentView = useRef(activeView);
++  currentView.current = activeView;
+   const [clients, setClients] = useState<ClientSummary[]>([]);
+   const [activeClients, setActiveClients] = useState<FbsActiveClientSummary[]>([]);
+   const [activeClientsLoading, setActiveClientsLoading] = useState(false);
+@@ -630,7 +634,7 @@
+     setActiveClientsError('');
+     try {
+       const rows = await fetchFbsActiveClients(session.accessToken, marketplace, 'snapshot', allBranches, displayWarehouseId);
+-      if (sequence !== activeClientsSequence.current) return;
++      if (sequence !== activeClientsSequence.current || currentView.current === 'allocation') return;
+       setActiveClients(rows);
+       setSelectedClientId((current) => {
+         if (rows.some((item) => item.client.id === current)) return current;
+@@ -706,6 +710,7 @@
+   useEffect(() => {
+     setConnectionOpen(false);
+     setConnectionError('');
++    if (isStockManagement) { ++loadSequence.current; return; }
+     void loadOrders();
+     if (!selectedClientId) {
+       return;
+@@ -716,23 +721,23 @@
+       }
+     }, 60_000);
+     return () => window.clearInterval(timer);
+-  }, [loadOrders, selectedClientId]);
++  }, [loadOrders, selectedClientId, isStockManagement]);
+ 
+   // FIX: collect background completion promptly without repeatedly forcing marketplace requests.
+   useEffect(() => {
+-    if (!ordersState.data?.sync?.refreshing) return;
++    if (isStockManagement || !ordersState.data?.sync?.refreshing) return;
+     const timer = window.setTimeout(() => { if (document.visibilityState === 'visible') void loadOrders(); }, 5_000);
+     return () => window.clearTimeout(timer);
+-  }, [loadOrders, ordersState.data]);
++  }, [loadOrders, ordersState.data, isStockManagement]);
+ 
+   useEffect(() => {
+-    if (!activeClients.some(item => item.sync?.refreshing)) return;
++    if (isStockManagement || !activeClients.some(item => item.sync?.refreshing)) return;
+     const timer = window.setTimeout(() => { if (document.visibilityState === 'visible') void loadActiveClients(); }, 5_000);
+     return () => window.clearTimeout(timer);
+-  }, [loadActiveClients, activeClients]);
++  }, [loadActiveClients, activeClients, isStockManagement]);
+ 
+   useEffect(() => {
+-    if (!marketplace) return;
++    if (!marketplace || isStockManagement) return;
+     void loadActiveClients();
+     const timer = window.setInterval(() => {
+       if (document.visibilityState === 'visible') {
+@@ -740,7 +745,7 @@
+       }
+     }, 60_000);
+     return () => window.clearInterval(timer);
+-  }, [loadActiveClients, marketplace]);
++  }, [loadActiveClients, marketplace, isStockManagement]);
+ 
+   useEffect(() => {
+     if (marketplace) return;
+@@ -2170,7 +2175,9 @@
+         ) : activeView === 'stocks' ? (
+           <FbsStocksView clientId={selectedClientId} session={session} search={search} />
+         ) : activeView === 'allocation' ? (
+-          <FbsStockAllocationView
++          <StockManagementView
++            key={selectedClientId}
++            renderStocks={() => <FbsStocksView clientId={selectedClientId} session={session} search={search} />}
+             clientId={selectedClientId}
+             connectionId={data?.connections.find((connection) => connection.marketplace === 'WILDBERRIES')?.id ?? ''}
+             session={session}
+--- /dev/null
++++ b/wms/apps/web/src/components/fbs/MarketplaceAllocationBindings.tsx
+@@ -0,0 +1,78 @@
++import { useEffect, useRef, useState } from 'react';
++import { fetchAllocationCatalog, confirmAllocationBinding, type MarketplaceAllocationDraft,
++  type MarketplaceAllocationProduct, type MarketplaceAllocationBinding } from '../../lib/api';
++
++// FIX: exact suggestions never bypass explicit confirmation.
++export function suggestAllocationPairs(sourceBarcode: string, wb: MarketplaceAllocationProduct[], ozon: MarketplaceAllocationProduct[]) {
++  const w = wb.filter(row => row.barcodes.includes(sourceBarcode));
++  const o = ozon.filter(row => row.barcodes.includes(sourceBarcode));
++  return { wb: w, ozon: o, unique: w.length === 1 && o.length === 1, confirmed: false };
++}
++
++export function allocationProductChoices(rows: MarketplaceAllocationProduct[], query: string, selected: string) {
++  const current = rows.filter(p => p.productId === selected);
++  const matches = rows.filter(p => p.productId !== selected
++    && `${p.name} ${p.article ?? ''} ${p.offerId} ${p.size} ${p.barcodes.join(' ')}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
++  return [...current, ...matches.slice(0, Math.max(0, 100 - current.length))];
++}
++
++// FIX: exact barcode suggestions do not bypass the client's explicit product/size confirmation.
++export function MarketplaceAllocationBindings({ token, clientId, draft }: { token: string; clientId: string; draft: MarketplaceAllocationDraft }) {
++  const [catalog, setCatalog] = useState<Awaited<ReturnType<typeof fetchAllocationCatalog>> | null>(null);
++  const [source, setSource] = useState('');
++  const [wb, setWb] = useState(''), [ozon, setOzon] = useState('');
++  const [wbSearch, setWbSearch] = useState(''), [ozonSearch, setOzonSearch] = useState('');
++  const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false);
++  const [message, setMessage] = useState(''), [error, setError] = useState('');
++  const generation = useRef(0);
++  useEffect(() => {
++    ++generation.current; setCatalog(null); setSource(''); setWb(''); setOzon(''); setConfirmed(false); setMessage(''); setError(''); setBusy(false);
++    return () => { ++generation.current; };
++  }, [token, clientId, draft.wbConnectionId, draft.ozonConnectionId]);
++  async function load() {
++    const id = ++generation.current; setBusy(true); setError(''); setConfirmed(false); setMessage('');
++    try { const result = await fetchAllocationCatalog(token, clientId, draft); if (id === generation.current) { setCatalog(result); setSource(''); setWb(''); setOzon(''); } }
++    catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось прочитать каталоги.'); }
++    finally { if (id === generation.current) setBusy(false); }
++  }
++  const existing = catalog?.bindings.find(b => b.sourceBarcode === source.trim());
++  function chooseSource(text: string) {
++    setSource(text); setConfirmed(false); setMessage('');
++    const binding = catalog?.bindings.find(b => b.sourceBarcode === text.trim() && b.wbConnectionId === draft.wbConnectionId && b.ozonConnectionId === draft.ozonConnectionId);
++    const { wb: w, ozon: o } = suggestAllocationPairs(text.trim(), catalog?.wb ?? [], catalog?.ozon ?? []);
++    setWb(binding?.wb.productId ?? (w.length === 1 ? w[0].productId : ''));
++    setOzon(binding?.ozon.productId ?? (o.length === 1 ? o[0].productId : ''));
++  }
++  async function save() {
++    if (!confirmed || busy) return;
++    const id = generation.current; setBusy(true); setError(''); setMessage('');
++    try {
++      const binding = await confirmAllocationBinding(token, clientId, { draft, sourceBarcode: source.trim(), wbProductId: wb,
++        ozonProductId: ozon, confirmed: true, revision: existing?.revision ?? null });
++      if (id !== generation.current) return;
++      setCatalog(current => current && { ...current, bindings: [...current.bindings.filter(b => b.sourceBarcode !== binding.sourceBarcode), binding] });
++      setConfirmed(false); setMessage('Соответствие сохранено. Остатки на площадки не отправлялись.');
++    } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Не удалось сохранить соответствие.'); }
++    finally { if (id === generation.current) setBusy(false); }
++  }
++  const select = (label: string, rows: MarketplaceAllocationProduct[], query: string, setQuery: (q: string) => void, value: string, setValue: (v: string) => void) => <label>
++    {label}<input placeholder="Поиск по названию, артикулу, ШК" value={query} onChange={e => setQuery(e.target.value)} />
++    <select value={value} onChange={e => { setValue(e.target.value); setConfirmed(false); setMessage(''); }}>
++      <option value="">Выберите карточку</option>{allocationProductChoices(rows, query, value).map(p => <option key={p.productId} value={p.productId}>{p.name} · {p.article || p.offerId} · {p.size} · {p.color} · {p.barcodes.join(', ')}</option>)}
++    </select>
++  </label>;
++  return <section><h4>Соответствия товаров WB/Ozon</h4>
++    <p>Предложения по точному ШК нужно подтвердить. Если совпадения нет или карточек несколько, выберите их вручную и проверьте размер.</p>
++    <button type="button" disabled={busy || !draft.wbConnectionId || !draft.ozonConnectionId} onClick={() => void load()}>{busy ? 'Обработка…' : 'Прочитать каталоги WB и Ozon'}</button>
++    {catalog && <fieldset disabled={busy} style={{ display: 'grid', gap: 12 }}><legend>Пара карточек</legend>
++      <label>Исходный ШК на складе<input value={source} onChange={e => chooseSource(e.target.value)} /></label>
++      {select('Карточка WB', catalog.wb, wbSearch, setWbSearch, wb, setWb)}
++      {select('Карточка Ozon', catalog.ozon, ozonSearch, setOzonSearch, ozon, setOzon)}
++      <small>В списках показано до 100 совпадений. Уточните поиск для остальных.</small>
++      <label><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />Подтверждаю соответствие исходного товара обеим карточкам, включая размер и цвет</label>
++      <button type="button" disabled={!source.trim() || !wb || !ozon || !confirmed} onClick={() => void save()}>Сохранить соответствие</button>
++      <p>Сохранённых соответствий: {catalog.bindings.filter((b: MarketplaceAllocationBinding) => b.wbConnectionId === draft.wbConnectionId && b.ozonConnectionId === draft.ozonConnectionId).length}</p>
++    </fieldset>}
++    {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
++  </section>;
++}
+--- /dev/null
++++ b/wms/apps/web/src/components/fbs/MarketplaceAllocationView.spec.tsx
+@@ -0,0 +1,50 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { previewMarketplaceAllocation, saveMarketplaceAllocation, fetchMarketplaceAllocation } from '../../lib/api';
++import { allocationProductChoices, suggestAllocationPairs } from './MarketplaceAllocationBindings';
++
++afterEach(() => vi.unstubAllGlobals());
++describe('Marketplace allocation UI API contract', () => {
++  // TEST: WB offerId may be a barcode; the seller article must remain searchable separately.
++  it('finds a WB card by its seller article independently of offerId', () => {
++    const rows = [{ productId: '10:20', offerId: '001', article: 'KOREA-BLUE', name: 'Товар', size: 'M', color: '', barcodes: ['001'] }];
++    expect(allocationProductChoices(rows, 'korea-blue', '')).toEqual(rows);
++  });
++  // TEST: exact matches remain suggestions; ambiguity and different leading zeroes require manual selection.
++  it('never confirms or guesses a card from names or ambiguous barcodes', () => {
++    const product = (id: string, barcode: string) => ({ productId: id, offerId: id, name: 'Одинаковое название', size: 'M', color: '', barcodes: [barcode] });
++    expect(suggestAllocationPairs('001', [product('w', '001')], [product('o', '001')])).toMatchObject({ unique: true, confirmed: false });
++    expect(suggestAllocationPairs('001', [product('w', '001'), product('w2', '001')], [product('o', '001')]).unique).toBe(false);
++    expect(suggestAllocationPairs('001', [product('w', '1')], [product('o', '001')]).wb).toEqual([]);
++  });
++
++  // TEST: a suggested card beyond the first 100 must remain visible before the user confirms it.
++  it('keeps a selected card visible even outside the search page', () => {
++    const rows = Array.from({ length: 150 }, (_, i) => ({ productId: `${i}`, offerId: `${i}`, name: 'Товар', size: 'M', color: '', barcodes: [`00${i}`] }));
++    const options = allocationProductChoices(rows, '', '149');
++    expect(options).toHaveLength(100);
++    expect(options[0].productId).toBe('149');
++    expect(allocationProductChoices(rows, 'нет совпадений', '149').map(p => p.productId)).toEqual(['149']);
++  });
++  // TEST: preparing allocations must never call the legacy immediate WB sync endpoint.
++  it('sends revision, selected client and preview pagination to separate endpoints', async () => {
++    const fetch = vi.fn().mockImplementation(() => Promise.resolve(new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })));
++    vi.stubGlobal('fetch', fetch);
++    const draft = { wbConnectionId: 'w', ozonConnectionId: 'o', wbPercent: 70 };
++    await saveMarketplaceAllocation('token', 'client', draft, 'revision');
++    await previewMarketplaceAllocation('token', 'client', draft, '001', 2);
++    expect(fetch.mock.calls[0][0]).toContain('/marketplace-connections/allocation/client');
++    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ draft, revision: 'revision' });
++    expect(fetch.mock.calls[1][0]).toContain('/allocation/client/preview');
++    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ draft, search: '001', page: 2 });
++    expect(fetch.mock.calls.some(([url]) => url.includes('/sync'))).toBe(false);
++  });
++  // TEST: reading the tile state is a single lightweight settings request, not a stock preview.
++  it('returns single-cabinet state unchanged and safely encodes the client', async () => {
++    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ available: false, message: 'Подключён только 1 кабинет' }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
++    vi.stubGlobal('fetch', fetch);
++    const result = await fetchMarketplaceAllocation('token', 'client/other');
++    expect(fetch.mock.calls[0][0]).toContain('client%2Fother');
++    expect(fetch).toHaveBeenCalledOnce();
++    expect(result.message).toBe('Подключён только 1 кабинет');
++  });
++});
+--- /dev/null
++++ b/wms/apps/web/src/components/fbs/MarketplaceAllocationView.tsx
+@@ -0,0 +1,83 @@
++import { useEffect, useRef, useState } from 'react';
++import { MarketplaceAllocationBindings } from './MarketplaceAllocationBindings';
++import { fetchMarketplaceAllocation, previewMarketplaceAllocation, saveMarketplaceAllocation,
++  type AuthSession, type MarketplaceAllocationDraft, type MarketplaceAllocationPreview, type MarketplaceAllocationSettings } from '../../lib/api';
++
++export function MarketplaceAllocationView({ session, clientId }: { session: AuthSession; clientId: string }) {
++  const [data, setData] = useState<MarketplaceAllocationSettings | null>(null);
++  const [draft, setDraft] = useState<MarketplaceAllocationDraft>({ wbConnectionId: '', ozonConnectionId: '', wbPercent: 50 });
++  const [preview, setPreview] = useState<MarketplaceAllocationPreview | null>(null);
++  const [search, setSearch] = useState('');
++  const [busy, setBusy] = useState(false);
++  const [error, setError] = useState('');
++  const [message, setMessage] = useState('');
++  const [reload, setReload] = useState(0);
++  const generation = useRef(0);
++  useEffect(() => {
++    const id = ++generation.current;
++    setData(null); setPreview(null); setError(''); setMessage(''); setBusy(true);
++    void fetchMarketplaceAllocation(session.accessToken, clientId).then(result => {
++      if (id !== generation.current) return;
++      setData(result);
++      const wb = result.connections.filter(c => c.marketplace === 'WILDBERRIES');
++      const ozon = result.connections.filter(c => c.marketplace === 'OZON');
++      setDraft(result.draft ?? { wbConnectionId: wb.length === 1 ? wb[0].id : '', ozonConnectionId: ozon.length === 1 ? ozon[0].id : '', wbPercent: 50 });
++    }).catch(e => { if (id === generation.current) setError(e.message); })
++      .finally(() => { if (id === generation.current) setBusy(false); });
++    return () => { ++generation.current; };
++  }, [session.accessToken, clientId, reload]);
++  function change(patch: Partial<MarketplaceAllocationDraft>) { setDraft(current => ({ ...current, ...patch })); setPreview(null); setMessage(''); }
++  async function run(kind: 'save' | 'preview', page = 1) {
++    if (busy || !data) return;
++    const id = generation.current;
++    setBusy(true); setError(''); setMessage('');
++    if (kind === 'preview') setPreview(null);
++    try {
++      if (kind === 'save') {
++        const saved = await saveMarketplaceAllocation(session.accessToken, clientId, draft, data.revision);
++        if (id !== generation.current) return;
++        setData(current => current && { ...current, revision: saved.revision, draft: saved.draft });
++        setMessage('Доли сохранены как настройки. Остатки на маркетплейсы не отправлялись.');
++      } else {
++        const result = await previewMarketplaceAllocation(session.accessToken, clientId, draft, search, page);
++        if (id === generation.current) setPreview(result);
++      }
++    } catch (e) { if (id === generation.current) setError(e instanceof Error ? e.message : 'Ошибка операции.'); }
++    finally { if (id === generation.current) setBusy(false); }
++  }
++  const valid = Number.isInteger(draft.wbPercent) && draft.wbPercent >= 0 && draft.wbPercent <= 100 && draft.wbConnectionId && draft.ozonConnectionId;
++  return <section className="fbs-allocation">
++    <h3>Между Wildberries и Ozon</h3>
++    {error && <p role="alert">{error} <button type="button" onClick={() => setReload(v => v + 1)} disabled={busy}>Обновить настройки</button></p>}
++    {!data ? <p>{busy ? 'Загрузка подключений…' : 'Настройки не загружены.'}</p> : !data.available ? <p>{data.message}</p> : <>
++      <p>Настройка долей и предпросмотр. Автоматическая отправка между площадками ещё не включена.</p>
++      {data.invalidated && <p role="alert">Сохранённый кабинет отключён. Выберите актуальные подключения.</p>}
++      <fieldset disabled={busy} style={{ display: 'grid', gap: 12 }}>
++        <legend>Кабинеты и доли</legend>
++        {(['WILDBERRIES', 'OZON'] as const).map(marketplace => {
++          const field = marketplace === 'WILDBERRIES' ? 'wbConnectionId' : 'ozonConnectionId';
++          return <label key={marketplace}>Кабинет {marketplace === 'WILDBERRIES' ? 'Wildberries' : 'Ozon'} <select value={draft[field]} onChange={e => change({ [field]: e.target.value })}>
++            <option value="">Выберите кабинет</option>{data.connections.filter(c => c.marketplace === marketplace).map((c, i) => <option key={c.id} value={c.id}>{c.accountName || `Кабинет ${i + 1}`}</option>)}
++          </select></label>;
++        })}
++        <label>Доля Wildberries, % <input type="number" min={0} max={100} step={1} value={Number.isNaN(draft.wbPercent) ? '' : draft.wbPercent}
++          onChange={e => change({ wbPercent: e.target.value === '' ? NaN : Number(e.target.value) })} /></label>
++        <p>Доля Ozon: {Number.isFinite(draft.wbPercent) ? 100 - draft.wbPercent : '—'}%</p>
++        <button type="button" onClick={() => change({ wbPercent: 50 })}>Поровну — 50/50</button>
++        <small>Распределяется свободный остаток после резервов. При равном дробном остатке лишняя единица относится к WB.</small>
++        <button type="button" disabled={!valid} onClick={() => void run('save')}>Сохранить доли</button>
++        <label>Поиск ШК для предпросмотра <input value={search} onChange={e => { setSearch(e.target.value); setPreview(null); }} /></label>
++        <button type="button" disabled={!valid} onClick={() => void run('preview')}>Рассчитать предпросмотр</button>
++      </fieldset>
++      {valid && <MarketplaceAllocationBindings token={session.accessToken} clientId={clientId} draft={draft} />}
++      {preview && <><p>Расчёт на {new Date(preview.generatedAt).toLocaleString('ru-RU')}. Строк: {preview.totalRows}. Это расчёт долей, не подтверждение сопоставления карточек и отправки.</p>
++        {preview.missingBarcodeCount > 0 && <p>Без основного ШК: {preview.missingBarcodeCount}. Эти позиции не включены.</p>}
++        <div className="fbs-allocation__table-wrap"><table><thead><tr><th>ШК</th><th>Остаток</th><th>Резерв</th><th>Доступно</th><th>WB</th><th>Ozon</th></tr></thead>
++          <tbody>{preview.rows.map(row => <tr key={row.barcode}><td>{row.barcode}</td><td>{row.total}</td><td>{row.reserved}</td><td>{row.available}</td><td>{row.wb}</td><td>{row.ozon}</td></tr>)}</tbody></table></div>
++        <button disabled={busy || preview.page <= 1} onClick={() => void run('preview', preview.page - 1)}>Назад</button>
++        <span> Страница {preview.page} </span><button disabled={busy || preview.page * preview.pageSize >= preview.totalRows} onClick={() => void run('preview', preview.page + 1)}>Далее</button>
++      </>}
++    </>}
++    {message && <p role="status">{message}</p>}
++  </section>;
++}
+--- /dev/null
++++ b/wms/apps/web/src/components/fbs/StockManagementView.tsx
+@@ -0,0 +1,52 @@
++import { useEffect, useState, type ReactNode } from 'react';
++import { fetchMarketplaceAllocationCapabilities, fetchMarketplaceAllocation, fetchMarketplaceConnections, type AuthSession } from '../../lib/api';
++import { FbsStockAllocationView } from './FbsStockAllocationView';
++import { MarketplaceAllocationView } from './MarketplaceAllocationView';
++
++// FIX: only the selected panel mounts; entering stock management does not fetch stock tables.
++export function StockManagementView({ session, clientId, connectionId, renderStocks }: {
++  session: AuthSession; clientId: string; connectionId: string; renderStocks: () => ReactNode;
++}) {
++  const [enabled, setEnabled] = useState<boolean | null>(null);
++  const [error, setError] = useState('');
++  const [section, setSection] = useState('');
++  const [cabinetMessage, setCabinetMessage] = useState('Проверка подключённых кабинетов…');
++  const [wbConnectionId, setWbConnectionId] = useState(connectionId);
++  const [reload, setReload] = useState(0);
++  useEffect(() => {
++    let active = true;
++    setSection(''); setEnabled(null); setError('');
++    void fetchMarketplaceAllocationCapabilities(session.accessToken).then(async r => {
++      if (!active) return;
++      if (r.enabled) {
++        const settings = await fetchMarketplaceAllocation(session.accessToken, clientId);
++        if (!active) return;
++        setCabinetMessage(settings.message || 'Подключены Wildberries и Ozon');
++        setWbConnectionId(settings.connections.find(c => c.marketplace === 'WILDBERRIES')?.id ?? '');
++      } else {
++        const connections = await fetchMarketplaceConnections(session.accessToken, { clientId });
++        if (!active) return;
++        setWbConnectionId(connections.find(c => c.isActive && c.marketplace === 'WILDBERRIES')?.id ?? '');
++      }
++      setEnabled(r.enabled);
++    })
++      .catch(() => { if (active) setError('Не удалось проверить доступность управления остатками. Откройте раздел повторно.'); });
++    return () => { active = false; };
++  }, [clientId, session.accessToken, reload]);
++  if (error) return <p role="alert">{error} <button onClick={() => setReload(v => v + 1)}>Повторить</button></p>;
++  if (enabled === null) return <p>Загрузка раздела…</p>;
++  if (!enabled) return <FbsStockAllocationView session={session} clientId={clientId} connectionId={wbConnectionId} />;
++  return <section>
++    <h3>Управление остатками</h3>
++    {section ? <button type="button" onClick={() => setSection('')}>← Все разделы</button> : <div className="fbs-allocation" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
++      <button type="button" onClick={() => setSection('marketplaces')}>Между маркетплейсами<br /><small>{cabinetMessage}</small></button>
++      <button type="button" onClick={() => setSection('stocks')}>Резервы и предпросмотр<br /><small>Текущие настройки остатков WB</small></button>
++      <button type="button" disabled>Между артикулами<br /><small>Следующий этап: соответствия и размеры</small></button>
++      <button type="button" onClick={() => setSection('warehouses')}>Между складами<br /><small>Действующее распределение WB</small></button>
++      <button type="button" disabled>Подтверждение остатков WB<br /><small>Отдельная статистика — следующий этап</small></button>
++    </div>}
++    {section === 'marketplaces' && <MarketplaceAllocationView key={clientId} session={session} clientId={clientId} />}
++    {section === 'stocks' && renderStocks()}
++    {section === 'warehouses' && <FbsStockAllocationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} />}
++  </section>;
++}
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -12574,3 +12574,44 @@
+ export const fetchSizeSubstitutionCapabilities = (accessToken: string) => request<{ enabled: boolean }>('/marketplace-connections/fbs/size-substitution/capabilities', { accessToken });
+ export const previewSizeSubstitution = (accessToken: string, body: { clientId: string; orderId: string }) => request<SizeSubstitutionPreview>('/marketplace-connections/fbs/size-substitution/preview', { accessToken, method: 'POST', body });
+ export const createSizeSubstitution = (accessToken: string, body: { clientId: string; orderId: string; taskId: string; sourceSkuId: string; previewToken: string; confirmRelabel: true }) => request<{ id: string; number: number }>('/marketplace-connections/fbs/size-substitution', { accessToken, method: 'POST', body });
++
++// FIX: preparation is deliberately distinct from actual marketplace publication.
++export type MarketplaceAllocationDraft = { wbConnectionId: string; ozonConnectionId: string; wbPercent: number };
++export type MarketplaceAllocationProduct = { productId: string; offerId: string; article?: string; name: string; size: string; color: string; barcodes: string[] };
++export type MarketplaceAllocationBinding = { sourceBarcode: string; wbConnectionId: string; ozonConnectionId: string;
++  wb: MarketplaceAllocationProduct; ozon: MarketplaceAllocationProduct; revision: string };
++export function fetchAllocationCatalog(accessToken: string, clientId: string, draft: MarketplaceAllocationDraft) {
++  return request<{ wb: MarketplaceAllocationProduct[]; ozon: MarketplaceAllocationProduct[]; bindings: MarketplaceAllocationBinding[] }>(
++    `/marketplace-connections/allocation/${encodeURIComponent(clientId)}/catalog`, { accessToken, method: 'POST', body: { draft } });
++}
++export function confirmAllocationBinding(accessToken: string, clientId: string, body: {
++  draft: MarketplaceAllocationDraft; sourceBarcode: string; wbProductId: string; ozonProductId: string; confirmed: boolean; revision: string | null;
++}) {
++  return request<MarketplaceAllocationBinding>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}/binding`, { accessToken, method: 'PUT', body });
++}
++export type MarketplaceAllocationSettings = {
++  available: boolean; count: number; message: string; invalidated: boolean; revision: string | null;
++  publicationEnabled: boolean; draft: MarketplaceAllocationDraft | null;
++  connections: Array<{ id: string; marketplace: 'WILDBERRIES' | 'OZON'; accountName: string | null; fbsExecutionWarehouseId: string | null }>;
++};
++export type MarketplaceAllocationPreview = {
++  generatedAt: string; totalRows: number; page: number; pageSize: number; missingBarcodeCount: number;
++  rows: Array<{ barcode: string; total: number; reserved: number; available: number; wb: number; ozon: number }>;
++};
++export function fetchMarketplaceAllocationCapabilities(accessToken: string) {
++  return request<{ enabled: boolean; publicationEnabled: boolean }>('/marketplace-connections/allocation/capabilities', { accessToken });
++}
++export function fetchMarketplaceAllocation(accessToken: string, clientId: string) {
++  return request<MarketplaceAllocationSettings>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}`, { accessToken });
++}
++export function saveMarketplaceAllocation(accessToken: string, clientId: string, draft: MarketplaceAllocationDraft, revision: string | null) {
++  return request<{ revision: string; draft: MarketplaceAllocationDraft }>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}`, {
++    accessToken, method: 'PUT', body: { draft, revision },
++  });
++}
++export function previewMarketplaceAllocation(accessToken: string, clientId: string, draft: MarketplaceAllocationDraft, search = '', page = 1) {
++  return request<MarketplaceAllocationPreview>(`/marketplace-connections/allocation/${encodeURIComponent(clientId)}/preview`, {
++    accessToken, method: 'POST', body: { draft, search, page },
++  });
++}
++

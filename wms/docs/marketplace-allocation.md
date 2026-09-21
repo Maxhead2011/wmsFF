@@ -69,6 +69,8 @@ API: `marketplace-connections/allocation/capabilities`, `/:clientId` (GET/PUT),
 
 ## Проверки
 
+Адаптация к текущим серверным образам: [порядок выпуска и точный патч](deployment/wb-ozon-20260921/README.md).
+
 API: `test/marketplace-allocation.spec.ts`, `test/marketplace-allocation.service.spec.ts`.
 Web: `src/components/fbs/MarketplaceAllocationView.spec.tsx`.
 Проверяются состав кабинетов, границы клиента/филиала, устаревшая версия настроек,
