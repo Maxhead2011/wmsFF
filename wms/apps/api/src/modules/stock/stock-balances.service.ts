@@ -26,6 +26,7 @@ export class StockBalancesService {
     // FIX: our client cabinet/export accepts only located free stock. Internal
     // operations retain physical quantities and other installations opt out.
     const locatedFreeStock = process.env.WMS_CLIENT_PALLET_SORT_FREE_STOCK_ENABLED === 'true';
+    const boxStockWarehouses = new Set((process.env.WMS_CLIENT_BOX_STOCK_WAREHOUSE_IDS ?? '').split(',').map(id => id.trim()).filter(Boolean));
     const search = filter.search?.trim();
     const skuWhere: Prisma.SkuWhereInput | undefined =
       filter.barcode || search
@@ -208,9 +209,10 @@ export class StockBalancesService {
         for (const row of scoped) {
           const placement = (row.box && 'storagePlacement' in row.box ? row.box.storagePlacement : null) as
             { pallet: { clientId: string; warehouseId: string } } | null;
-          // FIX: require pallet placement only for clients configured for PALLET_SORT.
-          // BOXES and boxless clients already passed their stock-mode filter above.
-          const located = !locatedFreeStock || !palletSortClientIds.includes(clientId) || Boolean(placement?.pallet && placement.pallet.clientId === clientId && placement.pallet.warehouseId === warehouseId);
+          // FIX: only explicitly enabled branches may expose BOXES stock without a pallet.
+          // All other branches retain the existing client-cabinet placement requirement.
+          const boxStockAllowed = boxStockWarehouses.has(warehouseId) && allBoxClientIds.includes(clientId);
+          const located = !locatedFreeStock || boxStockAllowed || Boolean(placement?.pallet && placement.pallet.clientId === clientId && placement.pallet.warehouseId === warehouseId);
           const physical = row.status === StockStatus.AVAILABLE && located ? Math.max(0, row.quantity) : 0;
           const deduction = Math.min(physical, reserved.get(row.skuId) ?? 0);
           freeById.set(row.id, physical - deduction);
