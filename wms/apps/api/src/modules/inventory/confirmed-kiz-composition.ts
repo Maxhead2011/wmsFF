@@ -1,5 +1,6 @@
 import { physicalKizIdentity, kizIdentityTransferEnabled } from '../../common/kiz-physical-identity';
 import { debitConfirmedKizSource } from './confirmed-kiz-transfer';
+import { confirmedKizRediscovery } from './confirmed-kiz-rediscovery';
 import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
@@ -112,6 +113,8 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
   for (const key of scans.map(scan => scan.identity).sort()) await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`sorting-kiz:${key}`}))`);
   const variants = scans.flatMap(scan => [scan.identity, ']d2' + scan.identity,
     ...(kizIdentityTransferEnabled() ? [']D2' + scan.identity] : [])]);
+  // FIX: preserve the exclusion evidence behind each physically rediscovered mark.
+  const rediscoveredMarks: Array<{ markId: string; exclusionProofId: string }> = [];
   const related = variants.length ? await tx.productMark.findMany({ where: { OR: variants.map(prefix => ({ value: { startsWith: prefix } })) },
     include: { box: { select: { warehouseId: true } } } }) : [];
   // FIX: deterministic lock order includes both ends of physical transfers.
@@ -128,6 +131,10 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
       // FIX: a physically scanned reserved unit belongs to this confirmed count.
       // Only this box's reservation may be released; another box is not implicitly approved.
       if (mark.status === 'RESERVED' && mark.boxId === box!.id) continue;
+      // FIX: a confirmed count exclusion is not evidence of sale or shipment.
+      const rediscovered = await confirmedKizRediscovery(tx, { mark, clientId: box!.clientId,
+        warehouseId: box!.warehouseId!, skuId: scan.skuId, identity: scan.identity, startedAt: audit.startedAt });
+      if (rediscovered) { rediscoveredMarks.push(rediscovered); continue; }
       // FIX: legacy administrative exclusions are recoverable only from physical
       // scans, with no surviving box ownership or evidence of any order/dispatch.
       if (mark.status !== 'BLOCKED' || mark.boxId || !(mark.updatedAt < audit.startedAt) ||
@@ -213,5 +220,6 @@ export async function confirmInventoryKizComposition(tx: Prisma.TransactionClien
       clientId: box!.clientId, warehouseId: box!.warehouseId, nonPhysicalBalances, retiredMarks: retired, previousScannedMarks: related,
       attachedMarkIds: attached, scans, transfers, releasedReservations, releasedTaskIds,
       archivedMarkIds, archiveReason: 'Не подтверждено при пересчёте',
+      rediscoveredMarks,
       evidenceIds: evidence.map(row => row.id), quantityChanged: -transfers.length - releasedReservations.reduce((sum, row) => sum + row.quantity, 0) })) } });
 }

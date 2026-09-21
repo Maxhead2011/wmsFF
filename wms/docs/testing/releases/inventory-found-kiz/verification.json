@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "before": "sha256:d1a7021ed1bd58049dc1a1701065c3cc31606b5ba80f40a64cca5d233f0323e0",
+  "after": "sha256:e67e1f3a5fbddc36662b05377fbb260de6ef99ccffbd87301389bf61ad4b2916",
+  "changed": [
+    "/app/apps/api/dist/modules/inventory/confirmed-kiz-composition.js",
+    "/app/apps/api/dist/modules/inventory/confirmed-kiz-rediscovery.js",
+    "/app/apps/api/src/modules/inventory/confirmed-kiz-composition.ts",
+    "/app/apps/api/src/modules/inventory/confirmed-kiz-rediscovery.ts"
+  ],
+  "otherModulesUnchanged": true
+}

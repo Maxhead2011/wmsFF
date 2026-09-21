@@ -69,6 +69,84 @@ function mutationFixture() {
   f.db.productMark.create = vi.fn(async ({ data }: any) => { const mark = { id: 'new-' + f.marks.length, ...data }; f.marks.push(mark); return mark; });
   return { ...f, user, confirm: () => confirmInventoryKizComposition(f.db, f.audit.id, user) };
 }
+
+// TEST: box 0130 contains receipt KIZs previously excluded by a different physical count.
+function rediscoveryFixture() {
+  vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
+  vi.stubEnv('WMS_INVENTORY_FOUND_KIZ_RESTORE_ENABLED', 'true');
+  const f = mutationFixture();
+  const blockedAt = new Date('2026-09-15T07:59:42.746Z');
+  Object.assign(f.marks[0], { status: 'BLOCKED', boxId: null, updatedAt: blockedAt,
+    stockMovementId: 'receipt', sourceDocument: 'TSD-RECEIPT-original' });
+  const proof: any = { id: 'previous-confirmation', entityId: 'previous-audit',
+    action: 'INVENTORY_KIZ_COMPOSITION_CONFIRMED', entity: 'InventoryAuditBox',
+    createdAt: new Date('2026-09-15T07:59:42.786Z'), payload: {
+      auditBoxId: 'previous-audit', roundStartedAt: '2026-09-15T07:56:12.720Z',
+      boxId: 'previous-box', clientId: 'client', warehouseId: 'warehouse',
+      archivedMarkIds: ['current'], archiveReason: 'Не подтверждено при пересчёте',
+      retiredMarks: [{ ...f.marks[0], boxId: 'previous-box', status: 'AVAILABLE', updatedAt: '2026-09-01T00:00:00.000Z' }],
+    } };
+  f.db.auditLog.findFirst = vi.fn(async () => proof);
+  for (const model of ['shippedKizHistory', 'fbsWebKizStickerPrint', 'fbsAssemblyAttemptHistory',
+    'fbsPrintJob', 'kizCirculationItem', 'fboAssemblyUnit', 'wbOrderShipment']) {
+    f.db[model] = { findFirst: vi.fn(async () => null) };
+  }
+  return { ...f, proof };
+}
+it('restores a physically rediscovered count exclusion once, preserving quantities and the original proof', async () => {
+  // TEST: ordinary receipt sourceDocument must not prevent recovery of a documented count exclusion.
+  const f = rediscoveryFixture(); const before = structuredClone(f.balances);
+  await f.confirm(); await f.confirm();
+  expect(f.marks[0]).toMatchObject({ status: 'AVAILABLE', boxId: 'box', stockMovementId: null });
+  expect(f.db.productMark.updateMany).toHaveBeenCalledTimes(1);
+  expect(f.db.productMark.create).not.toHaveBeenCalled();
+  expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+  expect(f.balances).toEqual(before);
+  expect(f.db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+    payload: expect.objectContaining({ rediscoveredMarks: [{ markId: 'current', exclusionProofId: 'previous-confirmation' }] }),
+  }) }));
+});
+it.each(['flag-off', 'missing-proof', 'other-reason', 'other-client', 'other-warehouse', 'other-sku',
+  'other-identity', 'other-box', 'not-archived', 'old-shipping', 'subsequent-block', 'future-proof', 'stale-snapshot'])
+('does not restore an unproven count exclusion: %s', async kind => {
+  // TEST: a blocked status alone is never an administrative return permission.
+  const f = rediscoveryFixture(); const p = f.proof.payload;
+  if (kind === 'flag-off') vi.stubEnv('WMS_INVENTORY_FOUND_KIZ_RESTORE_ENABLED', 'false');
+  if (kind === 'missing-proof') f.db.auditLog.findFirst.mockResolvedValue(null);
+  if (kind === 'other-reason') p.archiveReason = 'Manual block';
+  if (kind === 'other-client') p.clientId = 'sold';
+  if (kind === 'other-warehouse') p.warehouseId = 'sold';
+  if (kind === 'other-sku') p.retiredMarks[0].skuId = 'other';
+  if (kind === 'other-identity') p.retiredMarks[0].value = kiz.replace('NLnuX2T', 'XXXXXXX');
+  if (kind === 'other-box') p.retiredMarks[0].boxId = 'other';
+  if (kind === 'not-archived') p.archivedMarkIds = [];
+  if (kind === 'old-shipping') p.retiredMarks[0].status = 'SHIPPING';
+  if (kind === 'subsequent-block') f.marks[0].updatedAt = new Date('2026-09-15T08:00:00.000Z');
+  if (kind === 'future-proof') f.proof.createdAt = startedAt;
+  if (kind === 'stale-snapshot') p.retiredMarks[0].stockMovementId = 'changed';
+  await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.auditLog.create).not.toHaveBeenCalled();
+});
+it.each(['fbsTsdAssembly', 'shippedKizHistory', 'fbsWebKizStickerPrint', 'fbsAssemblyAttemptHistory',
+  'fbsPrintJob', 'kizCirculationItem', 'fboAssemblyUnit', 'wbOrderShipment'])
+('keeps rediscovered KIZs with %s history for separate review', async model => {
+  // TEST: previous exclusion does not erase evidence of picking, printing, circulation or shipment.
+  const f = rediscoveryFixture(); f.db[model].findFirst.mockResolvedValue({ id: 'history' });
+  await expect(f.confirm()).rejects.toThrow();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+});
+it.each(['worker', 'demo', 'pending', 'no-scans'])('requires administrator and complete current scans for rediscovery: %s', async kind => {
+  // TEST: only the existing audited administrative confirmation may consume the proof.
+  const f = rediscoveryFixture();
+  if (kind === 'worker') f.user.roleCodes = ['WAREHOUSE'];
+  if (kind === 'demo') f.user.isDemo = true;
+  if (kind === 'pending') f.audit.lines[0].decision = 'PENDING';
+  if (kind === 'no-scans') f.evidence.length = 0;
+  await f.confirm();
+  expect(f.db.productMark.updateMany).not.toHaveBeenCalled();
+  expect(f.db.auditLog.findFirst).not.toHaveBeenCalled();
+});
 it('retains the same physical mark when the legacy stored code has no GS separators', async () => {
   // TEST: box 181 must not block the legacy identity and create a second record.
   vi.stubEnv('WMS_FBS_KIZ_MANDATORY_AUDIT', 'true');
