@@ -57,6 +57,10 @@ web `components/fbs/DuplicateStockGroupsView.tsx`, `lib/duplicateStockGroups.ts`
 `WbStockSyncEvent` для штатного WB publisher.
 Общий резерв — существующие настройки `marketplace.wbReserve.client.<clientId>`.
 Серверная интеграция: [порядок выпуска](deployment/duplicate-stock-20260921/README.md).
+Подтверждения WB: `wb-stock-confirmation.{controller,service}.ts`, web
+`WbStockConfirmationView.tsx`. Лёгкое чтение `WbStockPublicationCheck` с фильтрами,
+повторная проверка через существующий `checkFbsStockPublication`. Флаг
+`WMS_WB_STOCK_CONFIRMATION_ENABLED` выключен по умолчанию.
 Существующая переклейка: `ClientArticleMapping`,
 `FbsStockPublication.relabelManualAmount`, `MarketplaceConnectionsService.calculateFbsRelabelStockPlan`.
 Общий сценарий остатков, долей и безопасного включения описан в том же документе WB/Ozon.
@@ -116,3 +120,5 @@ rg --files apps/api/test apps/web/src apps/web/test
 В этой сессии PR №144 принят в `feature/billing-period-register-20260910`. Это исторический факт, не постоянное назначение всех будущих PR. Ветки `feature/our-vm` и `feature/sold-vm`, упомянутые в правилах пользователя, отсутствовали среди полученных remote refs при проверке 16.09.2026; не создавайте их автоматически и не угадывайте замену.
 
 Сервер может содержать выпуски из нескольких линий разработки. Перед публикацией сверяйте текущие образы, источник сборки, миграции, конфигурацию и сведения о выпуске. Локальный checkout, корневой README и старый deploy-скрипт не являются доказательством соответствия production. Для проданной ВМС отдельно оценивайте общие модули и не развёртывайте изменения без соответствующей задачи.
+
+- WB allocation presentation: `WbStockSettingsCards.tsx/.css`; production-only fine-control integration is captured in `docs/deployment/wb-confirmation-20260922/production.patch`. Dedicated confirmation replaces the legacy table only when its capability is enabled.

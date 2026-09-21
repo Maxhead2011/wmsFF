@@ -1,3 +1,5 @@
+import { WbStockConfirmationController } from './wb-stock-confirmation.controller';
+import { WbStockConfirmationService } from './wb-stock-confirmation.service';
 import { Module } from '@nestjs/common';
 import { DuplicateStockGroupsController } from './duplicate-stock-groups.controller';
 import { DuplicateStockGroupsService } from './duplicate-stock-groups.service';
@@ -21,8 +23,9 @@ import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule],
-  controllers: [DuplicateStockGroupsController, MarketplaceAllocationController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+  controllers: [WbStockConfirmationController, DuplicateStockGroupsController, MarketplaceAllocationController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [
+    WbStockConfirmationService,
     DuplicateStockGroupsService,
     MarketplaceAllocationService,
     MarketplaceStockControlService,
