@@ -1458,6 +1458,7 @@ export type ClientRequestTimeline = {
 };
 
 export type ClientRequestSummary = {
+  fboRequestCode?: string | null;
   id: string;
   number: number;
   clientId: string;
@@ -11012,6 +11013,10 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 }
 
 export type FboPlan = {
+  // FIX: optional metadata keeps older deployments compatible.
+  remainderTransferEnabled?:boolean;
+  parentRequest?:{id:string;number:number;fboRequestCode?:string|null}|null;
+  childRequests?:Array<{id:string;number:number;status:string;fboRequestCode?:string|null}>;
   requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
   compositionChanged:boolean; wholeBoxes:string[];
   lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number}>;

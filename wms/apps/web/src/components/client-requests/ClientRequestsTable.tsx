@@ -164,7 +164,8 @@ export function ClientRequestsTable({
           {items.map((request) => {
             const originalFile = findOriginalRequestFile(request);
             const emergencyClosed = isEmergencyClosedRequest(request);
-            const formattedRequestNumber = formatRequestNumber(request.number);
+            // FIX: display the FBO branch number while retaining the numeric database identifier.
+            const formattedRequestNumber = request.fboRequestCode ?? formatRequestNumber(request.number);
             const requestNumberPrefix = formattedRequestNumber.slice(0, -3);
             const requestNumberAccent = formattedRequestNumber.slice(-3);
             const transferOrigin = parseFbsTransferOrigin(request.comment);
