@@ -1,0 +1,185 @@
+{
+  "passed": true,
+  "before": {
+    "images": {
+      "api": "sha256:caac447244e7327dc84d12413fd849ed9f77e18da75b08999a6395025f889ad8",
+      "web": "sha256:25a626ab2d9f542f1c79675d39108b7be70cd04d4bac49d6f56cd0d22d89520f"
+    },
+    "metadata": {
+      "versionCode": 201,
+      "versionName": "0.1.201-kiz-review",
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-kiz-review-201.apk",
+      "sha256": "9d3cdb29220073f25fbf877a48730f50b6f0b1cb5571fda17a0f03cccd692aba",
+      "size": 5366167,
+      "releasedAt": "2026-09-21T14:28:05.109768+00:00",
+      "releaseNotes": "KIZ history and verified WB reuse/relabel decisions. Install over the existing app without deleting data."
+    },
+    "releases": [
+      {
+        "path": "/opt/logoff-wms-releases/kiz-review-queue",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/kiz-wb-history",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-step-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-newest-first",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/client-report-summary",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-unconfirmed-stock-retry",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/dovoz-relabel-20260917",
+        "sources": [
+          "1083-list-source.txt",
+          "pick-1195-cambridge-source.cjs"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/historical-packing-publish-237",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/size-substitution-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/historical-packing-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/notification-navigation-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/inventory-shortage-kiz-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-manager-decision-20260920",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-stock-independent-events",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-stock-urgent-sync",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/done-packing-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-ozon-isolation",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/wb-zero-stock-history",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/eleonora-screen-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/eleonora-voice",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-released-kiz",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-voice-focus",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-whole-repack",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-packing-recovery",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-completion-220",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-manual-219",
+        "sources": [
+          "next-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-mixed-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/relabel-source-20260919",
+        "sources": []
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbo-packing-215",
+        "sources": [
+          "next-android-source.tar.gz",
+          "published-android-source.tar.gz"
+        ]
+      },
+      {
+        "path": "/opt/logoff-wms-releases/fbs-stock-load-20260918",
+        "sources": []
+      }
+    ],
+    "apiDiff": "",
+    "webDiff": "C /run\nA /run/nginx.pid\nC /etc\nC /etc/nginx\nC /etc/nginx/conf.d\nC /etc/nginx/conf.d/default.conf\nC /var\nC /var/cache\nC /var/cache/nginx\nA /var/cache/nginx/uwsgi_temp\nA /var/cache/nginx/client_temp\nA /var/cache/nginx/fastcgi_temp\nA /var/cache/nginx/proxy_temp\nA /var/cache/nginx/scgi_temp\n"
+  },
+  "webImage": "sha256:8c7d51dacfb88df1d2c2b9be0499fc6f11f862ba182551d5858c016812e84a15",
+  "metadata": {
+    "versionCode": 202,
+    "versionName": "0.1.202-kiz-permission",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-kiz-permission-202.apk",
+    "sha256": "9dd9907955e94ef0110bc809a06d6c71c4546a7371c4121370bcbe6eb01883a7",
+    "size": 5366167,
+    "releasedAt": "2026-09-21T15:04:10.128260+00:00",
+    "releaseNotes": "KIZ history and verified WB reuse/relabel decisions. Install over the existing app without deleting data."
+  },
+  "changes": [
+    "/usr/share/nginx/html/downloads/logoff-tsd-kiz-permission-202.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.json"
+  ],
+  "signatureMatches": true,
+  "signedContentsMatch": true,
+  "existingAssetsAndPrintAgentsPreserved": true,
+  "builderAssetsVerified": true
+}

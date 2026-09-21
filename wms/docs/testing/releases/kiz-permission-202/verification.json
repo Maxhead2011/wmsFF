@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 202,
+  "versionName": "0.1.202-kiz-permission",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "d77fa545107830a73d754aa48daf46923ad77737f8b24f5656e2703ae37bd4ec"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 191,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "13aac8052fbba541008d8773a2d28e6346b38e950909a90553660b9f7f37fe85",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "before": "sha256:caac447244e7327dc84d12413fd849ed9f77e18da75b08999a6395025f889ad8",
+  "after": "sha256:d1a7021ed1bd58049dc1a1701065c3cc31606b5ba80f40a64cca5d233f0323e0",
+  "changed": [
+    "/app/apps/api/dist/common/kiz-review-queue.js",
+    "/app/apps/api/dist/common/kiz-wb-reuse.js",
+    "/app/apps/api/dist/modules/inventory/kiz-location.service.js",
+    "/app/apps/api/dist/modules/marketplace-connections/fbs-physical-kiz-relabel.js",
+    "/app/apps/api/dist/modules/marketplace-connections/marketplace-connections.service.js",
+    "/app/apps/api/src/common/kiz-review-queue.ts",
+    "/app/apps/api/src/common/kiz-wb-reuse.ts",
+    "/app/apps/api/src/modules/inventory/kiz-location.service.ts",
+    "/app/apps/api/src/modules/marketplace-connections/fbs-physical-kiz-relabel.ts",
+    "/app/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts"
+  ],
+  "sourceBoxGuardPreserved": true,
+  "billingAndDisplayPreserved": true
+}

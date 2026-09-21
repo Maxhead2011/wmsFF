@@ -10276,7 +10276,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (kizReuseEnabled() && !pendingSizeKizRelabel(task)) {
       const evidence = await inspectKizReuse(this.prisma, task.clientId, kiz, task.id);
       const reviewDecision=kizReviewEnabled()?await queueKizReview(this.prisma,task.clientId,kiz,task.id,evidence):evidence.decision;
-      if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
+      if (reviewDecision !== 'RELABEL' && !kizReviewEnabled()) throw new BadRequestException(kizReuseMessage('REVIEW'));
       if (kizReviewEnabled() && reviewDecision!=='RELABEL')
         throw new BadRequestException('КИЗ передан администратору в «Проверку КИЗов». Требуется разрешение на переклейку.');
     }
@@ -10334,8 +10334,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const proposal = await readPhysicalKizRelabel(this.prisma, task, user);
         if (!proposal || proposal.id !== proposalId) throw new ConflictException('Предложение переклейки изменилось. Обновите задание.');
         const evidence = await inspectKizReuse(this.prisma, task.clientId, proposal.oldKiz, task.id);
-        if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
-        if (kizReviewEnabled() && await queueKizReview(this.prisma,task.clientId,proposal.oldKiz,task.id,evidence)!=='RELABEL')
+        // FIX: legacy proposals must enter the queue before rejecting uncertain evidence.
+        const reviewDecision=await queueKizReview(this.prisma,task.clientId,proposal.oldKiz,task.id,evidence);
+        if (!kizReviewEnabled() && evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
+        if (kizReviewEnabled() && reviewDecision!=='RELABEL')
           throw new BadRequestException('Переклейка ожидает решения администратора в «Проверке КИЗов».');
       }
       if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {

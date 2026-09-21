@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { FbsTsdAssembly, Prisma, StockStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
-import { approvedUnitRelabel, finishKizReview, assertUnusedReplacement } from '../../common/kiz-review-queue';
+import { approvedUnitRelabel, finishKizReview, assertUnusedReplacement, reusePermissionForProposal } from '../../common/kiz-review-queue';
 
 const ACTION = 'FBS_PHYSICAL_KIZ_RELABEL';
 const CLOSED = ['DONE', 'CANCELLED', 'REJECTED'];
@@ -27,6 +27,8 @@ async function latest(tx: Tx, task: Task, user: AuthUser) {
 export async function readPhysicalKizRelabel(tx: Tx, task: Task, user: AuthUser) {
   if (!physicalKizRelabelEnabled() || task.kiz || !task.boxId || !task.barcode || task.status !== 'IN_PROGRESS') return null;
   const row = await latest(tx, task, user);
+  // FIX: an administrator may allow the original KIZ after a legacy proposal was opened.
+  if(row?.intent.stage==='PROPOSED' && await reusePermissionForProposal(tx,task,row.intent.oldKiz))return null;
   return row?.intent.stage === 'PROPOSED' ? {id: row.id, oldKiz: row.intent.oldKiz, boxCode: task.boxCode} : null;
 }
 

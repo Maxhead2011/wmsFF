@@ -4997,6 +4997,8 @@ public class MainActivity extends Activity {
             root.addView(secondaryButton(tr("Взять другую единицу", "Boshqa mahsulotni olish"),
                 view -> executeFbsAction("cancel-kiz-relabel", null, null)));
         } else if ("SCAN_NEW_KIZ".equals(state)) {
+            // FIX: persistent mandatory warning also survives re-entry into the picking screen.
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(feedbackView("КИЗ НЕОБХОДИМО ЗАМЕНИТЬ", Color.rgb(254, 240, 138)));
             root.addView(feedbackView(tr("Наклейте новый КИЗ на эту единицу и отсканируйте его. Старую этикетку сохраните до завершения операции.",
                 "Shu mahsulotga yangi KIZ yopishtiring va skanerlang. Amal tugaguncha eski yorliqni saqlang."), Color.rgb(254, 240, 138)));
             root.addView(primaryMenuButton(tr("Сканировать новый КИЗ", "Yangi KIZni skanerlash"),
@@ -5455,6 +5457,10 @@ public class MainActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(18), dp(8), dp(18), 0);
+        // FIX: the automatic scanner dialog must show the replacement warning too.
+        if ("logoff".equals(BuildConfig.FLAVOR) && "SCAN_NEW_KIZ".equals(state)) {
+            content.addView(feedbackView("КИЗ НЕОБХОДИМО ЗАМЕНИТЬ", Color.rgb(254, 240, 138)));
+        }
         content.addView(feedbackView(
             (scanKiz
                 ? tr("ШАГ 2 ИЗ 2 · ОТСКАНИРУЙТЕ КИЗ", "2-QADAM · KIZNI SKANERLANG")

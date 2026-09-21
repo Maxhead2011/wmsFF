@@ -9,7 +9,7 @@ public class TsdKizLocationResponse {
     public List<Match> matches;
     public List<Review> reviews;
     public static class Review {
-        public String id, kizIdentity, status, decision, resolution, reason, decidedByName;
+        public String id, kizIdentity, status, decision, resolution, reason, decidedByName, scope;
         public boolean active;
         public Snapshot snapshot;
     }
