@@ -27759,6 +27759,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return result;
   }
 
+  // FIX: allocation reads each cabinet independently; never upsert/overwrite a warehouse SKU here.
+  async readAllocationCatalog(clientId: string, connectionId: string, user: AuthUser) {
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: { id: connectionId, clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } },
+      include: { client: { select: { id: true, code: true, name: true } } },
+    });
+    if (!connection) throw new NotFoundException('Активный кабинет клиента не найден.');
+    const products = await this.fetchMarketplaceProducts(connection);
+    return products.map(product => ({ productId: product.productId, offerId: product.offerId,
+      article: product.article ?? product.clientSku ?? product.offerId,
+      name: product.name, size: product.size ?? '', color: product.color ?? '', barcodes: product.barcodes }));
+  }
+
   async checkConnection(id: string, user: AuthUser) {
     const connection = await this.prisma.clientMarketplaceConnection.findUnique({
       where: { id },
