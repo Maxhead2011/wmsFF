@@ -17,10 +17,12 @@ export function FbsStockAllocationView({
   session,
   clientId,
   connectionId,
+  onOpenConfirmation,
 }: {
   session: AuthSession;
   clientId: string;
   connectionId: string;
+  onOpenConfirmation?: () => void;
 }) {
   const [data, setData] = useState<FbsStockAllocationResponse | null>(null);
   const [shares, setShares] = useState<DraftShare[]>([]);
@@ -156,6 +158,7 @@ export function FbsStockAllocationView({
 
   return (
     <section className="fbs-allocation">
+      {onOpenConfirmation && <button type="button" className="secondary-button" onClick={onOpenConfirmation}>Подтверждение остатков WB</button>}
       <header className="fbs-allocation__header">
         <div>
           <p className="eyebrow">Распределение остатков WB</p>

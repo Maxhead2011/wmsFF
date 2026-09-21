@@ -12439,3 +12439,14 @@ async function responseError(response: Response) {
 export function applyDuplicateGroup(accessToken: string, clientId: string, body: { group: import('./duplicateStockGroups').DuplicateGroup; revision: string | null; previewKey: string }) {
   return request<{ groups: import('./duplicateStockGroups').DuplicateGroup[]; revision: string; activeGroupIds: string[]; queued: boolean; mappingsCreated: number }>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/apply`, { accessToken, method: 'POST', body });
 }
+
+// FIX: the confirmation screen reads stored proofs without loading allocation analytics.
+export function fetchWbStockConfirmationCapabilities(accessToken: string) {
+  return request<{enabled: boolean}>('/marketplace-connections/stock-confirmation/capabilities', {accessToken});
+}
+export function fetchWbStockConfirmations(accessToken: string, clientId: string, connectionId: string, filters: {search?: string; warehouseId?: string; status?: string; page?: number}) {
+  return request<import('./wbStockConfirmation').StockConfirmationResult>(withQuery('/marketplace-connections/stock-confirmation',{clientId,connectionId,...filters}),{accessToken});
+}
+export function verifyWbStockConfirmations(accessToken: string, clientId: string, connectionId: string) {
+  return request<{checked: number; mismatches: number; unconfirmed?: number}>('/marketplace-connections/fbs/stocks/allocation/check',{accessToken,method:'POST',body:{clientId,connectionId}});
+}

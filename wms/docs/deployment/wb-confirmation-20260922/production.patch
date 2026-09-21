@@ -1,0 +1,465 @@
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -229,9 +229,9 @@
+     name: 'Маркетплейсы и FBS',
+     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
+       '/marketplace-connections/fbs/size-substitution', '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
+-      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/marketplace-connections/allocation', '/marketplace-connections/duplicate-groups'],
++      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/marketplace-connections/allocation', '/marketplace-connections/duplicate-groups', '/marketplace-connections/stock-confirmation'],
+     // FIX: preserve delivery-options plus six reshipment handlers; aliases count once.
+-    routeCount: 125, // FIX: includes read-only WB stock verification.
++    routeCount: 127, // FIX: includes read-only WB stock verification.
+     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+     logic: ['Перенос из доставки через расширение: после подтверждения выдаёт одну команду кабинету WB, затем независимо проверяет поставки и новый стикер; токены кабинета остаются в браузере.', 'Учёт по статусу WB: решение менеджера после проверки WB; точная пара КИЗ–ШК списывается и сохраняется в истории отгрузок, неизвестный источник — без короба.', 'Замена размера WB: ADMIN/OWNER подтверждает переклейку, создаётся локальная заявка без списания до отбора.', 'Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
+     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts
+@@ -1,3 +1,5 @@
++import { WbStockConfirmationController } from './wb-stock-confirmation.controller';
++import { WbStockConfirmationService } from './wb-stock-confirmation.service';
+ import { DuplicateStockGroupsController } from './duplicate-stock-groups.controller';
+ import { DuplicateStockGroupsService } from './duplicate-stock-groups.service';
+ import { MarketplaceAllocationController } from './marketplace-allocation.controller';
+@@ -25,8 +27,8 @@
+ 
+ @Module({
+   imports: [AuthModule, LogisticsModule],
+-  controllers: [DuplicateStockGroupsController, MarketplaceAllocationController, FbsSizeSubstitutionController, WbSyncHealthController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+-  providers: [DuplicateStockGroupsService, MarketplaceAllocationService, FbsSizeSubstitutionService, WbSyncHealthService,
++  controllers: [WbStockConfirmationController, DuplicateStockGroupsController, MarketplaceAllocationController, FbsSizeSubstitutionController, WbSyncHealthController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
++  providers: [WbStockConfirmationService, DuplicateStockGroupsService, MarketplaceAllocationService, FbsSizeSubstitutionService, WbSyncHealthService,
+     MarketplaceStockControlService,
+     // FIX: keep current stock-control registration when adding independent repeats.
+     FbsRepeatAssemblyService,
+--- a/wms/apps/web/src/components/fbs/FbsStockAllocationView.tsx
++++ b/wms/apps/web/src/components/fbs/FbsStockAllocationView.tsx
+@@ -1,3 +1,4 @@
++import { WbStockSettingsCards } from './WbStockSettingsCards';
+ import { filterWbStockPreviewRows, WB_STOCK_PREVIEW_LIMIT, wbStockPreview } from '../../lib/wbStockPreview';
+ import { WbLowStockReserveSummary } from './WbLowStockReserveFields';
+ import { canEditWbReserve, WbClientReserveEditor, WbAnalysisSettings, WbPublicationChecks, WbSkuRuleEditor } from './WbStockFineControls';
+@@ -20,10 +21,12 @@
+   session,
+   clientId,
+   connectionId,
++  onOpenConfirmation,
+ }: {
+   session: AuthSession;
+   clientId: string;
+   connectionId: string;
++  onOpenConfirmation?: () => void;
+ }) {
+   const [data, setData] = useState<FbsStockAllocationResponse | null>(null);
+   const [shares, setShares] = useState<DraftShare[]>([]);
+@@ -192,19 +195,26 @@
+ 
+       {data?.fineSettingsEnabled && <section className="fbs-allocation__fine">
+         <h4>Резерв и предпросмотр WB</h4>
+-        <WbLowStockReserveSummary rule={data.reserve?.lowStock} />
++        <WbStockSettingsCards
++          publicationEnabled={Boolean(data.publicationEnabled)} onOpenConfirmation={onOpenConfirmation}
++          reserve={<>
++<WbLowStockReserveSummary rule={data.reserve?.lowStock} />
+         <p>Резерв: {data.reserve?.mode === 'UNITS' ? `${data.reserve.value} шт. на позицию` : data.reserve?.mode === 'PERCENT' ? `${data.reserve.value}% на позицию` : 'без резерва'}.</p>
+         {canEditReserve && <WbClientReserveEditor key={`${clientId}:${data.reserveUpdatedAt}`} session={session} clientId={clientId} data={data} onSaved={() => load(true)} />}
+-        <p>{data.publicationEnabled ? 'Отправка WB разрешена.' : 'Отправка WB для клиента выключена. Сохранённые доли не будут выгружены.'}</p>
+-        <p>При включённом автоуправлении сохранённые изменения доступного остатка — после инвентаризации, актуализации короба, сортировки и перемещения — учитываются в очередном фоновом пересчёте. Обычное перемещение между коробами одного склада не увеличивает общий остаток.</p>
+-        {canEditFineSettings && data.analysisSettings && <WbAnalysisSettings key={`${clientId}:${data.analysisSettings.updatedAt}`} session={session} clientId={clientId} settings={data.analysisSettings} onSaved={() => load(true)} />}
+-        {!data.analysis && <p>Сначала задайте доли в сумме 100% и основной склад, сохраните настройки и обновите раздел.</p>}
+-        {data.analysis && <>
+-          <p>Расчёт на {new Date(data.analysis.generatedAt).toLocaleString('ru-RU')}. {data.analysis.orderedUnits} заказанных единиц; {data.analysis.excluded} записей исключено из-за даты, склада или отсутствия привязки к товару.</p>
++          </>}
++          recommendations={<>
++{canEditFineSettings && data.analysisSettings && <details><summary>Настроить шаг рекомендации</summary><WbAnalysisSettings key={`${clientId}:${data.analysisSettings.updatedAt}`} session={session} clientId={clientId} settings={data.analysisSettings} onSaved={() => load(true)} /></details>}
++            {!data.analysis && <p>Сохраните доли в сумме 100% и основной склад, затем обновите раздел.</p>}
++            {data.analysis && <>
++<p>Расчёт на {new Date(data.analysis.generatedAt).toLocaleString('ru-RU')}. {data.analysis.orderedUnits} заказанных единиц; {data.analysis.excluded} записей исключено из-за даты, склада или отсутствия привязки к товару.</p>
+           {!data.analysis.hasEvidence && <p>Недостаточно истории: сохраняем ручное распределение.</p>}
+           <details><summary>Как рассчитана рекомендация</summary>{data.analysis.warnings.map(text => <p key={text}>{text}</p>)}<p>Доли товара следуют спросу; для Y используется 75% рекомендации и 25% ручных долей, для Z — 50/50. Общая рекомендация взвешена количеством товара к продаже. После применения общие доли действуют на все позиции. Пересчёт — при открытии раздела; автоматического сохранения нет.</p></details>
+-          <label>Поиск позиции <input value={stockSearch} onChange={e => setStockSearch(e.target.value)} placeholder="Название или штрихкод" /></label>
+-          <p>Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Только позиции с доступным остатком. Показано {Math.min(WB_STOCK_PREVIEW_LIMIT, previewRows.length)} из {previewRows.length} найденных позиций; для остальных используйте поиск.</p>
++            </>}
++          </>}
++        />
++        {data.analysis && <>
++          <div className="wb-stock-preview-heading"><h4>Предпросмотр остатков</h4><label>Поиск позиции <input value={stockSearch} onChange={e => setStockSearch(e.target.value)} placeholder="Название или штрихкод" /></label></div>
++          <p className="wb-stock-preview-note">Предпросмотр по введённым долям и порогу малого остатка, до сохранения. Только позиции с доступным остатком. Показано {Math.min(WB_STOCK_PREVIEW_LIMIT, previewRows.length)} из {previewRows.length} найденных позиций; для остальных используйте поиск.</p>
+           <div className="fbs-allocation__table-wrap"><table className="fbs-allocation__table"><thead><tr><th>Товар / ШК</th><th>Доступно</th><th>Резерв</th><th>На WB с учётом лимита</th><th>ABC–XYZ / спрос</th><th>По складам</th></tr></thead><tbody>
+             {previewRows.slice(0, WB_STOCK_PREVIEW_LIMIT).map(row => <tr key={row.skuId}>
+               <td>{row.name}<br />{row.barcode}{canEditReserve && <WbSkuRuleEditor key={`${clientId}:${row.skuId}:${row.ruleUpdatedAt}`} session={session} clientId={clientId} row={row} onSaved={() => load(true)} />}{row.blocked && <strong> · Публикация запрещена</strong>}</td><td>{row.available}</td><td>{row.reserveQuantity}</td><td>{row.publishable}</td><td>{row.abc}{row.xyz} · {row.orderedUnits} шт.{!row.sufficient && ' · мало данных'}<br />Покрытие: {row.coveredDays ?? 0} дней; без наличия: {row.stockoutDays ?? 0} складо-дней</td>
+@@ -215,7 +225,7 @@
+         </>}
+       </section>}
+ 
+-      {data?.fineSettingsEnabled && <WbPublicationChecks key={`${clientId}:${connectionId}`} session={session} clientId={clientId} connectionId={connectionId} data={data} onSaved={() => load(true)} />}
++      {data?.fineSettingsEnabled && !onOpenConfirmation && <WbPublicationChecks key={`${clientId}:${connectionId}`} session={session} clientId={clientId} connectionId={connectionId} data={data} onSaved={() => load(true)} />}
+ 
+       <div className="fbs-allocation__rules">
+         <label>
+--- a/wms/apps/web/src/components/fbs/StockManagementMenu.tsx
++++ b/wms/apps/web/src/components/fbs/StockManagementMenu.tsx
+@@ -2,15 +2,15 @@
+ import './StockManagementMenu.css';
+ 
+ // FIX: reuse FBS theme tiles; unavailable sections remain native disabled buttons.
+-export function StockManagementMenu({ cabinetMessage, duplicatesEnabled, onSelect }: {
+-  cabinetMessage: string; duplicatesEnabled: boolean; onSelect: (section: string) => void;
++export function StockManagementMenu({ cabinetMessage, duplicatesEnabled, confirmationEnabled = false, onSelect }: {
++  cabinetMessage: string; duplicatesEnabled: boolean; confirmationEnabled?: boolean; onSelect: (section: string) => void;
+ }) {
+   const items = [
+     { id: 'marketplaces', title: 'Между маркетплейсами', description: cabinetMessage, icon: ArrowLeftRight, accent: 'blue' },
+     { id: 'stocks', title: 'Резервы и предпросмотр', description: 'Текущие настройки остатков WB', icon: ShieldCheck, accent: 'green' },
+     { id: 'duplicates', title: 'Между артикулами', description: duplicatesEnabled ? 'Доли, размеры и страховой резерв' : 'Раздел ещё не включён', icon: Copy, accent: 'violet', disabled: !duplicatesEnabled },
+     { id: 'warehouses', title: 'Между складами', description: 'Действующее распределение WB', icon: Warehouse, accent: 'amber' },
+-    { id: 'confirmation', title: 'Подтверждение остатков WB', description: 'Отдельная статистика — следующий этап', icon: PackageCheck, accent: 'slate', disabled: true },
++    { id: 'confirmation', title: 'Подтверждение остатков WB', description: confirmationEnabled ? 'Отправка, проверка и расхождения' : 'Отдельная статистика — следующий этап', icon: PackageCheck, accent: 'slate', disabled: !confirmationEnabled },
+   ];
+   return <nav className="stock-management-menu" aria-label="Разделы управления остатками">
+     {items.map(({ id, title, description, icon: Icon, accent, disabled }) => <div key={id} className={`fbs-tile fbs-tile--${accent}${disabled ? ' stock-management-menu__disabled' : ''}`}>
+--- a/wms/apps/web/src/components/fbs/StockManagementView.tsx
++++ b/wms/apps/web/src/components/fbs/StockManagementView.tsx
+@@ -1,7 +1,8 @@
++import { WbStockConfirmationView } from './WbStockConfirmationView';
+ import { ArrowLeft } from 'lucide-react';
+ import { StockManagementMenu } from './StockManagementMenu';
+ import { useEffect, useState, type ReactNode } from 'react';
+-import { fetchDuplicateGroupCapabilities, fetchMarketplaceAllocationCapabilities, fetchMarketplaceAllocation, fetchMarketplaceConnections, type AuthSession } from '../../lib/api';
++import { fetchWbStockConfirmationCapabilities, fetchDuplicateGroupCapabilities, fetchMarketplaceAllocationCapabilities, fetchMarketplaceAllocation, fetchMarketplaceConnections, type AuthSession } from '../../lib/api';
+ import { FbsStockAllocationView } from './FbsStockAllocationView';
+ import { MarketplaceAllocationView } from './MarketplaceAllocationView';
+ import { DuplicateStockGroupsView } from './DuplicateStockGroupsView';
+@@ -16,19 +17,21 @@
+   const [cabinetMessage, setCabinetMessage] = useState('Проверка подключённых кабинетов…');
+   const [wbConnectionId, setWbConnectionId] = useState(connectionId);
+   const [reload, setReload] = useState(0);
++  const [confirmationEnabled, setConfirmationEnabled] = useState(false);
+   const [duplicatesEnabled, setDuplicatesEnabled] = useState(false);
+   useEffect(() => {
+     let active = true;
+-    setSection(''); setEnabled(null); setError(''); setDuplicatesEnabled(false);
++    setSection(''); setEnabled(null); setError(''); setDuplicatesEnabled(false); setConfirmationEnabled(false);
+     void fetchMarketplaceAllocationCapabilities(session.accessToken).then(async r => {
+       if (!active) return;
+       if (r.enabled) {
+-        const [settings, duplicateCapabilities] = await Promise.all([
++        const [settings, duplicateCapabilities, confirmationCapabilities] = await Promise.all([
+           fetchMarketplaceAllocation(session.accessToken, clientId),
+           fetchDuplicateGroupCapabilities(session.accessToken).catch(() => ({ enabled: false })),
++          fetchWbStockConfirmationCapabilities(session.accessToken).catch(() => ({ enabled: false })),
+         ]);
+         if (!active) return;
+-        setDuplicatesEnabled(duplicateCapabilities.enabled);
++        setDuplicatesEnabled(duplicateCapabilities.enabled); setConfirmationEnabled(confirmationCapabilities.enabled);
+         setCabinetMessage(settings.message || 'Подключены Wildberries и Ozon');
+         setWbConnectionId(settings.connections.find(c => c.marketplace === 'WILDBERRIES')?.id ?? '');
+       } else {
+@@ -47,10 +50,11 @@
+   return <section>
+     <h3>Управление остатками</h3>
+     {section ? <button type="button" className="icon-text-button stock-management-back" onClick={() => setSection('')}><ArrowLeft size={18} aria-hidden="true" /> Все разделы</button>
+-      : <StockManagementMenu cabinetMessage={cabinetMessage} duplicatesEnabled={duplicatesEnabled} onSelect={setSection} />}
++      : <StockManagementMenu cabinetMessage={cabinetMessage} duplicatesEnabled={duplicatesEnabled} confirmationEnabled={confirmationEnabled} onSelect={setSection} />}
+     {section === 'marketplaces' && <MarketplaceAllocationView key={clientId} session={session} clientId={clientId} />}
+     {section === 'duplicates' && duplicatesEnabled && <DuplicateStockGroupsView key={clientId} session={session} clientId={clientId} />}
++    {section === 'confirmation' && confirmationEnabled && <WbStockConfirmationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} />}
+     {section === 'stocks' && renderStocks()}
+-    {section === 'warehouses' && <FbsStockAllocationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} />}
++    {section === 'warehouses' && <FbsStockAllocationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} onOpenConfirmation={confirmationEnabled ? () => setSection('confirmation') : undefined} />}
+   </section>;
+ }
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -12636,3 +12636,14 @@
+ export function applyDuplicateGroup(accessToken: string, clientId: string, body: { group: import('./duplicateStockGroups').DuplicateGroup; revision: string | null; previewKey: string }) {
+   return request<{ groups: import('./duplicateStockGroups').DuplicateGroup[]; revision: string; activeGroupIds: string[]; queued: boolean; mappingsCreated: number }>(`/marketplace-connections/duplicate-groups/${encodeURIComponent(clientId)}/apply`, { accessToken, method: 'POST', body });
+ }
++
++// FIX: the confirmation screen reads stored proofs without loading allocation analytics.
++export function fetchWbStockConfirmationCapabilities(accessToken: string) {
++  return request<{enabled: boolean}>('/marketplace-connections/stock-confirmation/capabilities', {accessToken});
++}
++export function fetchWbStockConfirmations(accessToken: string, clientId: string, connectionId: string, filters: {search?: string; warehouseId?: string; status?: string; page?: number}) {
++  return request<import('./wbStockConfirmation').StockConfirmationResult>(withQuery('/marketplace-connections/stock-confirmation',{clientId,connectionId,...filters}),{accessToken});
++}
++export function verifyWbStockConfirmations(accessToken: string, clientId: string, connectionId: string) {
++  return request<{checked: number; mismatches: number; unconfirmed?: number}>('/marketplace-connections/fbs/stocks/allocation/check',{accessToken,method:'POST',body:{clientId,connectionId}});
++}
+--- a/wms/apps/api/src/modules/marketplace-connections/wb-stock-confirmation.controller.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/wb-stock-confirmation.controller.ts
+@@ -0,0 +1,12 @@
++import { Controller, Get, Query } from '@nestjs/common';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequireAnyPermissions } from '../auth/decorators/require-permissions.decorator';
++import type { AuthUser } from '../auth/auth.types';
++import { WbStockConfirmationService, type ConfirmationQuery } from './wb-stock-confirmation.service';
++@Controller('marketplace-connections/stock-confirmation')
++@RequireAnyPermissions('clients:read', 'clients:write', 'client-requests:read', 'client-requests:write')
++export class WbStockConfirmationController {
++  constructor(private readonly confirmations: WbStockConfirmationService) {}
++  @Get('capabilities') capabilities() { return this.confirmations.capabilities(); }
++  @Get() list(@Query() query: ConfirmationQuery, @CurrentUser() user: AuthUser) { return this.confirmations.list(query,user); }
++}
+--- a/wms/apps/api/src/modules/marketplace-connections/wb-stock-confirmation.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/wb-stock-confirmation.service.ts
+@@ -0,0 +1,60 @@
++import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
++import { Prisma } from '@prisma/client';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import { ClientScopeService } from '../auth/client-scope.service';
++import type { AuthUser } from '../auth/auth.types';
++
++export const stockConfirmationEnabled = () => process.env.WMS_WB_STOCK_CONFIRMATION_ENABLED === 'true' && process.env.WMS_WB_STOCK_FINE_SETTINGS === 'true';
++const states = ['ALL', 'CONFIRMED', 'MISMATCH', 'UNCONFIRMED', 'PENDING'];
++export type ConfirmationQuery = { clientId?: string; connectionId?: string; search?: string; warehouseId?: string; status?: string; page?: string };
++// FIX: missing WB observations stay null; large WB identifiers are lossless strings.
++export function confirmationRow(row: any) {
++  return { ...row, chrtId: String(row.chrtId), difference: row.observedAmount === null ? null : row.observedAmount - row.calculatedAmount };
++}
++@Injectable()
++export class WbStockConfirmationService {
++  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService) {}
++  capabilities() { return { enabled: stockConfirmationEnabled() }; }
++  async list(query: ConfirmationQuery, user: AuthUser) {
++    if (!stockConfirmationEnabled() || user.isDemo) throw new ForbiddenException('Подтверждение остатков WB пока недоступно.');
++    if (!query || ['clientId','connectionId','search','warehouseId','status','page'].some(k => (query as any)[k] !== undefined && typeof (query as any)[k] !== 'string')) throw new BadRequestException('Некорректные параметры списка.');
++    const clientId = query.clientId?.trim(), connectionId = query.connectionId?.trim();
++    if (!clientId || !connectionId) throw new BadRequestException('Выберите клиента и кабинет WB.');
++    this.scopes.requireClientAccess(user, clientId, 'read');
++    const page = Number(query.page ?? 1), status = query.status ?? 'ALL';
++    if (!Number.isSafeInteger(page) || page < 1 || page > 100000 || !states.includes(status)) throw new BadRequestException('Некорректные параметры списка.');
++    const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: { id: connectionId, clientId, marketplace: 'WILDBERRIES', isActive: true }, select: { id: true, accountName: true, fbsExecutionWarehouseId: true } });
++    if (!connection) throw new NotFoundException('Активный кабинет WB не найден.');
++    if (!user.roleCodes.includes('CLIENT') && !user.permissionCodes.includes('system:admin')
++      && (!connection.fbsExecutionWarehouseId || user.activeWarehouseId !== connection.fbsExecutionWarehouseId || (user.warehouseIds && !user.warehouseIds.includes(connection.fbsExecutionWarehouseId)))) throw new ForbiddenException('Выберите доступный филиал исполнения кабинета.');
++    const search = (query.search ?? '').trim().slice(0, 150), warehouse = (query.warehouseId ?? '').trim();
++    const pattern = '%' + search.replace(/[\\%_]/g, '\\$&') + '%';
++    const base = Prisma.sql`c."clientId"=${clientId} AND c."connectionId"=${connectionId}`;
++    const where = Prisma.sql`${base}
++      AND (${warehouse}='' OR c."warehouseId"=${warehouse})
++      AND (${status}='ALL' OR c.status=${status} OR (${status}='PENDING' AND c.status IN ('PLANNED','SENDING','SENT')) OR (${status}='UNCONFIRMED' AND c.status NOT IN ('CONFIRMED','MISMATCH','PLANNED','SENDING','SENT')))
++      AND (${search}='' OR s.article ILIKE ${pattern} OR s.name ILIKE ${pattern} OR s."internalSku" ILIKE ${pattern} OR c."chrtId"::text=${search}
++        OR EXISTS(SELECT 1 FROM "Barcode" b WHERE b."skuId"=s.id AND b.value ILIKE ${pattern}))`;
++    // Repeatable read keeps counters and the page on one snapshot while the publisher updates rows.
++    return this.prisma.$transaction(async tx => {
++      const summary = await tx.$queryRaw<any[]>(Prisma.sql`SELECT count(*)::int AS total,
++        count(*) FILTER(WHERE status='CONFIRMED')::int AS confirmed,
++        count(*) FILTER(WHERE status='MISMATCH')::int AS mismatches,
++        count(*) FILTER(WHERE status NOT IN ('CONFIRMED','MISMATCH','PLANNED','SENDING','SENT'))::int AS unconfirmed,
++        count(*) FILTER(WHERE status IN ('PLANNED','SENDING','SENT'))::int AS pending,
++        max("checkedAt") AS "lastCheckedAt" FROM "WbStockPublicationCheck" c WHERE ${base}`);
++      const counts = await tx.$queryRaw<Array<{ total: number }>>(Prisma.sql`SELECT count(*)::int AS total FROM "WbStockPublicationCheck" c
++        LEFT JOIN "Sku" s ON s.id=c."skuId" AND s."clientId"=c."clientId" WHERE ${where}`);
++      const rows = await tx.$queryRaw<any[]>(Prisma.sql`SELECT c.id,c."warehouseId",c."skuId",c."chrtId",c.phase,c.status,c."calculatedAmount",c."sentAmount",c."observedAmount",c."sentAt",c."checkedAt",c."updatedAt",c.error,
++        s.article,s.name,s.size,(SELECT b.value FROM "Barcode" b WHERE b."skuId"=s.id ORDER BY b."isPrimary" DESC,b.value LIMIT 1) AS barcode
++        FROM "WbStockPublicationCheck" c LEFT JOIN "Sku" s ON s.id=c."skuId" AND s."clientId"=c."clientId"
++        WHERE ${where} ORDER BY c."updatedAt" DESC,c.id ASC LIMIT 50 OFFSET ${(page-1)*50}`);
++      const warehouses = await tx.$queryRaw<Array<{ id: string; name: string; total: number }>>(Prisma.sql`SELECT c."warehouseId" AS id,
++        COALESCE(max(sh."warehouseName"),c."warehouseId") AS name,count(*)::int AS total FROM "WbStockPublicationCheck" c
++        LEFT JOIN "FbsStockAllocationPolicy" p ON p."clientId"=c."clientId" AND p."connectionId"=c."connectionId"
++        LEFT JOIN "FbsStockAllocationShare" sh ON sh."policyId"=p.id AND sh."warehouseId"=c."warehouseId"
++        WHERE ${base} GROUP BY c."warehouseId" ORDER BY name,c."warehouseId"`);
++      return { summary: summary[0], total: counts[0]?.total ?? 0, rows: rows.map(confirmationRow), warehouses, page, pageSize: 50, generatedAt: new Date().toISOString(), accountName: connection.accountName };
++    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
++  }
++}
+--- a/wms/apps/api/test/wb-stock-confirmation.service.spec.ts
++++ b/wms/apps/api/test/wb-stock-confirmation.service.spec.ts
+@@ -0,0 +1,31 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { WbStockConfirmationService, confirmationRow } from '../src/modules/marketplace-connections/wb-stock-confirmation.service';
++import { ClientScopeService } from '../src/modules/auth/client-scope.service';
++const user:any={roleCodes:['CLIENT'],permissionCodes:['clients:read'],clientIds:['client'],writableClientIds:[],clientScopeMode:'LIMITED'};
++function fixture(){
++ vi.stubEnv('WMS_WB_STOCK_CONFIRMATION_ENABLED','true');vi.stubEnv('WMS_WB_STOCK_FINE_SETTINGS','true');
++ const db:any={clientMarketplaceConnection:{findFirst:vi.fn().mockResolvedValue({id:'wb',accountName:'WB',fbsExecutionWarehouseId:'warehouse'})},$queryRaw:vi.fn()};
++ db.$transaction=vi.fn(fn=>fn(db));
++ db.$queryRaw.mockResolvedValueOnce([{total:1,confirmed:0,mismatches:0,unconfirmed:1,pending:0,lastCheckedAt:null}]).mockResolvedValueOnce([{total:1}])
++ .mockResolvedValueOnce([{id:'r',chrtId:9007199254740993n,calculatedAmount:4,sentAmount:4,observedAmount:null,status:'UNCONFIRMED'}]).mockResolvedValueOnce([{id:'w',name:'Москва',total:1}]);
++ return {db,service:new WbStockConfirmationService(db,new ClientScopeService())};
++}
++afterEach(()=>vi.unstubAllEnvs());
++describe('WB confirmation read model',()=>{
++ // TEST: absent WB stock must never become a reassuring zero or lose chrtId precision.
++ it('preserves missing observations and large IDs',()=>{expect(confirmationRow({chrtId:9007199254740993n,calculatedAmount:4,observedAmount:null})).toMatchObject({chrtId:'9007199254740993',observedAmount:null,difference:null});expect(confirmationRow({chrtId:1n,calculatedAmount:4,observedAmount:0}).difference).toBe(-4);});
++ it('reads one scoped snapshot with pagination and no marketplace requests',async()=>{
++  const f=fixture();const result=await f.service.list({clientId:'client',connectionId:'wb',page:'2',status:'UNCONFIRMED',search:'001'},user);
++  expect(result.rows[0]).toMatchObject({chrtId:'9007199254740993',observedAmount:null,difference:null});expect(result.page).toBe(2);
++  expect(f.db.$transaction).toHaveBeenCalledWith(expect.any(Function),{isolationLevel:'RepeatableRead'});
++  for(const [sql] of f.db.$queryRaw.mock.calls){expect(sql.values).toContain('client');expect(sql.values).toContain('wb');}
++  expect(f.db.$queryRaw.mock.calls[2][0].values).toContain(50);
++ });
++ it('blocks another client before database access',async()=>{const f=fixture();await expect(f.service.list({clientId:'other',connectionId:'wb'},user)).rejects.toThrow();expect(f.db.clientMarketplaceConnection.findFirst).not.toHaveBeenCalled();});
++ it('rejects a cabinet outside this client and an employee in another warehouse',async()=>{
++  const f=fixture();f.db.clientMarketplaceConnection.findFirst.mockResolvedValueOnce(null);await expect(f.service.list({clientId:'client',connectionId:'wb'},user)).rejects.toThrow('не найден');
++  await expect(f.service.list({clientId:'client',connectionId:'wb'},{...user,roleCodes:['MANAGER'],activeWarehouseId:'other'})).rejects.toThrow('филиал');expect(f.db.$queryRaw).not.toHaveBeenCalled();
++ });
++ it('keeps the feature off on the sold VM',async()=>{const f=fixture();vi.stubEnv('WMS_WB_STOCK_CONFIRMATION_ENABLED','false');expect(f.service.capabilities().enabled).toBe(false);await expect(f.service.list({clientId:'client',connectionId:'wb'},user)).rejects.toThrow('недоступно');expect(f.db.$queryRaw).not.toHaveBeenCalled();});
++ it.each([{page:'-1'},{page:'1.5'},{status:'INVALID'},{clientId:['client']}])('validates untrusted query input %j',async extra=>{const f=fixture();await expect(f.service.list({clientId:'client',connectionId:'wb',...extra} as any,user)).rejects.toThrow('параметры');expect(f.db.$queryRaw).not.toHaveBeenCalled();});
++});
+--- a/wms/apps/web/src/components/fbs/WbStockConfirmationView.css
++++ b/wms/apps/web/src/components/fbs/WbStockConfirmationView.css
+@@ -0,0 +1,21 @@
++.wb-confirmation { display: grid; gap: 16px; margin-top: 12px; }
++.wb-confirmation h3,.wb-confirmation p { margin: 0; }
++.wb-confirmation header,.wb-confirmation__actions,.wb-confirmation footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
++.wb-confirmation header { justify-content: space-between; }
++.wb-confirmation__hint,.wb-confirmation td small { color: #718096; font-size: 12px; }
++.wb-confirmation__stats { display: grid; grid-template-columns: repeat(auto-fit,minmax(150px,1fr)); gap: 12px; }
++.wb-confirmation__stat { border: 1px solid #dce2e9; border-radius: 10px; padding: 16px; display: grid; gap: 8px; }
++.wb-confirmation__stat strong { font-size: 26px; }
++.wb-confirmation__stat--ok strong { color: #15803d; }.wb-confirmation__stat--bad strong { color: #dc2626; }.wb-confirmation__stat--warn strong { color: #b45309; }
++.wb-confirmation__filters { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
++.wb-confirmation__filters label { display: grid; gap: 6px; font-size: 12px; font-weight: 600; }
++.wb-confirmation__filters input,.wb-confirmation__filters select { border: 1px solid #dce2e9; border-radius: 6px; padding: 10px; font: inherit; background: transparent; color: inherit; }
++.wb-confirmation__filters input { width: min(360px,70vw); }
++.wb-confirmation__table { overflow-x: auto; }
++.wb-confirmation table { border-collapse: collapse; width: 100%; text-align: left; }
++.wb-confirmation th,.wb-confirmation td { padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
++.wb-confirmation th { font-size: 12px; color: #718096; }
++.wb-confirmation td small { display: block; margin-top: 5px; max-width: 350px; overflow-wrap: anywhere; }
++.wb-confirmation__status { display: inline-block; border-radius: 5px; padding: 4px 7px; font-size: 12px; background: #f1f5f9; color: #475569; }
++.wb-confirmation__status--confirmed { background: #edf9f1; color: #15803d; }.wb-confirmation__status--mismatch { background: #fff0f1; color: #b91c1c; }.wb-confirmation__status--unconfirmed { background: #fff8e7; color: #b45309; }
++.wb-confirmation [role=alert],.wb-confirmation td .wb-confirmation__error { color: #b91c1c; }
+--- a/wms/apps/web/src/components/fbs/WbStockConfirmationView.spec.tsx
++++ b/wms/apps/web/src/components/fbs/WbStockConfirmationView.spec.tsx
+@@ -0,0 +1,14 @@
++import { afterEach, expect, it, vi } from 'vitest';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { StockManagementMenu } from './StockManagementMenu';
++import { confirmationAmount, confirmationStatus } from '../../lib/wbStockConfirmation';
++import { fetchWbStockConfirmations, verifyWbStockConfirmations } from '../../lib/api';
++afterEach(()=>vi.unstubAllGlobals());
++// TEST: null is unknown, whereas zero is an actual WB stock value.
++it('distinguishes missing and zero confirmations',()=>{expect(confirmationAmount(null)).toBe('—');expect(confirmationAmount(0)).toBe('0');expect(confirmationStatus('MISMATCH')).toBe('Расхождение');});
++it('enables the fifth tile only with the server capability',()=>{const html=renderToStaticMarkup(<StockManagementMenu cabinetMessage="WB" duplicatesEnabled confirmationEnabled onSelect={()=>{}}/>);expect(html).not.toContain('disabled=""');expect(html).toContain('Отправка, проверка и расхождения');});
++it('uses scoped list and the existing read-only WB check endpoint',async()=>{
++ const fetch=vi.fn().mockImplementation(()=>Promise.resolve(new Response('{}',{status:200,headers:{'Content-Type':'application/json'}})));vi.stubGlobal('fetch',fetch);
++ await fetchWbStockConfirmations('token','c','wb',{page:2,status:'UNCONFIRMED',search:'001'});await verifyWbStockConfirmations('token','c','wb');
++ expect(fetch.mock.calls[0][0]).toContain('clientId=c');expect(fetch.mock.calls[0][0]).toContain('page=2');expect(fetch.mock.calls[1][0]).toContain('/allocation/check');expect(fetch.mock.calls[1][0]).not.toContain('/sync');expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({clientId:'c',connectionId:'wb'});
++});
+--- a/wms/apps/web/src/components/fbs/WbStockConfirmationView.tsx
++++ b/wms/apps/web/src/components/fbs/WbStockConfirmationView.tsx
+@@ -0,0 +1,55 @@
++import { useEffect, useRef, useState } from 'react';
++import { RefreshCw, ShieldCheck } from 'lucide-react';
++import { fetchWbStockConfirmations, verifyWbStockConfirmations, type AuthSession } from '../../lib/api';
++import { confirmationAmount, confirmationStatus, type StockConfirmationResult } from '../../lib/wbStockConfirmation';
++import './WbStockConfirmationView.css';
++const date = (value: string | null) => value ? new Date(value).toLocaleString('ru-RU') : 'Ещё не проверено';
++export function WbStockConfirmationView({session,clientId,connectionId}:{session:AuthSession;clientId:string;connectionId:string}) {
++  const [data,setData]=useState<StockConfirmationResult|null>(null),[error,setError]=useState(''),[message,setMessage]=useState('');
++  const [search,setSearch]=useState(''),[query,setQuery]=useState(''),[status,setStatus]=useState('ALL'),[warehouse,setWarehouse]=useState('');
++  const [page,setPage]=useState(1),[reload,setReload]=useState(0),[busy,setBusy]=useState(false),[checking,setChecking]=useState(false);
++  const generation=useRef(0);
++  useEffect(()=>{setData(null);setQuery('');setSearch('');setStatus('ALL');setWarehouse('');setPage(1);setMessage('');},[clientId,connectionId]);
++  useEffect(()=>{
++    const id=++generation.current;
++    if(!connectionId){setBusy(false);return;}
++    setBusy(true);setError('');
++    fetchWbStockConfirmations(session.accessToken,clientId,connectionId,{search:query,status,warehouseId:warehouse,page})
++      .then(result=>{if(id===generation.current)setData(result);})
++      .catch(e=>{if(id===generation.current)setError(e instanceof Error?e.message:'Не удалось загрузить подтверждения.');})
++      .finally(()=>{if(id===generation.current)setBusy(false);});
++    return()=>{generation.current++;};
++  },[session.accessToken,clientId,connectionId,query,status,warehouse,page,reload]);
++  useEffect(()=>{if(checking)return;const timer=window.setInterval(()=>setReload(n=>n+1),30000);return()=>window.clearInterval(timer);},[checking]);
++  async function check() {
++    if(checking||busy)return;const id=generation.current;setChecking(true);setError('');setMessage('');
++    try{const result=await verifyWbStockConfirmations(session.accessToken,clientId,connectionId);if(id!==generation.current)return;
++      setMessage(`Проверено в WB: ${result.checked}. Расхождений: ${result.mismatches}. Без подтверждения: ${result.unconfirmed??0}.`);setReload(n=>n+1);
++    }catch(e){if(id===generation.current){setError(e instanceof Error?e.message:'Проверка WB не завершена.');setReload(n=>n+1);}}
++    finally{setChecking(false);}
++  }
++  if(!connectionId)return <p>Для клиента не выбран активный кабинет WB.</p>;
++  return <section className="wb-confirmation">
++    <header><div><h3>Подтверждение остатков WB</h3><p>Последние результаты по каждому товару и складу{data?.accountName?` · ${data.accountName}`:''}.</p></div>
++      <div className="wb-confirmation__actions"><button className="icon-text-button" disabled={busy||checking} onClick={()=>setReload(n=>n+1)}><RefreshCw size={17} aria-hidden="true"/> Обновить список</button>
++        <button className="primary-button" disabled={busy||checking||!data?.summary.total} onClick={()=>void check()}><ShieldCheck size={17} aria-hidden="true"/>{checking?'Проверяем WB…':'Проверить в WB'}</button></div></header>
++    <p className="wb-confirmation__hint">Проверка читает остатки WB и не отправляет новые количества. «—» означает отсутствие данных, а не нулевой остаток.</p>
++    {error&&<p role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
++    {data&&<><div className="wb-confirmation__stats">
++      {[['Всего записей',data.summary.total,'all'],['Подтверждено',data.summary.confirmed,'ok'],['Расхождения',data.summary.mismatches,'bad'],['Нет подтверждения',data.summary.unconfirmed,'warn'],['В процессе',data.summary.pending,'pending']].map(([title,value,tone])=><div className={`wb-confirmation__stat wb-confirmation__stat--${tone}`} key={String(tone)}><span>{title}</span><strong>{value}</strong></div>)}
++    </div><p className="wb-confirmation__hint">Сводка по всему кабинету · Последняя проверка: {date(data.summary.lastCheckedAt)}. Список обновлён: {date(data.generatedAt)}.</p></>}
++    <form className="wb-confirmation__filters" onSubmit={e=>{e.preventDefault();setQuery(search.trim());setPage(1);}}>
++      <label>Товар<input placeholder="Артикул, название, ШК или ID размера WB" value={search} onChange={e=>setSearch(e.target.value)} disabled={checking}/></label><button type="submit" className="icon-text-button" disabled={checking}>Найти</button>
++      <label>Статус<select value={status} disabled={checking} onChange={e=>{setStatus(e.target.value);setPage(1);}}><option value="ALL">Все статусы</option><option value="CONFIRMED">Подтверждено</option><option value="MISMATCH">Расхождения</option><option value="UNCONFIRMED">Нет подтверждения</option><option value="PENDING">В процессе</option></select></label>
++      <label>Склад WB<select value={warehouse} disabled={checking} onChange={e=>{setWarehouse(e.target.value);setPage(1);}}><option value="">Все склады</option>{data?.warehouses.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>
++    </form>
++    {busy&&<p role="status">Обновляем список…</p>}
++    {data&&<><div className="wb-confirmation__table"><table><thead><tr><th>Товар / размер</th><th>Склад WB</th><th>Рассчитано</th><th>Отправлено</th><th>В WB</th><th>Разница</th><th>Статус / проверка</th></tr></thead><tbody>
++      {data.rows.map(row=><tr key={row.id}><td><strong>{row.article||row.name||'Карточка недоступна'}</strong><small>{row.size||'Размер не указан'} · {row.barcode||`ID WB: ${row.chrtId}`}</small></td><td>{data.warehouses.find(w=>w.id===row.warehouseId)?.name||row.warehouseId}</td>
++        <td>{row.calculatedAmount}</td><td>{confirmationAmount(row.sentAmount)}<small>{row.sentAt?date(row.sentAt):'Отправка не требовалась / не начата'}</small></td><td>{confirmationAmount(row.observedAmount)}</td><td>{row.difference===null?'—':row.difference>0?`+${row.difference}`:row.difference}</td>
++        <td><span className={`wb-confirmation__status wb-confirmation__status--${row.status.toLowerCase()}`}>{confirmationStatus(row.status)}</span><small>{date(row.checkedAt)}</small>{row.error&&<small className="wb-confirmation__error">{row.error}</small>}</td></tr>)}
++    </tbody></table></div>
++    {!data.rows.length&&<p>{data.summary.total?'Нет записей по выбранным фильтрам.':'Подтверждений пока нет. Они появятся после первого расчёта и проверки отправки остатков WB.'}</p>}
++    <footer><span>Найдено: {data.total} · Страница {page} из {Math.max(1,Math.ceil(data.total/data.pageSize))}</span><button className="icon-text-button" disabled={page<=1||busy||checking} onClick={()=>setPage(p=>p-1)}>Назад</button><button className="icon-text-button" disabled={page*data.pageSize>=data.total||busy||checking} onClick={()=>setPage(p=>p+1)}>Далее</button></footer></>}
++  </section>;
++}
+--- a/wms/apps/web/src/components/fbs/WbStockSettingsCards.css
++++ b/wms/apps/web/src/components/fbs/WbStockSettingsCards.css
+@@ -0,0 +1,18 @@
++.wb-stock-settings { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin:18px 0 24px; }
++.wb-stock-settings__card { min-width:0; border:1px solid #e2e8f0; border-radius:16px; background:#fff; padding:20px; box-shadow:0 4px 16px #0f172a04; }
++.wb-stock-settings__card h4 { display:flex; align-items:center; gap:10px; margin:0 0 16px; font-size:16px; color:#172438; }
++.wb-stock-settings__card h4 svg { color:#2864ee; flex-shrink:0; }
++.wb-stock-settings__card p { margin:10px 0; font-size:14px; line-height:1.6; color:#64748b; }
++.wb-stock-settings__card details { margin-top:14px; font-size:14px; line-height:1.6; }
++.wb-stock-settings__card summary { color:#2563eb; cursor:pointer; font-weight:600; }
++.wb-stock-settings__card label { display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-size:14px; line-height:1.5; }
++.wb-stock-settings__card button { margin-top:12px; display:inline-flex; align-items:center; justify-content:center; gap:8px; border:1px solid #dbe3ef; border-radius:10px; padding:10px 14px; background:#fff; color:#1e40af; font-weight:600; cursor:pointer; }
++.wb-stock-settings__card button:hover { background:#eff6ff; border-color:#93b4ff; }
++.wb-stock-settings__card input,.wb-stock-settings__card select { max-width:100%; border:1px solid #dbe3ef; border-radius:8px; padding:8px 10px; }
++.wb-stock-settings__status { display:inline-block; padding:6px 10px; border-radius:8px; background:#fff7ed; color:#9a3412; font-size:13px; }
++.wb-stock-settings__status.is-enabled { background:#ecfdf5; color:#047857; }
++.wb-stock-preview-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:16px; margin:24px 0 12px; }
++.wb-stock-preview-heading h4 { margin:0; }
++.wb-stock-preview-heading label { display:flex; align-items:center; gap:12px; font-size:14px; }
++.wb-stock-preview-note { font-size:14px; line-height:1.6; color:#64748b; }
++@media(max-width:1100px){.wb-stock-settings{grid-template-columns:1fr}.wb-stock-settings__card{padding:16px}}
+--- a/wms/apps/web/src/components/fbs/WbStockSettingsCards.spec.tsx
++++ b/wms/apps/web/src/components/fbs/WbStockSettingsCards.spec.tsx
+@@ -0,0 +1,12 @@
++import { expect, it } from 'vitest';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { WbStockSettingsCards } from './WbStockSettingsCards';
++// TEST: presentation preserves reserve and recommendation controls; confirmation gets its own navigation.
++it('separates controls into cards and links to confirmation when available', () => {
++ const html=renderToStaticMarkup(<WbStockSettingsCards reserve={<input aria-label="Резерв" defaultValue={3}/>} publicationEnabled recommendations={<button>Сохранить шаг</button>} onOpenConfirmation={()=>{}} />);
++ expect(html).toContain('Страховой резерв'); expect(html).toContain('value="3"'); expect(html).toContain('Сохранить шаг'); expect(html).toContain('Подтверждение остатков WB'); expect(html).not.toContain('<table'); expect(html).not.toContain('<details open');
++});
++it('does not advertise confirmation when capability is disabled',()=>{
++ const html=renderToStaticMarkup(<WbStockSettingsCards reserve="3 шт." publicationEnabled={false} recommendations="Мало данных"/>);
++ expect(html).toContain('Отправка выключена'); expect(html).not.toContain('Подтверждение остатков WB');
++});
+--- a/wms/apps/web/src/components/fbs/WbStockSettingsCards.tsx
++++ b/wms/apps/web/src/components/fbs/WbStockSettingsCards.tsx
+@@ -0,0 +1,19 @@
++import type { ReactNode } from 'react';
++import { ShieldCheck, Send, ChartNoAxesCombined, ArrowRight } from 'lucide-react';
++import './WbStockSettingsCards.css';
++
++// FIX: keep reserve, publication and recommendations readable without changing their controls.
++export function WbStockSettingsCards({ reserve, publicationEnabled, recommendations, onOpenConfirmation }: {
++  reserve: ReactNode; publicationEnabled: boolean; recommendations: ReactNode; onOpenConfirmation?: () => void;
++}) {
++  return <div className="wb-stock-settings">
++    <section className="wb-stock-settings__card"><h4><ShieldCheck size={20} /> Страховой резерв</h4>{reserve}</section>
++    <section className="wb-stock-settings__card"><h4><Send size={20} /> Отправка в WB</h4>
++      <strong className={`wb-stock-settings__status ${publicationEnabled ? 'is-enabled' : ''}`}>{publicationEnabled ? 'Отправка разрешена' : 'Отправка выключена'}</strong>
++      <p>{publicationEnabled ? 'Изменения доступного остатка учитываются при фоновом пересчёте.' : 'Сохранённые доли не будут выгружены.'}</p>
++      <details><summary>Как обновляются остатки</summary><p>При включённом автоуправлении учитываются сохранённые изменения после инвентаризации, актуализации короба, сортировки и перемещения. Перемещение между коробами одного склада не увеличивает общий остаток.</p></details>
++      {onOpenConfirmation && <button type="button" className="secondary-button" onClick={onOpenConfirmation}>Подтверждение остатков WB <ArrowRight size={16} /></button>}
++    </section>
++    <section className="wb-stock-settings__card"><h4><ChartNoAxesCombined size={20} /> Рекомендации по долям</h4>{recommendations}</section>
++  </div>;
++}
+--- a/wms/apps/web/src/lib/wbStockConfirmation.ts
++++ b/wms/apps/web/src/lib/wbStockConfirmation.ts
+@@ -0,0 +1,6 @@
++export type StockConfirmationRow = { id: string; warehouseId: string; skuId: string | null; chrtId: string; article: string | null; name: string | null; size: string | null; barcode: string | null; phase: string; status: string; calculatedAmount: number; sentAmount: number | null; observedAmount: number | null; difference: number | null; sentAt: string | null; checkedAt: string | null; updatedAt: string; error: string | null };
++export type StockConfirmationResult = { summary: { total: number; confirmed: number; mismatches: number; unconfirmed: number; pending: number; lastCheckedAt: string | null }; total: number; page: number; pageSize: number; generatedAt: string; accountName: string | null; warehouses: Array<{id: string; name: string; total: number}>; rows: StockConfirmationRow[] };
++export function confirmationAmount(value: number | null) { return value === null ? '—' : String(value); }
++export function confirmationStatus(status: string) {
++  return ({CONFIRMED:'Подтверждено',MISMATCH:'Расхождение',UNCONFIRMED:'Нет подтверждения',PLANNED:'Рассчитано',SENDING:'Отправляется',SENT:'Ожидает проверки'} as Record<string,string>)[status] ?? 'Нет подтверждения';
++}

@@ -1,7 +1,8 @@
+import { WbStockConfirmationView } from './WbStockConfirmationView';
 import { ArrowLeft } from 'lucide-react';
 import { StockManagementMenu } from './StockManagementMenu';
 import { useEffect, useState, type ReactNode } from 'react';
-import { fetchDuplicateGroupCapabilities, fetchMarketplaceAllocationCapabilities, fetchMarketplaceAllocation, fetchMarketplaceConnections, type AuthSession } from '../../lib/api';
+import { fetchWbStockConfirmationCapabilities, fetchDuplicateGroupCapabilities, fetchMarketplaceAllocationCapabilities, fetchMarketplaceAllocation, fetchMarketplaceConnections, type AuthSession } from '../../lib/api';
 import { FbsStockAllocationView } from './FbsStockAllocationView';
 import { MarketplaceAllocationView } from './MarketplaceAllocationView';
 import { DuplicateStockGroupsView } from './DuplicateStockGroupsView';
@@ -16,19 +17,21 @@ export function StockManagementView({ session, clientId, connectionId, renderSto
   const [cabinetMessage, setCabinetMessage] = useState('Проверка подключённых кабинетов…');
   const [wbConnectionId, setWbConnectionId] = useState(connectionId);
   const [reload, setReload] = useState(0);
+  const [confirmationEnabled, setConfirmationEnabled] = useState(false);
   const [duplicatesEnabled, setDuplicatesEnabled] = useState(false);
   useEffect(() => {
     let active = true;
-    setSection(''); setEnabled(null); setError(''); setDuplicatesEnabled(false);
+    setSection(''); setEnabled(null); setError(''); setDuplicatesEnabled(false); setConfirmationEnabled(false);
     void fetchMarketplaceAllocationCapabilities(session.accessToken).then(async r => {
       if (!active) return;
       if (r.enabled) {
-        const [settings, duplicateCapabilities] = await Promise.all([
+        const [settings, duplicateCapabilities, confirmationCapabilities] = await Promise.all([
           fetchMarketplaceAllocation(session.accessToken, clientId),
           fetchDuplicateGroupCapabilities(session.accessToken).catch(() => ({ enabled: false })),
+          fetchWbStockConfirmationCapabilities(session.accessToken).catch(() => ({ enabled: false })),
         ]);
         if (!active) return;
-        setDuplicatesEnabled(duplicateCapabilities.enabled);
+        setDuplicatesEnabled(duplicateCapabilities.enabled); setConfirmationEnabled(confirmationCapabilities.enabled);
         setCabinetMessage(settings.message || 'Подключены Wildberries и Ozon');
         setWbConnectionId(settings.connections.find(c => c.marketplace === 'WILDBERRIES')?.id ?? '');
       } else {
@@ -47,10 +50,11 @@ export function StockManagementView({ session, clientId, connectionId, renderSto
   return <section>
     <h3>Управление остатками</h3>
     {section ? <button type="button" className="icon-text-button stock-management-back" onClick={() => setSection('')}><ArrowLeft size={18} aria-hidden="true" /> Все разделы</button>
-      : <StockManagementMenu cabinetMessage={cabinetMessage} duplicatesEnabled={duplicatesEnabled} onSelect={setSection} />}
+      : <StockManagementMenu cabinetMessage={cabinetMessage} duplicatesEnabled={duplicatesEnabled} confirmationEnabled={confirmationEnabled} onSelect={setSection} />}
     {section === 'marketplaces' && <MarketplaceAllocationView key={clientId} session={session} clientId={clientId} />}
     {section === 'duplicates' && duplicatesEnabled && <DuplicateStockGroupsView key={clientId} session={session} clientId={clientId} />}
+    {section === 'confirmation' && confirmationEnabled && <WbStockConfirmationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} />}
     {section === 'stocks' && renderStocks()}
-    {section === 'warehouses' && <FbsStockAllocationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} />}
+    {section === 'warehouses' && <FbsStockAllocationView key={clientId} session={session} clientId={clientId} connectionId={wbConnectionId} onOpenConfirmation={confirmationEnabled ? () => setSection('confirmation') : undefined} />}
   </section>;
 }

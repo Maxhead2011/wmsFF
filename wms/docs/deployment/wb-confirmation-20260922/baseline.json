@@ -1,0 +1,30 @@
+{
+  "images": {
+    "api": {
+      "image": "sha256:321594a19938ef2fbd21def1c66b590d79d28bc041af0114ed9e2f3544e0137f"
+    },
+    "web": {
+      "image": "sha256:3876dcbcbc666f4462810ea7df0a56c38eff1e1140e15eb43e91f65035a93577"
+    }
+  },
+  "webBuilder": "logoff-web:stock-menu-20260921-build",
+  "files": {
+    "wms/apps/api/src/modules/administration/administration-internal-api.service.ts": "90615758d3d8ec35af24d8c1efe4f44126782186764cde1a7121dd01e6b95aa9",
+    "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts": "670b1c591bbee699f1384afbac7ca2813532cc9ac9dd6c6f4a9edff23635ecad",
+    "wms/apps/api/test/administration-internal-api.service.spec.ts": "39dbe83758405da92dfb54e0bf41794f1fae993c8c3f08377e507b49b16f46c0",
+    "wms/apps/web/src/components/fbs/FbsStockAllocationView.tsx": "51832e2fb61bcf5a394176572c21ef605d49a32bf79b54ff3a491b49e4001f76",
+    "wms/apps/web/src/components/fbs/StockManagementMenu.tsx": "439e06309da153b6fcf781477fe7c9b75f398aed10c0598868bef8ecb08198a1",
+    "wms/apps/web/src/components/fbs/StockManagementView.tsx": "42fe8be7ee4d2d5e91cad7079f682bfaefb424f5d07a508cb238713871e0773f",
+    "wms/apps/web/src/lib/api.ts": "51764e71ea8a298c62ff2322d9cf1355f88ed166786ed6d42b240a6f05067d53",
+    "wms/apps/api/src/modules/marketplace-connections/wb-stock-confirmation.controller.ts": null,
+    "wms/apps/api/src/modules/marketplace-connections/wb-stock-confirmation.service.ts": null,
+    "wms/apps/api/test/wb-stock-confirmation.service.spec.ts": null,
+    "wms/apps/web/src/components/fbs/WbStockConfirmationView.css": null,
+    "wms/apps/web/src/components/fbs/WbStockConfirmationView.spec.tsx": null,
+    "wms/apps/web/src/components/fbs/WbStockConfirmationView.tsx": null,
+    "wms/apps/web/src/components/fbs/WbStockSettingsCards.css": null,
+    "wms/apps/web/src/components/fbs/WbStockSettingsCards.spec.tsx": null,
+    "wms/apps/web/src/components/fbs/WbStockSettingsCards.tsx": null,
+    "wms/apps/web/src/lib/wbStockConfirmation.ts": null
+  }
+}
