@@ -111,16 +111,16 @@ final class KizLocationScreen {
         decisions.removeAllViews();
         if(lastResponse==null||lastResponse.reviews==null)return;
         if(lastResponse.reviews.isEmpty()&&lastResponse.found){
-            TextView hint=new TsdUi.Label(activity);hint.setText("Для решения нужно обращение из текущей сборки. Попросите сборщика отсканировать этот КИЗ в задании.");decisions.addView(hint);
+            TextView hint=new TsdUi.Label(activity);hint.setText("Для решения нужна одна однозначно найденная единица в выбранном филиале. Проверьте размещение и дубли КИЗа.");decisions.addView(hint);
             for(String caption:new String[]{"Разрешить использовать","Разрешить переклейку"}){
                 Button button=new TsdUi.Button(activity);button.setText(caption);button.setEnabled(false);decisions.addView(button);
             }
         }
         for(TsdKizLocationResponse.Review row:lastResponse.reviews){
             TextView title=new TsdUi.Label(activity);
-            title.setText(row.snapshot==null?"Обращение сборщика":"Заявка №"+row.snapshot.requestNumber+" · WB "+row.snapshot.orderId+"\n"+row.snapshot.workerName+" · "+row.snapshot.boxCode);
+            title.setText("UNIT".equals(row.scope)?"Разрешение по КИЗу для следующего отбора\n"+(row.snapshot==null?"":row.snapshot.productName+" · "+row.snapshot.boxCode):row.snapshot==null?"Обращение сборщика":"Заявка №"+row.snapshot.requestNumber+" · WB "+row.snapshot.orderId+"\n"+row.snapshot.workerName+" · "+row.snapshot.boxCode);
             decisions.addView(title);
-            if("APPROVED".equals(row.status)){TextView approved=new TsdUi.Label(activity);approved.setText("Разрешено: "+("RELABEL".equals(row.resolution)?"переклейка":"использование")+" · "+row.decidedByName);decisions.addView(approved);}
+            if("APPROVED".equals(row.status)||"CLAIMED".equals(row.status)){TextView approved=new TsdUi.Label(activity);approved.setText("Разрешено: "+("RELABEL".equals(row.resolution)?"КИЗ НЕОБХОДИМО ЗАМЕНИТЬ":"использование")+" · "+row.decidedByName);decisions.addView(approved);}
             for(String mode:new String[]{"REUSE","RELABEL"}){
                 Button button=new TsdUi.Button(activity);button.setText("REUSE".equals(mode)?"Разрешить использовать":"Разрешить переклейку");
                 button.setEnabled(!busy&&KizReviewPolicy.canDecide(BuildConfig.FLAVOR,session,row,mode));
@@ -156,7 +156,7 @@ final class KizLocationScreen {
                 String failure=problem;
                 handler.post(()->{if(closed||activity.isDestroyed())return;busy=false;dialog.setCancelable(true);
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(true);
-                    if(failure==null){row.status="APPROVED";row.resolution=mode;row.decidedByName="администратор";dialog.dismiss();result.setText("Решение сохранено. Сборщик может повторить сканирование старого КИЗа.");}
+                    if(failure==null){row.status="APPROVED";row.resolution=mode;row.decidedByName="администратор";dialog.dismiss();result.setText("Решение сохранено для следующего отбора этой единицы. "+("RELABEL".equals(mode)?"КИЗ НЕОБХОДИМО ЗАМЕНИТЬ":"Сборщик может повторить сканирование исходного КИЗа."));}
                     else error.setText(failure);
                     renderDecisions();
                 });

@@ -25,7 +25,7 @@ export function decideKizReuse(orders: OrderEvidence[], circulation: string | nu
   return 'REVIEW';
 }
 export const kizReuseMessage = (decision: ReuseDecision) => decision === 'RELABEL'
-  ? 'Нужна переклейка: использование этого КИЗа подтверждено. Нужен новый КИЗ.'
+  ? 'КИЗ НЕОБХОДИМО ЗАМЕНИТЬ. Переклейте эту единицу и отсканируйте новый КИЗ.'
   : decision === 'REVIEW' ? 'КИЗ связан с прежним заказом. Нужна проверка администратора; переклейка пока не подтверждена.'
   : 'Прежний заказ отменён до передачи, КИЗ не погашен. Можно продолжить сборку.';
 

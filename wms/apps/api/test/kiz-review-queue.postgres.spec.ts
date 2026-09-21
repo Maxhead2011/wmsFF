@@ -64,3 +64,55 @@ it.skipIf(!db)('persists one concurrent case, audits one decision, and replaces 
   expect((await p.stockBalance.findUniqueOrThrow({where:{balanceKey:id('stock')}})).quantity).toBe(1);
   expect(await p.stockMovement.count({where:{clientId:task.clientId}})).toBe(0);
 },30000);
+
+// TEST: approve a physical KIZ before any picking task, then claim it only once at next picking.
+it.skipIf(!db)('authorizes without a request and retains mandatory relabel through the next picking',async()=>{
+  const p=db!;
+  for(const name of ['WMS_KIZ_REUSE_EVIDENCE_ENABLED','WMS_KIZ_REVIEW_QUEUE_ENABLED','WMS_FBS_KIZ_RELABEL_ENABLED'])vi.stubEnv(name,'true');
+  const prefix=randomUUID();const id=(s:string)=>prefix+'-'+s;
+  await p.user.create({data:{id:id('user'),name:'Admin',email:id('mail')+'@example.test',passwordHash:'NO-LOGIN'}});
+  await p.client.create({data:{id:id('client'),code:id('client'),name:'Test client'}});
+  await p.warehouse.create({data:{id:id('wh'),code:id('wh'),name:'Test warehouse'}});
+  await p.sku.create({data:{id:id('sku'),clientId:id('client'),internalSku:'TEST',name:'Test SKU'}});
+  await p.box.create({data:{id:id('box'),clientId:id('client'),warehouseId:id('wh'),code:id('box')}});
+  await p.clientRequest.create({data:{id:id('request'),clientId:id('client'),warehouseId:id('wh'),type:'OUTBOUND',status:'IN_WORK',title:'Test'}});
+  await p.stockBalance.create({data:{balanceKey:id('stock'),clientId:id('client'),warehouseId:id('wh'),skuId:id('sku'),boxId:id('box'),status:'AVAILABLE',quantity:1}});
+  const old='010468099259002221'+prefix.replaceAll('-','').slice(0,13)+'\u001d91EE12\u001d92OLD';
+  const next='010468099259765621'+prefix.replaceAll('-','').slice(-13)+'\u001d91EE12\u001d92NEW';
+  await p.productMark.create({data:{id:id('mark'),clientId:id('client'),skuId:id('sku'),boxId:id('box'),value:old,status:'AVAILABLE'}});
+
+  const user:any={id:id('user'),name:'Admin',deviceCode:'test',roleCodes:['ADMIN'],permissionCodes:[],clientScopeMode:'LIMITED',clientIds:[id('client')],writableClientIds:[id('client')],activeWarehouseId:id('wh'),warehouseIds:[id('wh')],writableWarehouseIds:[id('wh')]};
+  let evidence:any={decision:'REVIEW',checkedAt:new Date().toISOString(),history:[{orderId:'foreign',event:'other branch',request:{warehouseId:'other'}}],orders:[],circulation:null};
+  vi.mocked(inspectKizReuse).mockImplementation(async()=>evidence);
+  const service=new KizReviewQueue(p as any,new ClientScopeService());
+
+  const unitId='unit:'+id('mark');
+  const choices=await service.unitChoices(old.split('\u001d')[0],user);
+  expect(choices[0]).toMatchObject({id:unitId,scope:'UNIT',status:'OPEN',active:true});
+  await expect(service.decide(unitId,'REUSE','Проверено вручную',true,{...user,writableClientIds:[]})).rejects.toThrow();
+  await service.decide(unitId,'REUSE','Проверено вручную',true,user);
+  expect(await p.fbsTsdAssembly.count({where:{clientId:id('client')}})).toBe(0);
+  const task=await p.fbsTsdAssembly.create({data:{id:id('task'),clientId:id('client'),connectionId:id('conn'),orderId:'1',requestId:id('request'),requestItemId:id('item'),skuId:id('sku'),
+    productName:'Test SKU',barcodes:['123'],storageBoxes:[],deviceCode:'test',workerUserId:id('user'),workerName:'Picker',startedAt:new Date(),boxId:id('box'),boxCode:id('box'),barcode:'123',requiresKiz:true}});
+
+  expect(await queueKizReview(p as any,task.clientId,old,task.id,evidence)).toBe('ALLOW');
+  const other=await p.fbsTsdAssembly.create({data:{...task,id:id('other-task'),orderId:'2'}});
+  await expect(queueKizReview(p as any,task.clientId,old,other.id,evidence)).rejects.toThrow('другой сборке');
+  // Fresh retirement invalidates reuse instead of sending the previous code to WB.
+  evidence={...evidence,decision:'RELABEL',circulation:'RETIRED'};
+  expect(await queueKizReview(p as any,task.clientId,old,task.id,evidence)).toBe('REVIEW');
+  await expect(service.decide(unitId,'REUSE','Проверено вручную',true,user)).rejects.toThrow('только переклейку');
+  // Newly confirmed retirement upgrades an obsolete reuse permission to mandatory replacement.
+  expect((await service.unitChoices(old.split('\u001d')[0],user))[0].status).toBe('OPEN');
+  await service.decide(unitId,'RELABEL','Подтверждено погашение',true,user);
+  evidence={...evidence,decision:'REVIEW',circulation:null};
+  expect(await queueKizReview(p as any,task.clientId,old,task.id,evidence)).toBe('RELABEL');
+  const lease=()=>{};
+  await p.$transaction(tx=>proposePhysicalKizRelabel(tx,task,old,user,lease));
+  const fresh=await p.fbsTsdAssembly.findUniqueOrThrow({where:{id:task.id}});
+  const proposal=await readPhysicalKizRelabel(p,fresh,user);expect(proposal).toBeTruthy();
+  await expect(p.$transaction(tx=>applyPhysicalKizRelabel(tx,fresh,user,proposal!.id,old,lease))).rejects.toThrow();
+  await p.$transaction(tx=>applyPhysicalKizRelabel(tx,fresh,user,proposal!.id,next,lease));
+  expect((await p.kizReviewCase.findFirstOrThrow({where:{taskId:'UNIT:'+id('mark')}})).status).toBe('USED');
+  expect((await p.stockBalance.findUniqueOrThrow({where:{balanceKey:id('stock')}})).quantity).toBe(1);
+},30000);

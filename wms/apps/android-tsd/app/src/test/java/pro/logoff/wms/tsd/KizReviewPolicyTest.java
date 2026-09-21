@@ -6,6 +6,13 @@ import pro.logoff.wms.tsd.auth.TsdSession;
 import pro.logoff.wms.tsd.network.TsdKizLocationResponse.Review;
 
 public class KizReviewPolicyTest {
+    // TEST: a scan can be authorized without a picker request or task snapshot.
+    @Test public void standaloneKizNeedsNoAssembly(){
+        Review r=new Review();r.id="unit:mark";r.scope="UNIT";r.active=true;r.status="OPEN";r.decision="REVIEW";
+        assertTrue(KizReviewPolicy.canDecide("logoff",user("ADMIN"),r,"REUSE"));
+        r.decision="RELABEL";assertTrue(KizReviewPolicy.canDecide("logoff",user("OWNER"),r,"RELABEL"));
+        r.status="CLAIMED";assertFalse(KizReviewPolicy.canDecide("logoff",user("OWNER"),r,"RELABEL"));
+    }
     private TsdSession user(String role){return new TsdSession("token","Bearer","dev","TSD","u","Name",Collections.singletonList(role));}
     @Test public void provenUseOnlyOffersRelabelToAdministrators(){
         // TEST: both choices exist, but permissions and evidence determine the available action.

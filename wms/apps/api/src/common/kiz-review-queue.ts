@@ -13,6 +13,15 @@ const json = (value: unknown): Prisma.InputJsonValue => JSON.parse(JSON.stringif
 const identityOf = (value: string) => physicalKizIdentity(value.replace(/^\(01\)(\d{14})\(21\)/,(_,gtin)=>`01${gtin}21`).replace(/^(01\d{14})\u001d21/,(_,gtin)=>`${gtin}21`));
 const prefixesOf = (identity: string) => [identity,']d2'+identity,']D2'+identity,`(01)${identity.slice(2,16)}(21)${identity.slice(18)}`];
 type Evidence = Awaited<ReturnType<typeof inspectKizReuse>>;
+// FIX: UNIT records deliberately have no request; the namespace separates them from assembly cases.
+const unitKey = (markId: string) => `UNIT:${markId}`;
+export const unitReviewContext = (m: {id:string;clientId:string;skuId:string;boxId:string|null;status:string;updatedAt:Date}) =>
+  createHash('sha256').update(JSON.stringify([m.id,m.clientId,m.skuId,m.boxId,m.status,m.updatedAt])).digest('hex');
+async function unitMark(tx: Prisma.TransactionClient, clientId: string, identity: string) {
+  const marks=await tx.productMark.findMany({where:{clientId,OR:prefixesOf(identity).map(p=>({value:{startsWith:p}}))},include:{box:true,sku:true}});
+  const exact=marks.filter(m=>identityOf(m.value)===identity);
+  return exact.length===1?exact[0]:null;
+}
 export const reviewContext = (t: FbsTsdAssembly) => createHash('sha256').update(JSON.stringify([
   t.id,t.clientId,t.connectionId,t.requestId,t.orderId,t.skuId,t.boxId,t.workerUserId,t.startedAt,t.createdAt,
 ])).digest('hex');
@@ -47,11 +56,37 @@ export async function queueKizReview(db: PrismaService, clientId: string, kiz: s
     if (!request?.warehouseId || request.clientId!==clientId || closed.includes(request.status) || task.status!=='IN_PROGRESS')
       throw new ConflictException('Заявка больше не доступна для отбора.');
     const key={taskId_kizIdentity:{taskId,kizIdentity:identity}};
+    // FIX: claim a standalone permission once, atomically, for the next actual picking attempt.
+    const mark=await unitMark(tx,clientId,identity);
+    if(mark && mark.status==='AVAILABLE' && mark.skuId===task.skuId && mark.boxId===task.boxId && mark.box?.warehouseId===request.warehouseId) {
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "KizReviewCase" WHERE "taskId"=${unitKey(mark.id)} FOR UPDATE`);
+      const independent=await tx.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:unitKey(mark.id),kizIdentity:identity}}});
+      if(independent?.context===unitReviewContext(mark) && ['APPROVED','CLAIMED'].includes(independent.status)) {
+        const snapshot=independent.snapshot as Record<string,unknown>;
+        const claimed=typeof snapshot.claimedTaskId==='string'?snapshot.claimedTaskId:null;
+        const owner=claimed && claimed!==taskId?await tx.fbsTsdAssembly.findUnique({where:{id:claimed}}):null;
+        if(owner && (owner.status==='IN_PROGRESS'||owner.kiz)) throw new ConflictException('Разрешение по КИЗу уже используется в другой сборке.');
+        const allowed=independent.resolution==='RELABEL'?'RELABEL':permittedReviewAction({...independent,status:'APPROVED'},unitReviewContext(mark),evidence.decision);
+        if(allowed) {
+          const data={clientId,warehouseId:request.warehouseId,requestId:task.requestId,kiz,context:reviewContext(task),decision:evidence.decision,
+            status:'APPROVED',resolution:independent.resolution,reason:independent.reason,decidedById:independent.decidedById,
+            decidedByName:independent.decidedByName,decidedAt:independent.decidedAt,evidence:json(evidence),usedAt:null,
+            snapshot:json({requestNumber:request.number,orderId:task.orderId,productName:task.productName,boxCode:task.boxCode,workerName:task.workerName,unitApprovalId:independent.id})};
+          await tx.kizReviewCase.upsert({where:key,create:{...data,taskId,kizIdentity:identity},update:data});
+          if(independent.status!=='CLAIMED'||claimed!==taskId) {
+            await tx.kizReviewCase.update({where:{id:independent.id},data:{status:'CLAIMED',snapshot:json({...snapshot,claimedTaskId:taskId})}});
+            await tx.auditLog.create({data:{userId:task.workerUserId,action:'KIZ_UNIT_PERMISSION_CLAIMED',entity:'KizReviewCase',entityId:independent.id,payload:json({taskId,kizIdentity:identity})}});
+          }
+          return allowed;
+        }
+      }
+    }
     const previous=await tx.kizReviewCase.findUnique({where:key});
     if (evidence.decision==='ALLOW' && !previous) return 'ALLOW';
     const context=reviewContext(task);
-    const permission=permittedReviewAction(previous,context,evidence.decision);
-    const reset=previous?.context!==context || (previous?.resolution==='REUSE' && evidence.decision==='RELABEL') ||
+    const staleUnitPermission=Boolean((previous?.snapshot as Record<string,unknown>|undefined)?.unitApprovalId);
+    const permission=staleUnitPermission?null:permittedReviewAction(previous,context,evidence.decision);
+    const reset=staleUnitPermission || previous?.context!==context || (previous?.resolution==='REUSE' && evidence.decision==='RELABEL') ||
       (previous?.resolution==='RELABEL' && evidence.decision!=='RELABEL');
     const status=permission ? 'APPROVED' : evidence.decision==='ALLOW' ? 'RESOLVED' : 'OPEN';
     const common={clientId,warehouseId:request.warehouseId,requestId:task.requestId,kiz,context,decision:evidence.decision,status,
@@ -68,9 +103,25 @@ export async function queueKizReview(db: PrismaService, clientId: string, kiz: s
 export class KizReviewQueue {
   constructor(private readonly db: PrismaService, private readonly clients: ClientScopeService) {}
   async forKiz(identity: string, user: AuthUser) { return (await this.list(user,undefined,identity)).items; }
+  async unitChoices(identity: string, user: AuthUser) {
+    requireReviewAdmin(user);
+    const marks=await this.db.productMark.findMany({where:{clientId:this.clients.resolveClientFilter(user),box:{warehouseId:user.activeWarehouseId!},
+      OR:prefixesOf(identity).map(p=>({value:{startsWith:p}}))},include:{box:true,sku:true}});
+    const exact=marks.filter(m=>identityOf(m.value)===identity);
+    if(exact.length!==1)return [];
+    const mark=exact[0];
+    const evidence=await inspectKizReuse(this.db,mark.clientId,mark.value);
+    const saved=await this.db.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:unitKey(mark.id),kizIdentity:identity}}});
+    const current=saved?.context===unitReviewContext(mark)&&['APPROVED','CLAIMED'].includes(saved.status)&&
+      !(saved.resolution==='REUSE'&&evidence.decision==='RELABEL')?saved:null;
+    return [{id:`unit:${mark.id}`,kizIdentity:identity,status:current?.status??'OPEN',decision:evidence.decision,
+      resolution:current?.resolution,decidedByName:current?.decidedByName,active:mark.status==='AVAILABLE'&&!['archived','deleted'].includes(mark.box?.status??'deleted'),
+      snapshot:{scope:'UNIT',productName:mark.sku.name,boxCode:mark.box?.code},scope:'UNIT'}];
+  }
   async list(user: AuthUser, cursor?: string, identity?: string) {
     requireReviewAdmin(user);
     const items=await this.db.kizReviewCase.findMany({where:{warehouseId:user.activeWarehouseId!,clientId:this.clients.resolveClientFilter(user),
+      NOT:{taskId:{startsWith:'UNIT:'}},
       status:{in:['OPEN','APPROVED']},...(identity?{kizIdentity:identity}:{})},orderBy:[{createdAt:'desc'},{id:'desc'}],take:51,...(cursor?{cursor:{id:cursor},skip:1}:{})});
     const tasks=await this.db.fbsTsdAssembly.findMany({where:{id:{in:items.map(r=>r.taskId)}}});
     const rows=items.slice(0,50).map(({kiz,...r})=>{
@@ -88,6 +139,7 @@ export class KizReviewQueue {
       throw new ForbiddenException('Нет права изменять данные выбранного филиала.');
     if (!['REUSE','RELABEL'].includes(resolution) || !confirmed || reason.trim().length<5 || reason.length>1000)
       throw new BadRequestException('Подтвердите проверку единицы и укажите основание решения (от 5 до 1000 символов).');
+    if(id.startsWith('unit:'))return this.decideUnit(id.slice(5),resolution,reason,user);
     const row=await this.db.kizReviewCase.findFirst({where:{id,warehouseId:user.activeWarehouseId!,clientId:this.clients.resolveClientFilter(user)}});
     if (!row) throw new NotFoundException('Обращение не найдено в выбранном филиале.');
     this.clients.requireClientAccess(user,row.clientId,'write');
@@ -136,6 +188,45 @@ export class KizReviewQueue {
       return {id,status:'APPROVED',resolution};
     });
   }
+  private async decideUnit(markId:string,resolution:'REUSE'|'RELABEL',reason:string,user:AuthUser) {
+    const initial=await this.db.productMark.findFirst({where:{id:markId,clientId:this.clients.resolveClientFilter(user),box:{warehouseId:user.activeWarehouseId!}}});
+    if(!initial)throw new NotFoundException('КИЗ не найден в выбранном филиале.');
+    this.clients.requireClientAccess(user,initial.clientId,'write');
+    const identity=identityOf(initial.value);
+    if(!identity)throw new BadRequestException('КИЗ не распознан.');
+    const evidence=await inspectKizReuse(this.db,initial.clientId,initial.value);
+    if(resolution==='REUSE'&&evidence.decision==='RELABEL')throw new BadRequestException('Подтверждена продажа или погашение. Можно разрешить только переклейку.');
+    if(resolution==='RELABEL'&&evidence.decision!=='RELABEL')throw new BadRequestException('Необходимость переклейки не подтверждена.');
+    return this.db.$transaction(async tx=>{
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ProductMark" WHERE "id"=${markId} FOR UPDATE`);
+      const mark=await unitMark(tx,initial.clientId,identity);
+      if(!mark||mark.id!==markId||unitReviewContext(mark)!==unitReviewContext(initial)||mark.status!=='AVAILABLE'||
+        !mark.box||mark.box.clientId!==mark.clientId||mark.box.warehouseId!==user.activeWarehouseId||['archived','deleted'].includes(mark.box.status))
+        throw new ConflictException('Единица изменилась или недоступна. Повторите проверку КИЗа.');
+      const balance=await tx.stockBalance.aggregate({where:{clientId:mark.clientId,warehouseId:user.activeWarehouseId!,skuId:mark.skuId,boxId:mark.boxId,status:'AVAILABLE'},_sum:{quantity:true}});
+      if((balance._sum.quantity??0)<1)throw new ConflictException('Нет доступного остатка этой единицы.');
+      const links=(await tx.fbsTsdAssembly.findMany({where:{clientId:mark.clientId,OR:prefixesOf(identity).map(p=>({kiz:{startsWith:p}}))}})).filter(t=>identityOf(t.kiz??'')===identity);
+      if(resolution==='REUSE'&&links.length)throw new ConflictException('КИЗ ещё привязан к другой сборке. Сначала разберите прежнюю заявку.');
+      if(resolution==='RELABEL'&&links.length){
+        const ids=[...new Set(links.map(t=>t.requestId))];
+        if(links.some(t=>!['COMPLETED','RETURN_REQUIRED'].includes(t.status))||await tx.clientRequest.count({where:{id:{in:ids},clientId:mark.clientId,status:{in:closed}}})!==ids.length)
+          throw new ConflictException('КИЗ занят незавершённой сборкой.');
+      }
+      const key={taskId_kizIdentity:{taskId:unitKey(markId),kizIdentity:identity}};
+      const old=await tx.kizReviewCase.findUnique({where:key});
+      if(old?.context===unitReviewContext(mark)&&['APPROVED','CLAIMED'].includes(old.status)&&
+        !(old.resolution==='REUSE'&&resolution==='RELABEL'&&evidence.decision==='RELABEL')) {
+        if(old.resolution!==resolution)throw new ConflictException('По этому КИЗу уже принято другое решение.');
+        return {id:`unit:${markId}`,status:old.status,resolution};
+      }
+      const data={clientId:mark.clientId,warehouseId:user.activeWarehouseId!,requestId:'',kiz:mark.value,context:unitReviewContext(mark),status:'APPROVED',
+        decision:evidence.decision,resolution,reason:reason.trim(),decidedById:user.id,decidedByName:user.name,decidedAt:new Date(),usedAt:null,evidence:json(evidence),
+        snapshot:json({scope:'UNIT',markId,skuId:mark.skuId,boxId:mark.boxId,boxCode:mark.box.code,productName:mark.sku.name})};
+      const row=await tx.kizReviewCase.upsert({where:key,create:{...data,taskId:unitKey(markId),kizIdentity:identity},update:data});
+      await tx.auditLog.create({data:{userId:user.id,action:'KIZ_UNIT_PERMISSION_APPROVED',entity:'KizReviewCase',entityId:row.id,payload:json({resolution,reason:reason.trim(),markId,kizIdentity:identity,evidence})}});
+      return {id:`unit:${markId}`,status:'APPROVED',resolution};
+    });
+  }
 }
 
 // FIX: acceptance consumes only this task's approval; uncertain network retries remain possible beforehand.
@@ -143,6 +234,17 @@ export async function finishKizReview(tx: Prisma.TransactionClient, task: FbsTsd
   if (!kizReviewEnabled()) return;
   await tx.kizReviewCase.updateMany({where:{taskId:task.id,kizIdentity:identityOf(kiz),context:reviewContext(task),
     status:'APPROVED',resolution},data:{status:'USED',usedAt:new Date()}});
+  await tx.kizReviewCase.updateMany({where:{clientId:task.clientId,kizIdentity:identityOf(kiz),taskId:{startsWith:'UNIT:'},status:'CLAIMED',resolution,
+    snapshot:{path:['claimedTaskId'],equals:task.id}},data:{status:'USED',usedAt:new Date()}});
+}
+export async function reusePermissionForProposal(tx:Prisma.TransactionClient,task:FbsTsdAssembly,kiz:string) {
+  if(!kizReviewEnabled())return false;
+  const identity=identityOf(kiz);
+  if(!identity)return false;
+  if(await tx.kizReviewCase.findFirst({where:{taskId:task.id,kizIdentity:identity,context:reviewContext(task),status:'APPROVED',resolution:'REUSE'}}))return true;
+  const mark=await unitMark(tx,task.clientId,identity);
+  if(!mark||mark.skuId!==task.skuId||mark.boxId!==task.boxId||mark.status!=='AVAILABLE')return false;
+  return Boolean(await tx.kizReviewCase.findFirst({where:{taskId:unitKey(mark.id),kizIdentity:identity,context:unitReviewContext(mark),status:{in:['APPROVED','CLAIMED']},resolution:'REUSE'}}));
 }
 export async function approvedUnitRelabel(tx: Prisma.TransactionClient, task: FbsTsdAssembly, kiz: string) {
   if (!kizReviewEnabled()) return false;

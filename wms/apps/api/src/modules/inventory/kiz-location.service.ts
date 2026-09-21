@@ -82,7 +82,7 @@ export class KizLocationService {
         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
       };
     }));
-    const reviews=kizReviewEnabled() ? await new KizReviewQueue(this.prisma,this.clients).forKiz(identity,user) : undefined;
+    const reviews=kizReviewEnabled() ? await new KizReviewQueue(this.prisma,this.clients).unitChoices(identity,user) : undefined;
     return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches, reviews };
   }
 }
