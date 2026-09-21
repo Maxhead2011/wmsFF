@@ -7,6 +7,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
+import { packedRequestShippingEnabled } from '../stock/packed-shipping-sources';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
@@ -1389,7 +1390,11 @@ export class ClientRequestsService {
         comment: true,
         items: { select: { id: true }, take: 1 },
         packages: {
-          where: { comment: 'Фактический короб из аварийного Excel' },
+          // FIX: ordinary packed outbound requests also have recorded shipping stock.
+          where: { OR: [
+            { comment: 'Фактический короб из аварийного Excel' },
+            ...(packedRequestShippingEnabled() ? [{ request: { type: ClientRequestType.OUTBOUND } }] : []),
+          ] },
           select: { id: true },
           take: 1,
         },
@@ -1673,7 +1678,7 @@ export class ClientRequestsService {
         dto.stockSources,
       );
     } else if (usesRecordedPackages) {
-      // Аварийное закрытие уже зафиксировало фактические короба, их состав и складские движения.
+      // FIX: упаковка уже зафиксировала фактические короба, их состав и складские движения.
       // При сдаче повторно ничего не подбираем из остатков: начисления и логистика берутся из этих упаковочных мест.
       await this.stockOperations.shipClientRequest(fulfillment, user);
     } else if (dto.stockSources?.length) {

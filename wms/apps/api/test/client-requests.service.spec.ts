@@ -1,11 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { ClientRequestEventType, ClientRequestPriority, ClientRequestStatus, ClientRequestType, MarketplaceType } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestsService } from '../src/modules/client-requests/client-requests.service';
 
 describe('ClientRequestsService', () => {
+  afterEach(() => vi.unstubAllEnvs());
   it('фильтрует список заявок по доступным клиентам пользователя', async () => {
     const prisma = {
       clientRequest: {
@@ -691,10 +692,12 @@ describe('ClientRequestsService', () => {
     );
   });
 
-  it('сдает аварийно упакованную заявку по ее фактическим коробам без повторного ручного списания', async () => {
+  // TEST: a regular packed FBO request must use its saved packages, without another stock pick.
+  it.each([null, 'Фактический короб из аварийного Excel'])('сдает упакованную заявку с комментарием короба %s без повторного подбора', async (packageComment) => {
+    vi.stubEnv('WMS_PACKED_REQUEST_SHIPPING_ENABLED', 'true');
     const stock = {
       shipClientRequest: vi.fn().mockResolvedValue({ status: 'ALREADY_APPLIED', requestId: 'request-1' }),
-      shipClientRequestFromCurrentStock: vi.fn(),
+      shipClientRequestFromCurrentStock: vi.fn().mockRejectedValue(new BadRequestException('Требуется повторный ручной ввод упаковки')),
     };
     const tx = {
       clientRequest: {
@@ -717,14 +720,17 @@ describe('ClientRequestsService', () => {
     };
     const prisma = {
       clientRequest: {
-        findUnique: vi.fn().mockResolvedValue({
+        findUnique: vi.fn().mockImplementation(async (query) => ({
           id: 'request-1',
           clientId: 'client-1',
           type: ClientRequestType.OUTBOUND,
           status: ClientRequestStatus.PACKED,
           title: 'Аварийная отгрузка',
-          packages: [{ id: 'emergency-package-1' }],
-        }),
+          comment: 'Создано из Excel: поставка.xlsx',
+          packages: (query.select.packages.where.OR ?? [query.select.packages.where]).some(
+            (filter) => filter.request?.type === 'OUTBOUND' || filter.comment === packageComment,
+          ) ? [{ id: 'packed-package-1', comment: packageComment }] : [],
+        })),
       },
       $transaction: vi.fn((callback) => callback(tx)),
     };

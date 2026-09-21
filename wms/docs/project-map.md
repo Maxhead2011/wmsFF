@@ -39,6 +39,14 @@
 
 ## Основные связи данных
 
+Сдача упакованной FBO-заявки: `ClientRequestsService.updateStatus` →
+`StockOperationsService.shipClientRequest` → `stock/packed-shipping-sources.ts`.
+Флаг `WMS_PACKED_REQUEST_SHIPPING_ENABLED` по умолчанию выключен; требует таблицы
+`FboAssembly` установленного двухэтапного FBO-модуля. При включении завершённая
+сборка списывается по сохранённым отгрузочным коробам после сверки с её движениями
+SHIPPING. Недостаток фактического остатка блокирует сдачу, автоматического восстановления
+нет. Тесты: `packed-shipping-sources.spec.ts`, `client-requests.service.spec.ts`.
+
 Подготовка распределения WB/Ozon: `modules/marketplace-connections/marketplace-allocation.{controller,service}.ts`
 и `marketplace-allocation.ts`; web `components/fbs/StockManagementView.tsx`,
 `MarketplaceAllocationView.tsx`, `MarketplaceAllocationBindings.tsx` (каталоги и подтверждение пар).

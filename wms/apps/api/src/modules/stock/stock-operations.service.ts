@@ -1,4 +1,5 @@
 import { fbsWbAccountingEnabled } from '../../common/fbs-wb-accounting';
+import { readPackedShippingSources } from './packed-shipping-sources';
 import { readWbShippedUnits, withoutWbShippedItems, type WbShippedUnit } from './fbs-wb-shipped-units';
 import { WB_KIZ_SHIPMENT_PREFIX } from '../marketplace-connections/fbs-wb-kiz-shipment';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -2054,14 +2055,16 @@ export class StockOperationsService {
         throw new BadRequestException('Отгрузка доступна только после упаковки заявки.');
       }
 
-      await this.ensurePackedStockIsInShipping(
+      // FIX: completed FBO ships only its proved destination boxes, never another available unit.
+      const packedSources = await readPackedShippingSources(tx, request, operationWarehouseId);
+      if (!packedSources) await this.ensurePackedStockIsInShipping(
         tx,
         request,
         `complete-pack-before-ship:${request.id}:${baseKey}`,
         operationWarehouseId,
       );
 
-      const savedSelections = await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
+      const savedSelections = packedSources ?? await this.loadRequestBoxSelections(tx, request.id, operationWarehouseId);
       const plan = await this.planWithWbShipments(tx, request, savedSelections, operationWarehouseId, async (remaining, selections) => {
         return selections.length
         ? await this.planRequestAllocationsFromSelections(
