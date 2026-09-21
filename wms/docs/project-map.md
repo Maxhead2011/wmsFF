@@ -45,6 +45,11 @@
 Данные таблиц запрашиваются при открытии раздела, каталоги — отдельно по кнопке.
 Границы текущего этапа и флаг: [распределение WB/Ozon](marketplace-allocation.md).
 Этот механизм пока не отправляет остатки и не заменяет существующий WB publisher.
+Расчёт дублей: `modules/marketplace-connections/duplicate-stock-plan.ts`,
+тест `apps/api/test/duplicate-stock-plan.spec.ts`. Это пока чистый расчёт без подключения
+к экрану/публикации. Существующая переклейка: `ClientArticleMapping`,
+`FbsStockPublication.relabelManualAmount`, `MarketplaceConnectionsService.calculateFbsRelabelStockPlan`.
+Общий сценарий остатков, долей и безопасного включения описан в том же документе WB/Ozon.
 
 | Сущности Prisma | Что проверять |
 | --- | --- |
