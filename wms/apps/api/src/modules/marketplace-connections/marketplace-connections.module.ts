@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { DuplicateStockGroupsController } from './duplicate-stock-groups.controller';
+import { DuplicateStockGroupsService } from './duplicate-stock-groups.service';
 import { MarketplaceAllocationController } from './marketplace-allocation.controller';
 import { MarketplaceAllocationService } from './marketplace-allocation.service';
 import { AuthModule } from '../auth/auth.module';
@@ -19,8 +21,9 @@ import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule],
-  controllers: [MarketplaceAllocationController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+  controllers: [DuplicateStockGroupsController, MarketplaceAllocationController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [
+    DuplicateStockGroupsService,
     MarketplaceAllocationService,
     MarketplaceStockControlService,
     // FIX: keep current stock-control registration when adding independent repeats.

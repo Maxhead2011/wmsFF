@@ -45,6 +45,18 @@
 Данные таблиц запрашиваются при открытии раздела, каталоги — отдельно по кнопке.
 Границы текущего этапа и флаг: [распределение WB/Ozon](marketplace-allocation.md).
 Этот механизм пока не отправляет остатки и не заменяет существующий WB publisher.
+Расчёт дублей: `modules/marketplace-connections/duplicate-stock-plan.ts`,
+тест `apps/api/test/duplicate-stock-plan.spec.ts`. Редактор и предпросмотр групп:
+`duplicate-stock-groups.{controller,service}.ts`, `duplicate-stock-groups.ts`,
+web `components/fbs/DuplicateStockGroupsView.tsx`, `lib/duplicateStockGroups.ts`.
+Флаг редактора `WMS_DUPLICATE_STOCK_GROUPS_ENABLED` выключен по умолчанию.
+Активные группы: `duplicate-stock-runtime.ts`, отдельный флаг
+`WMS_DUPLICATE_STOCK_PUBLICATION_ENABLED`, явное включение групп администратором.
+Общий резерв — существующие настройки `marketplace.wbReserve.client.<clientId>`.
+Серверная интеграция: [порядок выпуска](deployment/duplicate-stock-20260921/README.md).
+Существующая переклейка: `ClientArticleMapping`,
+`FbsStockPublication.relabelManualAmount`, `MarketplaceConnectionsService.calculateFbsRelabelStockPlan`.
+Общий сценарий остатков, долей и безопасного включения описан в том же документе WB/Ozon.
 
 | Сущности Prisma | Что проверять |
 | --- | --- |
