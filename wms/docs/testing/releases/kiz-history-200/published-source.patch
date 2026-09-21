@@ -1,0 +1,718 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 199 // FIX: show WB sticker digits above picking completion.
+-            versionName = "0.1.199-fbs-step-voice"
++            versionCode = 200 // FIX: show WB sticker digits above picking completion.
++            versionName = "0.1.200-kiz-history"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizLocationPolicy.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/KizLocationPolicy.java
+@@ -42,6 +42,17 @@
+             text.append("\nФилиал: ").append(or(match.warehouse, "не указан"));
+             text.append("\nКлиент: ").append(or(match.client, "не указан"));
+             text.append("\nСтатус: ").append(status(match.status));
++            // FIX: only server evidence determines relabel/review; AVAILABLE does not erase history.
++            if (match.reuse != null) {
++                text.append("\nПроверка использования: ").append(or(match.reuse.message, "Нужна проверка"));
++                if (match.reuse.history != null) for (TsdKizLocationResponse.History h : match.reuse.history) {
++                    text.append("\nЗаявка: ").append(h.request == null ? "не указана" : String.valueOf(h.request.number));
++                    text.append(" · Заказ WB: ").append(or(h.orderId, "не указан"));
++                    text.append("\n").append(or(h.event, "Событие")).append(": ").append(date(h.at));
++                    if (present(h.worker)) text.append("\nСканировал: ").append(h.worker);
++                    if (present(h.supplyId)) text.append("\nПоставка WB: ").append(h.supplyId);
++                }
++            }
+             if (present(match.locationWarning)) text.append("\n").append(match.locationWarning);
+         }
+         return text.toString();
+@@ -55,6 +66,16 @@
+         if ("QUARANTINE".equals(value)) return "Карантин";
+         return or(value, "не указан");
+     }
++    private static String date(String value) {
++        if (!present(value)) return "время не зафиксировано";
++        try {
++            java.text.SimpleDateFormat source = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.ROOT);
++            source.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
++            java.text.SimpleDateFormat display = new java.text.SimpleDateFormat("dd.MM.yyyy HH:mm:ss", java.util.Locale.ROOT);
++            display.setTimeZone(java.util.TimeZone.getTimeZone("Europe/Moscow"));
++            return display.format(source.parse(value)) + " МСК";
++        } catch (Exception error) { return value; }
++    }
+     private static boolean present(String value) { return value != null && !value.trim().isEmpty(); }
+     private static String or(String value, String fallback) { return present(value) ? value : fallback; }
+ }
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdKizLocationResponse.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdKizLocationResponse.java
+@@ -10,7 +10,17 @@
+     public static class Match {
+         public String id, client, status, boxCode, boxStatus, palletCode, room, warehouse, locationWarning;
+         public Product product;
++        public Reuse reuse; // FIX: historical use is separate from current AVAILABLE stock.
+     }
++    public static class Reuse {
++        public String decision, message, circulation, checkedAt;
++        public List<History> history;
++    }
++    public static class History {
++        public String orderId, at, event, supplyId, worker;
++        public Request request;
++    }
++    public static class Request { public int number; public String status; }
+     public static class Product {
+         public String id, name, article, size, color;
+     }
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/KizLocationPolicyTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/KizLocationPolicyTest.java
+@@ -64,4 +64,16 @@
+         m.warehouse = "ФФ Москва"; m.client = "Лукин"; m.status = "AVAILABLE";
+         r.matches = Collections.singletonList(m); return r;
+     }
++    @Test public void historyDoesNotTurnAvailableStockIntoAutomaticRelabel() {
++        // TEST: first request, exact event/time and REVIEW survive formatting without inventing a sale.
++        TsdKizLocationResponse r=found();
++        var reuse=new TsdKizLocationResponse.Reuse();reuse.decision="REVIEW";reuse.message="Нужна проверка";
++        var history=new TsdKizLocationResponse.History();history.event="Архивная сборка";
++        history.at="2026-09-04T14:36:38.000Z";history.orderId="5664720661";
++        history.request=new TsdKizLocationResponse.Request();history.request.number=646;
++        reuse.history=Collections.singletonList(history);r.matches.get(0).reuse=reuse;
++        String text=KizLocationPolicy.describe(r);
++        assertTrue(text.contains("Нужна проверка"));assertTrue(text.contains("646"));
++        assertTrue(text.contains("04.09.2026 17:36:38 МСК"));assertFalse(text.contains("Нужна переклейка"));
++    }
+ }
+--- a/wms/apps/api/src/common/kiz-wb-reuse.ts
++++ b/wms/apps/api/src/common/kiz-wb-reuse.ts
+@@ -0,0 +1,116 @@
++import { ConfigService } from '@nestjs/config';
++import { PrismaService } from './prisma/prisma.service';
++import { physicalKizIdentity } from './kiz-physical-identity';
++import { KizCirculationCryptoService } from '../modules/kiz-circulation/kiz-circulation-crypto.service';
++import { officialTrueApiBase } from '../modules/kiz-circulation/kiz-circulation.policy';
++
++export const kizReuseEnabled = () => process.env.WMS_KIZ_REUSE_EVIDENCE_ENABLED === 'true';
++// FIX: keep the planned-size exception independent of the published relabel module version.
++export const pendingSizeKizRelabel = (task: {requiresKiz: boolean; relabelRequired: boolean;
++  sourceSkuId: string | null; relabelConfirmedAt: Date | null}) =>
++  process.env.WMS_FBS_KIZ_RELABEL_ENABLED === 'true' && task.requiresKiz &&
++  task.relabelRequired && Boolean(task.sourceSkuId) && !task.relabelConfirmedAt;
++export type ReuseDecision = 'ALLOW' | 'REVIEW' | 'RELABEL';
++export type OrderEvidence = { verified: boolean; supplierStatus?: string; wbStatus?: string;
++  containsKiz?: boolean; supplyAccepted?: boolean | null };
++const cancelled = new Set(['canceled', 'canceled_by_client', 'declined_by_client', 'defect']);
++// FIX: order cancellation, label printing and local SHIPPING never prove a sale of this serial.
++export function decideKizReuse(orders: OrderEvidence[], circulation: string | null): ReuseDecision {
++  if (['RETIRED', 'WRITTEN_OFF'].includes(circulation ?? '')) return 'RELABEL';
++  if (orders.some(o => o.verified && o.containsKiz &&
++      (o.wbStatus === 'sold' || (o.supplyAccepted === true && cancelled.has(o.wbStatus ?? ''))))) return 'RELABEL';
++  if (circulation === 'INTRODUCED' && orders.length > 0 && orders.every(o => o.verified &&
++      o.supplierStatus === 'cancel' && cancelled.has(o.wbStatus ?? '') &&
++      o.containsKiz === false && o.supplyAccepted === false)) return 'ALLOW';
++  return 'REVIEW';
++}
++export const kizReuseMessage = (decision: ReuseDecision) => decision === 'RELABEL'
++  ? 'Нужна переклейка: использование этого КИЗа подтверждено. Нужен новый КИЗ.'
++  : decision === 'REVIEW' ? 'КИЗ связан с прежним заказом. Нужна проверка администратора; переклейка пока не подтверждена.'
++  : 'Прежний заказ отменён до передачи, КИЗ не погашен. Можно продолжить сборку.';
++
++function identity(value: string) {
++  return physicalKizIdentity(value.replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d').replace(/^\(01\)(\d{14})\(21\)/, '01$121')
++    .replace(/^(01\d{14})\u001d21/, '$121'));
++}
++type History = { orderId: string | null; requestId: string; at: Date | null; event: string;
++  connectionId?: string; supplyId?: string; worker?: string };
++const record = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
++
++// FIX: read-only, client-scoped evidence shared by picker validation and administrator lookup.
++// No stock/mark restoration is performed here; existing lease/reservation transactions remain mandatory.
++export async function inspectKizReuse(db: PrismaService, clientId: string, kiz: string, excludedId = '') {
++  const serial = identity(kiz);
++  const separated = serial.slice(0,16) + '\u001d' + serial.slice(16);
++  const prefixes = [serial, ']d2' + serial, ']D2' + serial, separated, ']d2' + separated,
++    '(01)' + serial.slice(2,16) + '(21)' + serial.slice(18), separated.replace('\u001d','<GS>')];
++  const filter = { OR: prefixes.map(prefix => ({ kiz: { startsWith: prefix } })) };
++  const checkedAt = new Date().toISOString();
++  if (!serial) return { decision: 'REVIEW' as ReuseDecision, checkedAt, history: [], orders: [], circulation: null };
++  const [tasks, attempts, shipments, prints] = await Promise.all([
++    db.fbsTsdAssembly.findMany({ where: { clientId, marketplace: 'WILDBERRIES', id: { not: excludedId }, ...filter }, take: 101 }),
++    db.fbsAssemblyAttemptHistory.findMany({ where: { clientId, ...filter }, take: 101 }),
++    db.shippedKizHistory.findMany({ where: { clientId, ...filter }, take: 101 }),
++    db.fbsWebKizStickerPrint.findMany({ where: { clientId, ...filter }, take: 101 }),
++  ]);
++  const exact = (row: { kiz: string | null }) => identity(row.kiz ?? '') === serial;
++  const history: History[] = [
++    ...tasks.filter(exact).map(t => ({ orderId: t.orderId, requestId: t.requestId, at: t.completedAt,
++      event: t.wbMetaStatus === 'ACCEPTED' ? 'КИЗ принят WB; время завершения сборки' : 'Привязка в ВМС',
++      connectionId: t.connectionId, supplyId: t.supplyId ?? undefined, worker: t.workerName ?? undefined })),
++    ...attempts.filter(exact).map(t => { const s=record(t.taskSnapshot); return { orderId:t.orderId, requestId:t.requestId,
++      at:t.completedAt, event:'Архивная сборка', connectionId:s.connectionId as string, supplyId:s.supplyId as string, worker:s.workerName as string }; }),
++    ...shipments.filter(exact).map(t => ({ orderId:t.orderId, requestId:t.requestId, at:t.shippedAt, event:'Отгрузка в учёте ВМС', supplyId:t.supplyId ?? undefined })),
++    ...prints.filter(exact).map(t => ({ orderId:t.orderId, requestId:t.requestId, at:t.printedAt, event:'Печать этикетки' })),
++  ].sort((a,b) => (a.at?.getTime() ?? Infinity)-(b.at?.getTime() ?? Infinity));
++  const requests=await db.clientRequest.findMany({ where:{clientId,id:{in:[...new Set(history.map(h=>h.requestId))]}},select:{id:true,number:true,status:true,warehouseId:true} });
++  const detailed=history.map(h=>({...h,request:requests.find(r=>r.id===h.requestId) ?? null}));
++  const truncated=[tasks,attempts,shipments,prints].some(rows=>rows.length>100);
++  if (!history.length && !truncated) return {decision:'ALLOW' as ReuseDecision,checkedAt,history:detailed,orders:[],circulation:null};
++  // Remote calls are bounded; absent or incomplete replies are uncertainty, never permission.
++  const json=async(url:string,token:string,body?:unknown)=>{
++    const r=await fetch(url,{method:body===undefined?'GET':'POST',headers:{Authorization:token,'Content-Type':'application/json'},
++      ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(6000)});
++    if(!r.ok)throw new Error('Remote check failed');return r.json();
++  };
++  const orderIds=[...new Set(history.map(h=>h.orderId).filter((v):v is string=>!!v))];
++  const orders: Array<OrderEvidence & {orderId:string}> = [];
++  // Limit network work on the scanner path; larger histories remain reviewable in the report.
++  await Promise.all(orderIds.slice(0,5).map(async orderId => {
++    try {
++      const h=history.find(h=>h.orderId===orderId && h.connectionId);
++      const link=await db.fbsOrderRequestLink.findFirst({where:{clientId,marketplace:'WILDBERRIES',orderId},select:{connectionId:true,lastSupplyId:true}});
++      const connectionId=h?.connectionId ?? link?.connectionId;
++      const connection=connectionId ? await db.clientMarketplaceConnection.findFirst({where:{id:connectionId,clientId,marketplace:'WILDBERRIES',isActive:true},select:{apiKey:true}}) : null;
++      if(!connection)throw new Error('No connection');
++      const [statuses,metadata]=await Promise.all([
++        json('https://marketplace-api.wildberries.ru/api/v3/orders/status',connection.apiKey,{orders:[Number(orderId)]}),
++        json('https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta',connection.apiKey,{orders:[Number(orderId)]}),
++      ]);
++      const status=statuses.orders?.find((o:any)=>String(o.id)===orderId);
++      const meta=metadata.orders?.find((o:any)=>String(o.id)===orderId);
++      if(!status || !meta || !Array.isArray(meta.meta?.sgtin?.value))throw new Error('Incomplete evidence');
++      // FIX: an order can move between supplies; a null receipt on only the first one is not proof.
++      const supplyIds=[...new Set([...history.filter(h=>h.orderId===orderId).map(h=>h.supplyId),link?.lastSupplyId].filter((id):id is string=>!!id))];
++      if(supplyIds.length>5)throw new Error('Too many supplies to verify');
++      const supplies=await Promise.all(supplyIds.map(id=>json('https://marketplace-api.wildberries.ru/api/v3/supplies/'+encodeURIComponent(id),connection.apiKey)));
++      orders.push({orderId,verified:true,supplierStatus:status.supplierStatus,wbStatus:status.wbStatus,
++        containsKiz:meta.meta.sgtin.value.some((k:unknown)=>typeof k==='string' && identity(k)===serial),
++        supplyAccepted:supplies.some(s=>!!s.scanDt) ? true : supplies.length && supplies.every(s=>Object.hasOwn(s,'scanDt') && s.scanDt===null) ? false : null});
++    } catch { orders.push({orderId,verified:false}); }
++  }));
++  let circulation:string|null=null;
++  try {
++    const c=await db.kizTrueApiConnection.findUnique({where:{clientId}});
++    if(c?.isActive && (!c.tokenExpiresAt || c.tokenExpiresAt>new Date())) {
++      const token=new KizCirculationCryptoService(new ConfigService()).decrypt(c.apiTokenEncrypted);
++      const rows=await json(officialTrueApiBase(c.apiBaseUrl)+'/cises/info?pg='+encodeURIComponent(c.productGroup),'Bearer '+token,[serial]);
++      const row=Array.isArray(rows) ? rows.find((r:any)=>identity(r.cisInfo?.requestedCis ?? r.cisInfo?.cis ?? '')===serial) : null;
++      if(row && !row.errorMessage)circulation=typeof row.cisInfo.status==='string'?row.cisInfo.status.toUpperCase():null;
++    }
++  } catch { /* FIX: missing marking-system evidence must not masquerade as INTRODUCED. */ }
++  let decision: ReuseDecision=truncated || orderIds.length>5 ? 'REVIEW' : decideKizReuse(orders,circulation);
++  // FIX: do not steal a still-stored task binding or erase immutable history to bypass the unique KIZ constraint.
++  if (decision === 'ALLOW' && tasks.some(exact)) decision = 'REVIEW';
++  return {decision:decision as ReuseDecision,checkedAt,history:detailed,orders,circulation};
++}
+--- a/wms/apps/api/src/modules/inventory/kiz-location.service.ts
++++ b/wms/apps/api/src/modules/inventory/kiz-location.service.ts
+@@ -3,6 +3,7 @@
+ import { ClientScopeService } from '../auth/client-scope.service';
+ import type { AuthUser } from '../auth/auth.types';
+ import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service';
++import { inspectKizReuse, kizReuseEnabled, kizReuseMessage } from '../../common/kiz-wb-reuse';
+ 
+ @Injectable()
+ export class KizLocationService {
+@@ -54,22 +55,28 @@
+       select: { boxId: true, boxCode: true, pallet: { select: { code: true, clientId: true, warehouseId: true,
+         zone: { select: { name: true, warehouseId: true } } } } },
+     }) : [];
+-    const matches = marks.map(mark => {
++    const matches = await Promise.all(marks.map(async mark => {
+       const box = mark.box;
+       const placement = box ? placements.find(p => p.pallet.clientId === mark.clientId && p.pallet.warehouseId === warehouseId &&
+         (p.boxId === box.id || (!p.boxId && p.boxCode === box.code))) : null;
+       const boxIsConsistent = box?.clientId === mark.clientId && box.warehouseId === warehouseId;
+       const legacy = boxIsConsistent && !placement && box?.pallet?.clientId === mark.clientId ? box.pallet : null;
+       const room = placement?.pallet.zone ?? legacy?.zone ?? (boxIsConsistent ? box?.zone : null);
++      // FIX: history survives AVAILABLE restoration; show only requests inside the selected branch.
++      const evidence = kizReuseEnabled() ? await inspectKizReuse(this.prisma, mark.clientId, mark.value) : null;
++      const reuse = evidence ? { ...evidence, message: evidence.history.length ? kizReuseMessage(evidence.decision) : 'История использования в WB не найдена.',
++        history: evidence.history.filter(h => h.request?.warehouseId === warehouseId),
++        orders: evidence.orders.filter(o => evidence.history.some(h => h.orderId === o.orderId && h.request?.warehouseId === warehouseId)) } : undefined;
+       return {
+         id: mark.id, product: mark.sku, client: mark.client.name, status: mark.status,
++        reuse,
+         boxCode: boxIsConsistent ? box!.code : null, boxStatus: boxIsConsistent ? box!.status : null,
+         palletCode: boxIsConsistent ? placement?.pallet.code ?? legacy?.code ?? null : null,
+         room: boxIsConsistent && room?.warehouseId === warehouseId ? room.name : null,
+         warehouse: boxIsConsistent ? box?.warehouse?.name ?? null : !box ? mark.stockMovement?.warehouse?.name ?? null : null,
+         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
+       };
+-    });
++    }));
+     return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches };
+   }
+ }
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -20,7 +20,8 @@
+ import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
+ import { FbsDisplayCache, type FbsDisplaySync } from './fbs-display-cache';
+ import { branchScopedFbsDateKey, loadFbsDateBillingBranches } from './fbs-billing-shipment-key';
+-import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
++import { physicalKizLookup, physicalKizHistoryFilter, physicalKizIdentity } from '../../common/kiz-physical-identity';
++import { inspectKizReuse, kizReuseEnabled, kizReuseMessage, pendingSizeKizRelabel } from '../../common/kiz-wb-reuse';
+ import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
+ import { retainFbsBranchEvidence } from '../billing/fbs-billing-branch-evidence';
+ import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
+@@ -10817,10 +10818,17 @@
+ 
+   // FIX: the ordinary task owner can explicitly relabel a returned physical unit; no administrator override.
+   private async proposeFbsPhysicalKizRelabel(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
++    // FIX: a past binding alone must never propose destroying a reusable marking code.
++    if (kizReuseEnabled() && !pendingSizeKizRelabel(task)) {
++      const evidence = await inspectKizReuse(this.prisma, task.clientId, kiz, task.id);
++      if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
++    }
+     await this.inventoryLock?.assertStockMovementsAllowed();
+     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
+       fresh => this.requireCurrentFbsTsdLease(fresh, user)));
+-    return this.formatFbsTsdAssembly(task, user, 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
++    return this.formatFbsTsdAssembly(task, user, pendingSizeKizRelabel(task)
++      ? 'Старый КИЗ исходного размера подтверждён. Переклейте товар и отсканируйте НОВЫЙ КИЗ.'
++      : kizReuseEnabled() ? kizReuseMessage('RELABEL') : 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
+   }
+ 
+   // FIX: relabeling must never repair a foreign-box KIZ by changing its SKU first.
+@@ -10876,6 +10884,13 @@
+     if (payload.confirmKizRelabel === true) {
+       if (!physicalKizRelabelEnabled()) throw new ForbiddenException('Переклейка КИЗ в этом окружении выключена.');
+       const proposalId = requiredFbsTsdText(payload.kizRelabelProposalId, 'Сначала отсканируйте старый КИЗ.');
++      // FIX: an old persisted proposal is not proof that replacement is still required.
++      if (kizReuseEnabled() && !pendingSizeKizRelabel(task) && !task.kiz) {
++        const proposal = await readPhysicalKizRelabel(this.prisma, task, user);
++        if (!proposal || proposal.id !== proposalId) throw new ConflictException('Предложение переклейки изменилось. Обновите задание.');
++        const evidence = await inspectKizReuse(this.prisma, task.clientId, proposal.oldKiz, task.id);
++        if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
++      }
+       if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {
+         throw new BadRequestException('Новый КИЗ уже использовался в WB. Возьмите свободный новый КИЗ.');
+       }
+@@ -11041,7 +11056,7 @@
+         if (payload.supportsKizRelabel !== true) throw new BadRequestException('Этот КИЗ уже использовался в WB. Для переклейки обновите приложение ТСД через «Проверить обновление».');
+         return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
+       }
+-      const message = previousWbUsage.orderId
++      const message = kizReuseEnabled() ? kizReuseMessage('RELABEL') : previousWbUsage.orderId
+         ? `Этот КИЗ уже передавался в Wildberries для заказа ${previousWbUsage.orderId}. Возьмите другую единицу.`
+         : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.';
+       await this.recordLocalFbsKizConflict(task, kiz, mark, message, user, 'WB_HISTORY');
+@@ -12523,7 +12538,7 @@
+     );
+     if (previousWbUsage) {
+       throw new BadRequestException(
+-        previousWbUsage.orderId
++        kizReuseEnabled() ? kizReuseMessage('RELABEL') : previousWbUsage.orderId
+           ? `Этот КИЗ уже передавался в Wildberries для заказа №${previousWbUsage.orderId}. Возьмите другую единицу.`
+           : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.',
+       );
+@@ -14189,6 +14204,16 @@
+     kiz: string,
+     excludedAssemblyId: string,
+   ) {
++    // FIX: only independently confirmed usage asks for relabeling; uncertainty stays a review.
++    if (kizReuseEnabled()) {
++      const evidence = await inspectKizReuse(this.prisma, clientId, kiz, excludedAssemblyId);
++      await this.prisma.auditLog.create({ data: { action: 'KIZ_REUSE_CHECK', entity: 'FbsTsdAssembly', entityId: excludedAssemblyId,
++        payload: JSON.parse(JSON.stringify({ clientId, kizIdentity: physicalKizIdentity(kiz), ...evidence })) } });
++      if (evidence.decision === 'ALLOW') return null;
++      if (evidence.decision === 'REVIEW') throw new BadRequestException(kizReuseMessage('REVIEW'));
++      const first = evidence.history[0];
++      return { source: 'SHIPMENT' as const, orderId: first?.orderId ?? null, requestId: first?.requestId ?? '', shippedAt: first?.at ?? null };
++    }
+     const [assembly, shipped, printed] = await Promise.all([
+       this.prisma.fbsTsdAssembly.findFirst({
+         where: {
+--- a/wms/apps/api/test/kiz-location.service.spec.ts
++++ b/wms/apps/api/test/kiz-location.service.spec.ts
+@@ -0,0 +1,119 @@
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++import { ClientScopeService } from '../src/modules/auth/client-scope.service';
++import { KizLocationService } from '../src/modules/inventory/kiz-location.service';
++import { CheckKizLocationDto, KizLocationController } from '../src/modules/inventory/kiz-location.controller';
++import { validate } from 'class-validator';
++
++const code = '0104640569959539215eCUd%lbPYtuV';
++const full = code + '\u001d91EE12\u001d92signature';
++const user = { id: 'admin', roleCodes: ['ADMIN'], permissionCodes: [], clientScopeMode: 'LIMITED',
++  clientIds: ['client'], writableClientIds: [], activeWarehouseId: 'wh', warehouseIds: ['wh'] } as any;
++const product = { id: 'sku', name: 'Костюм Соул', article: 'Соул_розовый', size: 'S / 42', color: 'розовый' };
++const mark = () => ({ id: 'mark', clientId: 'client', value: full, status: 'AVAILABLE',
++  sku: product, client: { name: 'Клиент' }, stockMovement: null,
++  box: { id: 'box', code: 'FFL_BOX_25', clientId: 'client', warehouseId: 'wh', status: 'active',
++    warehouse: { name: 'ФФ Москва' }, zone: null, pallet: null } });
++const placement = () => ({ boxId: 'box', boxCode: 'FFL_BOX_25', pallet: { code: 'PALET_SORT_02',
++  clientId: 'client', warehouseId: 'wh', zone: { name: 'Помещение 1', code: 'ROOM1', warehouseId: 'wh' } } });
++function setup(marks: any[] = [mark()], placements: any[] = [placement()]) {
++  const db = { productMark: { findMany: vi.fn(async () => marks) }, storagePalletBox: { findMany: vi.fn(async () => placements) } };
++  return { db, service: new KizLocationService(db as any, new ClientScopeService()) };
++}
++beforeEach(() => vi.stubEnv('WMS_KIZ_LOCATION_CHECK_ENABLED', 'true'));
++afterEach(() => vi.unstubAllEnvs());
++
++describe('administrator KIZ location check (read only)', () => {
++  it('validates input and delegates the authenticated user through the controller', async () => {
++    // TEST: API validates scanner input and passes scope rather than trusting client-supplied placement.
++    const { service } = setup(); const controller = new KizLocationController(service);
++    expect((await controller.check({ kiz: full }, user)).found).toBe(true);
++    const dto = new CheckKizLocationDto(); dto.kiz = 123 as any;
++    expect((await validate(dto)).length).toBeGreaterThan(0);
++  });
++  it.each(['ADMIN', 'OWNER', 'SUPER_ADMIN'])('shows product and current placement for %s', async role => {
++    // TEST: a full Data Matrix must resolve to the recorded box, pallet-sort and room.
++    const { service, db } = setup();
++    const result = await service.lookup(full, { ...user, roleCodes: [role] });
++    expect(result.found).toBe(true); expect(result.ambiguous).toBe(false);
++    expect(result.matches[0]).toMatchObject({ product, boxCode: 'FFL_BOX_25', palletCode: 'PALET_SORT_02', room: 'Помещение 1', warehouse: 'ФФ Москва', status: 'AVAILABLE' });
++    expect(db.productMark.findMany).toHaveBeenCalledOnce();
++  });
++  it.each([code, ']d2' + full, full.replaceAll('\u001d', '<GS>'), '(01)04640569959539(21)5eCUd%lbPYtuV'])('normalizes scanner format %s', async scan => {
++    // TEST: suffix and scanner-prefix variants refer to the same serial, never merely the GTIN.
++    expect((await setup().service.lookup(scan, user)).found).toBe(true);
++  });
++  it.each(['MANAGER', 'OPERATOR', 'CLIENT', 'WAREHOUSE_KEEPER'])('denies %s before reading data', async role => {
++    // TEST: system:admin permission without an administrator role must not grant this screen.
++    const { service, db } = setup();
++    await expect(service.lookup(full, { ...user, roleCodes: [role], permissionCodes: ['system:admin'] })).rejects.toThrow();
++    expect(db.productMark.findMany).not.toHaveBeenCalled();
++  });
++  it('is disabled by default and requires an accessible selected warehouse', async () => {
++    // TEST: sold installations are opted out; an unscoped query cannot cross branches.
++    const { service, db } = setup(); vi.stubEnv('WMS_KIZ_LOCATION_CHECK_ENABLED', 'false');
++    await expect(service.lookup(full, user)).rejects.toThrow();
++    vi.stubEnv('WMS_KIZ_LOCATION_CHECK_ENABLED', 'true');
++    await expect(service.lookup(full, { ...user, activeWarehouseId: null })).rejects.toThrow();
++    await expect(service.lookup(full, { ...user, warehouseIds: ['other'] })).rejects.toThrow();
++    expect(db.productMark.findMany).not.toHaveBeenCalled();
++  });
++  it('honors existing system administrator warehouse access without explicit warehouse scopes', async () => {
++    // TEST: global owners retain selected-warehouse filtering and the existing hidden-demo-client exclusion.
++    const { service, db } = setup();
++    expect((await service.lookup(full, { ...user, roleCodes: ['OWNER'], permissionCodes: ['system:admin'], warehouseIds: [], hiddenClientIds: ['demo'] })).found).toBe(true);
++    const query = db.productMark.findMany.mock.calls[0]?.[0] as any;
++    expect(query.where.clientId).toEqual({ notIn: ['demo'] });
++    expect(query.where.AND[1].OR[0]).toEqual({ box: { warehouseId: 'wh' } });
++  });
++  it('applies client and warehouse scope in the database query', async () => {
++    // TEST: another client's code must not be disclosed even to a limited administrator.
++    const { service, db } = setup([]); await service.lookup(full, user);
++    const query = db.productMark.findMany.mock.calls[0]?.[0] as any;
++    expect(query.where.clientId).toEqual({ in: ['client'] });
++    expect(query.where.AND[1].OR).toEqual([{ box: { warehouseId: 'wh' } }, { boxId: null, stockMovement: { warehouseId: 'wh' } }]);
++  });
++  it('returns not found without inventing a location', async () => {
++    // TEST: no current mark row is a normal, explicit not-found result.
++    const { service, db } = setup([]);
++    expect(await service.lookup(full, user)).toMatchObject({ found: false, matches: [] });
++    expect(db.storagePalletBox.findMany).not.toHaveBeenCalled();
++  });
++  it('reports every duplicate identity instead of selecting a random box', async () => {
++    // TEST: two stored encodings of the same serial remain visible as a data conflict.
++    const second = { ...mark(), id: 'second', value: code };
++    const r = await setup([mark(), second]).service.lookup(full, user);
++    expect(r.ambiguous).toBe(true); expect(r.matches).toHaveLength(2);
++  });
++  it('does not disclose a different client or warehouse through a conflicting pallet link', async () => {
++    // TEST: inconsistent placement metadata must not attach another client's pallet to this mark.
++    const wrong = placement(); wrong.pallet.clientId = 'other';
++    expect((await setup([mark()], [wrong]).service.lookup(full, user)).matches[0]).toMatchObject({ palletCode: null, room: null });
++    wrong.pallet.clientId = 'client'; wrong.pallet.warehouseId = 'elsewhere';
++    expect((await setup([mark()], [wrong]).service.lookup(full, user)).matches[0]).toMatchObject({ palletCode: null, room: null });
++    const foreignBox = mark(); foreignBox.box.clientId = 'other';
++    const result = (await setup([foreignBox]).service.lookup(full, user)).matches[0];
++    expect(result).toMatchObject({ boxCode: null, palletCode: null, room: null, warehouse: null });
++    expect(result.locationWarning).toBeTruthy();
++  });
++  it('does not accept another serial sharing the search prefix', async () => {
++    // TEST: serial boundaries matter when querying prefix variants.
++    const r = await setup([{ ...mark(), value: code + 'X' }]).service.lookup(full, user);
++    expect(r.found).toBe(false);
++  });
++  it('does not turn a historical movement into current storage for a boxless mark', async () => {
++    // TEST: packing/shipping can retain history while the current box is unassigned.
++    const r = await setup([{ ...mark(), box: null, status: 'PACKING', stockMovement: { warehouseId: 'wh', warehouse: { name: 'ФФ Москва' } } }], []).service.lookup(full, user);
++    expect(r.matches[0]).toMatchObject({ status: 'PACKING', boxCode: null, palletCode: null, room: null });
++  });
++  it('finds placement stored by box code and falls back to the box room when no pallet is assigned', async () => {
++    // TEST: older placement rows may have boxId=null but still identify the physical box by code.
++    expect((await setup([mark()], [{ ...placement(), boxId: null }]).service.lookup(full, user)).matches[0].palletCode).toBe('PALET_SORT_02');
++    const m = mark(); m.box.zone = { name: 'Комната 2', warehouseId: 'wh' } as any;
++    expect((await setup([m], []).service.lookup(full, user)).matches[0]).toMatchObject({ palletCode: null, room: 'Комната 2' });
++  });
++  it.each(['2051610924437', '0104', '', 'x'.repeat(1025)])('rejects a barcode or incomplete scan', async scan => {
++    // TEST: invalid input cannot launch a broad GTIN or catalogue search.
++    const { service, db } = setup(); await expect(service.lookup(scan, user)).rejects.toThrow();
++    expect(db.productMark.findMany).not.toHaveBeenCalled();
++  });
++});
+--- a/wms/apps/api/test/kiz-wb-reuse-guard.spec.ts
++++ b/wms/apps/api/test/kiz-wb-reuse-guard.spec.ts
+@@ -0,0 +1,20 @@
++import { afterEach, expect, it, vi } from 'vitest';
++import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
++import { inspectKizReuse } from '../src/common/kiz-wb-reuse';
++vi.mock('../src/common/kiz-wb-reuse', async original => ({...await original<any>(), inspectKizReuse: vi.fn()}));
++afterEach(()=>{vi.unstubAllEnvs();vi.clearAllMocks();});
++// TEST: actual picker guard honors ALLOW/REVIEW/RELABEL and records its evidence.
++it('does not turn a past WB binding into a relabel decision',async()=>{
++  vi.stubEnv('WMS_KIZ_REUSE_EVIDENCE_ENABLED','true');
++  const service:any=Object.create(MarketplaceConnectionsService.prototype);
++  service.prisma={auditLog:{create:vi.fn(async()=>({}))}};
++  for(const decision of ['ALLOW','REVIEW','RELABEL'] as const) {
++    vi.mocked(inspectKizReuse).mockResolvedValue({decision,checkedAt:'2026-09-21',history:[{orderId:'old',requestId:'r',at:new Date(),event:'event',request:null}],orders:[],circulation:null});
++    const call=service.findPreviousWildberriesKizUsage('client','kiz','current');
++    if(decision==='ALLOW')expect(await call).toBeNull();
++    else if(decision==='REVIEW')await expect(call).rejects.toThrow('Нужна проверка администратора');
++    else expect(await call).toMatchObject({orderId:'old'});
++  }
++  expect(service.prisma.auditLog.create).toHaveBeenCalledTimes(3);
++  expect(inspectKizReuse).toHaveBeenLastCalledWith(service.prisma,'client','kiz','current');
++});
+--- a/wms/apps/api/test/kiz-wb-reuse.spec.ts
++++ b/wms/apps/api/test/kiz-wb-reuse.spec.ts
+@@ -0,0 +1,77 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { decideKizReuse, inspectKizReuse, pendingSizeKizRelabel } from '../src/common/kiz-wb-reuse';
++import { KizCirculationCryptoService } from '../src/modules/kiz-circulation/kiz-circulation-crypto.service';
++
++describe('KIZ reuse evidence', () => {
++  // TEST: planned size relabel bypass remains compatible with the published relabel module.
++  it('distinguishes pending size relabel from completed and ordinary relabel', () => {
++    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'true');
++    const task = {requiresKiz:true,relabelRequired:true,sourceSkuId:'source',relabelConfirmedAt:null};
++    expect(pendingSizeKizRelabel(task)).toBe(true);
++    expect(pendingSizeKizRelabel({...task,relabelConfirmedAt:new Date()})).toBe(false);
++    expect(pendingSizeKizRelabel({...task,sourceSkuId:null})).toBe(false);
++    vi.stubEnv('WMS_FBS_KIZ_RELABEL_ENABLED', 'false');
++    expect(pendingSizeKizRelabel(task)).toBe(false);
++    vi.unstubAllEnvs();
++  });
++  const cancelled = { verified: true, supplierStatus: 'cancel', wbStatus: 'canceled_by_client',
++    containsKiz: false, supplyAccepted: false };
++  // TEST: binding, local closure and cancellation alone do not prove a sale.
++  it('allows a non-retired code only after all previous orders are confirmed unshipped and released', () => {
++    expect(decideKizReuse([cancelled], 'INTRODUCED')).toBe('ALLOW');
++    expect(decideKizReuse([cancelled], null)).toBe('REVIEW');
++    expect(decideKizReuse([{ ...cancelled, supplierStatus: 'complete' }], 'INTRODUCED')).toBe('REVIEW');
++  });
++  // TEST: a different KIZ in the repeat order cannot transfer its sale to the original unit.
++  it('requires matching KIZ for marketplace sale/return evidence', () => {
++    expect(decideKizReuse([{ ...cancelled, wbStatus: 'sold', containsKiz: false }], 'INTRODUCED')).toBe('REVIEW');
++    expect(decideKizReuse([{ ...cancelled, wbStatus: 'sold', containsKiz: true }], null)).toBe('RELABEL');
++    expect(decideKizReuse([{ ...cancelled, containsKiz: true, supplyAccepted: true }], null)).toBe('RELABEL');
++  });
++  // TEST: failures, active bindings and unresolved history never turn into a free code.
++  it('keeps ambiguous and still-bound codes on review', () => {
++    expect(decideKizReuse([{ ...cancelled, verified: false }], 'INTRODUCED')).toBe('REVIEW');
++    expect(decideKizReuse([{ ...cancelled, containsKiz: true }], 'INTRODUCED')).toBe('REVIEW');
++    expect(decideKizReuse([cancelled, { ...cancelled, supplierStatus: 'confirm' }], 'INTRODUCED')).toBe('REVIEW');
++    expect(decideKizReuse([], 'INTRODUCED')).toBe('REVIEW');
++    expect(decideKizReuse([cancelled], 'RETIRED')).toBe('RELABEL');
++  });
++});
++
++afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
++// TEST: returned AVAILABLE marking still has history, and remote order outcome belongs only to its exact serial.
++it('reports the first request and refuses to infer use from a successor KIZ', async () => {
++  const kiz='0104640684261708215lg"wSKJpPnsk';
++  const db:any={
++    fbsTsdAssembly:{findMany:vi.fn(async()=>[])},
++    fbsAssemblyAttemptHistory:{findMany:vi.fn(async()=>[{kiz,orderId:'123',requestId:'old',completedAt:new Date('2026-09-04T14:36:38Z'),taskSnapshot:{connectionId:'c',supplyId:'s',workerName:'Карина'}}])},
++    shippedKizHistory:{findMany:vi.fn(async()=>[{kiz,orderId:'123',requestId:'old',shippedAt:new Date('2026-09-04T15:57:48Z'),supplyId:'s'}])},
++    fbsWebKizStickerPrint:{findMany:vi.fn(async()=>[])},
++    clientRequest:{findMany:vi.fn(async()=>[{id:'old',number:646,warehouseId:'wh',status:'DONE'}])},
++    fbsOrderRequestLink:{findFirst:vi.fn(async()=>({connectionId:'c',lastSupplyId:'s'}))},
++    clientMarketplaceConnection:{findFirst:vi.fn(async()=>({apiKey:'test'}))},
++    kizTrueApiConnection:{findUnique:vi.fn(async()=>null)},
++  };
++  let remoteKiz='0104640684261708215C=IsXFS:OBFH';
++  vi.stubGlobal('fetch',vi.fn(async(url:string)=>({ok:true,json:async()=>url.endsWith('orders/status')
++    ?{orders:[{id:123,supplierStatus:'complete',wbStatus:'sold'}]}
++    :url.endsWith('orders/meta')?{orders:[{id:123,meta:{sgtin:{value:[remoteKiz]}}}]}:{scanDt:'2026-09-05T00:00:00Z'}})));
++  const result=await inspectKizReuse(db,'client',kiz,'current');
++  expect(result.decision).toBe('REVIEW');
++  expect(result.history[0]).toMatchObject({request:{number:646},worker:'Карина'});
++  expect(db.fbsAssemblyAttemptHistory.findMany.mock.calls[0][0].where.clientId).toBe('client');
++  remoteKiz=kiz+'\u001d91EE12\u001d92signature';
++  expect((await inspectKizReuse(db,'client',kiz,'current')).decision).toBe('RELABEL');
++  vi.stubGlobal('fetch',vi.fn(async()=>{throw new Error('timeout');}));
++  expect((await inspectKizReuse(db,'client',kiz,'current')).decision).toBe('REVIEW');
++  // TEST: full read-only pipeline permits reuse only with a fresh exact True API response and released bindings.
++  db.kizTrueApiConnection.findUnique.mockResolvedValue({isActive:true,apiTokenEncrypted:'test',productGroup:'lp',apiBaseUrl:'https://markirovka.crpt.ru/api/v3/true-api'});
++  vi.spyOn(KizCirculationCryptoService.prototype,'decrypt').mockReturnValue('test');
++  vi.stubGlobal('fetch',vi.fn(async(url:string)=>({ok:true,json:async()=>url.includes('/cises/info')
++    ?[{cisInfo:{requestedCis:kiz,status:'INTRODUCED'}}]
++    :url.endsWith('orders/status')?{orders:[{id:123,supplierStatus:'cancel',wbStatus:'canceled_by_client'}]}
++    :url.endsWith('orders/meta')?{orders:[{id:123,meta:{sgtin:{value:[]}}}]}:{scanDt:null}})));
++  expect((await inspectKizReuse(db,'client',kiz,'current')).decision).toBe('ALLOW');
++  db.fbsTsdAssembly.findMany.mockResolvedValue([{kiz,orderId:'123',requestId:'old',completedAt:new Date(),wbMetaStatus:'ACCEPTED'}]);
++  expect((await inspectKizReuse(db,'client',kiz,'current')).decision).toBe('REVIEW');
++});
+--- a/wms/apps/web/src/components/kiz/KizCheckPanel.spec.tsx
++++ b/wms/apps/web/src/components/kiz/KizCheckPanel.spec.tsx
+@@ -0,0 +1,22 @@
++import React from 'react';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { afterEach, expect, it, vi } from 'vitest';
++import { KizIssuesPanel } from './KizIssuesPanel';
++import { KizCheckPanel } from './KizCheckPanel';
++
++afterEach(()=>vi.unstubAllEnvs());
++const session=(role:string)=>({accessToken:'test',user:{roleCodes:[role],activeWarehouseId:'wh'}} as any);
++// TEST: the extra tile is visible only to administrators in our opt-in build.
++it('isolates the new tile from sold builds and picker accounts',()=>{
++  vi.stubEnv('VITE_KIZ_REUSE_EVIDENCE_ENABLED','true');
++  expect(renderToStaticMarkup(<KizIssuesPanel session={session('ADMIN')} />)).toContain('Проверка КИЗов');
++  expect(renderToStaticMarkup(<KizIssuesPanel session={session('OPERATOR')} />)).not.toContain('Проверка КИЗов');
++  vi.stubEnv('VITE_KIZ_REUSE_EVIDENCE_ENABLED','false');
++  expect(renderToStaticMarkup(<KizIssuesPanel session={session('ADMIN')} />)).not.toContain('Проверка КИЗов');
++});
++// TEST: scanning is an explicit read-only action, separate from issue correction.
++it('offers a scanner without stock-changing actions',()=>{
++  const html=renderToStaticMarkup(<KizCheckPanel session={session('OWNER')} />);
++  expect(html).toContain('Проверить');expect(html).toContain('не изменяет остатки');
++  expect(html).not.toContain('Списать');
++});
+--- a/wms/apps/web/src/components/kiz/KizCheckPanel.tsx
++++ b/wms/apps/web/src/components/kiz/KizCheckPanel.tsx
+@@ -0,0 +1,50 @@
++import { useRef, useState } from 'react';
++import { checkKizHistory, type AuthSession, type KizCheckResult } from '../../lib/api';
++
++// FIX: a dedicated read-only scanner view, with explicit evidence instead of inferred relabeling.
++export function KizCheckPanel({ session }: { session: AuthSession }) {
++  const [scan, setScan] = useState('');
++  const [result, setResult] = useState<KizCheckResult | null>(null);
++  const [error, setError] = useState('');
++  const [busy, setBusy] = useState(false);
++  const lock = useRef(false);
++  return <section className="kiz-panel">
++    <h2>Проверка КИЗов</h2>
++    <p>Отсканируйте или вставьте КИЗ. Проверка не изменяет остатки и привязки.</p>
++    <form className="kiz-search" onSubmit={async event => {
++      event.preventDefault(); if (lock.current || !scan.trim()) return;
++      lock.current = true; setBusy(true); setError(''); setResult(null);
++      try { setResult(await checkKizHistory(session.accessToken, scan.trim())); }
++      catch (e) { setError(e instanceof Error ? e.message : 'Не удалось проверить КИЗ.'); }
++      finally { lock.current = false; setBusy(false); }
++    }}>
++      <label htmlFor="kiz-history-scan">КИЗ</label>
++      <input id="kiz-history-scan" autoFocus value={scan} onChange={e => setScan(e.target.value)} disabled={busy} autoComplete="off" />
++      <button className="primary-button" type="submit" disabled={busy || !scan.trim()}>{busy ? 'Проверяю…' : 'Проверить'}</button>
++    </form>
++    {error && <p role="alert">{error}</p>}
++    {result && !result.found && <p>КИЗ не найден в выбранном филиале.</p>}
++    {result?.ambiguous && <p role="alert">Найдено несколько записей. Нужна проверка привязок.</p>}
++    {result?.matches.map(m => <article key={m.id} className="kiz-queue">
++      <h3>{m.product.name} · {m.product.size}</h3>
++      <p>{m.client} · {m.product.article} · {m.product.color}</p>
++      <p>Короб: {m.boxCode ?? 'не назначен'} · Паллет: {m.palletCode ?? 'не назначен'} · {m.room} · {m.warehouse}</p>
++      <p>Учётный статус: {m.status}</p>
++      {m.locationWarning && <p role="alert">{m.locationWarning}</p>}
++      {m.reuse && <>
++        <h3>{m.reuse.decision === 'RELABEL' ? 'Нужна переклейка' : m.reuse.decision === 'REVIEW' ? 'Нужна проверка' : 'Можно продолжить сборку'}</h3>
++        <p>{m.reuse.message}</p>
++        <p>Честный знак: {m.reuse.circulation ?? 'статус не подтверждён'}. Проверено: {date(m.reuse.checkedAt)}</p>
++        <div className="kiz-table-wrap"><table><thead><tr><th>Заявка ВМС</th><th>Заказ WB</th><th>Событие</th><th>Дата и время, МСК</th><th>Сотрудник</th><th>Поставка WB</th></tr></thead>
++          <tbody>{m.reuse.history.map((h, i) => <tr key={i}>
++            <td>{h.request ? `№${String(h.request.number).padStart(6, '0')} · ${h.request.status}` : '—'}{i === 0 ? ' · первая запись' : ''}</td>
++            <td>{h.orderId ?? '—'}</td><td>{h.event}</td><td>{date(h.at)}</td><td>{h.worker ?? '—'}</td><td>{h.supplyId ?? '—'}</td>
++          </tr>)}</tbody>
++        </table></div>
++      </>}
++    </article>)}
++  </section>;
++}
++function date(value: string | null) {
++  return value ? new Date(value).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) : 'Не зафиксировано';
++}
+--- a/wms/apps/web/src/components/kiz/KizIssuesPanel.tsx
++++ b/wms/apps/web/src/components/kiz/KizIssuesPanel.tsx
+@@ -25,6 +25,7 @@
+ } from '../../lib/api';
+ import './kiz.css';
+ import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
++import { KizCheckPanel } from './KizCheckPanel';
+ 
+ type KizIssuesPanelProps = {
+   session: AuthSession;
+@@ -32,6 +33,9 @@
+ };
+ 
+ export function KizIssuesPanel({ session, embedded = false }: KizIssuesPanelProps) {
++  const [checking, setChecking] = useState(false); // FIX: separate scanner scenario from issue correction.
++  const canCheck = import.meta.env.VITE_KIZ_REUSE_EVIDENCE_ENABLED === 'true' &&
++    session.user.roleCodes.some(role => ['ADMIN', 'OWNER', 'SUPER_ADMIN'].includes(role));
+   const [status, setStatus] = useState<'open' | 'resolved' | 'all'>('open');
+   const [search, setSearch] = useState('');
+   const [report, setReport] = useState<KizIssuesReport | null>(null);
+@@ -56,6 +60,7 @@
+ 
+   const load = useCallback(
+     async (quiet = false) => {
++      if (checking && canCheck) return;
+       if (!quiet) setLoading(true);
+       setError('');
+       try {
+@@ -82,7 +87,7 @@
+         if (!quiet) setLoading(false);
+       }
+     },
+-    [search, session.accessToken, status],
++    [search, session.accessToken, status, checking, canCheck],
+   );
+ 
+   useEffect(() => {
+@@ -275,12 +280,13 @@
+       title="КИЗ"
+       description="Сначала выберите сценарий: разобрать проблему сканирования, сверить короба или выполнить корректировку."
+       tiles={[
+-        { title: 'Проблемные КИЗ', description: 'Очередь ошибок и полная история использования кода.', icon: AlertTriangle, tone: 'red' },
+-        { title: 'Расхождения в коробах', description: 'Найти лишние и отсутствующие КИЗ по фактическим остаткам.', icon: Search, tone: 'orange' },
+-        { title: 'Исправления', description: 'Заменить КИЗ, подтвердить единицу или списать расхождение.', icon: Wrench, tone: 'green' },
++        ...(canCheck ? [{ title: 'Проверка КИЗов', description: 'Товар, размещение, первые заявки и проверка возможности повторной сборки.', icon: Search, onOpen: () => setChecking(true) }] : []),
++        { title: 'Проблемные КИЗ', description: 'Очередь ошибок и полная история использования кода.', icon: AlertTriangle, tone: 'red', onOpen: () => setChecking(false) },
++        { title: 'Расхождения в коробах', description: 'Найти лишние и отсутствующие КИЗ по фактическим остаткам.', icon: Search, tone: 'orange', onOpen: () => setChecking(false) },
++        { title: 'Исправления', description: 'Заменить КИЗ, подтвердить единицу или списать расхождение.', icon: Wrench, tone: 'green', onOpen: () => setChecking(false) },
+       ]}
+     >
+-    <div className="kiz-panel">
++    {checking && canCheck ? <KizCheckPanel key={`${session.accessToken}:${session.user.activeWarehouseId}`} session={session} /> : <div className="kiz-panel">
+       <section className="kiz-hero">
+         <div className="kiz-hero__icon">
+           <ShieldCheck size={26} aria-hidden="true" />
+@@ -1051,7 +1057,7 @@
+           </section>
+         </div>
+       ) : null}
+-    </div>
++    </div>}
+     </WorkspaceTileGate>
+   );
+ }
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -7231,6 +7231,19 @@
+ 
+ const API_BASE_URL = import.meta.env.VITE_API_URL ?? '/api/v1';
+ 
++// FIX: read-only KIZ history uses the same scoped endpoint as the administrator TSD.
++export type KizCheckResult = { found: boolean; ambiguous: boolean; identity: string; matches: Array<{
++  id: string; client: string; status: string; boxCode: string | null; palletCode: string | null;
++  room: string | null; warehouse: string | null; locationWarning: string | null;
++  product: { name: string; article: string | null; size: string | null; color: string | null };
++  reuse?: { decision: 'ALLOW' | 'REVIEW' | 'RELABEL'; message: string; circulation: string | null; checkedAt: string;
++    history: Array<{ orderId: string | null; at: string | null; event: string; worker?: string; supplyId?: string;
++      request: { number: number; status: string } | null }> };
++}> };
++export function checkKizHistory(accessToken: string, kiz: string) {
++  return request<KizCheckResult>('/inventory/kiz-location/check', { accessToken, method: 'POST', body: { kiz } });
++}
++
+ export async function login(payload: LoginPayload) {
+   return request<AuthSession>('/auth/login', {
+     method: 'POST',

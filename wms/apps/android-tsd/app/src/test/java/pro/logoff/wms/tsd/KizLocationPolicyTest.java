@@ -64,4 +64,16 @@ public class KizLocationPolicyTest {
         m.warehouse = "ФФ Москва"; m.client = "Лукин"; m.status = "AVAILABLE";
         r.matches = Collections.singletonList(m); return r;
     }
+    @Test public void historyDoesNotTurnAvailableStockIntoAutomaticRelabel() {
+        // TEST: first request, exact event/time and REVIEW survive formatting without inventing a sale.
+        TsdKizLocationResponse r=found();
+        var reuse=new TsdKizLocationResponse.Reuse();reuse.decision="REVIEW";reuse.message="Нужна проверка";
+        var history=new TsdKizLocationResponse.History();history.event="Архивная сборка";
+        history.at="2026-09-04T14:36:38.000Z";history.orderId="5664720661";
+        history.request=new TsdKizLocationResponse.Request();history.request.number=646;
+        reuse.history=Collections.singletonList(history);r.matches.get(0).reuse=reuse;
+        String text=KizLocationPolicy.describe(r);
+        assertTrue(text.contains("Нужна проверка"));assertTrue(text.contains("646"));
+        assertTrue(text.contains("04.09.2026 17:36:38 МСК"));assertFalse(text.contains("Нужна переклейка"));
+    }
 }

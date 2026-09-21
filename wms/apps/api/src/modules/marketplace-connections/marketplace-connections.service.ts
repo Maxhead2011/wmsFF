@@ -3,11 +3,12 @@ import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../co
 import { collectFbsConnectionOrders, type FbsConnectionError } from './fbs-connection-results';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
-import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
+import { physicalKizLookup, physicalKizHistoryFilter, physicalKizIdentity } from '../../common/kiz-physical-identity';
+import { inspectKizReuse, kizReuseEnabled, kizReuseMessage, pendingSizeKizRelabel } from '../../common/kiz-wb-reuse';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
-import { physicalKizRelabelEnabled, pendingSizeKizRelabel, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
+import { physicalKizRelabelEnabled, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
 import { retainDovoz1049Route } from './fbs-dovoz1049-route';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
@@ -10270,12 +10271,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   // FIX: the ordinary task owner can explicitly relabel a returned physical unit; no administrator override.
   private async proposeFbsPhysicalKizRelabel(task: FbsTsdAssemblyRecord, kiz: string, user: AuthUser) {
+    // FIX: a past binding alone must never propose destroying a reusable marking code.
+    if (kizReuseEnabled() && !pendingSizeKizRelabel(task)) {
+      const evidence = await inspectKizReuse(this.prisma, task.clientId, kiz, task.id);
+      if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
+    }
     await this.inventoryLock?.assertStockMovementsAllowed();
     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
       fresh => this.requireCurrentFbsTsdLease(fresh, user)));
     return this.formatFbsTsdAssembly(task, user, pendingSizeKizRelabel(task)
       ? 'Старый КИЗ исходного размера подтверждён. Переклейте товар и отсканируйте НОВЫЙ КИЗ.'
-      : 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
+      : kizReuseEnabled() ? kizReuseMessage('RELABEL') : 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
   }
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
@@ -10319,6 +10325,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (payload.confirmKizRelabel === true) {
       if (!physicalKizRelabelEnabled()) throw new ForbiddenException('Переклейка КИЗ в этом окружении выключена.');
       const proposalId = requiredFbsTsdText(payload.kizRelabelProposalId, 'Сначала отсканируйте старый КИЗ.');
+      // FIX: an old persisted proposal is not proof that replacement is still required.
+      if (kizReuseEnabled() && !pendingSizeKizRelabel(task) && !task.kiz) {
+        const proposal = await readPhysicalKizRelabel(this.prisma, task, user);
+        if (!proposal || proposal.id !== proposalId) throw new ConflictException('Предложение переклейки изменилось. Обновите задание.');
+        const evidence = await inspectKizReuse(this.prisma, task.clientId, proposal.oldKiz, task.id);
+        if (evidence.decision !== 'RELABEL') throw new BadRequestException(kizReuseMessage('REVIEW'));
+      }
       if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {
         throw new BadRequestException('Новый КИЗ уже использовался в WB. Возьмите свободный новый КИЗ.');
       }
@@ -10480,7 +10493,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         if (payload.supportsKizRelabel !== true) throw new BadRequestException('Этот КИЗ уже использовался в WB. Для переклейки обновите приложение ТСД через «Проверить обновление».');
         return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
       }
-      const message = previousWbUsage.orderId
+      const message = kizReuseEnabled() ? kizReuseMessage('RELABEL') : previousWbUsage.orderId
         ? `Этот КИЗ уже передавался в Wildberries для заказа ${previousWbUsage.orderId}. Возьмите другую единицу.`
         : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.';
       await this.recordLocalFbsKizConflict(task, kiz, mark, message, user, 'WB_HISTORY');
@@ -11929,7 +11942,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     if (previousWbUsage) {
       throw new BadRequestException(
-        previousWbUsage.orderId
+        kizReuseEnabled() ? kizReuseMessage('RELABEL') : previousWbUsage.orderId
           ? `Этот КИЗ уже передавался в Wildberries для заказа №${previousWbUsage.orderId}. Возьмите другую единицу.`
           : 'Этот КИЗ уже передавался или был отгружен через Wildberries. Возьмите другую единицу.',
       );
@@ -13595,6 +13608,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     kiz: string,
     excludedAssemblyId: string,
   ) {
+    // FIX: only independently confirmed usage asks for relabeling; uncertainty stays a review.
+    if (kizReuseEnabled()) {
+      const evidence = await inspectKizReuse(this.prisma, clientId, kiz, excludedAssemblyId);
+      await this.prisma.auditLog.create({ data: { action: 'KIZ_REUSE_CHECK', entity: 'FbsTsdAssembly', entityId: excludedAssemblyId,
+        payload: JSON.parse(JSON.stringify({ clientId, kizIdentity: physicalKizIdentity(kiz), ...evidence })) } });
+      if (evidence.decision === 'ALLOW') return null;
+      if (evidence.decision === 'REVIEW') throw new BadRequestException(kizReuseMessage('REVIEW'));
+      const first = evidence.history[0];
+      return { source: 'SHIPMENT' as const, orderId: first?.orderId ?? null, requestId: first?.requestId ?? '', shippedAt: first?.at ?? null };
+    }
     const [assembly, shipped, printed] = await Promise.all([
       this.prisma.fbsTsdAssembly.findFirst({
         where: {
