@@ -1,0 +1,170 @@
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -1,3 +1,4 @@
++import { ensureWmsAutoAssemblyAuthor, fbsRequestWarehouseName } from './fbs-request-identity';
+ import { withFbsAssemblyLock } from './fbs-assembly-lock';
+ import { activeDuplicateGroups, calculateActiveDuplicateQuantities, commonDuplicateReserve, exactDuplicateSource, validateActiveDuplicatePairs, unavailableDuplicateChrtIds } from './duplicate-stock-runtime';
+ import { approvedSizeRoutes } from './fbs-size-substitution-route';
+@@ -18437,7 +18438,7 @@
+           : rule?.mode === 'CENTRAL' || ((!rule || rule.mode === 'DEFAULT') && connection.fbsAutoRouteNewWarehouses) ? connection.fbsExecutionWarehouseId : null;
+         if (!externalId || !executionId || (!config.allWarehouses && !config.warehouseIds.includes(externalId))) { skipped++; continue; }
+         const key = `${externalId}:${executionId}`;
+-        const group = groups.get(key) ?? { warehouseId: executionId, label: order.warehouseName || externalId, orders: [] };
++        const group = groups.get(key) ?? { warehouseId: executionId, label: fbsRequestWarehouseName(externalId, order.warehouseName, rule?.marketplaceWarehouseName), orders: [] };
+         group.orders.push(order); groups.set(key, group);
+       }
+       const result: { skipped: number; groups: Array<{ label: string; count: number; requestNumber?: number; error?: string }> } = { skipped, groups: [] };
+@@ -18458,7 +18459,7 @@
+             entry.count = eligible.length;
+             if (!eligible.length) return;
+             const dto = { clientId, orders: eligible.map(order => ({ connectionId, id: order.id })) };
+-            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId);
++            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId, { automatic: true, warehouseName: group.label });
+             entry.requestNumber = created.request.number;
+             if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
+           }, group.orders.map(order => `${connectionId}:${order.id}`));
+@@ -23688,6 +23689,7 @@
+     user: AuthUser,
+     responseOverride?: FbsOrdersResponse,
+     executionWarehouseId?: string,
++    source?: { automatic: boolean; warehouseName: string },
+   ) {
+     const clientId = dto.clientId.trim();
+     this.clientScopes.requireClientAccess(user, clientId, 'write');
+@@ -23720,10 +23722,17 @@
+     const wbWarehouseOrder = orders.find(
+       (order) => order.marketplace === MarketplaceType.WILDBERRIES,
+     );
++    // FIX: the fast selected-order refresh may omit names that were present in the routing preview.
++    const route = wbWarehouseOrder && process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true'
++      ? await this.prisma.fbsWarehouseRoutingRule.findFirst({ where: {
++          connectionId: wbWarehouseOrder.connectionId,
++          marketplaceWarehouseId: wbWarehouseOrder.warehouseId || wbWarehouseOrder.officeId || '',
++        }, select: { marketplaceWarehouseName: true } }) : null;
+     const wbWarehouseLabel = wbWarehouseOrder
+-      ? wbWarehouseOrder.warehouseName?.trim() ||
+-        (wbWarehouseOrder.warehouseId ? `WB №${wbWarehouseOrder.warehouseId}` : 'WB: склад не определён')
+-      : null;
++      ? fbsRequestWarehouseName(wbWarehouseOrder.warehouseId, wbWarehouseOrder.warehouseName, source?.warehouseName, route?.marketplaceWarehouseName)
++      : source?.warehouseName || null;
++    const marketplaceLabel = wbWarehouseOrder ? 'WB' : 'Ozon';
++    const automatic = source?.automatic === true && process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true';
+     const inactive = orders.filter((order) => order.category !== 'active');
+     if (inactive.length > 0) {
+       throw new BadRequestException(
+@@ -23794,6 +23803,7 @@
+         }, select: { id: true } });
+         if (freshLinks.length) throw new ConflictException('Заказы уже включены в другую заявку. Обновите список.');
+         }
++        const authorId = automatic ? await ensureWmsAutoAssemblyAuthor(tx) : user.id;
+         const created = await tx.clientRequest.create({
+           data: {
+             clientId,
+@@ -23801,10 +23811,10 @@
+             type: ClientRequestType.OUTBOUND,
+             status: ClientRequestStatus.SUBMITTED,
+             priority: 'NORMAL',
+-            title: `${wbWarehouseLabel ? `FBS WB · ${wbWarehouseLabel}` : 'FBS'} — ${orders.length} заказ(а/ов)`,
++            title: `${wbWarehouseLabel ? `FBS ${marketplaceLabel} · ${wbWarehouseLabel}` : 'FBS'} — ${orders.length} заказ(а/ов)`,
+             destinationCity: wbWarehouseLabel ? `Маркетплейс FBS · ${wbWarehouseLabel}` : 'Маркетплейс FBS',
+-            comment: `${wbWarehouseLabel ? `Склад WB: ${wbWarehouseLabel}. ` : ''}Создано из FBS-заказов: ${orderIds.join(', ')}`,
+-            createdByUserId: user.id,
++            comment: `${wbWarehouseLabel ? `Склад ${marketplaceLabel}: ${wbWarehouseLabel}. ` : ''}Создано из FBS-заказов: ${orderIds.join(', ')}`,
++            createdByUserId: authorId,
+             items: {
+               create: [...itemGroups.values()].map((item) => ({
+                 skuId: item.skuId,
+@@ -23829,8 +23839,8 @@
+             requestId: created.id,
+             clientId,
+             eventType: ClientRequestEventType.CREATED,
+-            title: 'Заявка создана из FBS-заказов',
+-            body: `${wbWarehouseLabel ? `Склад WB: ${wbWarehouseLabel}. ` : ''}${orderIds.join(', ')}`,
++            title: automatic ? 'Заявка создана автосборкой WMS' : 'Заявка создана из FBS-заказов',
++            body: `${wbWarehouseLabel ? `Склад ${marketplaceLabel}: ${wbWarehouseLabel}. ` : ''}${orderIds.join(', ')}`,
+             statusTo: ClientRequestStatus.SUBMITTED,
+             createdByUserId: user.id,
+           },
+--- /dev/null
++++ b/wms/apps/api/src/modules/marketplace-connections/fbs-request-identity.ts
+@@ -0,0 +1,22 @@
++import type { Prisma } from '@prisma/client';
++
++export const WMS_AUTO_ASSEMBLY_AUTHOR_ID = '59432a17-6c71-4e51-a349-7466d4cf0158';
++// FIX: a blocked, roleless identity is attribution only, never an execution principal.
++export async function ensureWmsAutoAssemblyAuthor(tx: Prisma.TransactionClient): Promise<string> {
++  const author = await tx.user.upsert({
++    where: { id: WMS_AUTO_ASSEMBLY_AUTHOR_ID }, update: {},
++    create: { id: WMS_AUTO_ASSEMBLY_AUTHOR_ID, email: 'autosborka@system.wms.invalid',
++      name: 'WMS', status: 'BLOCKED', passwordHash: '!SYSTEM-NO-LOGIN!' },
++    select: { id: true, name: true, status: true, roles: { select: { roleId: true } } },
++  });
++  if (author.name !== 'WMS' || author.status !== 'BLOCKED' || author.roles.length) {
++    throw new Error('Некорректная служебная запись автора автосборки.');
++  }
++  return author.id;
++}
++
++// FIX: numeric placeholders are not warehouse names; retain a truthful fallback if no name is known.
++export function fbsRequestWarehouseName(id: string | null | undefined, ...names: Array<string | null | undefined>) {
++  const name = names.map(value => value?.trim()).find(value => value && !/^\d+$/.test(value) && !/^(?:WB №|Склад WB )\d+$/.test(value));
++  return name || (id ? `WB №${id}` : 'WB: склад не определён');
++}
+--- /dev/null
++++ b/wms/apps/api/test/fbs-request-identity.spec.ts
+@@ -0,0 +1,41 @@
++import { afterEach, expect, it, vi } from 'vitest';
++import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
++import { ensureWmsAutoAssemblyAuthor, fbsRequestWarehouseName, WMS_AUTO_ASSEMBLY_AUTHOR_ID } from '../src/modules/marketplace-connections/fbs-request-identity';
++afterEach(() => vi.unstubAllEnvs());
++// TEST: selected-order fast refresh loses the warehouse name; routing restores it.
++it.each([true, false])('keeps a named warehouse and correct author, automatic=%s', async automatic => {
++  vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'true');
++  const tx = {
++    $executeRaw: vi.fn(),
++    user: { upsert: vi.fn().mockResolvedValue({ id: WMS_AUTO_ASSEMBLY_AUTHOR_ID, name: 'WMS', status: 'BLOCKED', roles: [] }) },
++    clientRequest: { create: vi.fn().mockResolvedValue({ id: 'request', number: 42 }) },
++    clientRequestEvent: { create: vi.fn() },
++    fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([]), create: vi.fn() },
++  };
++  const db = { $transaction: (fn: any) => fn(tx), fbsOrderRequestLink: { findMany: vi.fn().mockResolvedValue([]) },
++    fbsWarehouseRoutingRule: { findFirst: vi.fn().mockResolvedValue({ marketplaceWarehouseName: 'Москва Вешки' }) } };
++  const service = new MarketplaceConnectionsService(db as never, { requireClientAccess: vi.fn() } as never);
++  const order = { id: 'order', connectionId: 'cab', marketplace: 'WILDBERRIES', warehouseId: '1954106', warehouseName: null,
++    category: 'active', itemCount: 1, barcodes: ['123'], product: { id: 'sku', name: 'Товар' } };
++  vi.spyOn(service as any, 'resolveSelectedFbsOrders').mockResolvedValue({ orders: [order] });
++  await (service as any).createFbsRequestUnlocked({ clientId: 'client', orders: [{ connectionId: 'cab', id: 'order' }] },
++    { id: 'admin' }, { orders: [order] }, 'physical-warehouse', automatic ? { automatic: true, warehouseName: 'WB №1954106' } : undefined);
++  expect(tx.clientRequest.create.mock.calls[0][0].data).toMatchObject({ title: 'FBS WB · Москва Вешки — 1 заказ(а/ов)',
++    destinationCity: 'Маркетплейс FBS · Москва Вешки', warehouseId: 'physical-warehouse', createdByUserId: automatic ? WMS_AUTO_ASSEMBLY_AUTHOR_ID : 'admin' });
++  expect(tx.clientRequestEvent.create.mock.calls[0][0].data).toMatchObject({ createdByUserId: 'admin',
++    title: automatic ? 'Заявка создана автосборкой WMS' : 'Заявка создана из FBS-заказов' });
++  expect(db.fbsWarehouseRoutingRule.findFirst.mock.calls[0][0].where).toEqual({ connectionId: 'cab', marketplaceWarehouseId: '1954106' });
++  expect(tx.user.upsert).toHaveBeenCalledTimes(automatic ? 1 : 0);
++  if (automatic) expect(tx.user.upsert.mock.calls[0][0].create).toMatchObject({ name: 'WMS', status: 'BLOCKED', passwordHash: '!SYSTEM-NO-LOGIN!' });
++});
++// TEST: names cannot silently become codes, and unknown warehouses remain explicit.
++it('prefers real names and retains a truthful unknown fallback', () => {
++  expect(fbsRequestWarehouseName('123', '123', 'WB №123', 'Волгоград')).toBe('Волгоград');
++  expect(fbsRequestWarehouseName('123', ' Москва ', 'Волгоград')).toBe('Москва');
++  expect(fbsRequestWarehouseName('123', null)).toBe('WB №123');
++});
++// TEST: an accidentally enabled/privileged identity cannot be used by automation.
++it('rejects a privileged system author', async () => {
++  const db = { user: { upsert: vi.fn().mockResolvedValue({ name: 'WMS', status: 'ACTIVE', roles: [] }) } };
++  await expect(ensureWmsAutoAssemblyAuthor(db as never)).rejects.toThrow('служебная');
++});
+--- /dev/null
++++ b/wms/apps/web/src/components/client-requests/ClientRequestsTable.author.spec.tsx
+@@ -0,0 +1,11 @@
++import { renderToStaticMarkup } from 'react-dom/server';
++import { expect, it } from 'vitest';
++import { ClientRequestsTable } from './ClientRequestsTable';
++// TEST: automatic and manual authors use the actual persisted identity in the request list.
++it.each(['WMS', 'Администратор'])('shows author %s', name => {
++  const props: any = { items: [{ id: 'r', number: 1264, type: 'OUTBOUND', status: 'SUBMITTED', priority: 'NORMAL',
++    title: 'FBS WB · Москва Вешки', destinationCity: 'Маркетплейс FBS · Москва Вешки', createdAt: '2026-09-22T10:00:00Z',
++    createdBy: { id: 'author', name }, client: { id: 'c', name: 'Клиент' }, items: [], files: [], packages: [] }] };
++  const html = renderToStaticMarkup(<ClientRequestsTable {...props} />);
++  expect(html).toContain(`Автор: ${name}`); expect(html).toContain('Москва Вешки');
++});
