@@ -130,7 +130,7 @@ final class FboTwoStageScreen {
                 if("CONTROL".equals(plan.phase))hint="ШК короба поставки";
                 else if("PICKING".equals(plan.phase)&&state.source.isEmpty())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
                 else if("PACKING".equals(plan.phase)&&state.target.isEmpty())hint=packingChoices()
-                    ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":"ШК короба для упаковки")
+                    ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":packingMode==PackingMode.MANUAL&&plan.reusablePackingEnabled?"ШК нового или закрытого короба для дополнения":"ШК короба для упаковки")
                     :plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
                 else if(!state.barcode.isEmpty())hint="КИЗ товара";
                 text(root,hint);input=new EditText(activity);input.setSingleLine(true);TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
@@ -144,12 +144,12 @@ final class FboTwoStageScreen {
                 if("PICKING".equals(plan.phase)){
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.name+" · "+t.barcode);
-                        if(r.wholeBox&&"logoff".equals(BuildConfig.FLAVOR))card(root,"Короб уезжает целиком · "+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
+                        if(r.wholeBox&&"logoff".equals(BuildConfig.FLAVOR))card(root,(FboScanState.reusableBin(plan,r.boxCode)?"Отобрать весь товар, бокс остаётся на стеллаже · ":"Короб уезжает целиком · ")+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
                         if(r.recount)text(root,"Для целого короба требуется актуализация: количество и КИЗ расходятся.");
                         // FIX: picking and transferring the surplus are explicit choices, never automatic writes.
                         button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
                         if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
-                        if(r.wholeBox)button(root,"Короб забран целиком",ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
+                        if(r.wholeBox)button(root,FboScanState.wholePickTitle(plan,r.boxCode),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
                         if(state.pallet.isEmpty()){
@@ -250,7 +250,7 @@ final class FboTwoStageScreen {
         handler.removeCallbacks(automatic);
         quantityInput=new EditText(activity);quantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         quantityInput.setSingleLine(true);quantityInput.setHint("Фактическое количество единиц");
-        quantityDialog=new AlertDialog.Builder(activity).setTitle("Короб забран целиком")
+        quantityDialog=new AlertDialog.Builder(activity).setTitle(FboScanState.wholePickTitle(plan,state.source))
             .setMessage("Введите количество единиц товара в коробе. По учёту: "+source().wholeBoxQuantity)
             .setView(quantityInput).setPositiveButton("Подтвердить",null).setNegativeButton("Отмена",null).create();
         quantityDialog.setOnDismissListener(d->{quantityDialog=null;quantityInput=null;if(!closed)render();});

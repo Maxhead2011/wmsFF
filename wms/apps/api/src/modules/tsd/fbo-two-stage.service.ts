@@ -23,6 +23,9 @@ const untouchedFbsRoute = (task: FbsTsdAssembly) =>
     !task.sourceBarcode && !task.barcode && !task.kiz && !task.relabelConfirmedAt &&
     ((task.status === 'RESERVED' && task.deviceCode === 'AUTO:FBS:PALLET_SORT' && !task.boxId) || task.status === 'IN_PROGRESS');
 const identity = (value: string) => physicalKizIdentity(value) || value.trim();
+// FIX: opt-in for our WMS; reusable rack bins are never shipping cartons.
+const reusablePackingEnabled = () => process.env.WMS_FBO_REUSABLE_PACKING_ENABLED === 'true';
+const reusableBin = (code: string) => /^FFL_LKBBOX_/i.test(code);
 const composition = (r: Request) => hash(r.items.map(i => [i.id, i.skuId, i.barcode, i.quantity]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 @Injectable()
 export class FboTwoStageService {
@@ -112,7 +115,7 @@ export class FboTwoStageService {
                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
-        return { manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+        return { reusablePackingEnabled: reusablePackingEnabled(), manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
@@ -172,12 +175,13 @@ export class FboTwoStageService {
                     throw new ConflictException('Сначала отсканируйте паллет, на котором сейчас находится этот короб.');
                 const balances = await tx.stockBalance.findMany({ where: { boxId: source.id, clientId: r.clientId, warehouseId: r.warehouseId } });
                 const marks = await tx.productMark.findMany({ where: { boxId: source.id, status: { not: 'SHIPPING' } } });
-                const whole = dto.action === 'PICK_BOX';
+                const allContents = dto.action === 'PICK_BOX';
+                const whole = allContents && !(reusablePackingEnabled() && reusableBin(source.code));
                 let chosen: Array<{
                     skuId: string;
                     mark: typeof marks[number] | null;
                 }> = [];
-                if (whole) {
+                if (allContents) {
                     // FIX: never infer a physical confirmation from the displayed planned amount.
                     if (!Number.isSafeInteger(dto.confirmedQuantity) || dto.confirmedQuantity! < 1)
                         throw new ConflictException('Введите фактическое количество единиц в коробе. Обновите ТСД, если поля ввода нет.');
@@ -240,8 +244,16 @@ export class FboTwoStageService {
                 await this.requireIdleBox(tx, target.id, id);
                 const previousBox = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (previousBox) {
-                    if (previousBox.requestId !== id || previousBox.closedAt || previousBox.wholeBox)
+                    // FIX: selecting a closed carton explicitly in manual mode reopens it for additions.
+                    const reopen = reusablePackingEnabled() && process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && dto.action === 'MANUAL_OPEN_BOX';
+                    if (previousBox.requestId !== id || (!reopen && (previousBox.closedAt || previousBox.wholeBox)))
                         throw new ConflictException('Короб уже закрыт или принадлежит другой сборке.');
+                    if (reopen && (previousBox.closedAt || previousBox.wholeBox || previousBox.confirmedAt)) {
+                        await tx.fboAssemblyBox.update({ where: { id: previousBox.id }, data: { closedAt: null, confirmedAt: null, confirmedByUserId: null, wholeBox: false } });
+                        await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_PACKING_BOX_REOPENED', entity: 'ClientRequest', entityId: id,
+                            payload: { operationId: dto.operationId, boxCode: target.code, previousClosedAt: previousBox.closedAt?.toISOString(),
+                                previousConfirmedAt: previousBox.confirmedAt?.toISOString(), previousWholeBox: previousBox.wholeBox, quantity: units.filter(u => u.targetBoxId === target.id && u.state === 'PACKED').length } } });
+                    }
                 }
                 else {
                     if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
@@ -282,6 +294,8 @@ export class FboTwoStageService {
             else if (dto.action === 'PACK_BOX') {
                 requirePhase('PACKING');
                 const box = await this.box(tx, r, dto.sourceBoxCode);
+                if (reusablePackingEnabled() && reusableBin(box.code))
+                    throw new ConflictException('Бокс — ячейка стеллажа. Упакуйте отобранный товар поштучно в отгрузочные короба.');
                 const picked = units.filter(u => u.wholeBox && u.sourceBoxId === box.id && u.state === 'PICKED');
                 if (!picked.length)
                     throw new ConflictException('Этот короб не отобран целиком или уже добавлен.');
@@ -519,6 +533,9 @@ export class FboTwoStageService {
     private async target(tx: Prisma.TransactionClient, r: Request, code?: string) {
         if (!code || !/^FFL[\w-]{1,96}$/i.test(code))
             throw new BadRequestException('Сканируйте ШК короба FFL.');
+        // FIX: an empty reusable rack bin must not become an outbound carton either.
+        if (reusablePackingEnabled() && reusableBin(code))
+            throw new ConflictException('Бокс остаётся на стеллаже. Отсканируйте отгрузочный короб.');
         await tx.box.upsert({ where: { code }, create: { code, clientId: r.clientId, warehouseId: r.warehouseId }, update: {} });
         return this.box(tx, r, code);
     }

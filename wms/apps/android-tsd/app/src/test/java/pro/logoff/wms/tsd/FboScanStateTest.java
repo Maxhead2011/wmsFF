@@ -7,6 +7,14 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: labels distinguish rack bins only when enabled; sold WMS keeps its existing behavior.
+    @Test public void reusableBinContentsAreNotCalledAShippingCarton() {
+        TsdFboPlan plan=new TsdFboPlan();
+        assertEquals("Короб забран целиком",FboScanState.wholePickTitle(plan,"FFL_LKBBOX_042"));
+        plan.reusablePackingEnabled=true;
+        assertEquals("Весь товар из бокса отобран",FboScanState.wholePickTitle(plan,"ffl_lkbbox_042"));
+        assertEquals("Короб забран целиком",FboScanState.wholePickTitle(plan,"FFL_LKB0409_28"));
+    }
     // TEST: a lost response and an app restart retain the same physical count and operation id.
     @Test public void wholeBoxRetryPreservesConfirmedQuantity() {
         FboScanState first=new FboScanState();first.source="BOX";
