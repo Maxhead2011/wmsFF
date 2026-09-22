@@ -4574,6 +4574,13 @@ public class MainActivity extends Activity {
             fbsScanInput = null;
         }
         LinearLayout root = baseRoot();
+        // FIX: feedback covers the entire FBS screen, with a text status as well as color.
+        if("logoff".equals(BuildConfig.FLAVOR)){
+            boolean transmitting=fbsBusy&&fbsFeedbackColor==BOX_DUPLICATE_BLUE;
+            root.setBackgroundColor(AssemblyScreenFeedback.background(true,transmitting,fbsFeedbackColor));
+            String feedback=transmitting?"Отправка / повторная отправка запроса":AssemblyScreenFeedback.label(false,fbsFeedbackColor);
+            if(!feedback.isEmpty())root.addView(messageView(feedback));
+        }
         root.addView(header());
         root.addView(title(tr("Сборка FBS", "FBS buyurtmasini yig‘ish")));
         int completedToday = fbsAssembly != null && fbsAssembly.progress != null
@@ -8993,6 +9000,9 @@ public class MainActivity extends Activity {
         }
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
+        if("logoff".equals(BuildConfig.FLAVOR)&&screen==Screen.FBS_ASSEMBLY){
+            scroll.setFillViewport(true);scroll.setBackground(root.getBackground());
+        }
         scroll.addView(root);
         setContentView(scroll);
     }

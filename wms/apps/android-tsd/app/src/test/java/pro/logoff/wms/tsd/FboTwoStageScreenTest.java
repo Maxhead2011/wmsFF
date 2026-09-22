@@ -26,6 +26,41 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: FBS feedback covers the viewport and sold variants retain their existing background.
+    @Test public void fbsFeedbackColorsCoverViewport() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(MainActivity.class).setup()){
+            MainActivity a=controller.get();
+            java.lang.reflect.Field color=MainActivity.class.getDeclaredField("fbsFeedbackColor");color.setAccessible(true);
+            java.lang.reflect.Field busy=MainActivity.class.getDeclaredField("fbsBusy");busy.setAccessible(true);
+            java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderFbsAssemblyScreen");render.setAccessible(true);
+            for(int[] pair:new int[][]{{0xfffecaca,0xffff9494},{0xffbbf7d0,0xffccffcc}}){
+                busy.setBoolean(a,false);color.setInt(a,pair[0]);render.invoke(a);
+                ViewGroup root=a.findViewById(android.R.id.content);android.widget.ScrollView viewport=(android.widget.ScrollView)root.getChildAt(0);
+                assertEquals(pair[1],((ColorDrawable)viewport.getBackground()).getColor());assertTrue(viewport.isFillViewport());
+            }
+        }
+    }
+    // TEST: carton lists start collapsed, preserve scanner input, and failures color the entire viewport.
+    @Test public void packingListsCollapseWithoutResettingScanner() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.wholeBoxes.add("WHOLE_A");
+            TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="WHOLE_B";b.wholeBox=true;b.closed=true;b.quantity=12;p.boxes.add(b);
+            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger(),()->{});
+            try {
+                View root=a.findViewById(android.R.id.content);
+                assertNotNull(find(root,"Целые короба: отсканировано 1 из 2 · осталось 1"));
+                TextView code=find(root,"WHOLE_A");assertEquals(View.GONE,((View)code.getParent()).getVisibility());
+                android.widget.EditText scanner=screen.scannerField();scanner.setText("PARTIAL");
+                find(root,"Целые короба к добавлению").performClick();
+                assertEquals(View.VISIBLE,((View)code.getParent()).getVisibility());assertSame(scanner,screen.scannerField());assertEquals("PARTIAL",scanner.getText().toString());
+                scanner.setText("WRONG");screen.submit();
+                ViewGroup container=a.findViewById(android.R.id.content);android.widget.ScrollView viewport=(android.widget.ScrollView)container.getChildAt(0);
+                assertEquals(0xffff9494,((ColorDrawable)viewport.getBackground()).getColor());assertTrue(viewport.isFillViewport());
+            }finally{screen.close();}
+        }
+    }
     // TEST: real packing widgets announce box/barcode/KIZ and only confirmed acceptance.
     @Test public void newBoxPackingSpeaksStepsAfterServerConfirmation() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
