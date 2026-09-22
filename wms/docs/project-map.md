@@ -123,3 +123,5 @@ rg --files apps/api/test apps/web/src apps/web/test
 Сервер может содержать выпуски из нескольких линий разработки. Перед публикацией сверяйте текущие образы, источник сборки, миграции, конфигурацию и сведения о выпуске. Локальный checkout, корневой README и старый deploy-скрипт не являются доказательством соответствия production. Для проданной ВМС отдельно оценивайте общие модули и не развёртывайте изменения без соответствующей задачи.
 
 - WB allocation presentation: `WbStockSettingsCards.tsx/.css`; production-only fine-control integration is captured in `docs/deployment/wb-confirmation-20260922/production.patch`. Dedicated confirmation replaces the legacy table only when its capability is enabled.
+
+- Автосборка: подписи складов и технический автор WMS — `apps/api/src/modules/marketplace-connections/fbs-request-identity.ts`, вызов из `createFbsRequestUnlocked`; [публикация и исправление старых подписей](deployment/autosborka-labels-20260922/README.md).

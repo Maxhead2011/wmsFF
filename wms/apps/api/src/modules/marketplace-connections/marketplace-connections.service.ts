@@ -1,3 +1,4 @@
+import { ensureWmsAutoAssemblyAuthor, fbsRequestWarehouseName } from './fbs-request-identity';
 import { withFbsAssemblyLock } from './fbs-assembly-lock';
 import { AdminNotificationsService } from '../admin-notifications/admin-notifications.service';
 import { FBS_WB_ACCOUNTED, isFbsWbAccounted } from '../../common/fbs-wb-accounting';
@@ -17452,7 +17453,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : rule?.mode === 'CENTRAL' || ((!rule || rule.mode === 'DEFAULT') && connection.fbsAutoRouteNewWarehouses) ? connection.fbsExecutionWarehouseId : null;
         if (!externalId || !executionId || (!config.allWarehouses && !config.warehouseIds.includes(externalId))) { skipped++; continue; }
         const key = `${externalId}:${executionId}`;
-        const group = groups.get(key) ?? { warehouseId: executionId, label: order.warehouseName || externalId, orders: [] };
+        const group = groups.get(key) ?? { warehouseId: executionId, label: fbsRequestWarehouseName(externalId, order.warehouseName, rule?.marketplaceWarehouseName), orders: [] };
         group.orders.push(order); groups.set(key, group);
       }
       const result: { skipped: number; groups: Array<{ label: string; count: number; requestNumber?: number; error?: string }> } = { skipped, groups: [] };
@@ -17473,7 +17474,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             entry.count = eligible.length;
             if (!eligible.length) return;
             const dto = { clientId, orders: eligible.map(order => ({ connectionId, id: order.id })) };
-            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId);
+            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId, { automatic: true, warehouseName: group.label });
             entry.requestNumber = created.request.number;
             if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
           }, group.orders.map(order => `${connectionId}:${order.id}`));
@@ -22675,6 +22676,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     user: AuthUser,
     responseOverride?: FbsOrdersResponse,
     executionWarehouseId?: string,
+    source?: { automatic: boolean; warehouseName: string },
   ) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
@@ -22701,10 +22703,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const wbWarehouseOrder = orders.find(
       (order) => order.marketplace === MarketplaceType.WILDBERRIES,
     );
+    // FIX: the fast selected-order refresh may omit names that were present in the routing preview.
+    const route = wbWarehouseOrder && process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true'
+      ? await this.prisma.fbsWarehouseRoutingRule.findFirst({ where: {
+          connectionId: wbWarehouseOrder.connectionId,
+          marketplaceWarehouseId: wbWarehouseOrder.warehouseId || wbWarehouseOrder.officeId || '',
+        }, select: { marketplaceWarehouseName: true } }) : null;
     const wbWarehouseLabel = wbWarehouseOrder
-      ? wbWarehouseOrder.warehouseName?.trim() ||
-        (wbWarehouseOrder.warehouseId ? `WB №${wbWarehouseOrder.warehouseId}` : 'WB: склад не определён')
-      : null;
+      ? fbsRequestWarehouseName(wbWarehouseOrder.warehouseId, wbWarehouseOrder.warehouseName, source?.warehouseName, route?.marketplaceWarehouseName)
+      : source?.warehouseName || null;
+    const marketplaceLabel = wbWarehouseOrder ? 'WB' : 'Ozon';
+    const automatic = source?.automatic === true && process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true';
     const inactive = orders.filter((order) => order.category !== 'active');
     if (inactive.length > 0) {
       throw new BadRequestException(
@@ -22775,6 +22784,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }, select: { id: true } });
         if (freshLinks.length) throw new ConflictException('Заказы уже включены в другую заявку. Обновите список.');
         }
+        const authorId = automatic ? await ensureWmsAutoAssemblyAuthor(tx) : user.id;
         const created = await tx.clientRequest.create({
           data: {
             clientId,
@@ -22782,10 +22792,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             type: ClientRequestType.OUTBOUND,
             status: ClientRequestStatus.SUBMITTED,
             priority: 'NORMAL',
-            title: `${wbWarehouseLabel ? `FBS WB · ${wbWarehouseLabel}` : 'FBS'} — ${orders.length} заказ(а/ов)`,
+            title: `${wbWarehouseLabel ? `FBS ${marketplaceLabel} · ${wbWarehouseLabel}` : 'FBS'} — ${orders.length} заказ(а/ов)`,
             destinationCity: wbWarehouseLabel ? `Маркетплейс FBS · ${wbWarehouseLabel}` : 'Маркетплейс FBS',
-            comment: `${wbWarehouseLabel ? `Склад WB: ${wbWarehouseLabel}. ` : ''}Создано из FBS-заказов: ${orderIds.join(', ')}`,
-            createdByUserId: user.id,
+            comment: `${wbWarehouseLabel ? `Склад ${marketplaceLabel}: ${wbWarehouseLabel}. ` : ''}Создано из FBS-заказов: ${orderIds.join(', ')}`,
+            createdByUserId: authorId,
             items: {
               create: [...itemGroups.values()].map((item) => ({
                 skuId: item.skuId,
@@ -22810,8 +22820,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             requestId: created.id,
             clientId,
             eventType: ClientRequestEventType.CREATED,
-            title: 'Заявка создана из FBS-заказов',
-            body: `${wbWarehouseLabel ? `Склад WB: ${wbWarehouseLabel}. ` : ''}${orderIds.join(', ')}`,
+            title: automatic ? 'Заявка создана автосборкой WMS' : 'Заявка создана из FBS-заказов',
+            body: `${wbWarehouseLabel ? `Склад ${marketplaceLabel}: ${wbWarehouseLabel}. ` : ''}${orderIds.join(', ')}`,
             statusTo: ClientRequestStatus.SUBMITTED,
             createdByUserId: user.id,
           },

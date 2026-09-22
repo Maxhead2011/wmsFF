@@ -249,6 +249,8 @@ export function ClientRequestsTable({
                 <span className="client-request-list-meta">
                   Создана: {createdAtFormatter.format(new Date(request.createdAt))}
                 </span>
+                {/* FIX: show the persisted author; automatic requests have the WMS identity. */}
+                <span className="client-request-list-meta">Автор: {request.createdBy?.name || request.createdBy?.email || 'Система'}</span>
                 {onOpenFbsOrders && isFbsRequest(request) ? (
                   <button
                     className="client-request-row-fbs-link"
