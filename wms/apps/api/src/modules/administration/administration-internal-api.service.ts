@@ -47,9 +47,9 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'administration',
     name: 'Администрирование',
-    prefixes: ['/administration', '/administration/marketplace-stock-control'],
+    prefixes: ['/administration', '/administration/marketplace-stock-control', '/administration/auto-assembly'],
     // FIX: include the client stock-control list and update handlers.
-    routeCount: 39, // ADDED: send/list TSD monitor messages.
+    routeCount: 43, // FIX: includes auto assembly settings, preview and manual run.
     description: 'Диагностика WMS, технические работы, настройки, аудит, контроль внутренних API и включение/отключение отправки остатков на МП по клиентам.',
     logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.'],
     dependencies: ['Основная БД', 'Права system:admin'],

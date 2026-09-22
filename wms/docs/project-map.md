@@ -33,6 +33,7 @@
 | Начисления, счета, хранение | `modules/billing/`, `modules/contracts/`, `modules/expenses/` | Найти API-вызов и использующий его компонент |
 | Доставка, фабрика, Ozon FBO | `modules/logistics/`, `modules/factory-shipments/`, `modules/ozon-fbo/` | Соответствующие компоненты через поиск API-вызова |
 | Печать этикеток | `modules/print/` | Web API-клиент и Android сетевой контракт |
+| Плитки администрирования | Существующие API администрирования | `components/administration/AdministrationPanel.tsx`, `AdministrationNavigation`; `AdministrationAutoAssembly.tsx`; API `administration/auto-assembly.{controller,service}.ts`, расписание `auto-assembly-policy.ts`, общий замок ручной/автоматической сборки `marketplace-connections/fbs-assembly-lock.ts`. Флаг `WMS_AUTO_ASSEMBLY_ENABLED` выключен по умолчанию |
 | Отчёты, оборот, интеграции | `modules/analytics/`, `modules/turnover/`, `modules/integration-api/` | `components/turnover/`, API-клиент |
 
 Все API-пути в этой таблице начинаются с `apps/api/src/`, web-пути — с `apps/web/src/`. Имена сервисов помогают найти область, но обработчик конкретного действия устанавливайте по контроллеру.

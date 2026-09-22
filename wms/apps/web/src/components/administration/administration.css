@@ -104,6 +104,34 @@
   gap: 18px;
 }
 
+/* FIX: responsive section tiles follow the FBS navigation theme. */
+.admin-topic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.admin-topic-tile { --tile-accent: #2865ff; --tile-tint: #eff5ff; display: flex; align-items: flex-start; gap: 13px; min-height: 155px; padding: 18px; border: 1px solid #e0e6ee; border-radius: 12px; background: #fff; text-align: left; cursor: pointer; color: #172331; transition: border-color .15s, box-shadow .15s; }
+.admin-topic-tile--1 { --tile-accent: #168749; --tile-tint: #edf9f1; }
+.admin-topic-tile--2 { --tile-accent: #7b35ed; --tile-tint: #f5f0ff; }
+.admin-topic-tile--3 { --tile-accent: #c46a08; --tile-tint: #fff7e8; }
+.admin-topic-tile--4 { --tile-accent: #e63749; --tile-tint: #fff0f2; }
+.admin-topic-tile:hover { border-color: var(--tile-accent); box-shadow: 0 6px 20px #1e355412; }
+.admin-topic-tile:focus-visible { outline: 3px solid var(--tile-accent); outline-offset: 3px; }
+.admin-topic-tile__icon { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 9px; background: var(--tile-tint); color: var(--tile-accent); }
+.admin-topic-tile__content { display: grid; gap: 7px; min-width: 0; }
+.admin-topic-tile__content small { color: var(--tile-accent); font-size: 12px; font-weight: 800; }
+.admin-topic-tile__content strong { font-size: 14px; line-height: 1.35; }
+.admin-topic-tile__content > span { font-size: 12px; line-height: 1.55; color: #748298; }
+.admin-topic-tile__content b { justify-self: start; background: var(--tile-tint); color: var(--tile-accent); padding: 5px 8px; border-radius: 6px; font-size: 12px; }
+.admin-section-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.admin-section-navigation h3 { margin: 0; }
+.auto-assembly-fields { display: grid; gap: 18px; border: 0; padding: 0; margin: 0; min-width: 0; }
+.auto-assembly-fields label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.auto-assembly-fields input:not([type=checkbox]), .auto-assembly-fields select { border: 1px solid #dbe3ed; border-radius: 8px; padding: 10px 12px; font: inherit; max-width: 100%; }
+.auto-assembly-interval { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.auto-assembly-route { margin-bottom: 10px; }
+.auto-assembly-report { border: 1px solid #e0e6ee; background: #f7f9fc; padding: 14px; border-radius: 10px; margin-top: 12px; overflow-wrap: anywhere; }
+.auto-assembly-cabinet .admin-button--ghost, .admin-section-navigation .admin-button--ghost { color: #355070; background: #fff; border-color: #dbe3ed; }
+.admin-stack[aria-label="Автосборка"] > .admin-section > label { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.admin-stack[aria-label="Автосборка"] select { border: 1px solid #dbe3ed; border-radius: 8px; padding: 10px 12px; background: #fff; color: #172331; font: inherit; max-width: 100%; }
+@media (max-width: 520px) { .admin-topic-grid { grid-template-columns: 1fr; } .admin-topic-tile { min-height: 110px; } }
+
 .admin-section {
   display: grid;
   gap: 18px;
