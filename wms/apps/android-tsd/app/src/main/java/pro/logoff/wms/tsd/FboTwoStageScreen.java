@@ -34,6 +34,7 @@ final class FboTwoStageScreen {
     private final FboScanFeedback scanFeedback;
     private final FboPackingVoice packingVoice=new FboPackingVoice();
     private int feedbackColor=Color.TRANSPARENT;
+    private boolean retrySending, waitingExpanded, scannedExpanded;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService executor=Executors.newSingleThreadExecutor();
     private final FboScanState state=new FboScanState();
@@ -50,7 +51,7 @@ final class FboTwoStageScreen {
     private boolean packingChoices(){return packing&&"logoff".equals(BuildConfig.FLAVOR);}
     private void choosePackingMode(PackingMode mode){
         if(!ready()||!state.target.isEmpty()||!state.barcode.isEmpty())return;
-        handler.removeCallbacks(automatic);state.source="";packingMode=mode;message="";render();
+        handler.removeCallbacks(automatic);state.source="";packingMode=mode;message="";feedbackColor=Color.TRANSPARENT;render();
     }
     private void packingCompleteButton(LinearLayout root){
         boolean allClosed=true;for(TsdFboPlan.Box b:plan.boxes)if(!b.closed)allClosed=false;
@@ -99,13 +100,38 @@ final class FboTwoStageScreen {
         handler.removeCallbacks(automatic);manualPackingScan=true;
         message="Отсканируйте КИЗ для товара "+state.barcode;feedbackColor=Color.TRANSPARENT;render();
     }
+    // FIX: expanding lists does not rebuild the scanner or discard its current text.
+    private void cartonList(LinearLayout root,String title,List<String> codes,boolean waiting){
+        boolean expanded=waiting?waitingExpanded:scannedExpanded;
+        Button toggle=new TsdUi.Button(activity);toggle.setAllCaps(false);
+        LinearLayout content=new LinearLayout(activity);content.setOrientation(LinearLayout.VERTICAL);
+        for(String code:codes)text(content,code);
+        if(codes.isEmpty())text(content,"Нет коробов");
+        content.setVisibility(expanded?android.view.View.VISIBLE:android.view.View.GONE);
+        toggle.setText((expanded?"▼ ":"▶ ")+title+" ("+codes.size()+")");
+        toggle.setOnClickListener(v->{boolean open=content.getVisibility()!=android.view.View.VISIBLE;
+            if(waiting)waitingExpanded=open;else scannedExpanded=open;
+            content.setVisibility(open?android.view.View.VISIBLE:android.view.View.GONE);
+            toggle.setText((open?"▼ ":"▶ ")+title+" ("+codes.size()+")");
+            AssemblyAutoFocus.request(input,()->ready()&&!closed&&quantityDialog==null);
+        });
+        root.addView(toggle);root.addView(content);
+    }
+    private void wholeCartonProgress(LinearLayout root){
+        FboPackingProgress progress=new FboPackingProgress(plan);
+        text(root,"Целые короба: отсканировано "+progress.scanned.size()+" из "+progress.total()+" · осталось "+progress.waiting.size());
+        cartonList(root,"Целые короба к добавлению",progress.waiting,true);
+        cartonList(root,"Отсканированные целые короба",progress.scanned,false);
+    }
     private boolean ready(){return state.pending()==null&&!busy;}
     private void render(){
         if(closed||activity.isDestroyed())return;
-        LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);root.setBackgroundColor(Color.WHITE);
+        LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);int screenColor=AssemblyScreenFeedback.background("logoff".equals(BuildConfig.FLAVOR),retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor);root.setBackgroundColor(screenColor);
         text(root,packing?"Упаковка FBO":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
+        if("logoff".equals(BuildConfig.FLAVOR)&&retrySending&&busy&&state.pending()!=null)text(root,"Повторная отправка запроса");
         input=null;
         if(plan!=null){text(root,plan.title);text(root,"Нужно "+plan.needed+" · Отобрано "+plan.picked+" · Упаковано "+plan.packed);
+            if(packingChoices()&&("PACKING".equals(plan.phase)||"PICKING".equals(plan.phase)))wholeCartonProgress(root);
             if(plan.compositionChanged)text(root,"Состав заявки изменился. Нужна сверка.");
             if(plan.shortage>0)text(root,"Недостаточно доступного остатка: "+plan.shortage+" ед.");
             if(!FboScanState.phaseAllowed(packing,plan.phase))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
@@ -123,7 +149,7 @@ final class FboTwoStageScreen {
                 button(root,"Отсканировать целые короба",ready(),()->choosePackingMode(PackingMode.WHOLE_BOXES));
                 if(plan.manualPackingEnabled)button(root,"Добавить товар вручную",ready(),()->choosePackingMode(PackingMode.MANUAL));
                 packingCompleteButton(root);
-                for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
+                for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
             }
             else {
                 String hint="ШК товара";
@@ -164,7 +190,7 @@ final class FboTwoStageScreen {
                     text(root,"Осталось вложить "+(plan.needed-plan.packed));
                     if(!state.target.isEmpty()){text(root,"Открыт короб "+state.target);button(root,"Закрыть короб",ready(),()->send("CLOSE_BOX",null));}
                     for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(state.target)&&!b.closed&&b.quantity==0)button(root,"Отложить пустой короб",ready(),()->send("CANCEL_EMPTY_BOX",null));
-                    if(!plan.wholeBoxes.isEmpty())text(root,"Целые короба к добавлению: "+String.join(", ",plan.wholeBoxes));
+                    if(!packingChoices()&&!plan.wholeBoxes.isEmpty())text(root,"Целые короба к добавлению: "+String.join(", ",plan.wholeBoxes));
                     if(packingChoices()){
                         String finish=packingMode==PackingMode.WHOLE_BOXES?"Завершить сканирование целых коробов":"Завершить формирование новых коробов";
                         button(root,finish,ready()&&state.target.isEmpty()&&state.barcode.isEmpty(),()->choosePackingMode(PackingMode.MENU));
@@ -175,12 +201,12 @@ final class FboTwoStageScreen {
                     if(packingChoices())text(root,"Осталось отсканировать: "+String.join(", ",unconfirmedBoxes()));
                     button(root,packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
                 }
-                for(TsdFboPlan.Box b:plan.boxes)text(root,b.code+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
+                for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
             }
         }
         if(state.pending()!=null)button(root,"Повторить неподтверждённый запрос",!busy,()->send("",null));
         button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
-        ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
+        ScrollView scroll=new ScrollView(activity);scroll.setFillViewport("logoff".equals(BuildConfig.FLAVOR));scroll.setBackgroundColor(screenColor);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
         final EditText scanTarget=input;
         AssemblyAutoFocus.request(scanTarget,()->!closed&&input==scanTarget&&ready()&&quantityDialog==null);
         packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
@@ -220,7 +246,7 @@ final class FboTwoStageScreen {
         if(packingChoices()&&packingMode==PackingMode.MANUAL&&"PACKING".equals(plan.phase)){
             if(!state.barcode.isEmpty())send("MANUAL_PACK_UNIT",value);
             else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";packingErrorSpeech=true;render();}
-            else{state.barcode=value;if(scanFeedback!=null)scanFeedback.success();message="Отсканируйте КИЗ товара.";render();}
+            else{feedbackColor=Color.rgb(187,247,208);state.barcode=value;if(scanFeedback!=null)scanFeedback.success();message="Отсканируйте КИЗ товара.";render();}
             return;
         }
         if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
@@ -233,7 +259,7 @@ final class FboTwoStageScreen {
     }
     private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
     private void send(String action,String kiz){send(action,kiz,null);}
-    private void send(String action,String kiz,Integer quantity){if(busy||closed)return;Map<String,String> payload=state.prepare(action,kiz,quantity);
+    private void send(String action,String kiz,Integer quantity){if(busy||closed)return;retrySending=state.pending()!=null;feedbackColor=Color.TRANSPARENT;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.
         if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";packingErrorSpeech=true;render();return;}
         busy=true;message="";render();executor.execute(()->{try{
