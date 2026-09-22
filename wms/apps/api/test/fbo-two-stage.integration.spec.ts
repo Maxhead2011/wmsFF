@@ -76,6 +76,54 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + target });
     }
     const manual = (kiz: string, extra: Record<string,string> = {}) => act('MANUAL_PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz, ...extra });
+    // TEST: a reusable rack bin stays in the warehouse even when every unit is picked.
+    it('picks all contents of a reusable BOX as loose units with one warehouse debit', async () => {
+        vi.stubEnv('WMS_FBO_REUSABLE_PACKING_ENABLED', 'true');
+        const code = 'FFL_LKBBOX_' + whole;
+        await p.box.update({ where: { id: whole }, data: { code } });
+        await act('START');
+        const payload = { sourceBoxCode: code, operationId: randomUUID() };
+        const result = await act('PICK_BOX', payload);
+        expect(result.wholeBoxes).not.toContain(code);
+        expect(result.looseRemaining).toBe(2);
+        expect(await p.fboAssemblyUnit.count({ where: { requestId: request, sourceBoxId: whole, wholeBox: false } })).toBe(2);
+        const holding = await p.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${request}` } });
+        expect(await p.productMark.count({ where: { id: { in: marks.slice(0, 2).map(m => m.id) }, boxId: holding.id, status: 'PACKING' } })).toBe(2);
+        const movements = await p.stockMovement.count({ where: { clientId: client } });
+        await act('PICK_BOX', payload);
+        expect(await p.stockMovement.count({ where: { clientId: client } })).toBe(movements);
+    });
+    // TEST: manual reopening preserves contents, invalidates confirmation and audits exactly once.
+    it('reopens a closed carton for manual additions and requires closing it again', async () => {
+        vi.stubEnv('WMS_FBO_REUSABLE_PACKING_ENABLED', 'true');
+        await manualReady();
+        await manual(marks[2].value);
+        await act('CLOSE_BOX', { targetBoxCode: 'FFL_' + target });
+        await p.fboAssemblyBox.updateMany({ where: { requestId: request, boxCode: 'FFL_' + target }, data: { confirmedAt: new Date(), confirmedByUserId: uid } });
+        const payload = { targetBoxCode: 'FFL_' + target, operationId: randomUUID() };
+        await act('MANUAL_OPEN_BOX', payload);
+        await act('MANUAL_OPEN_BOX', payload);
+        const parcel = await p.fboAssemblyBox.findUniqueOrThrow({ where: { requestId_boxCode: { requestId: request, boxCode: 'FFL_' + target } } });
+        expect(parcel).toMatchObject({ closedAt: null, confirmedAt: null, confirmedByUserId: null });
+        const result = await manual(marks[3].value);
+        expect(result.boxes.find(b => b.code === 'FFL_' + target)).toMatchObject({ quantity: 2, closed: false, confirmed: false });
+        expect(await p.auditLog.count({ where: { entityId: request, action: 'FBO_PACKING_BOX_REOPENED' } })).toBe(1);
+    });
+    // TEST: missed picking is recovered once, composition and export totals grow atomically.
+    it('adds to a closed whole carton but never uses a reusable rack bin as a target', async () => {
+        vi.stubEnv('WMS_FBO_REUSABLE_PACKING_ENABLED', 'true');
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
+        await picked();
+        await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const before = await p.stockMovement.count({ where: { clientId: client, status: 'AVAILABLE' } });
+        await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + whole });
+        const result = await manual(marks[2].value, { targetBoxCode: 'FFL_' + whole });
+        expect(result.boxes.find(b => b.code === 'FFL_' + whole)).toMatchObject({ quantity: 3, wholeBox: false, closed: false });
+        expect(await p.stockMovement.count({ where: { clientId: client, status: 'AVAILABLE' } })).toBe(before);
+        await expect(act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_LKBBOX_042' })).rejects.toThrow('стеллаже');
+        await p.fboAssembly.update({ where: { requestId: request }, data: { phase: 'COMPLETED' } });
+        await expect(act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + whole })).rejects.toThrow();
+    });
     // TEST: missed picking is recovered once, composition and export totals grow atomically.
     it('manually packs extra stock with exact source, durable retries and duplicate protection', async () => {
         await manualReady();

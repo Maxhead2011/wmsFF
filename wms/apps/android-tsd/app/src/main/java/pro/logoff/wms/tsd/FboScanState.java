@@ -6,6 +6,13 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 // FIX: barcode and KIZ are a pair; an unanswered command keeps its original id.
 final class FboScanState {
+    // FIX: picking every unit from a shelf bin does not mean taking the bin itself.
+    static boolean reusableBin(TsdFboPlan plan, String code) {
+        return plan.reusablePackingEnabled && code != null && code.toUpperCase(java.util.Locale.ROOT).startsWith("FFL_LKBBOX_");
+    }
+    static String wholePickTitle(TsdFboPlan plan, String code) {
+        return reusableBin(plan, code) ? "Весь товар из бокса отобран" : "Короб забран целиком";
+    }
     // FIX: changing entry point never changes the persisted phase or performs a stock operation.
     static boolean phaseAllowed(boolean packing,String phase) {
         return packing ? "PACKING".equals(phase)||"CONTROL".equals(phase)||"COMPLETED".equals(phase)

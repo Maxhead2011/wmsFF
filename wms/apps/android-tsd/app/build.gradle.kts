@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 202 // FIX: verified KIZ reuse history in our TSD flavor.
-            versionName = "0.1.202-kiz-permission"
+            versionCode = 203 // FIX: distinguish reusable bins and allow manual carton additions in our TSD.
+            versionName = "0.1.203-fbo-reusable-packing"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
