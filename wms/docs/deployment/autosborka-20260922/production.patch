@@ -43,7 +43,7 @@
  import { activeDuplicateGroups, calculateActiveDuplicateQuantities, commonDuplicateReserve, exactDuplicateSource, validateActiveDuplicatePairs, unavailableDuplicateChrtIds } from './duplicate-stock-runtime';
  import { approvedSizeRoutes } from './fbs-size-substitution-route';
  import { WbStockSyncWorker, withWbStockPlan, captureWbStockPlan, assertFreshWbStockPlan, isUrgentWbStockSync, urgentWbStockScope, registerWbStockPlan, expandWbStockScope } from './wb-stock-sync-queue';
-@@ -18399,7 +18400,71 @@
+@@ -18399,7 +18400,82 @@
      return currentCount + previousCount;
    }
  
@@ -57,10 +57,10 @@
 +    return asArray<Record<string, unknown>>(response.warehouses).map(row => ({ id: textValue(row.warehouse_id), name: textValue(row.name) || textValue(row.warehouse_id) })).filter(row => row.id);
 +  }
 +
-+  // FIX: use the same request and WB supply operations, with one client lock.
++  // FIX: use the same request and WB supply operations, with shared per-order locks.
 +  async runAutoAssembly(connectionId: string, config: { allWarehouses: boolean; warehouseIds: string[] }, user: AuthUser, preview = false) {
 +    const connection = await this.prisma.clientMarketplaceConnection.findUniqueOrThrow({ where: { id: connectionId } });
-+    return withFbsAssemblyLock(this.prisma, connection.clientId, async () => {
++    return (async () => {
 +      this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
 +      if (!connection.isActive || !['WILDBERRIES', 'OZON'].includes(connection.marketplace)) throw new BadRequestException('Кабинет отключён или не поддерживается.');
 +      const clientId = connection.clientId;
@@ -94,34 +94,45 @@
 +        if (preview) continue;
 +        try {
 +          // Create the durable WMS request first: a failed marketplace call remains visible to a manager.
-+          const dto = { clientId, orders: group.orders.map(order => ({ connectionId, id: order.id })) };
-+          const created = await this.createFbsRequestUnlocked(dto, user, response, group.warehouseId);
-+          entry.requestNumber = created.request.number;
-+          if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
++          const selectedIds = new Set(group.orders.map(order => order.id));
++          await withFbsAssemblyLock(this.prisma, clientId, async () => {
++            // Re-read after obtaining order ownership; manual work may have won since preview.
++            const fresh = await this.loadFbsOrdersUncached(clientId, undefined, { historyMode: 'cache-only', billingMode: 'skip', readOnly: true, selections: group.orders.map(order => ({ connectionId, id: order.id })) });
++            const freshErrors = (fresh as FbsOrdersResponse & { connectionErrors?: Array<{ connectionId: string }> }).connectionErrors;
++            if (freshErrors?.some(error => error.connectionId === connectionId)) throw new BadRequestException('Не удалось проверить актуальные статусы заказов.');
++            const eligible = fresh.orders.filter(order => order.connectionId === connectionId && selectedIds.has(order.id) && order.category === 'active' && !order.request && !order.reservation && !order.wbAccounted && !order.requiresReshipment && order.product && (order.marketplace === MarketplaceType.WILDBERRIES ? order.supplierStatus === 'new' && !order.supplyId : order.supplierStatus === 'awaiting_packaging'));
++            result.skipped += group.orders.length - eligible.length;
++            entry.count = eligible.length;
++            if (!eligible.length) return;
++            const dto = { clientId, orders: eligible.map(order => ({ connectionId, id: order.id })) };
++            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId);
++            entry.requestNumber = created.request.number;
++            if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
++          }, group.orders.map(order => `${connectionId}:${order.id}`));
 +        } catch (error) { entry.error = error instanceof Error ? error.message : 'Ошибка сборки'; }
 +      }
 +      return result;
-+    });
++    })();
 +  }
 +
    async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
 +    return withFbsAssemblyLock(this.prisma, dto.clientId, async () => {
 +      if (process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true') this.fbsOrdersCache.delete(dto.clientId);
 +      return this.assembleFbsOrdersUnlocked(dto, user);
-+    });
++    }, dto.orders.map(order => `${order.connectionId}:${order.id}`));
 +  }
 +
 +  private async assembleFbsOrdersUnlocked(dto: FbsOrderSelectionDto, user: AuthUser) {
      const clientId = dto.clientId.trim();
      // FIX: the "Собрать / Передаю" path validates only selected orders, before any WB mutation.
      this.clientScopes.requireClientAccess(user, clientId, 'write');
-@@ -23603,10 +23668,15 @@
+@@ -23603,10 +23679,15 @@
      };
    }
  
 -  async createFbsRequest(
 +  async createFbsRequest(dto: FbsOrderSelectionDto, user: AuthUser, responseOverride?: FbsOrdersResponse) {
-+    return withFbsAssemblyLock(this.prisma, dto.clientId, () => this.createFbsRequestUnlocked(dto, user, responseOverride));
++    return withFbsAssemblyLock(this.prisma, dto.clientId, () => this.createFbsRequestUnlocked(dto, user, responseOverride), dto.orders.map(order => `${order.connectionId}:${order.id}`));
 +  }
 +
 +  private async createFbsRequestUnlocked(
@@ -132,7 +143,7 @@
    ) {
      const clientId = dto.clientId.trim();
      this.clientScopes.requireClientAccess(user, clientId, 'write');
-@@ -23701,9 +23771,18 @@
+@@ -23701,9 +23782,18 @@
        }
      }
  
@@ -434,23 +445,26 @@
 +}
 --- a/wms/apps/api/src/modules/marketplace-connections/fbs-assembly-lock.ts
 +++ b/wms/apps/api/src/modules/marketplace-connections/fbs-assembly-lock.ts
-@@ -0,0 +1,13 @@
+@@ -0,0 +1,16 @@
 +import { ConflictException } from '@nestjs/common';
 +import type { PrismaService } from '../../common/prisma/prisma.service';
 +
 +// FIX: manual and scheduled actions share a cross-process PostgreSQL lock.
 +// No stock changes occur in this transaction; existing services keep their own atomic writes.
-+export async function withFbsAssemblyLock<T>(prisma: PrismaService, clientId: string, action: () => Promise<T>): Promise<T> {
++export async function withFbsAssemblyLock<T>(prisma: PrismaService, clientId: string, action: () => Promise<T>, orderKeys?: string[]): Promise<T> {
 +  if (process.env.WMS_AUTO_ASSEMBLY_ENABLED !== 'true') return action();
 +  return prisma.$transaction(async tx => {
-+    const rows = await tx.$queryRaw<Array<{ locked: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${'fbs-assembly:' + clientId})) AS locked`;
-+    if (!rows[0]?.locked) throw new ConflictException('Для клиента уже выполняется создание сборки. Повторите после завершения текущей операции.');
++    const keys = orderKeys?.length ? [...new Set(orderKeys)].sort().map(key => `fbs-assembly:${clientId}:${key}`) : [`fbs-assembly:${clientId}`];
++    for (const key of keys) {
++      const rows = await tx.$queryRaw<Array<{ locked: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${key})) AS locked`;
++      if (!rows[0]?.locked) throw new ConflictException('Для выбранных заказов уже выполняется создание сборки. Остальные заказы доступны для ручной работы.');
++    }
 +    return action();
 +  }, { timeout: 600000, maxWait: 5000 });
 +}
 --- a/wms/apps/api/test/auto-assembly.spec.ts
 +++ b/wms/apps/api/test/auto-assembly.spec.ts
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,112 @@
 +import { afterEach, describe, expect, it, vi } from 'vitest';
 +import { nextAutoAssembly, parseAutoAssembly, emptyAutoAssembly } from '../src/modules/administration/auto-assembly-policy';
 +import { withFbsAssemblyLock } from '../src/modules/marketplace-connections/fbs-assembly-lock';
@@ -542,6 +556,26 @@
 +    expect(run).toHaveBeenCalledOnce();
 +    expect(run.mock.calls[0][2]).toBe(value.nextAt);
 +  });
++});
++// TEST: manual collection of unrelated orders remains available during an automatic batch.
++it('locks only intersecting order identities', async () => {
++  vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'true');
++  const locks = new Set<string>();
++  const db = { $transaction: async (fn: any) => { const owned: string[] = []; try { return await fn({ $queryRaw: async (_sql: unknown, key: string) => { if (locks.has(key)) return [{ locked: false }]; locks.add(key); owned.push(key); return [{ locked: true }]; } }); } finally { owned.forEach(key => locks.delete(key)); } } };
++  let release!: () => void; let started!: () => void;
++  const gate = new Promise<void>(r => { release = r; }); const ready = new Promise<void>(r => { started = r; });
++  const auto = withFbsAssemblyLock(db as never, 'client', async () => { started(); await gate; }, ['cab:100']);
++  await ready;
++  expect(await withFbsAssemblyLock(db as never, 'client', async () => 'manual available', ['cab:200'])).toBe('manual available');
++  await expect(withFbsAssemblyLock(db as never, 'client', async () => true, ['cab:100'])).rejects.toThrow('уже выполняется');
++  release(); await auto; expect(locks.size).toBe(0);
++});
++it('rechecks manual ownership after selecting the automatic batch', async () => {
++  const { service, create } = setup();
++  const fresh = { id: 'new', connectionId: 'cab', marketplace: 'WILDBERRIES', category: 'active', supplierStatus: 'new', product: { id: 'sku' }, warehouseId: 'seller' };
++  (service as any).loadFbsOrdersUncached.mockResolvedValueOnce({ orders: [fresh] }).mockResolvedValueOnce({ orders: [{ ...fresh, request: { id: 'manual-won' } }] });
++  const result = await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never);
++  expect(create).not.toHaveBeenCalled(); expect(result.groups[0].count).toBe(0); expect(result.skipped).toBe(1);
 +});
 --- a/wms/apps/web/src/components/administration/AdministrationAutoAssembly.tsx
 +++ b/wms/apps/web/src/components/administration/AdministrationAutoAssembly.tsx

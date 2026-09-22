@@ -17425,10 +17425,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return asArray<Record<string, unknown>>(response.warehouses).map(row => ({ id: textValue(row.warehouse_id), name: textValue(row.name) || textValue(row.warehouse_id) })).filter(row => row.id);
   }
 
-  // FIX: use the same request and WB supply operations, with one client lock.
+  // FIX: use the same request and WB supply operations, with shared per-order locks.
   async runAutoAssembly(connectionId: string, config: { allWarehouses: boolean; warehouseIds: string[] }, user: AuthUser, preview = false) {
     const connection = await this.prisma.clientMarketplaceConnection.findUniqueOrThrow({ where: { id: connectionId } });
-    return withFbsAssemblyLock(this.prisma, connection.clientId, async () => {
+    return (async () => {
       this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
       if (!connection.isActive || !['WILDBERRIES', 'OZON'].includes(connection.marketplace)) throw new BadRequestException('Кабинет отключён или не поддерживается.');
       const clientId = connection.clientId;
@@ -17462,21 +17462,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         if (preview) continue;
         try {
           // Create the durable WMS request first: a failed marketplace call remains visible to a manager.
-          const dto = { clientId, orders: group.orders.map(order => ({ connectionId, id: order.id })) };
-          const created = await this.createFbsRequestUnlocked(dto, user, response, group.warehouseId);
-          entry.requestNumber = created.request.number;
-          if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
+          const selectedIds = new Set(group.orders.map(order => order.id));
+          await withFbsAssemblyLock(this.prisma, clientId, async () => {
+            // Re-read after obtaining order ownership; manual work may have won since preview.
+            const fresh = await this.loadFbsOrdersUncached(clientId, undefined, { historyMode: 'cache-only', billingMode: 'skip' });
+            const freshErrors = (fresh as FbsOrdersResponse & { connectionErrors?: Array<{ connectionId: string }> }).connectionErrors;
+            if (freshErrors?.some(error => error.connectionId === connectionId)) throw new BadRequestException('Не удалось проверить актуальные статусы заказов.');
+            const eligible = fresh.orders.filter(order => order.connectionId === connectionId && selectedIds.has(order.id) && order.category === 'active' && !order.request && !order.reservation && !order.wbAccounted && !order.requiresReshipment && order.product && (order.marketplace === MarketplaceType.WILDBERRIES ? order.supplierStatus === 'new' && !order.supplyId : order.supplierStatus === 'awaiting_packaging'));
+            result.skipped += group.orders.length - eligible.length;
+            entry.count = eligible.length;
+            if (!eligible.length) return;
+            const dto = { clientId, orders: eligible.map(order => ({ connectionId, id: order.id })) };
+            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId);
+            entry.requestNumber = created.request.number;
+            if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
+          }, group.orders.map(order => `${connectionId}:${order.id}`));
         } catch (error) { entry.error = error instanceof Error ? error.message : 'Ошибка сборки'; }
       }
       return result;
-    });
+    })();
   }
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
     return withFbsAssemblyLock(this.prisma, dto.clientId, async () => {
       if (process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true') this.fbsOrdersCache.delete(dto.clientId);
       return this.assembleFbsOrdersUnlocked(dto, user);
-    });
+    }, dto.orders.map(order => `${order.connectionId}:${order.id}`));
   }
 
   private async assembleFbsOrdersUnlocked(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -22656,7 +22667,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async createFbsRequest(dto: FbsOrderSelectionDto, user: AuthUser, responseOverride?: FbsOrdersResponse) {
-    return withFbsAssemblyLock(this.prisma, dto.clientId, () => this.createFbsRequestUnlocked(dto, user, responseOverride));
+    return withFbsAssemblyLock(this.prisma, dto.clientId, () => this.createFbsRequestUnlocked(dto, user, responseOverride), dto.orders.map(order => `${order.connectionId}:${order.id}`));
   }
 
   private async createFbsRequestUnlocked(

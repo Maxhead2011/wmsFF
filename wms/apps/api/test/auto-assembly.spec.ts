@@ -90,3 +90,23 @@ describe('durable schedule claim', () => {
     expect(run.mock.calls[0][2]).toBe(value.nextAt);
   });
 });
+// TEST: manual collection of unrelated orders remains available during an automatic batch.
+it('locks only intersecting order identities', async () => {
+  vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'true');
+  const locks = new Set<string>();
+  const db = { $transaction: async (fn: any) => { const owned: string[] = []; try { return await fn({ $queryRaw: async (_sql: unknown, key: string) => { if (locks.has(key)) return [{ locked: false }]; locks.add(key); owned.push(key); return [{ locked: true }]; } }); } finally { owned.forEach(key => locks.delete(key)); } } };
+  let release!: () => void; let started!: () => void;
+  const gate = new Promise<void>(r => { release = r; }); const ready = new Promise<void>(r => { started = r; });
+  const auto = withFbsAssemblyLock(db as never, 'client', async () => { started(); await gate; }, ['cab:100']);
+  await ready;
+  expect(await withFbsAssemblyLock(db as never, 'client', async () => 'manual available', ['cab:200'])).toBe('manual available');
+  await expect(withFbsAssemblyLock(db as never, 'client', async () => true, ['cab:100'])).rejects.toThrow('уже выполняется');
+  release(); await auto; expect(locks.size).toBe(0);
+});
+it('rechecks manual ownership after selecting the automatic batch', async () => {
+  const { service, create } = setup();
+  const fresh = { id: 'new', connectionId: 'cab', marketplace: 'WILDBERRIES', category: 'active', supplierStatus: 'new', product: { id: 'sku' }, warehouseId: 'seller' };
+  (service as any).loadFbsOrdersUncached.mockResolvedValueOnce({ orders: [fresh] }).mockResolvedValueOnce({ orders: [{ ...fresh, request: { id: 'manual-won' } }] });
+  const result = await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never);
+  expect(create).not.toHaveBeenCalled(); expect(result.groups[0].count).toBe(0); expect(result.skipped).toBe(1);
+});
