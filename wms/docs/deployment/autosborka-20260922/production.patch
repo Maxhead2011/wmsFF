@@ -1,0 +1,693 @@
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -72,9 +72,9 @@
+   {
+     id: 'administration',
+     name: 'Администрирование',
+-    prefixes: ['/administration', '/administration/marketplace-stock-control'],
++    prefixes: ['/administration', '/administration/marketplace-stock-control', '/administration/auto-assembly'],
+     // FIX: include the client stock-control list and update handlers.
+-    routeCount: 42, // FIX: client reserve, SKU exclusions and recommendation limits.
++    routeCount: 46, // FIX: client reserve, SKU exclusions and recommendation limits.
+     description: 'Диагностика WMS, технические работы, настройки, аудит, контроль внутренних API и включение/отключение отправки остатков на МП по клиентам.',
+     logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.'],
+     dependencies: ['Основная БД', 'Права system:admin'],
+--- a/wms/apps/api/src/modules/administration/administration.module.ts
++++ b/wms/apps/api/src/modules/administration/administration.module.ts
+@@ -1,4 +1,7 @@
+ import { Module } from '@nestjs/common';
++import { AutoAssemblyController } from './auto-assembly.controller';
++import { AutoAssemblyService } from './auto-assembly.service';
++import { AuthModule } from '../auth/auth.module';
+ import { AdministrationController } from './administration.controller';
+ import { AdministrationService } from './administration.service';
+ import { MarketplaceConnectionsModule } from '../marketplace-connections/marketplace-connections.module';
+@@ -11,10 +14,11 @@
+ import { AdministrationMarketplaceStockControlController } from './administration-marketplace-stock-control.controller';
+ 
+ @Module({
+-  imports: [MarketplaceConnectionsModule, StockModule, InventoryModule],
+-  controllers: [AdministrationController, AdministrationMarketplaceStockControlController],
++  imports: [AuthModule, MarketplaceConnectionsModule, StockModule, InventoryModule],
++  controllers: [AutoAssemblyController, AdministrationController, AdministrationMarketplaceStockControlController],
+   // ADDED: Internal API diagnostics are isolated from existing technical-work repair logic.
+   providers: [
++    AutoAssemblyService,
+     AdministrationService,
+     AdministrationTechnicalWorkService,
+     AdministrationInternalApiService,
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -1,3 +1,4 @@
++import { withFbsAssemblyLock } from './fbs-assembly-lock';
+ import { activeDuplicateGroups, calculateActiveDuplicateQuantities, commonDuplicateReserve, exactDuplicateSource, validateActiveDuplicatePairs, unavailableDuplicateChrtIds } from './duplicate-stock-runtime';
+ import { approvedSizeRoutes } from './fbs-size-substitution-route';
+ import { WbStockSyncWorker, withWbStockPlan, captureWbStockPlan, assertFreshWbStockPlan, isUrgentWbStockSync, urgentWbStockScope, registerWbStockPlan, expandWbStockScope } from './wb-stock-sync-queue';
+@@ -18399,7 +18400,82 @@
+     return currentCount + previousCount;
+   }
+ 
++  async listAutoAssemblyOzonRoutes(connectionId: string, user: AuthUser) {
++    const connection = await this.prisma.clientMarketplaceConnection.findUniqueOrThrow({ where: { id: connectionId } });
++    this.clientScopes.requireClientAccess(user, connection.clientId, 'read');
++    if (connection.marketplace !== MarketplaceType.OZON || !connection.fbsExecutionWarehouseId) return [];
++    const response = await marketplaceJson('https://api-seller.ozon.ru/v2/warehouse/list', {
++      method: 'POST', headers: { 'Client-Id': connection.sellerId || '', 'Api-Key': connection.apiKey, 'Content-Type': 'application/json' }, body: JSON.stringify({ limit: 100 }),
++    });
++    return asArray<Record<string, unknown>>(response.warehouses).map(row => ({ id: textValue(row.warehouse_id), name: textValue(row.name) || textValue(row.warehouse_id) })).filter(row => row.id);
++  }
++
++  // FIX: use the same request and WB supply operations, with shared per-order locks.
++  async runAutoAssembly(connectionId: string, config: { allWarehouses: boolean; warehouseIds: string[] }, user: AuthUser, preview = false) {
++    const connection = await this.prisma.clientMarketplaceConnection.findUniqueOrThrow({ where: { id: connectionId } });
++    return (async () => {
++      this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
++      if (!connection.isActive || !['WILDBERRIES', 'OZON'].includes(connection.marketplace)) throw new BadRequestException('Кабинет отключён или не поддерживается.');
++      const clientId = connection.clientId;
++      this.fbsOrdersCache.delete(clientId);
++      const response = await this.loadFbsOrdersUncached(clientId, undefined, { historyMode: 'cache-only', billingMode: 'skip', readOnly: true });
++      const failures = (response as FbsOrdersResponse & { connectionErrors?: Array<{ connectionId: string }> }).connectionErrors;
++      if (failures?.some(failure => failure.connectionId === connectionId)) throw new BadRequestException('Не удалось обновить заказы кабинета. Запуск отменён.');
++      const rules = await this.prisma.fbsWarehouseRoutingRule.findMany({ where: { connectionId } });
++      const tasks = await this.prisma.fbsTsdAssembly.findMany({ where: { connectionId }, select: { orderId: true } });
++      const busy = new Set(tasks.map(task => task.orderId));
++      const groups = new Map<string, { warehouseId: string; label: string; orders: FbsOrderSummary[] }>();
++      let skipped = 0;
++      for (const order of response.orders.filter(item => item.connectionId === connectionId && item.category === 'active')) {
++        if (order.request || order.reservation || busy.has(order.id) || !order.product || order.requiresReshipment || order.supplyId || order.wbAccounted) { skipped++; continue; }
++        if (order.marketplace === MarketplaceType.WILDBERRIES && order.supplierStatus !== 'new') { skipped++; continue; }
++        if (order.marketplace === MarketplaceType.OZON && order.supplierStatus !== 'awaiting_packaging') { skipped++; continue; }
++        const externalId = order.warehouseId || order.officeId;
++        const rule = rules.find(item => item.marketplaceWarehouseId === externalId);
++        const executionId = connection.marketplace === MarketplaceType.OZON ? connection.fbsExecutionWarehouseId
++          : rule?.mode === 'BRANCH' ? rule.executionWarehouseId
++          : rule?.mode === 'CENTRAL' || ((!rule || rule.mode === 'DEFAULT') && connection.fbsAutoRouteNewWarehouses) ? connection.fbsExecutionWarehouseId : null;
++        if (!externalId || !executionId || (!config.allWarehouses && !config.warehouseIds.includes(externalId))) { skipped++; continue; }
++        const key = `${externalId}:${executionId}`;
++        const group = groups.get(key) ?? { warehouseId: executionId, label: order.warehouseName || externalId, orders: [] };
++        group.orders.push(order); groups.set(key, group);
++      }
++      const result: { skipped: number; groups: Array<{ label: string; count: number; requestNumber?: number; error?: string }> } = { skipped, groups: [] };
++      for (const group of groups.values()) {
++        const entry: { label: string; count: number; requestNumber?: number; error?: string } = { label: group.label, count: group.orders.length };
++        result.groups.push(entry);
++        if (preview) continue;
++        try {
++          // Create the durable WMS request first: a failed marketplace call remains visible to a manager.
++          const selectedIds = new Set(group.orders.map(order => order.id));
++          await withFbsAssemblyLock(this.prisma, clientId, async () => {
++            // Re-read after obtaining order ownership; manual work may have won since preview.
++            const fresh = await this.loadFbsOrdersUncached(clientId, undefined, { historyMode: 'cache-only', billingMode: 'skip', readOnly: true, selections: group.orders.map(order => ({ connectionId, id: order.id })) });
++            const freshErrors = (fresh as FbsOrdersResponse & { connectionErrors?: Array<{ connectionId: string }> }).connectionErrors;
++            if (freshErrors?.some(error => error.connectionId === connectionId)) throw new BadRequestException('Не удалось проверить актуальные статусы заказов.');
++            const eligible = fresh.orders.filter(order => order.connectionId === connectionId && selectedIds.has(order.id) && order.category === 'active' && !order.request && !order.reservation && !order.wbAccounted && !order.requiresReshipment && order.product && (order.marketplace === MarketplaceType.WILDBERRIES ? order.supplierStatus === 'new' && !order.supplyId : order.supplierStatus === 'awaiting_packaging'));
++            result.skipped += group.orders.length - eligible.length;
++            entry.count = eligible.length;
++            if (!eligible.length) return;
++            const dto = { clientId, orders: eligible.map(order => ({ connectionId, id: order.id })) };
++            const created = await this.createFbsRequestUnlocked(dto, user, fresh, group.warehouseId);
++            entry.requestNumber = created.request.number;
++            if (connection.marketplace === MarketplaceType.WILDBERRIES) await this.assembleFbsOrdersUnlocked(dto, user);
++          }, group.orders.map(order => `${connectionId}:${order.id}`));
++        } catch (error) { entry.error = error instanceof Error ? error.message : 'Ошибка сборки'; }
++      }
++      return result;
++    })();
++  }
++
+   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
++    return withFbsAssemblyLock(this.prisma, dto.clientId, async () => {
++      if (process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true') this.fbsOrdersCache.delete(dto.clientId);
++      return this.assembleFbsOrdersUnlocked(dto, user);
++    }, dto.orders.map(order => `${order.connectionId}:${order.id}`));
++  }
++
++  private async assembleFbsOrdersUnlocked(dto: FbsOrderSelectionDto, user: AuthUser) {
+     const clientId = dto.clientId.trim();
+     // FIX: the "Собрать / Передаю" path validates only selected orders, before any WB mutation.
+     this.clientScopes.requireClientAccess(user, clientId, 'write');
+@@ -23603,10 +23679,15 @@
+     };
+   }
+ 
+-  async createFbsRequest(
++  async createFbsRequest(dto: FbsOrderSelectionDto, user: AuthUser, responseOverride?: FbsOrdersResponse) {
++    return withFbsAssemblyLock(this.prisma, dto.clientId, () => this.createFbsRequestUnlocked(dto, user, responseOverride), dto.orders.map(order => `${order.connectionId}:${order.id}`));
++  }
++
++  private async createFbsRequestUnlocked(
+     dto: FbsOrderSelectionDto,
+     user: AuthUser,
+     responseOverride?: FbsOrdersResponse,
++    executionWarehouseId?: string,
+   ) {
+     const clientId = dto.clientId.trim();
+     this.clientScopes.requireClientAccess(user, clientId, 'write');
+@@ -23701,9 +23782,18 @@
+       }
+     }
+ 
+-    const requestWarehouseId = await this.resolveFbsRequestWarehouseId(clientId, user, orders);
++    const requestWarehouseId = executionWarehouseId ?? await this.resolveFbsRequestWarehouseId(clientId, user, orders);
+     try {
+       const request = await this.prisma.$transaction(async (tx) => {
++        if (process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true') {
++        // FIX: also serialize callers when the automatic worker flag is off.
++        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'fbs-request:' + clientId}))`;
++        const freshLinks = await tx.fbsOrderRequestLink.findMany({ where: { clientId,
++          OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })),
++          syncStatus: { not: FBS_REQUEST_LINK_REMOVED }, request: { status: { not: ClientRequestStatus.CANCELLED } },
++        }, select: { id: true } });
++        if (freshLinks.length) throw new ConflictException('Заказы уже включены в другую заявку. Обновите список.');
++        }
+         const created = await tx.clientRequest.create({
+           data: {
+             clientId,
+--- a/wms/apps/web/src/components/administration/AdministrationPanel.tsx
++++ b/wms/apps/web/src/components/administration/AdministrationPanel.tsx
+@@ -1,5 +1,7 @@
+ import {
+   Activity,
++  ArrowLeft,
++  Clock3,
+   AlertTriangle,
+   BookOpen,
+   Bot,
+@@ -55,6 +57,7 @@
+ } from '../../lib/api';
+ import { workspaceNav, type WorkspaceId } from '../../lib/workspaces';
+ import './administration.css';
++import { AdministrationAutoAssembly } from './AdministrationAutoAssembly';
+ import { AdministrationStockCheck } from './AdministrationStockCheck';
+ import { AdministrationPhantomStockPanel } from './AdministrationPhantomStock';
+ import { AdministrationTsdWorkloadsPanel } from './AdministrationTsdWorkloads';
+@@ -67,10 +70,11 @@
+   onOpenWorkspace: (id: WorkspaceId) => void;
+ };
+ 
+-type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
++type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit' | 'auto-assembly';
+ 
+ const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
+   { id: 'overview', label: 'Центр управления', icon: Crown },
++  { id: 'auto-assembly', label: 'Автосборка', icon: Clock3 },
+   // ADDED: One entry point for diagnostics and verified repair actions.
+   { id: 'technical-work', label: 'Тех. работы', icon: Wrench },
+   { id: 'error-correction', label: 'Исправление ошибок', icon: Wrench },
+@@ -99,8 +103,42 @@
+ 
+ const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]));
+ 
++const sectionDescriptions: Record<TabId, string> = {
++  overview: 'Состояние системы и основные показатели',
++  'auto-assembly': 'Заявки FBS по расписанию для WB и Ozon',
++  'technical-work': 'Диагностика и обслуживание системы',
++  'error-correction': 'Проверка и исправление ошибок FBS',
++  'tsd-workloads': 'Задания сотрудников и занятость терминалов',
++  'phantom-stock': 'Поиск расхождений складского учёта',
++  'stock-check': 'Сверка товаров и количества на складах',
++  'marketplace-stock-control': 'Управление передачей остатков клиентов',
++  settings: 'Параметры и правила работы WMS',
++  integrations: 'Подключения API и маршрутизация складов',
++  visibility: 'Доступность разделов для пользователей',
++  assistant: 'Предпросмотр предложений и действий',
++  documentation: 'Инструкции и схемы работы',
++  audit: 'История действий и изменений настроек',
++};
++
++// FIX: preserve each section and its access restriction in the tile navigation.
++export function AdministrationNavigation({ session, activeTab, phantomCount, onSelect }: {
++  session: AuthSession; activeTab: TabId | null; phantomCount: number; onSelect: (id: TabId) => void;
++}) {
++  return <nav className="admin-topic-grid" aria-label="Разделы администрирования">
++    {tabs.filter((tab) => tab.id !== 'marketplace-stock-control' || canManageMarketplaceStockControl(session)).map((tab, index) => {
++      const Icon = tab.icon;
++      return <button type="button" key={tab.id} className={`admin-topic-tile admin-topic-tile--${index % 5}`} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => onSelect(tab.id)}>
++        <span className="admin-topic-tile__icon"><Icon size={23} aria-hidden="true" /></span>
++        <span className="admin-topic-tile__content"><small>{String(index + 1).padStart(2, '0')}</small><strong>{tab.label}</strong><span>{sectionDescriptions[tab.id]}</span>
++          {tab.id === 'phantom-stock' && phantomCount > 0 ? <b>{phantomCount} расхождений</b> : null}
++        </span>
++      </button>;
++    })}
++  </nav>;
++}
++
+ export function AdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
+-  const [activeTab, setActiveTab] = useState<TabId>('overview');
++  const [activeTab, setActiveTab] = useState<TabId | null>(null);
+   const [overview, setOverview] = useState<AdministrationOverview | null>(null);
+   const [settings, setSettings] = useState<AdministrationSetting[]>([]);
+   const [visibility, setVisibility] = useState<AdministrationWorkspaceVisibility | null>(null);
+@@ -301,25 +339,11 @@
+         </button>
+       </section>
+ 
+-      <nav className="admin-tabs" aria-label="Разделы администрирования">
+-        {tabs.map((tab) => {
+-          if (tab.id === 'marketplace-stock-control' && !canManageMarketplaceStockControl(session)) return null;
+-          const Icon = tab.icon;
+-          return (
+-            <button
+-              type="button"
+-              key={tab.id}
+-              className={activeTab === tab.id ? 'active' : ''}
+-              onClick={() => setActiveTab(tab.id)}
+-            >
+-              <Icon size={17} /><span>{tab.label}</span>
+-              {tab.id === 'phantom-stock' && phantomCount > 0 ? (
+-                <b className="admin-tabs__badge">{phantomCount}</b>
+-              ) : null}
+-            </button>
+-          );
+-        })}
+-      </nav>
++      {activeTab === null ? <AdministrationNavigation session={session} activeTab={activeTab} phantomCount={phantomCount} onSelect={setActiveTab} /> : (
++        <div className="admin-section-navigation"><button type="button" className="admin-button admin-button--ghost" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /> Все разделы</button><h3>{tabs.find((tab) => tab.id === activeTab)?.label}</h3></div>
++      )}
++
++      {activeTab === 'auto-assembly' ? <AdministrationAutoAssembly session={session} /> : null}
+ 
+       {phantomCount > 0 && activeTab !== 'phantom-stock' ? (
+         <button type="button" className="admin-phantom-alert" onClick={() => setActiveTab('phantom-stock')}>
+--- a/wms/apps/web/src/components/administration/administration.css
++++ b/wms/apps/web/src/components/administration/administration.css
+@@ -103,6 +103,34 @@
+   display: grid;
+   gap: 18px;
+ }
++
++/* FIX: responsive section tiles follow the FBS navigation theme. */
++.admin-topic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
++.admin-topic-tile { --tile-accent: #2865ff; --tile-tint: #eff5ff; display: flex; align-items: flex-start; gap: 13px; min-height: 155px; padding: 18px; border: 1px solid #e0e6ee; border-radius: 12px; background: #fff; text-align: left; cursor: pointer; color: #172331; transition: border-color .15s, box-shadow .15s; }
++.admin-topic-tile--1 { --tile-accent: #168749; --tile-tint: #edf9f1; }
++.admin-topic-tile--2 { --tile-accent: #7b35ed; --tile-tint: #f5f0ff; }
++.admin-topic-tile--3 { --tile-accent: #c46a08; --tile-tint: #fff7e8; }
++.admin-topic-tile--4 { --tile-accent: #e63749; --tile-tint: #fff0f2; }
++.admin-topic-tile:hover { border-color: var(--tile-accent); box-shadow: 0 6px 20px #1e355412; }
++.admin-topic-tile:focus-visible { outline: 3px solid var(--tile-accent); outline-offset: 3px; }
++.admin-topic-tile__icon { display: grid; place-items: center; flex: 0 0 42px; height: 42px; border-radius: 9px; background: var(--tile-tint); color: var(--tile-accent); }
++.admin-topic-tile__content { display: grid; gap: 7px; min-width: 0; }
++.admin-topic-tile__content small { color: var(--tile-accent); font-size: 12px; font-weight: 800; }
++.admin-topic-tile__content strong { font-size: 14px; line-height: 1.35; }
++.admin-topic-tile__content > span { font-size: 12px; line-height: 1.55; color: #748298; }
++.admin-topic-tile__content b { justify-self: start; background: var(--tile-tint); color: var(--tile-accent); padding: 5px 8px; border-radius: 6px; font-size: 12px; }
++.admin-section-navigation { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
++.admin-section-navigation h3 { margin: 0; }
++.auto-assembly-fields { display: grid; gap: 18px; border: 0; padding: 0; margin: 0; min-width: 0; }
++.auto-assembly-fields label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
++.auto-assembly-fields input:not([type=checkbox]), .auto-assembly-fields select { border: 1px solid #dbe3ed; border-radius: 8px; padding: 10px 12px; font: inherit; max-width: 100%; }
++.auto-assembly-interval { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
++.auto-assembly-route { margin-bottom: 10px; }
++.auto-assembly-report { border: 1px solid #e0e6ee; background: #f7f9fc; padding: 14px; border-radius: 10px; margin-top: 12px; overflow-wrap: anywhere; }
++.auto-assembly-cabinet .admin-button--ghost, .admin-section-navigation .admin-button--ghost { color: #355070; background: #fff; border-color: #dbe3ed; }
++.admin-stack[aria-label="Автосборка"] > .admin-section > label { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
++.admin-stack[aria-label="Автосборка"] select { border: 1px solid #dbe3ed; border-radius: 8px; padding: 10px 12px; background: #fff; color: #172331; font: inherit; max-width: 100%; }
++@media (max-width: 520px) { .admin-topic-grid { grid-template-columns: 1fr; } .admin-topic-tile { min-height: 110px; } }
+ 
+ .admin-section {
+   display: grid;
+--- a/wms/apps/api/src/modules/administration/auto-assembly-policy.ts
++++ b/wms/apps/api/src/modules/administration/auto-assembly-policy.ts
+@@ -0,0 +1,16 @@
++import { BadRequestException } from '@nestjs/common';
++
++export type AutoAssemblyConfig = { enabled: boolean; times: string[]; warehouseIds: string[]; allWarehouses: boolean };
++export const emptyAutoAssembly: AutoAssemblyConfig = { enabled: false, times: ['00:00', '06:00', '12:00', '18:00'], warehouseIds: [], allWarehouses: false };
++// FIX: explicit Moscow wall-clock times survive server timezone changes and restarts.
++export function parseAutoAssembly(value: unknown): AutoAssemblyConfig {
++  const v = value as AutoAssemblyConfig;
++  if (!v || typeof v.enabled !== 'boolean' || typeof v.allWarehouses !== 'boolean' || !Array.isArray(v.times) || !v.times.length || v.times.length > 24 || v.times.some(t => typeof t !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) || !Array.isArray(v.warehouseIds) || v.warehouseIds.length > 200 || v.warehouseIds.some(id => typeof id !== 'string' || !id || id.length > 100)) throw new BadRequestException('Проверьте время запуска и склады.');
++  if (v.enabled && !v.allWarehouses && !v.warehouseIds.length) throw new BadRequestException('Выберите склады или все направления.');
++  return { enabled: v.enabled, allWarehouses: v.allWarehouses, times: [...new Set(v.times)].sort(), warehouseIds: [...new Set(v.warehouseIds)] };
++}
++export function nextAutoAssembly(times: string[], after: Date): Date {
++  const moscow = new Date(after.getTime() + 3 * 3600000).toISOString().slice(0, 10);
++  const candidates = [0, 1].flatMap(day => times.map(time => new Date(new Date(`${moscow}T${time}:00+03:00`).getTime() + day * 86400000))).filter(date => date > after);
++  return new Date(Math.min(...candidates.map(date => date.getTime())));
++}
+--- a/wms/apps/api/src/modules/administration/auto-assembly.controller.ts
++++ b/wms/apps/api/src/modules/administration/auto-assembly.controller.ts
+@@ -0,0 +1,14 @@
++import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
++import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import type { AuthUser } from '../auth/auth.types';
++import { AutoAssemblyService } from './auto-assembly.service';
++@RequirePermissions('system:admin')
++@Controller('administration/auto-assembly')
++export class AutoAssemblyController {
++  constructor(private readonly service: AutoAssemblyService) {}
++  @Get() list(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.service.list(clientId, user); }
++  @Put(':id') save(@Param('id') id: string, @Body() body: { config: unknown; version?: string | null }, @CurrentUser() user: AuthUser) { return this.service.save(id, body, user); }
++  @Post(':id/preview') preview(@Param('id') id: string, @Body() body: { config: unknown }, @CurrentUser() user: AuthUser) { return this.service.preview(id, body.config, user); }
++  @Post(':id/run') run(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.service.run(id, user); }
++}
+--- a/wms/apps/api/src/modules/administration/auto-assembly.service.ts
++++ b/wms/apps/api/src/modules/administration/auto-assembly.service.ts
+@@ -0,0 +1,98 @@
++import { BadRequestException, ForbiddenException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
++import { randomUUID } from 'node:crypto';
++import { Prisma } from '@prisma/client';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import type { AuthUser } from '../auth/auth.types';
++import { ClientScopeService } from '../auth/client-scope.service';
++import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
++import { emptyAutoAssembly, nextAutoAssembly, parseAutoAssembly, type AutoAssemblyConfig } from './auto-assembly-policy';
++const PREFIX = 'fbs.autoAssembly.config.';
++const RUN = 'fbs.autoAssembly.run.';
++type Stored = AutoAssemblyConfig & { nextAt: string; ownerId: string };
++@Injectable()
++export class AutoAssemblyService implements OnModuleInit, OnModuleDestroy {
++  private timer?: ReturnType<typeof setTimeout>;
++  private stopped = false;
++  private readonly logger = new Logger(AutoAssemblyService.name);
++  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly marketplace: MarketplaceConnectionsService) {}
++  onModuleInit() { if (process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true') this.schedule(); }
++  onModuleDestroy() { this.stopped = true; clearTimeout(this.timer); }
++  private schedule() { if (!this.stopped) this.timer = setTimeout(() => { void this.tick().catch(e => this.logger.error(e.message)).finally(() => this.schedule()); }, 30000); }
++  private admin(user: AuthUser) {
++    if (user.isDemo || user.roleCodes.includes('CLIENT') || !user.permissionCodes.includes('system:admin')) throw new ForbiddenException('Автосборка доступна администратору.');
++  }
++  private async connection(id: string, user: AuthUser) {
++    this.admin(user);
++    const c = await this.prisma.clientMarketplaceConnection.findUnique({ where: { id }, include: { client: { select: { isDemo: true } } } });
++    if (!c || c.client.isDemo || !c.isActive || !['WILDBERRIES', 'OZON'].includes(c.marketplace)) throw new BadRequestException('Кабинет недоступен.');
++    this.scopes.requireClientAccess(user, c.clientId, 'write');
++    return c;
++  }
++  async list(clientId: string, user: AuthUser) {
++    this.admin(user); this.scopes.requireClientAccess(user, clientId, 'read');
++    const connections = await this.prisma.clientMarketplaceConnection.findMany({ where: { clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } }, select: { id: true, marketplace: true, accountName: true, fbsExecutionWarehouseId: true } });
++    const items = await Promise.all(connections.map(async c => {
++      const saved = await this.prisma.systemSetting.findUnique({ where: { key: PREFIX + c.id } });
++      const config = saved?.value as Stored | undefined;
++      const routes = c.marketplace === 'WILDBERRIES' ? (await this.marketplace.listFbsWarehouseRoutes(c.id, user)).warehouses.filter(r => r.effectiveExecutionWarehouseId).map(r => ({ id: r.marketplaceWarehouseId, name: r.marketplaceWarehouseName })) : await this.marketplace.listAutoAssemblyOzonRoutes(c.id, user);
++      const history = await this.prisma.systemSetting.findMany({ where: { key: { startsWith: RUN + c.id + '.' } }, orderBy: { createdAt: 'desc' }, take: 20 });
++      return { ...c, config: config ?? emptyAutoAssembly, nextAt: config?.enabled ? config.nextAt : null, version: saved?.updatedAt.toISOString() ?? null, routes, history: history.map(row => row.value) };
++    }));
++    return { available: process.env.WMS_AUTO_ASSEMBLY_ENABLED === 'true', items };
++  }
++  async save(id: string, body: { config: unknown; version?: string | null }, user: AuthUser) {
++    await this.connection(id, user);
++    if (process.env.WMS_AUTO_ASSEMBLY_ENABLED !== 'true') throw new BadRequestException('Автосборка отключена на сервере.');
++    const config = parseAutoAssembly(body.config);
++    const value = { ...config, ownerId: user.id, nextAt: nextAutoAssembly(config.times, new Date()).toISOString() };
++    return this.prisma.$transaction(async tx => {
++      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${PREFIX + id}))`;
++      const old = await tx.systemSetting.findUnique({ where: { key: PREFIX + id } });
++      if ((old?.updatedAt.toISOString() ?? null) !== (body.version ?? null)) throw new BadRequestException('Настройки изменились. Обновите страницу.');
++      const saved = await tx.systemSetting.upsert({ where: { key: PREFIX + id }, create: { key: PREFIX + id, value, updatedByUserId: user.id }, update: { value, updatedByUserId: user.id } });
++      await tx.auditLog.create({ data: { userId: user.id, action: 'AUTO_ASSEMBLY_SETTINGS', entity: 'ClientMarketplaceConnection', entityId: id, payload: value } });
++      return { saved: true, version: saved.updatedAt.toISOString(), nextAt: value.nextAt };
++    });
++  }
++  async preview(id: string, config: unknown, user: AuthUser) { await this.connection(id, user); return this.marketplace.runAutoAssembly(id, parseAutoAssembly(config), user, true); }
++  async run(id: string, user: AuthUser, slot = 'manual') {
++    await this.connection(id, user);
++    if (process.env.WMS_AUTO_ASSEMBLY_ENABLED !== 'true') throw new BadRequestException('Автосборка отключена.');
++    const saved = await this.prisma.systemSetting.findUnique({ where: { key: PREFIX + id } });
++    if (!saved) throw new BadRequestException('Сначала сохраните настройки.');
++    const config = parseAutoAssembly(saved.value);
++    if (slot !== 'manual' && !config.enabled) return;
++    const key = RUN + id + '.' + (slot === 'manual' ? randomUUID() : slot);
++    const startedAt = new Date().toISOString();
++    try { await this.prisma.systemSetting.create({ data: { key, value: { startedAt, status: 'RUNNING', slot }, updatedByUserId: user.id } }); }
++    catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return; throw error; }
++    let result: unknown;
++    try {
++      const report = await this.marketplace.runAutoAssembly(id, config, user);
++      result = { startedAt, completedAt: new Date().toISOString(), status: report.groups.some(g => g.error) ? 'PARTIAL' : 'DONE', slot, ...report };
++    } catch (error) { result = { startedAt, completedAt: new Date().toISOString(), status: 'ERROR', slot, error: error instanceof Error ? error.message : 'Ошибка запуска' }; }
++    await this.prisma.systemSetting.update({ where: { key }, data: { value: result as Prisma.InputJsonValue } });
++    return result;
++  }
++  // FIX: claim the scheduled occurrence in PostgreSQL; multiple API instances cannot replay it.
++  async tick() {
++    const settings = await this.prisma.systemSetting.findMany({ where: { key: { startsWith: PREFIX } } });
++    for (const row of settings) {
++      const value = row.value as unknown as Stored;
++      if (!value.enabled || !value.nextAt || Date.parse(value.nextAt) > Date.now()) continue;
++      try {
++        const config = parseAutoAssembly(value);
++        const claimed = await this.prisma.systemSetting.updateMany({ where: { key: row.key, updatedAt: row.updatedAt }, data: { value: { ...config, ownerId: value.ownerId, nextAt: nextAutoAssembly(config.times, new Date()).toISOString() } } });
++        if (!claimed.count) continue;
++        const owner = await this.prisma.user.findUnique({ where: { id: value.ownerId }, include: { roles: { include: { role: { include: { permissions: { include: { permission: true } } } } } } } });
++        if (!owner || owner.isDemo || owner.status !== 'ACTIVE') throw new ForbiddenException('Администратор расписания недоступен.');
++        const user: AuthUser = { id: owner.id, name: owner.name, email: owner.email, roleCodes: owner.roles.map(r => r.role.code), permissionCodes: owner.roles.flatMap(r => r.role.permissions.map(p => p.permission.code)), clientScopeMode: 'ALL', clientIds: [], writableClientIds: [] };
++        await this.run(row.key.slice(PREFIX.length), user, value.nextAt);
++      } catch (error) {
++        const message = error instanceof Error ? error.message : 'Ошибка автосборки';
++        this.logger.error(message);
++        await this.prisma.systemSetting.upsert({ where: { key: RUN + row.key.slice(PREFIX.length) + '.' + value.nextAt }, create: { key: RUN + row.key.slice(PREFIX.length) + '.' + value.nextAt, value: { startedAt: new Date().toISOString(), status: 'ERROR', error: message } }, update: {} });
++      }
++    }
++  }
++}
+--- a/wms/apps/api/src/modules/marketplace-connections/fbs-assembly-lock.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/fbs-assembly-lock.ts
+@@ -0,0 +1,16 @@
++import { ConflictException } from '@nestjs/common';
++import type { PrismaService } from '../../common/prisma/prisma.service';
++
++// FIX: manual and scheduled actions share a cross-process PostgreSQL lock.
++// No stock changes occur in this transaction; existing services keep their own atomic writes.
++export async function withFbsAssemblyLock<T>(prisma: PrismaService, clientId: string, action: () => Promise<T>, orderKeys?: string[]): Promise<T> {
++  if (process.env.WMS_AUTO_ASSEMBLY_ENABLED !== 'true') return action();
++  return prisma.$transaction(async tx => {
++    const keys = orderKeys?.length ? [...new Set(orderKeys)].sort().map(key => `fbs-assembly:${clientId}:${key}`) : [`fbs-assembly:${clientId}`];
++    for (const key of keys) {
++      const rows = await tx.$queryRaw<Array<{ locked: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${key})) AS locked`;
++      if (!rows[0]?.locked) throw new ConflictException('Для выбранных заказов уже выполняется создание сборки. Остальные заказы доступны для ручной работы.');
++    }
++    return action();
++  }, { timeout: 600000, maxWait: 5000 });
++}
+--- a/wms/apps/api/test/auto-assembly.spec.ts
++++ b/wms/apps/api/test/auto-assembly.spec.ts
+@@ -0,0 +1,112 @@
++import { afterEach, describe, expect, it, vi } from 'vitest';
++import { nextAutoAssembly, parseAutoAssembly, emptyAutoAssembly } from '../src/modules/administration/auto-assembly-policy';
++import { withFbsAssemblyLock } from '../src/modules/marketplace-connections/fbs-assembly-lock';
++import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
++import { AutoAssemblyService } from '../src/modules/administration/auto-assembly.service';
++afterEach(() => vi.unstubAllEnvs());
++// TEST: scheduling is independent from the API host's timezone.
++describe('auto assembly schedule', () => {
++  it('uses Moscow time and advances across midnight', () => {
++    expect(nextAutoAssembly(['00:00', '06:00'], new Date('2026-09-22T20:59:00Z')).toISOString()).toBe('2026-09-22T21:00:00.000Z');
++    expect(nextAutoAssembly(['00:00', '06:00'], new Date('2026-09-22T21:00:00Z')).toISOString()).toBe('2026-09-23T03:00:00.000Z');
++  });
++  it('requires explicit direction selection before enabling', () => expect(() => parseAutoAssembly({ ...emptyAutoAssembly, enabled: true })).toThrow());
++  it.each(['24:00', '06:90', '6:00', ''])('rejects invalid time %s', time => expect(() => parseAutoAssembly({ ...emptyAutoAssembly, times: [time] })).toThrow());
++  it('deduplicates times', () => expect(parseAutoAssembly({ ...emptyAutoAssembly, times: ['06:00', '06:00'] }).times).toEqual(['06:00']));
++});
++describe('manual and automatic assembly coordination', () => {
++  it('does not enter a competing action while a client is being processed', async () => {
++    vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'true');
++    let locked = false;
++    const db = { $transaction: async (action: any) => {
++      let acquired = false;
++      try { return await action({ $queryRaw: async () => { acquired = !locked; if (acquired) locked = true; return [{ locked: acquired }]; } }); }
++      finally { if (acquired) locked = false; }
++    } };
++    let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
++    const manual = withFbsAssemblyLock(db as never, 'client', () => gate);
++    await Promise.resolve(); await Promise.resolve();
++    const auto = vi.fn();
++    await expect(withFbsAssemblyLock(db as never, 'client', auto)).rejects.toThrow('уже выполняется');
++    expect(auto).not.toHaveBeenCalled(); release(); await manual;
++    await withFbsAssemblyLock(db as never, 'client', auto); expect(auto).toHaveBeenCalledOnce();
++  });
++  it('preserves other installations when disabled', async () => {
++    vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'false');
++    const action = vi.fn().mockResolvedValue(42);
++    expect(await withFbsAssemblyLock({} as never, 'client', action)).toBe(42);
++  });
++});
++function setup(marketplace = 'WILDBERRIES') {
++  vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'true');
++  const db = { $transaction: (fn: any) => fn({ $queryRaw: async () => [{ locked: true }] }),
++    clientMarketplaceConnection: { findUniqueOrThrow: async () => ({ id: 'cab', clientId: 'client', marketplace, isActive: true, fbsExecutionWarehouseId: 'wms', fbsAutoRouteNewWarehouses: true }) },
++    fbsWarehouseRoutingRule: { findMany: async () => [] }, fbsTsdAssembly: { findMany: async () => [{ orderId: 'physical' }] } };
++  const service = new MarketplaceConnectionsService(db as never, { requireClientAccess: vi.fn() } as never);
++  const order = { id: 'new', connectionId: 'cab', marketplace, category: 'active', supplierStatus: marketplace === 'OZON' ? 'awaiting_packaging' : 'new', product: { id: 'sku' }, warehouseId: 'seller', warehouseName: 'Москва' };
++  vi.spyOn(service as any, 'loadFbsOrdersUncached').mockResolvedValue({ orders: [order, { ...order, id: 'manual', request: { id: 'existing' } }, { ...order, id: 'physical' }, { ...order, id: 'supply', supplyId: 'WB-1' }, { ...order, id: 'cancelled', category: 'cancelled' }] } as never);
++  const create = vi.spyOn(service as any, 'createFbsRequestUnlocked').mockResolvedValue({ request: { number: 12 } });
++  const assemble = vi.spyOn(service as any, 'assembleFbsOrdersUnlocked').mockResolvedValue({});
++  return { service, create, assemble };
++}
++describe('scheduled assembly selection', () => {
++  it('skips manually claimed, scanned, cancelled and already supplied orders', async () => {
++    const { service, create, assemble } = setup();
++    const result = await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never);
++    expect(create.mock.calls[0][0].orders).toEqual([{ connectionId: 'cab', id: 'new' }]);
++    expect(result.skipped).toBe(3); expect(assemble).toHaveBeenCalledOnce();
++  });
++  it('never confirms shipping to Ozon', async () => {
++    const { service, create, assemble } = setup('OZON');
++    await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never);
++    expect(create).toHaveBeenCalledOnce(); expect(assemble).not.toHaveBeenCalled();
++  });
++  it('preview creates neither requests nor WB supplies', async () => {
++    const { service, create, assemble } = setup();
++    const result = await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never, true);
++    expect(result.groups[0].count).toBe(1); expect(create).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled();
++  });
++  it('respects selected directions', async () => {
++    const { service, create } = setup();
++    await service.runAutoAssembly('cab', { allWarehouses: false, warehouseIds: ['other'] }, {} as never);
++    expect(create).not.toHaveBeenCalled();
++  });
++  it('reports the durable request after a WB failure', async () => {
++    const { service, assemble } = setup(); assemble.mockRejectedValue(new Error('WB unavailable'));
++    const result = await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never);
++    expect(result.groups[0]).toMatchObject({ requestNumber: 12, error: 'WB unavailable' });
++  });
++});
++// TEST: duplicate worker ticks cannot claim the same scheduled occurrence twice.
++describe('durable schedule claim', () => {
++  it('runs a due occurrence only for the winning compare-and-swap', async () => {
++    const value = { ...emptyAutoAssembly, enabled: true, allWarehouses: true, ownerId: 'admin', nextAt: '2020-01-01T00:00:00Z' };
++    let claimed = false;
++    const db = { systemSetting: { findMany: vi.fn().mockResolvedValue([{ key: 'fbs.autoAssembly.config.cab', value, updatedAt: new Date() }]), updateMany: vi.fn(async () => { const count = claimed ? 0 : 1; claimed = true; return { count }; }) }, user: { findUnique: vi.fn().mockResolvedValue({ id: 'admin', email: 'a', name: 'Admin', status: 'ACTIVE', isDemo: false, roles: [{ role: { code: 'ADMIN', permissions: [{ permission: { code: 'system:admin' } }] } }] }) } };
++    const service = new AutoAssemblyService(db as never, {} as never, {} as never);
++    const run = vi.spyOn(service, 'run').mockResolvedValue({});
++    await Promise.all([service.tick(), service.tick()]);
++    expect(run).toHaveBeenCalledOnce();
++    expect(run.mock.calls[0][2]).toBe(value.nextAt);
++  });
++});
++// TEST: manual collection of unrelated orders remains available during an automatic batch.
++it('locks only intersecting order identities', async () => {
++  vi.stubEnv('WMS_AUTO_ASSEMBLY_ENABLED', 'true');
++  const locks = new Set<string>();
++  const db = { $transaction: async (fn: any) => { const owned: string[] = []; try { return await fn({ $queryRaw: async (_sql: unknown, key: string) => { if (locks.has(key)) return [{ locked: false }]; locks.add(key); owned.push(key); return [{ locked: true }]; } }); } finally { owned.forEach(key => locks.delete(key)); } } };
++  let release!: () => void; let started!: () => void;
++  const gate = new Promise<void>(r => { release = r; }); const ready = new Promise<void>(r => { started = r; });
++  const auto = withFbsAssemblyLock(db as never, 'client', async () => { started(); await gate; }, ['cab:100']);
++  await ready;
++  expect(await withFbsAssemblyLock(db as never, 'client', async () => 'manual available', ['cab:200'])).toBe('manual available');
++  await expect(withFbsAssemblyLock(db as never, 'client', async () => true, ['cab:100'])).rejects.toThrow('уже выполняется');
++  release(); await auto; expect(locks.size).toBe(0);
++});
++it('rechecks manual ownership after selecting the automatic batch', async () => {
++  const { service, create } = setup();
++  const fresh = { id: 'new', connectionId: 'cab', marketplace: 'WILDBERRIES', category: 'active', supplierStatus: 'new', product: { id: 'sku' }, warehouseId: 'seller' };
++  (service as any).loadFbsOrdersUncached.mockResolvedValueOnce({ orders: [fresh] }).mockResolvedValueOnce({ orders: [{ ...fresh, request: { id: 'manual-won' } }] });
++  const result = await service.runAutoAssembly('cab', { allWarehouses: true, warehouseIds: [] }, {} as never);
++  expect(create).not.toHaveBeenCalled(); expect(result.groups[0].count).toBe(0); expect(result.skipped).toBe(1);
++});
+--- a/wms/apps/web/src/components/administration/AdministrationAutoAssembly.tsx
++++ b/wms/apps/web/src/components/administration/AdministrationAutoAssembly.tsx
+@@ -0,0 +1,84 @@
++import { useEffect, useState } from 'react';
++import { Clock3, RefreshCw, Save, Play } from 'lucide-react';
++import { fetchClients, request, type AuthSession, type ClientSummary } from '../../lib/api';
++type Config = { enabled: boolean; times: string[]; allWarehouses: boolean; warehouseIds: string[] };
++type Report = { startedAt?: string; status?: string; skipped?: number; error?: string; groups?: Array<{ label: string; count: number; requestNumber?: number; error?: string }> };
++type Cabinet = { id: string; marketplace: string; accountName: string | null; config: Config; version: string | null; nextAt: string | null; routes: Array<{ id: string; name: string }>; history: Report[] };
++export function AdministrationAutoAssembly({ session }: { session: AuthSession }) {
++  const [clients, setClients] = useState<ClientSummary[]>([]);
++  const [clientId, setClientId] = useState('');
++  const [data, setData] = useState<{ available: boolean; items: Cabinet[] } | null>(null);
++  const [error, setError] = useState('');
++  const [loading, setLoading] = useState(false);
++  useEffect(() => { let current = true; fetchClients(session.accessToken).then(items => { if (current) setClients(items); }).catch(e => { if (current) setError(e.message); }); return () => { current = false; }; }, [session.accessToken]);
++  useEffect(() => {
++    let current = true; setData(null); setError('');
++    if (!clientId) return;
++    setLoading(true);
++    request<{ available: boolean; items: Cabinet[] }>(`/administration/auto-assembly?clientId=${encodeURIComponent(clientId)}`, { accessToken: session.accessToken }).then(value => { if (current) setData(value); }).catch(e => { if (current) setError(e.message); }).finally(() => { if (current) setLoading(false); });
++    return () => { current = false; };
++  }, [clientId, session.accessToken]);
++  return <section className="admin-stack" aria-label="Автосборка">
++    <div className="admin-section"><h3><Clock3 size={20} /> Автосборка FBS</h3><p>Создание заявок по расписанию. Ручная сборка остаётся доступной; заказы, уже взятые в работу, пропускаются.</p>
++      <label>Клиент <select value={clientId} onChange={e => setClientId(e.target.value)}><option value="">Выберите клиента</option>{clients.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>
++    </div>
++    {error && <p className="form-error" role="alert">{error}</p>}{loading && <p role="status">Загружаю кабинеты и маршрутизацию…</p>}
++    {data && !data.available && <p role="status">Автосборка отключена на сервере.</p>}
++    {data?.items.length === 0 && <p>У клиента нет активных кабинетов WB или Ozon.</p>}
++    {data?.items.map(item => <CabinetSettings key={`${clientId}:${item.id}`} item={item} available={data.available} token={session.accessToken} />)}
++  </section>;
++}
++function CabinetSettings({ item, token, available }: { item: Cabinet; token: string; available: boolean }) {
++  const [config, setConfig] = useState(item.config);
++  const [timesText, setTimesText] = useState(item.config.times.join(', '));
++  const [version, setVersion] = useState(item.version);
++  const [nextAt, setNextAt] = useState(item.nextAt);
++  const [history, setHistory] = useState(item.history);
++  const [busy, setBusy] = useState(false);
++  const [dirty, setDirty] = useState(false);
++  const [message, setMessage] = useState('');
++  const [error, setError] = useState('');
++  const [report, setReport] = useState<Report | null>(null);
++  const [interval, setInterval] = useState('6');
++  const [start, setStart] = useState('06:00');
++  function change(value: Partial<Config>) { setConfig(old => ({ ...old, ...value })); setDirty(true); setReport(null); }
++  function makeTimes() {
++    const hours = Number(interval); const [h, m] = start.split(':').map(Number);
++    const times = Array.from({ length: 24 / hours }, (_, i) => `${String((h + i * hours) % 24).padStart(2, '0')}:${String(m).padStart(2, '0')}`).sort();
++    setTimesText(times.join(', ')); change({ times });
++  }
++  async function action(mode: 'save' | 'preview' | 'run') {
++    if (mode === 'run' && !window.confirm('Создать заявки сейчас по сохранённым настройкам?')) return;
++    setBusy(true); setError(''); setMessage('');
++    try {
++      const draft = { ...config, times: timesText.split(',').map(t => t.trim()).filter(Boolean) };
++      const result = await request<Report>(`/administration/auto-assembly/${item.id}${mode === 'save' ? '' : '/' + mode}`, { method: mode === 'save' ? 'PUT' : 'POST', accessToken: token, body: { config: draft, version } });
++      if (mode === 'preview') setReport(result);
++      if (mode === 'run') { setReport(result); if (result) setHistory(old => [result, ...old].slice(0, 20)); }
++      if (mode === 'save') {
++        setDirty(false); setMessage('Настройки сохранены.');
++        // Reload the authoritative version and next run instead of predicting server state.
++        setConfig(draft);
++        const saved = result as Report & { version?: string; nextAt?: string };
++        setVersion(saved.version ?? null); setNextAt(draft.enabled ? saved.nextAt ?? null : null);
++      }
++    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось выполнить действие.'); } finally { setBusy(false); }
++  }
++  return <section className="admin-section auto-assembly-cabinet"><header><h3>{item.marketplace === 'WILDBERRIES' ? 'Wildberries' : 'Ozon'} · {item.accountName || 'Кабинет'}</h3><span>{config.enabled ? 'По расписанию' : 'Приостановлено'}</span></header>
++    <fieldset disabled={busy || !available} className="auto-assembly-fields"><label><input type="checkbox" checked={config.enabled} onChange={e => change({ enabled: e.target.checked })} /> Включить автосборку</label>
++      <label>Время запусков, МСК<input value={timesText} onChange={e => { setTimesText(e.target.value); setDirty(true); setReport(null); }} placeholder="00:00, 06:00, 12:00, 18:00" /></label>
++      <div className="auto-assembly-interval"><label>Каждые<select value={interval} onChange={e => setInterval(e.target.value)}>{[1, 2, 3, 4, 6, 8, 12, 24].map(h => <option key={h} value={h}>{h} ч.</option>)}</select></label><label>Начиная с<input type="time" value={start} onChange={e => setStart(e.target.value)} /></label><button className="admin-button" type="button" disabled={!start} onClick={makeTimes}>Заполнить время</button></div>
++      <label><input type="checkbox" checked={config.allWarehouses} onChange={e => change({ allWarehouses: e.target.checked })} /> Все направления действующей маршрутизации</label>
++      {!config.allWarehouses && <div>{item.routes.map(route => <label className="auto-assembly-route" key={route.id}><input type="checkbox" checked={config.warehouseIds.includes(route.id)} onChange={e => change({ warehouseIds: e.target.checked ? [...config.warehouseIds, route.id] : config.warehouseIds.filter(id => id !== route.id) })} />{route.name}</label>)}{!item.routes.length && <p>Индивидуальные направления не найдены. Настройте маршрутизацию или выберите все направления.</p>}</div>}
++    </fieldset>
++    <p>Ближайший запуск: {nextAt ? new Date(nextAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) + ' МСК' : 'не назначен'}{dirty ? ' · Есть несохранённые изменения' : ''}</p>
++    {item.marketplace === 'OZON' && <p>Создаётся заявка WMS. Передача собранного заказа в Ozon остаётся действием сотрудника.</p>}
++    <div className="auto-assembly-interval"><button className="admin-button" disabled={busy || !available} onClick={() => void action('save')}><Save size={16} />Сохранить</button><button className="admin-button admin-button--ghost" disabled={busy || !available} onClick={() => void action('preview')}><RefreshCw size={16} />Предпросмотр</button><button className="admin-button admin-button--ghost" disabled={busy || !available || dirty || !version} onClick={() => void action('run')}><Play size={16} />Запустить сейчас</button></div>
++    {message && <p role="status">{message}</p>}{error && <p className="form-error" role="alert">{error}</p>}{report && <ReportView report={report} />}
++    <details><summary>История запусков ({history.length})</summary>{history.length ? history.map((r, i) => <ReportView key={r.startedAt || i} report={r} />) : <p>Запусков пока не было.</p>}</details>
++  </section>;
++}
++function ReportView({ report }: { report: Report }) {
++  const labels: Record<string, string> = { RUNNING: 'Запуск начат; результат ещё не подтверждён', DONE: 'Завершено', PARTIAL: 'Частично выполнено', ERROR: 'Ошибка' };
++  return <div className="auto-assembly-report">{report.startedAt && <strong>{new Date(report.startedAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })} МСК · {labels[report.status || ''] || report.status}</strong>}{report.error && <p className="form-error">{report.error}</p>}{report.groups?.map((g, i) => <p key={i}>{g.label}: {g.count} заказов {g.requestNumber ? `· Заявка №${String(g.requestNumber).padStart(6, '0')}` : ''}{g.error ? ` · ${g.error}` : ''}</p>)}<p>Пропущено заказов: {report.skipped ?? 0}</p></div>;
++}
+--- a/wms/apps/web/src/components/administration/AdministrationNavigation.spec.tsx
++++ b/wms/apps/web/src/components/administration/AdministrationNavigation.spec.tsx
+@@ -0,0 +1,24 @@
++import { describe, expect, it } from 'vitest';
++import { renderToStaticMarkup } from 'react-dom/server';
++import { AdministrationNavigation } from './AdministrationPanel';
++import type { AuthSession } from '../../lib/api';
++
++const session = { user: { permissionCodes: ['system:admin'], roleCodes: ['ADMIN'] } } as AuthSession;
++// TEST: tile migration must preserve destinations, findings, and access restrictions.
++describe('Administration navigation', () => {
++  it('renders all existing destinations and Autosborka as accessible buttons', () => {
++    const html = renderToStaticMarkup(<AdministrationNavigation session={session} activeTab={null} phantomCount={7} onSelect={() => {}} />);
++    expect(html.match(/<button/g)).toHaveLength(14);
++    expect(html).toContain('admin-topic-grid');
++    expect(html).toContain('Автосборка');
++    expect(html).toContain('API и склады');
++    expect(html).toContain('Журнал изменений');
++    expect(html).toContain('7 расхождений');
++    expect(html).not.toContain('admin-tabs');
++  });
++  it('keeps marketplace stock control hidden from unauthorized users', () => {
++    const html = renderToStaticMarkup(<AdministrationNavigation session={{ user: { permissionCodes: [], roleCodes: ['CLIENT'] } } as unknown as AuthSession} activeTab={null} phantomCount={0} onSelect={() => {}} />);
++    expect(html).not.toContain('Контроль остатков на МП');
++    expect(html).not.toContain('расхождений</b>');
++  });
++});

@@ -1,5 +1,7 @@
 import {
   Activity,
+  ArrowLeft,
+  Clock3,
   AlertTriangle,
   BookOpen,
   Bot,
@@ -55,6 +57,7 @@ import {
 } from '../../lib/api';
 import { workspaceNav, type WorkspaceId } from '../../lib/workspaces';
 import './administration.css';
+import { AdministrationAutoAssembly } from './AdministrationAutoAssembly';
 import { AdministrationStockCheck } from './AdministrationStockCheck';
 import { AdministrationPhantomStockPanel } from './AdministrationPhantomStock';
 import { AdministrationTsdWorkloadsPanel } from './AdministrationTsdWorkloads';
@@ -67,10 +70,11 @@ type AdministrationPanelProps = {
   onOpenWorkspace: (id: WorkspaceId) => void;
 };
 
-type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
+type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit' | 'auto-assembly';
 
 const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
   { id: 'overview', label: 'Центр управления', icon: Crown },
+  { id: 'auto-assembly', label: 'Автосборка', icon: Clock3 },
   // ADDED: One entry point for diagnostics and verified repair actions.
   { id: 'technical-work', label: 'Тех. работы', icon: Wrench },
   { id: 'error-correction', label: 'Исправление ошибок', icon: Wrench },
@@ -99,8 +103,42 @@ const metricLabels: Record<string, string> = {
 
 const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]));
 
+const sectionDescriptions: Record<TabId, string> = {
+  overview: 'Состояние системы и основные показатели',
+  'auto-assembly': 'Заявки FBS по расписанию для WB и Ozon',
+  'technical-work': 'Диагностика и обслуживание системы',
+  'error-correction': 'Проверка и исправление ошибок FBS',
+  'tsd-workloads': 'Задания сотрудников и занятость терминалов',
+  'phantom-stock': 'Поиск расхождений складского учёта',
+  'stock-check': 'Сверка товаров и количества на складах',
+  'marketplace-stock-control': 'Управление передачей остатков клиентов',
+  settings: 'Параметры и правила работы WMS',
+  integrations: 'Подключения API и маршрутизация складов',
+  visibility: 'Доступность разделов для пользователей',
+  assistant: 'Предпросмотр предложений и действий',
+  documentation: 'Инструкции и схемы работы',
+  audit: 'История действий и изменений настроек',
+};
+
+// FIX: preserve each section and its access restriction in the tile navigation.
+export function AdministrationNavigation({ session, activeTab, phantomCount, onSelect }: {
+  session: AuthSession; activeTab: TabId | null; phantomCount: number; onSelect: (id: TabId) => void;
+}) {
+  return <nav className="admin-topic-grid" aria-label="Разделы администрирования">
+    {tabs.filter((tab) => tab.id !== 'marketplace-stock-control' || canManageMarketplaceStockControl(session)).map((tab, index) => {
+      const Icon = tab.icon;
+      return <button type="button" key={tab.id} className={`admin-topic-tile admin-topic-tile--${index % 5}`} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => onSelect(tab.id)}>
+        <span className="admin-topic-tile__icon"><Icon size={23} aria-hidden="true" /></span>
+        <span className="admin-topic-tile__content"><small>{String(index + 1).padStart(2, '0')}</small><strong>{tab.label}</strong><span>{sectionDescriptions[tab.id]}</span>
+          {tab.id === 'phantom-stock' && phantomCount > 0 ? <b>{phantomCount} расхождений</b> : null}
+        </span>
+      </button>;
+    })}
+  </nav>;
+}
+
 export function AdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
-  const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [activeTab, setActiveTab] = useState<TabId | null>(null);
   const [overview, setOverview] = useState<AdministrationOverview | null>(null);
   const [settings, setSettings] = useState<AdministrationSetting[]>([]);
   const [visibility, setVisibility] = useState<AdministrationWorkspaceVisibility | null>(null);
@@ -301,25 +339,11 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
         </button>
       </section>
 
-      <nav className="admin-tabs" aria-label="Разделы администрирования">
-        {tabs.map((tab) => {
-          if (tab.id === 'marketplace-stock-control' && !canManageMarketplaceStockControl(session)) return null;
-          const Icon = tab.icon;
-          return (
-            <button
-              type="button"
-              key={tab.id}
-              className={activeTab === tab.id ? 'active' : ''}
-              onClick={() => setActiveTab(tab.id)}
-            >
-              <Icon size={17} /><span>{tab.label}</span>
-              {tab.id === 'phantom-stock' && phantomCount > 0 ? (
-                <b className="admin-tabs__badge">{phantomCount}</b>
-              ) : null}
-            </button>
-          );
-        })}
-      </nav>
+      {activeTab === null ? <AdministrationNavigation session={session} activeTab={activeTab} phantomCount={phantomCount} onSelect={setActiveTab} /> : (
+        <div className="admin-section-navigation"><button type="button" className="admin-button admin-button--ghost" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /> Все разделы</button><h3>{tabs.find((tab) => tab.id === activeTab)?.label}</h3></div>
+      )}
+
+      {activeTab === 'auto-assembly' ? <AdministrationAutoAssembly session={session} /> : null}
 
       {phantomCount > 0 && activeTab !== 'phantom-stock' ? (
         <button type="button" className="admin-phantom-alert" onClick={() => setActiveTab('phantom-stock')}>
