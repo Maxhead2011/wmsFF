@@ -76,6 +76,20 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + target });
     }
     const manual = (kiz: string, extra: Record<string,string> = {}) => act('MANUAL_PACK_UNIT', { targetBoxCode: 'FFL_' + target, barcode: '2051234567890', kiz, ...extra });
+    // TEST: a duplicate carton scan explains its state and never repeats stock movements.
+    it('reports an already packed carton while preserving manual reopening and idempotent retries', async () => {
+        vi.stubEnv('WMS_FBO_REUSABLE_PACKING_ENABLED', 'true');
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
+        await picked();
+        const payload = { sourceBoxCode: 'FFL_' + whole, operationId: randomUUID() };
+        await act('PACK_BOX', payload);
+        const count = await p.stockMovement.count({ where: { clientId: client } });
+        await act('PACK_BOX', payload);
+        await expect(act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole })).rejects.toThrow('Данный короб уже упакован в поставку');
+        await expect(act('OPEN_BOX', { targetBoxCode: 'FFL_' + whole })).rejects.toThrow('Данный короб уже упакован в поставку');
+        expect(await p.stockMovement.count({ where: { clientId: client } })).toBe(count);
+        await act('MANUAL_OPEN_BOX', { targetBoxCode: 'FFL_' + whole });
+    });
     // TEST: a reusable rack bin stays in the warehouse even when every unit is picked.
     it('picks all contents of a reusable BOX as loose units with one warehouse debit', async () => {
         vi.stubEnv('WMS_FBO_REUSABLE_PACKING_ENABLED', 'true');

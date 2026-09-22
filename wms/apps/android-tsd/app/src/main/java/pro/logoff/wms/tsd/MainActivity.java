@@ -4116,7 +4116,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton(tr("К списку поставок", "Yetkazib berishlar ro‘yxatiga"), view -> renderOzonFboPlansScreen()));
         root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         setScrollableContent(root);
-        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus();
+        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus(); AssemblyAutoFocus.request(ozonFboScanInput);
         refreshHeaderText();
     }
 
@@ -4205,7 +4205,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton(tr("К списку коробов", "Qutilar ro‘yxatiga"), view -> renderOzonFboBoxesScreen()));
         root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         setScrollableContent(root);
-        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus();
+        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus(); AssemblyAutoFocus.request(ozonFboScanInput);
         refreshHeaderText();
     }
 
@@ -5090,9 +5090,9 @@ public class MainActivity extends Activity {
             showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName);
         } else if (stickerAppliedButton != null && orderStickerReady) {
             stickerAppliedButton.setFocusableInTouchMode(true);
-            stickerAppliedButton.requestFocus();
+            stickerAppliedButton.requestFocus(); AssemblyAutoFocus.request(stickerAppliedButton);
         } else if (fbsScanInput != null) {
-            fbsScanInput.requestFocus();
+            fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
         }
         refreshHeaderText();
     }
@@ -5505,6 +5505,7 @@ public class MainActivity extends Activity {
         dialog.setCanceledOnTouchOutside(false);
         dialog.setOnShowListener(ignored -> {
             dialogInput.requestFocus();
+            AssemblyAutoFocus.request(dialogInput,()->fbsGuidedScanDialog==dialog&&dialog.isShowing()&&!fbsBusy);
         });
         dialog.setOnDismissListener(ignored -> {
             if (fbsGuidedScanDialog == dialog) {
@@ -5558,7 +5559,7 @@ public class MainActivity extends Activity {
                 // field and be submitted again by the hardware scanner.
                 if (fbsScanInput != null) {
                     fbsScanInput.setText("");
-                    fbsScanInput.requestFocus();
+                    fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
                 }
                 showFbsError(kizError, true);
                 return;
@@ -5964,7 +5965,7 @@ public class MainActivity extends Activity {
                         // FIX: a rejected product barcode or KIZ must never remain in the
                         // scanner field and be submitted again by the operator.
                         fbsScanInput.setText("");
-                        fbsScanInput.requestFocus();
+                        fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
                     }
                     speakFbsScan(action,submittedState,value,response.code(),null,actionOwnerKey,taskId);
                     showFbsError(errorDetails.message, response.code() < 500);
@@ -7141,7 +7142,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton("Обновить", view -> renderBoxSearchScreen()));
         root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
         setScrollableContent(root);
-        assemblyScanInput.requestFocus();
+        assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         refreshHeaderText();
     }
 
@@ -7283,7 +7284,7 @@ public class MainActivity extends Activity {
             root.addView(messageView(statusMessage));
         }
         setScrollableContent(root);
-        assemblyScanInput.requestFocus();
+        assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         refreshHeaderText();
     }
 
@@ -7429,7 +7430,7 @@ public class MainActivity extends Activity {
         }));
         root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
         setScrollableContent(root);
-        assemblyScanInput.requestFocus();
+        assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         refreshHeaderText();
     }
 
@@ -7493,7 +7494,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton("Назад к заявке", view -> renderAssemblyDetailScreen()));
         setScrollableContent(root);
         if (assemblyScanInput != null) {
-            assemblyScanInput.requestFocus();
+            assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         }
         refreshHeaderText();
     }

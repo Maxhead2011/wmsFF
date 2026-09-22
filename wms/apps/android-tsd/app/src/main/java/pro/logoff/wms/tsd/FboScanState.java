@@ -6,6 +6,13 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 // FIX: barcode and KIZ are a pair; an unanswered command keeps its original id.
 final class FboScanState {
+    // FIX: manual additions intentionally reopen a closed carton; ordinary packing must report duplicates.
+    static boolean alreadyPackedBox(TsdFboPlan plan, String code, boolean manual) {
+        if (!plan.reusablePackingEnabled || manual || code == null || plan.boxes == null) return false;
+        for (TsdFboPlan.Box box : plan.boxes)
+            if (box.closed && box.quantity > 0 && code.trim().equalsIgnoreCase(box.code)) return true;
+        return false;
+    }
     // FIX: picking every unit from a shelf bin does not mean taking the bin itself.
     static boolean reusableBin(TsdFboPlan plan, String code) {
         return plan.reusablePackingEnabled && code != null && code.toUpperCase(java.util.Locale.ROOT).startsWith("FFL_LKBBOX_");

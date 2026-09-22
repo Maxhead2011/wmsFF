@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 203 // FIX: distinguish reusable bins and allow manual carton additions in our TSD.
-            versionName = "0.1.203-fbo-reusable-packing"
+            versionCode = 204 // FIX: explain repeat scans of packed FBO cartons.
+            versionName = "0.1.204-fbo-packed-box"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

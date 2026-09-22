@@ -246,6 +246,9 @@ export class FboTwoStageService {
                 if (previousBox) {
                     // FIX: selecting a closed carton explicitly in manual mode reopens it for additions.
                     const reopen = reusablePackingEnabled() && process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && dto.action === 'MANUAL_OPEN_BOX';
+                    // FIX: a normal repeated carton scan is not an attempt to reopen it manually.
+                    if (reusablePackingEnabled() && !reopen && previousBox.requestId === id && previousBox.closedAt)
+                        throw new ConflictException('Данный короб уже упакован в поставку');
                     if (previousBox.requestId !== id || (!reopen && (previousBox.closedAt || previousBox.wholeBox)))
                         throw new ConflictException('Короб уже закрыт или принадлежит другой сборке.');
                     if (reopen && (previousBox.closedAt || previousBox.wholeBox || previousBox.confirmedAt)) {
@@ -296,6 +299,9 @@ export class FboTwoStageService {
                 const box = await this.box(tx, r, dto.sourceBoxCode);
                 if (reusablePackingEnabled() && reusableBin(box.code))
                     throw new ConflictException('Бокс — ячейка стеллажа. Упакуйте отобранный товар поштучно в отгрузочные короба.');
+                // FIX: distinguish a duplicate physical scan from an unrelated source carton.
+                if (reusablePackingEnabled() && units.some(u => u.targetBoxId === box.id && u.state === 'PACKED'))
+                    throw new ConflictException('Данный короб уже упакован в поставку');
                 const picked = units.filter(u => u.wholeBox && u.sourceBoxId === box.id && u.state === 'PICKED');
                 if (!picked.length)
                     throw new ConflictException('Этот короб не отобран целиком или уже добавлен.');

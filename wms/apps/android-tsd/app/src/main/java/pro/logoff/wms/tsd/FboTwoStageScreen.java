@@ -181,6 +181,8 @@ final class FboTwoStageScreen {
         if(state.pending()!=null)button(root,"Повторить неподтверждённый запрос",!busy,()->send("",null));
         button(root,"Обновить",ready(),this::refresh);button(root,"Назад",canLeave(),()->{close();back.run();});
         ScrollView scroll=new ScrollView(activity);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
+        final EditText scanTarget=input;
+        AssemblyAutoFocus.request(scanTarget,()->!closed&&input==scanTarget&&ready()&&quantityDialog==null);
         packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
         // FIX: one error cue per rejection, after rendering so a stage prompt cannot interrupt it.
         if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices()&&scanFeedback!=null)scanFeedback.error("packing:"+message);}
@@ -197,6 +199,9 @@ final class FboTwoStageScreen {
         }
         if("PACKING".equals(plan.phase)&&state.target.isEmpty()){
             // FIX: mode selection is navigation only; never convert a wrong scan into the other action.
+            if(FboScanState.alreadyPackedBox(plan,value,packingMode==PackingMode.MANUAL)){
+                message="Данный короб уже упакован в поставку";packingErrorSpeech=true;render();return;
+            }
             if(packingChoices()){
                 if(packingMode==PackingMode.WHOLE_BOXES){
                     if(plan.wholeBoxes.contains(value)){state.source=value;send("PACK_BOX",null);}
@@ -239,6 +244,7 @@ final class FboTwoStageScreen {
             TsdFboPlan next=res.body();handler.post(()->{state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;prefs.edit().remove(pendingKey).commit();plan=next;busy=false;feedbackColor=Color.rgb(187,247,208);message="Операция принята";
                 if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan);
                 if(packingVoiceActive()&&("PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action"))))packingPrompt(packingVoice.accepted(payload.get("operationId")));
+                if(packingChoices()&&"PACK_BOX".equals(payload.get("action")))packingPrompt(packingVoice.boxAccepted(payload.get("operationId")));
                 // FIX: only the successful server response may announce box closure.
                 if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
                 if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
@@ -256,6 +262,7 @@ final class FboTwoStageScreen {
         quantityDialog.setOnDismissListener(d->{quantityDialog=null;quantityInput=null;if(!closed)render();});
         quantityDialog.show();quantityDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->confirmWholeBoxQuantity());
         quantityInput.requestFocus();
+        AssemblyAutoFocus.request(quantityInput,()->quantityDialog!=null&&quantityDialog.isShowing());
     }
     private void confirmWholeBoxQuantity(){
         if(quantityInput==null||!ready())return;

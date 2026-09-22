@@ -15,6 +15,17 @@ public class FboScanStateTest {
         assertEquals("Весь товар из бокса отобран",FboScanState.wholePickTitle(plan,"ffl_lkbbox_042"));
         assertEquals("Короб забран целиком",FboScanState.wholePickTitle(plan,"FFL_LKB0409_28"));
     }
+    // TEST: detect repeats case-insensitively without blocking manual additions or resuming open cartons.
+    @Test public void detectsPackedCartonAndPreservesManualMode() {
+        TsdFboPlan plan=new TsdFboPlan();plan.reusablePackingEnabled=true;
+        TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="FFL_LKB0409_393";box.closed=true;box.quantity=15;
+        plan.boxes=Collections.singletonList(box);
+        assertTrue(FboScanState.alreadyPackedBox(plan,"ffl_lkb0409_393",false));
+        assertFalse(FboScanState.alreadyPackedBox(plan,box.code,true));
+        assertFalse(FboScanState.alreadyPackedBox(plan,"FFL_OTHER",false));
+        box.closed=false;assertFalse(FboScanState.alreadyPackedBox(plan,box.code,false));
+        box.closed=true;plan.reusablePackingEnabled=false;assertFalse(FboScanState.alreadyPackedBox(plan,box.code,false));
+    }
     // TEST: a lost response and an app restart retain the same physical count and operation id.
     @Test public void wholeBoxRetryPreservesConfirmedQuantity() {
         FboScanState first=new FboScanState();first.source="BOX";
