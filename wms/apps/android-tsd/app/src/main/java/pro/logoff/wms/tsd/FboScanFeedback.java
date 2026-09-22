@@ -64,6 +64,8 @@ interface FboScanFeedback {
         public void error(String errorKey) { playSample(personal.repeated(errorKey)?repeat:prompts.getOrDefault(FboPackingVoice.Cue.ERROR,0)); }
         public void success(){personal.success();}
         public void prompt(FboPackingVoice.Cue cue) {
+            // FIX: offline "Попал", including the user's personal voice pack.
+            if(cue==FboPackingVoice.Cue.PACKED_BOX){scan(true,"packing:box");return;}
             if(cue==FboPackingVoice.Cue.ERROR){error("packing:error");return;}
             if(cue==FboPackingVoice.Cue.PUT||cue==FboPackingVoice.Cue.CLOSED)personal.success();
             if(cue!=null)playSample(prompts.getOrDefault(cue,0));
