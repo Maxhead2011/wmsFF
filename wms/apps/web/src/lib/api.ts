@@ -6118,6 +6118,14 @@ export type PrintPrinterSummary = {
   updatedAt: string;
 };
 
+export type PrintAgentStationSummary = {
+  id: string;
+  name: string;
+  printerName: string;
+  printerModel: string;
+  lastSeenAt: string | null;
+};
+
 export type UpsertPrintPrinterPayload = {
   code: string;
   name: string;
@@ -11465,6 +11473,22 @@ export async function fetchPrintPrinters(accessToken: string) {
   return request<PrintPrinterSummary[]>('/print/printers', {
     accessToken,
   });
+}
+
+export async function fetchPrintAgentStations(accessToken: string) {
+  return request<PrintAgentStationSummary[]>('/print/agent-stations', { accessToken });
+}
+
+export async function createPrintAgentSkuJob(accessToken: string, payload: {
+  stationId: string; skuId: string; barcode: string; imageBase64: string; copies: number; widthMm: 40; heightMm: 60;
+}) {
+  return request<{ id: string; status: string }>('/print/agent-jobs', { method: 'POST', body: payload, accessToken });
+}
+
+export async function createPrintAgentCustomJob(accessToken: string, payload: {
+  stationId: string; clientId: string; value: string; imageBase64: string; copies: number; widthMm: number; heightMm: number;
+}) {
+  return request<{ id: string; status: string }>('/print/agent-custom-jobs', { method: 'POST', body: payload, accessToken });
 }
 
 export async function fetchPrintPrinterGroups(accessToken: string) {

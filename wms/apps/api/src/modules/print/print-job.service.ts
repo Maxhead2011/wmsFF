@@ -98,8 +98,13 @@ export class PrintJobService {
       throw new NotFoundException('Задание печати не найдено.');
     }
 
-    const printer = await this.printers.getActivePrinterOrThrow(job.printerCode);
-    this.printerScopes.requirePrinterGroupAccess(user, printer.groupCode, 'print');
+    if (job.printerCode.startsWith('AGENT:')) {
+      const station = await this.prisma.fbsPrintStation.findFirst({ where: { id: job.printerCode.slice('AGENT:'.length), enabled: true }, select: { id: true } });
+      if (!station) throw new BadRequestException('Печатная станция отключена.');
+    } else {
+      const printer = await this.printers.getActivePrinterOrThrow(job.printerCode);
+      this.printerScopes.requirePrinterGroupAccess(user, printer.groupCode, 'print');
+    }
 
     // Русский комментарий: перепечатка создает новое задание, а связь с оригиналом хранится в payload для аудита.
     return this.prisma.printJob.create({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRODUCT_LABEL_TSPL, productLabelCopies, productLabelVariables } from './productLabel';
+import { PRODUCT_LABEL_TSPL, productLabelBatch, productLabelCopies, productLabelVariables } from './productLabel';
 
 // TEST: synced marketplace card barcode is used on the agreed 40 × 60 label.
 describe('product label', () => {
@@ -20,5 +20,11 @@ describe('product label', () => {
   it('validates copy count before queueing', () => {
     expect(productLabelCopies('2')).toBe(2);
     for (const invalid of ['0', '101', '1.5', '']) expect(() => productLabelCopies(invalid)).toThrow();
+  });
+  it('keeps a separate quantity for each selected item', () => {
+    const second = { ...sku, id: 'sku-2', name: 'Костюм серый' };
+    const batch = productLabelBatch([{ ...sku, id: 'sku-1' }, second] as never, 'ИП Лукин', { 'sku-1': '2', 'sku-2': '5' }, {});
+    expect(batch.map(item => item.copies)).toEqual([2, 5]);
+    expect(() => productLabelBatch([second] as never, 'ИП Лукин', { 'sku-2': '0' }, {})).toThrow();
   });
 });

@@ -1,0 +1,10 @@
+{
+  "server": "https://wms.logoff.pro",
+  "login": "operator-login",
+  "password": "operator-password",
+  "stationId": "ID_СТАНЦИИ_ИЗ_WMS",
+  "stationName": "СБОРКА-1",
+  "printerName": "TSC TE200",
+  "labelWidthMm": 58,
+  "labelHeightMm": 40
+}

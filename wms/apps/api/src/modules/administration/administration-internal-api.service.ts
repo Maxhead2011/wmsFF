@@ -243,9 +243,9 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'print',
     name: 'Печать',
     prefixes: ['/print'],
-    routeCount: 16,
+    routeCount: 21, // FIX: include print-agent station discovery, SKU/custom jobs, queue claim and result routes.
     description: 'Очереди печати, шаблоны, принтеры и повторная печать этикеток.',
-    logic: ['Формирует задания печати.', 'Маршрутизирует задание в группу принтеров.', 'Хранит статус, ошибки и историю повторов.'],
+    logic: ['Формирует задания печати.', 'Маршрутизирует задание в группу принтеров.', 'Передаёт задания действующим агентам печати.', 'Хранит статус, ошибки и историю повторов.'],
     dependencies: ['Основная БД', 'Принтеры/агент печати'],
   },
   {

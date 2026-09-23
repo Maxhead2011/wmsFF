@@ -20,6 +20,7 @@ import { LabelTemplateService } from './label-template.service';
 import { PrintJobService } from './print-job.service';
 import { PrintPrinterService } from './print-printer.service';
 import { PrintQueueWorkerService } from './print-queue-worker.service';
+import { PrintAgentService } from './print-agent.service';
 import { TsplLabelService } from './tspl-label.service';
 
 @ApiTags('print')
@@ -32,11 +33,39 @@ export class PrintController {
     private readonly jobs: PrintJobService,
     private readonly printers: PrintPrinterService,
     private readonly queue: PrintQueueWorkerService,
+    private readonly agent: PrintAgentService,
   ) {}
 
   @Get('printers')
   listPrinters(@CurrentUser() user: AuthUser) {
     return this.printers.listPrinters(user);
+  }
+
+  @Get('agent-stations')
+  listAgentStations() {
+    return this.agent.listStations();
+  }
+
+  @Post('agent-jobs')
+  createAgentSkuJob(@Body() body: { stationId?: string; skuId?: string; barcode?: string; imageBase64?: string; copies?: number; widthMm?: number; heightMm?: number }, @CurrentUser() user: AuthUser) {
+    return this.agent.createSkuJob(body ?? {}, user);
+  }
+
+  @Post('agent-custom-jobs')
+  createAgentCustomJob(@Body() body: { stationId?: string; clientId?: string; value?: string; imageBase64?: string; copies?: number; widthMm?: number; heightMm?: number }, @CurrentUser() user: AuthUser) {
+    return this.agent.createCustomJob(body ?? {}, user);
+  }
+
+  @Post('agent-stations/:stationId/claim')
+  @RequirePermissions()
+  claimAgentJob(@Param('stationId') stationId: string) {
+    return this.agent.claim(stationId);
+  }
+
+  @Post('agent-jobs/:id/result')
+  @RequirePermissions()
+  finishAgentJob(@Param('id') id: string, @Body() body: { success?: boolean; error?: string }) {
+    return this.agent.finish(id, body?.success === true, body?.error);
   }
 
   @Get('printer-groups')

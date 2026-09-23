@@ -2,24 +2,29 @@ import { FileText, Printer, Save } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   createLabelTemplate,
+  createPrintAgentCustomJob,
   createPrintJobFromTemplate,
   fetchClients,
   fetchPrintPrinters,
+  fetchPrintAgentStations,
   previewLabelTemplate,
   type AuthSession,
   type ClientSummary,
   type PrintPrinterSummary,
+  type PrintAgentStationSummary,
 } from '../../lib/api';
-import { printB1Stickers } from './niimbotBrowser';
+import { printB1Stickers, renderStickerPng } from './niimbotBrowser';
+import { StickerCanvasEditor } from './StickerCanvasEditor';
 import { TsplPreviewCard } from './TsplPreviewCard';
 import { stickerSequence, type StickerSequence } from '../../lib/stickerSequence';
-import { buildStickerTspl, type StickerCodeKind } from '../../lib/stickerLayout';
+import { buildStickerTspl, defaultStickerBoxes, fitStickerText, type StickerBoxes, type StickerCodeKind, type StickerLayout } from '../../lib/stickerLayout';
 
 const NIIMBOT_BROWSER_CODE = 'NIIMBOT_B1_BROWSER';
 
 export function StickerSetPanel({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [printers, setPrinters] = useState<PrintPrinterSummary[]>([]);
+  const [stations, setStations] = useState<PrintAgentStationSummary[]>([]);
   const [clientId, setClientId] = useState('');
   const [name, setName] = useState('Короба с QR');
   const [prefix, setPrefix] = useState('');
@@ -45,6 +50,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
   const [barcodeX, setBarcodeX] = useState('16');
   const [barcodeY, setBarcodeY] = useState('175');
   const [numberY, setNumberY] = useState('280');
+  const [boxes, setBoxes] = useState<StickerBoxes>(() => defaultStickerBoxes({ width: 50, height: 30, font: 3, codeKind: 'qr', qrLevel: 'M', qrModule: 4, barcodeHeight: 70, topText: '', bottomText: '', qrX: 20, qrY: 45, barcodeX: 16, barcodeY: 120, numberY: 175 }));
   const [printerCode, setPrinterCode] = useState('');
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof previewLabelTemplate>> | null>(null);
   const [message, setMessage] = useState('');
@@ -59,15 +65,16 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
   }, [prefix, start, count, step, repeat, digits, direction]);
   const values = sequenceResult.values;
   const availablePrinters = useMemo(
-    () => [{ id: NIIMBOT_BROWSER_CODE, code: NIIMBOT_BROWSER_CODE, name: 'NIIMBOT B1 · Bluetooth этого ноутбука' }, ...printers],
-    [printers],
+    () => [{ id: NIIMBOT_BROWSER_CODE, code: NIIMBOT_BROWSER_CODE, name: 'NIIMBOT B1 · Bluetooth этого ноутбука' }, ...stations.map((station) => ({ id: station.id, code: `AGENT:${station.id}`, name: `${station.printerName} · ${station.name}` })), ...printers],
+    [printers, stations],
   );
 
   useEffect(() => {
-    Promise.all([fetchClients(session.accessToken), fetchPrintPrinters(session.accessToken)])
-      .then(([nextClients, nextPrinters]) => {
+    Promise.all([fetchClients(session.accessToken), fetchPrintPrinters(session.accessToken), fetchPrintAgentStations(session.accessToken)])
+      .then(([nextClients, nextPrinters, nextStations]) => {
         setClients(nextClients);
         setPrinters(nextPrinters.filter((printer) => printer.isActive));
+        setStations(nextStations);
         setClientId((current) => current || nextClients[0]?.id || '');
         setPrinterCode((current) => current || NIIMBOT_BROWSER_CODE);
       })
@@ -76,7 +83,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
 
   useEffect(() => {
     const printer = printers.find((item) => item.code === printerCode);
-    if (!printer && printerCode !== NIIMBOT_BROWSER_CODE) return;
+    if (!printer && printerCode !== NIIMBOT_BROWSER_CODE && !printerCode.startsWith('AGENT:')) return;
     const isNiimbot = printerCode === NIIMBOT_BROWSER_CODE || `${printer?.code ?? ''} ${printer?.name ?? ''}`.toUpperCase().includes('NIIMBOT');
     setWidth(isNiimbot ? '50' : '40');
     setHeight(isNiimbot ? '30' : '60');
@@ -86,12 +93,19 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
     setBarcodeY(compact ? (codeKind === 'both' ? '120' : '85') : '220');
     setBarcodeHeight(compact && codeKind === 'both' ? '42' : '70');
     setNumberY(compact ? '175' : '335');
+    setBoxes(defaultStickerBoxes({ width: compact ? 50 : 40, height: compact ? 30 : 60, font: positive(font, 3), codeKind, qrLevel, qrModule: compact && codeKind === 'both' ? 3 : 4, barcodeHeight: compact && codeKind === 'both' ? 42 : 70, topText, bottomText, qrX: coordinate(qrX, 20), qrY: compact ? (codeKind === 'both' ? 35 : 45) : 82, barcodeX: coordinate(barcodeX, 16), barcodeY: compact ? (codeKind === 'both' ? 120 : 85) : 220, numberY: compact ? 175 : 335 }));
   }, [printerCode, printers, codeKind]);
 
   async function createSet(mode: 'preview' | 'print') {
     if (!client || values.length === 0) return;
     setWorking(true); setError(''); setMessage(''); setPreview(null);
     try {
+      const layout: StickerLayout = { width: positive(width, 50), height: positive(height, 30), font: positive(font, 3), codeKind, qrLevel, qrModule: positive(qrModule, 4), barcodeHeight: positive(barcodeHeight, 70), topText, bottomText, qrX: boxes.qr.x, qrY: boxes.qr.y, barcodeX: boxes.barcode.x, barcodeY: boxes.barcode.y, numberY: boxes.number.y, boxes };
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      const measure = (line: string, size: number) => { if (!context) return line.length * size * .65; context.font = `700 ${size}px Arial`; return context.measureText(line).width; };
+      for (const [key, text] of [['client', client.name], ['top', topText], ['bottom', bottomText]] as const) if (text.trim()) fitStickerText(text, boxes[key], Math.max(18, layout.font * 6), measure);
+      for (const value of values) fitStickerText(value, boxes.number, Math.max(18, layout.font * 6), measure);
       const template = await createLabelTemplate(session.accessToken, {
         code: `SET_${Date.now().toString(36)}`,
         name: `${client.name} · ${name}`.slice(0, 120),
@@ -99,7 +113,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
         description: `Набор стикеров клиента ${client.name}. Префикс: ${prefix}`,
         widthMm: positive(width, 50),
         heightMm: positive(height, 30),
-        tspl: buildStickerTspl({ width: positive(width, 50), height: positive(height, 30), font: positive(font, 3), codeKind, qrLevel, qrModule: positive(qrModule, 4), barcodeHeight: positive(barcodeHeight, 70), topText, bottomText, qrX: coordinate(qrX, 20), qrY: coordinate(qrY, 82), barcodeX: coordinate(barcodeX, 180), barcodeY: coordinate(barcodeY, 88), numberY: coordinate(numberY, 230) }),
+        tspl: buildStickerTspl(layout),
         isActive: true,
       });
       const firstVariables = stickerVariables(client.name, values[0], topText, bottomText);
@@ -124,8 +138,17 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
             numberY: coordinate(numberY, 190),
             qrLevel,
             qrSize: codeKind === 'both' ? 75 : 102,
+            boxes,
           })), setMessage);
           setMessage(`NIIMBOT B1 напечатал ${values.length} стикеров: от ${values[0]} до ${values[values.length - 1]}.`);
+          return;
+        }
+        if (printerCode.startsWith('AGENT:')) {
+          for (const value of values) {
+            const sticker = { clientName: client.name, value, topText, bottomText, fontSize: layout.font, barcodeEnabled, qrEnabled, qrX: boxes.qr.x, qrY: boxes.qr.y, barcodeX: boxes.barcode.x, barcodeY: boxes.barcode.y, numberY: boxes.number.y, qrLevel, boxes };
+            await createPrintAgentCustomJob(session.accessToken, { stationId: printerCode.slice(6), clientId: client.id, value, imageBase64: await renderStickerPng(sticker, layout.width, layout.height), copies: 1, widthMm: layout.width, heightMm: layout.height });
+          }
+          setMessage(`В агент печати отправлено ${values.length} стикеров: от ${values[0]} до ${values[values.length - 1]}.`);
           return;
         }
         for (const value of values) {
@@ -152,8 +175,8 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
       <label><span>Принтер</span><select value={printerCode} onChange={(event) => setPrinterCode(event.target.value)}><option value="">Выберите принтер</option>{availablePrinters.map((item) => <option key={item.id} value={item.code}>{item.code === NIIMBOT_BROWSER_CODE ? item.name : `${item.code} · ${item.name}`}</option>)}</select></label>
     </div>
     {printerCode === NIIMBOT_BROWSER_CODE ? <p className="sticker-set__browser-note">Печать напрямую с этого ноутбука: включите NIIMBOT B1, откройте WMS в Chrome или Edge и нажмите «Напечатать». Браузер попросит выбрать принтер один раз.</p> : null}
-    <div className="sticker-set__design"><label><span>Ширина, мм</span><input min="20" max="100" type="number" value={width} onChange={(event) => setWidth(event.target.value)} /></label><label><span>Высота, мм</span><input min="20" max="100" type="number" value={height} onChange={(event) => setHeight(event.target.value)} /></label><label><span>Размер шрифта</span><input min="1" max="10" type="number" value={font} onChange={(event) => setFont(event.target.value)} /></label><label><span>Текст сверху</span><input value={topText} onChange={(event) => setTopText(event.target.value)} placeholder="Например: Короб клиента" /></label><label><span>Текст снизу</span><input value={bottomText} onChange={(event) => setBottomText(event.target.value)} placeholder="Например: Москва" /></label><label><span>Вид кода</span><select value={codeKind} onChange={(event) => setCodeKind(event.target.value as StickerCodeKind)}><option value="qr">QR-код</option><option value="code128">Штрихкод Code 128</option><option value="both">QR + Code 128</option></select></label><label><span>Читаемость QR</span><select disabled={!qrEnabled} value={qrLevel} onChange={(event) => setQrLevel(event.target.value as typeof qrLevel)}><option value="L">L · больше данных</option><option value="M">M · стандарт</option><option value="Q">Q · устойчивый</option><option value="H">H · максимальная</option></select></label><label><span>Размер модуля QR, точки</span><input disabled={!qrEnabled} min="1" max="10" type="number" value={qrModule} onChange={(event) => setQrModule(event.target.value)} /></label><label><span>Высота ШК, точки</span><input disabled={!barcodeEnabled} min="20" max="150" type="number" value={barcodeHeight} onChange={(event) => setBarcodeHeight(event.target.value)} /></label></div>
-    <div className="sticker-set__editor"><div className="sticker-set__canvas" style={{ aspectRatio: `${positive(width, 50)} / ${positive(height, 30)}` }}><small className="sticker-set__canvas-client">{client?.name ?? 'Клиент'}</small>{topText ? <b className="sticker-set__canvas-top">{topText}</b> : null}{qrEnabled ? <span className="sticker-set__canvas-qr" style={{ left: `${Math.min(76, coordinate(qrX, 20) / 5)}%`, top: `${Math.min(70, coordinate(qrY, 82) / 4)}%` }}>▦</span> : null}{barcodeEnabled ? <span className="sticker-set__canvas-barcode" style={{ left: `${Math.min(65, coordinate(barcodeX, 180) / 5)}%`, top: `${Math.min(70, coordinate(barcodeY, 88) / 4)}%` }}>|||||||||</span> : null}<strong className="sticker-set__canvas-number" style={{ top: `${Math.min(82, coordinate(numberY, 230) / 4)}%`, fontSize: `${Math.min(18, 7 + positive(font, 3) * 2)}px` }}>{values[0] ?? 'Номер'}</strong>{bottomText ? <em>{bottomText}</em> : null}</div><div className="sticker-set__positions"><b>Положение элементов, точки принтера</b><label>QR X<input type="number" value={qrX} onChange={(e) => setQrX(e.target.value)} /></label><label>QR Y<input type="number" value={qrY} onChange={(e) => setQrY(e.target.value)} /></label><label>ШК X<input type="number" value={barcodeX} onChange={(e) => setBarcodeX(e.target.value)} /></label><label>ШК Y<input type="number" value={barcodeY} onChange={(e) => setBarcodeY(e.target.value)} /></label><label>Номер Y<input type="number" value={numberY} onChange={(e) => setNumberY(e.target.value)} /></label></div></div>
+    <div className="sticker-set__design"><label><span>Ширина, мм</span><input min="20" max="100" type="number" value={width} onChange={(event) => setWidth(event.target.value)} /></label><label><span>Высота, мм</span><input min="20" max="100" type="number" value={height} onChange={(event) => setHeight(event.target.value)} /></label><label><span>Размер шрифта</span><input min="1" max="10" type="number" value={font} onChange={(event) => setFont(event.target.value)} /></label><label><span>Текст сверху</span><input value={topText} onChange={(event) => setTopText(event.target.value)} placeholder="Например: Короб клиента" /></label><label><span>Текст снизу</span><input value={bottomText} onChange={(event) => setBottomText(event.target.value)} placeholder="Например: Москва" /></label><label><span>Вид кода</span><select value={codeKind} onChange={(event) => setCodeKind(event.target.value as StickerCodeKind)}><option value="qr">QR-код</option><option value="code128">Штрихкод Code 128</option><option value="both">QR + Code 128</option></select></label><label><span>Читаемость QR</span><select disabled={!qrEnabled} value={qrLevel} onChange={(event) => setQrLevel(event.target.value as typeof qrLevel)}><option value="L">L · больше данных</option><option value="M">M · стандарт</option><option value="Q">Q · устойчивый</option><option value="H">H · максимальная</option></select></label></div>
+    <StickerCanvasEditor width={positive(width, 50)} height={positive(height, 30)} boxes={boxes} onChange={setBoxes} clientName={client?.name ?? ''} topText={topText} bottomText={bottomText} value={values[0] ?? ''} codeKind={codeKind} font={positive(font, 3)} />
     <div className="sticker-set__sequence"><b>Будет напечатано: {values.length} этикеток</b><span>{values.slice(0, 5).join(' · ')}{values.length > 5 ? ` · … · ${values[values.length - 1]}` : ''}</span></div>
     {sequenceResult.error ? <p className="form-error" role="alert">{sequenceResult.error}</p> : null}
     {error || message ? <p className={error ? 'form-error' : 'inline-status'}>{error || message}</p> : null}

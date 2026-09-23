@@ -1,6 +1,7 @@
 import JsBarcode from 'jsbarcode';
 import QRCode from 'qrcode';
 import 'niimbot-web-bluetooth';
+import { fitStickerText, type StickerBoxes, type StickerBox } from '../../lib/stickerLayout';
 
 declare global {
   interface Window {
@@ -48,6 +49,7 @@ export type BrowserSticker = {
   barcodeX: number;
   barcodeY: number;
   numberY: number;
+  boxes?: StickerBoxes;
 };
 
 export async function printB1Stickers(stickers: BrowserSticker[], onProgress: (message: string) => void) {
@@ -57,7 +59,7 @@ export async function printB1Stickers(stickers: BrowserSticker[], onProgress: (m
   if (stickers.length === 0) return;
 
   onProgress('Готовлю макет для NIIMBOT B1…');
-  const images = await Promise.all(stickers.map((sticker) => renderB1Sticker(sticker)));
+  const images = await Promise.all(stickers.map((sticker) => renderStickerImage(sticker, 50, 30, B1_50X30.w_px, B1_50X30.h_px)));
   await window.Niimbot.printBatch(images, {
     model: B1_MODEL,
     size: B1_50X30,
@@ -65,69 +67,67 @@ export async function printB1Stickers(stickers: BrowserSticker[], onProgress: (m
   });
 }
 
-async function renderB1Sticker(sticker: BrowserSticker) {
+export async function renderStickerPng(sticker: BrowserSticker, widthMm: number, heightMm: number) {
+  const image = await renderStickerImage(sticker, widthMm, heightMm, Math.round(widthMm * 11.81), Math.round(heightMm * 11.81));
+  return image.replace(/^data:image\/png;base64,/, '');
+}
+
+async function renderStickerImage(sticker: BrowserSticker, widthMm: number, heightMm: number, outputWidth: number, outputHeight: number) {
   const canvas = document.createElement('canvas');
-  canvas.width = B1_50X30.w_px;
-  canvas.height = B1_50X30.h_px;
+  canvas.width = outputWidth;
+  canvas.height = outputHeight;
   const context = canvas.getContext('2d');
   if (!context) throw new Error('Не удалось подготовить макет стикера для печати.');
 
   context.fillStyle = '#fff';
   context.fillRect(0, 0, canvas.width, canvas.height);
+  context.scale(outputWidth / (widthMm * 8), outputHeight / (heightMm * 8));
   context.fillStyle = '#050505';
   context.textBaseline = 'top';
 
-  const fontScale = clamp(sticker.fontSize, 1, 10);
-  const left = 14;
-  drawText(context, sticker.clientName, left, 12, 10 + fontScale * 2, canvas.width - 28, true);
-  if (sticker.topText.trim()) drawText(context, sticker.topText, left, 37, 9 + fontScale * 2, canvas.width - 28, false);
+  const boxes = sticker.boxes;
+  const textSize = Math.max(18, clamp(sticker.fontSize, 1, 10) * 6);
+  drawText(context, sticker.clientName, boxes?.client ?? { x: 14, y: 12, width: widthMm * 8 - 28, height: 30 }, textSize, true);
+  if (sticker.topText.trim()) drawText(context, sticker.topText, boxes?.top ?? { x: 14, y: 37, width: widthMm * 8 - 28, height: 30 }, textSize, false);
 
-  const qrX = clamp(sticker.qrX, 0, 275);
-  const qrY = clamp(sticker.qrY, 35, 140);
+  const qrBox = boxes?.qr ?? { x: sticker.qrX, y: sticker.qrY, width: sticker.qrSize ?? 102, height: sticker.qrSize ?? 102 };
   if (sticker.qrEnabled) {
     const qrCanvas = document.createElement('canvas');
-    const qrSize = sticker.qrSize ?? 102;
+    const qrSize = Math.min(qrBox.width, qrBox.height);
     await QRCode.toCanvas(qrCanvas, sticker.value, { width: qrSize, margin: 0, errorCorrectionLevel: sticker.qrLevel ?? 'M', color: { dark: '#000000', light: '#ffffff' } });
-    context.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
+    context.drawImage(qrCanvas, qrBox.x, qrBox.y, qrSize, qrSize);
   }
 
   if (sticker.barcodeEnabled) {
     const barcodeCanvas = document.createElement('canvas');
-    const barcodeX = clamp(sticker.barcodeX, 0, 180);
-    const barcodeY = clamp(sticker.barcodeY, 48, 150);
+    const barcodeBox = boxes?.barcode ?? { x: sticker.barcodeX, y: sticker.barcodeY, width: 180, height: 48 };
     JsBarcode(barcodeCanvas, sticker.value, {
       format: 'CODE128',
       displayValue: false,
       margin: 0,
       width: 1.28,
-      height: 48,
+      height: barcodeBox.height,
       background: '#ffffff',
       lineColor: '#000000',
     });
-    const maxWidth = canvas.width - barcodeX - 10;
-    const ratio = Math.min(1, maxWidth / barcodeCanvas.width);
-    context.drawImage(barcodeCanvas, barcodeX, barcodeY, barcodeCanvas.width * ratio, barcodeCanvas.height);
+    context.drawImage(barcodeCanvas, barcodeBox.x, barcodeBox.y, barcodeBox.width, barcodeBox.height);
   }
 
-  const serialY = clamp(sticker.numberY, 150, 218);
-  drawText(context, sticker.value, left, serialY, 12 + fontScale * 2, canvas.width - 28, true);
-  if (sticker.bottomText.trim()) drawText(context, sticker.bottomText, left, Math.min(226, serialY + 22), 9 + fontScale, canvas.width - 28, false);
+  drawText(context, sticker.value, boxes?.number ?? { x: 14, y: sticker.numberY, width: widthMm * 8 - 28, height: 30 }, textSize, true);
+  if (sticker.bottomText.trim()) drawText(context, sticker.bottomText, boxes?.bottom ?? { x: 14, y: sticker.numberY + 22, width: widthMm * 8 - 28, height: 22 }, textSize, false);
   return canvas.toDataURL('image/png');
 }
 
-function drawText(context: CanvasRenderingContext2D, source: string, x: number, y: number, size: number, maxWidth: number, bold: boolean) {
+function drawText(context: CanvasRenderingContext2D, source: string, box: StickerBox, size: number, bold: boolean) {
   const text = source.trim();
   if (!text) return;
-  context.font = `${bold ? '700' : '500'} ${size}px Arial, sans-serif`;
-  const clipped = truncateToWidth(context, text, maxWidth);
-  context.fillText(clipped, x, y);
-}
-
-function truncateToWidth(context: CanvasRenderingContext2D, value: string, maxWidth: number) {
-  if (context.measureText(value).width <= maxWidth) return value;
-  let shortened = value;
-  while (shortened.length > 1 && context.measureText(`${shortened}…`).width > maxWidth) shortened = shortened.slice(0, -1);
-  return `${shortened}…`;
+  const weight = bold ? '700' : '500';
+  const fitted = fitStickerText(text, box, size, (line, fontSize) => {
+    context.font = `${weight} ${fontSize}px Arial, sans-serif`;
+    return context.measureText(line).width;
+  });
+  context.font = `${weight} ${fitted.size}px Arial, sans-serif`;
+  fitted.lines.forEach((line, index) => context.fillText(line, box.x, box.y + index * fitted.size * 1.2));
 }
 
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)); }

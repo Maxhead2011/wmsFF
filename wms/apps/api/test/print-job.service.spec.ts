@@ -9,6 +9,7 @@ import { PrintJobService } from '../src/modules/print/print-job.service';
 describe('PrintJobService', () => {
   function createService(options: { isActive?: boolean } = {}) {
     const prisma = {
+      fbsPrintStation: { findFirst: vi.fn().mockResolvedValue({ id: 'station-1' }) },
       printJob: {
         create: vi.fn().mockImplementation(({ data }) => ({ id: 'job-1', createdAt: new Date(), ...data })),
         findMany: vi.fn().mockResolvedValue([]),
@@ -134,6 +135,15 @@ describe('PrintJobService', () => {
       reprintOfJobId: 'job-1',
       reprintReason: 'Этикетка испорчена',
     });
+  });
+
+  it('разрешает повторную печать того же PNG через подключённого агента', async () => {
+    const { service, prisma, printers } = createService();
+    vi.mocked(prisma.printJob.findUnique).mockResolvedValue({ id: 'job-agent', printerCode: 'AGENT:station-1', labelType: LabelTemplateType.SKU, payload: { source: 'SKU_AGENT', imageBase64: 'png' }, tspl: 'IMAGE/PNG', status: 'printed' } as never);
+    const job = await service.reprintJob('job-agent', {}, adminUser());
+    expect(prisma.fbsPrintStation.findFirst).toHaveBeenCalled();
+    expect(printers.getActivePrinterOrThrow).not.toHaveBeenCalled();
+    expect(job.payload).toMatchObject({ imageBase64: 'png', reprintOfJobId: 'job-agent' });
   });
 });
 

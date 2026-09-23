@@ -32,3 +32,8 @@ export function productLabelCopies(value: string) {
   }
   return Number(value);
 }
+
+// FIX: each selected SKU carries its own validated print quantity.
+export function productLabelBatch(skus: SkuSummary[], clientName: string, quantities: Record<string, string>, barcodes: Record<string, string>) {
+  return skus.map(sku => ({ skuId: sku.id, variables: productLabelVariables(sku, clientName, barcodes[sku.id]), copies: productLabelCopies(quantities[sku.id] ?? '1') }));
+}
