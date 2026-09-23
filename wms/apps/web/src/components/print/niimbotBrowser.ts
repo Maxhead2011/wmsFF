@@ -40,6 +40,8 @@ export type BrowserSticker = {
   bottomText: string;
   fontSize: number;
   qrEnabled: boolean;
+  qrLevel?: 'L' | 'M' | 'Q' | 'H';
+  qrSize?: number;
   barcodeEnabled: boolean;
   qrX: number;
   qrY: number;
@@ -81,11 +83,12 @@ async function renderB1Sticker(sticker: BrowserSticker) {
   if (sticker.topText.trim()) drawText(context, sticker.topText, left, 37, 9 + fontScale * 2, canvas.width - 28, false);
 
   const qrX = clamp(sticker.qrX, 0, 275);
-  const qrY = clamp(sticker.qrY, 48, 140);
+  const qrY = clamp(sticker.qrY, 35, 140);
   if (sticker.qrEnabled) {
     const qrCanvas = document.createElement('canvas');
-    await QRCode.toCanvas(qrCanvas, sticker.value, { width: 102, margin: 0, errorCorrectionLevel: 'M', color: { dark: '#000000', light: '#ffffff' } });
-    context.drawImage(qrCanvas, qrX, qrY, 102, 102);
+    const qrSize = sticker.qrSize ?? 102;
+    await QRCode.toCanvas(qrCanvas, sticker.value, { width: qrSize, margin: 0, errorCorrectionLevel: sticker.qrLevel ?? 'M', color: { dark: '#000000', light: '#ffffff' } });
+    context.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
   }
 
   if (sticker.barcodeEnabled) {

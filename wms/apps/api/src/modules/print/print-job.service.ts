@@ -44,7 +44,8 @@ export class PrintJobService {
     }
 
     const variables = dto.variables ?? {};
-    const tspl = this.templates.renderTspl(template.tspl, variables);
+    // FIX: copies must alter the command sent to the printer, not just job metadata.
+    const tspl = applyPrintCopies(this.templates.renderTspl(template.tspl, variables), copies);
 
     // Русский комментарий: очередь хранит уже готовый TSPL, чтобы будущий печатный воркер не зависел от изменений шаблона.
     return this.prisma.printJob.create({
@@ -152,4 +153,15 @@ function reprintPayload(payload: Prisma.JsonValue, jobId: string, reason?: strin
     reprintReason: trimmedReason || 'Повторная печать',
     reprintedAt: new Date().toISOString(),
   } satisfies Prisma.InputJsonObject;
+}
+
+function applyPrintCopies(tspl: string, copies: number) {
+  if (!Number.isInteger(copies) || copies < 1 || copies > 100) {
+    throw new BadRequestException('Количество копий должно быть от 1 до 100.');
+  }
+  const normalized = tspl.replace(/\r\n?/g, '\n');
+  const command = /^[ \t]*PRINT[ \t]+\d+(?:[ \t]*,[ \t]*\d+)?[ \t]*$/gim;
+  const matches = [...normalized.matchAll(command)];
+  if (matches.length > 1) throw new BadRequestException('Шаблон содержит несколько команд PRINT.');
+  return matches.length ? normalized.replace(command, `PRINT ${copies}`) : `${normalized.trimEnd()}\nPRINT ${copies}`;
 }

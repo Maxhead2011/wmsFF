@@ -1,7 +1,8 @@
-import { ImageOff, Pencil, RefreshCw, Search, X } from 'lucide-react';
+import { ImageOff, Pencil, Printer, RefreshCw, Search, X } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { fetchNomenclature, type AuthSession, type NomenclatureSummary } from '../../lib/api';
 import { NomenclatureEditDialog } from './NomenclatureEditDialog';
+import { SkuLabelForm } from '../print/SkuLabelForm';
 
 type SkuDirectoryTableProps = {
   session: AuthSession;
@@ -173,7 +174,7 @@ export function SkuDirectoryTable({ session, reloadKey }: SkuDirectoryTableProps
       </div>
 
       {selectedSku ? (
-        <SkuDetailsCard sku={selectedSku} onClose={() => setSelectedSku(null)} onEdit={() => setEditingSku(selectedSku)} />
+        <SkuDetailsCard sku={selectedSku} session={session} onClose={() => setSelectedSku(null)} onEdit={() => setEditingSku(selectedSku)} />
       ) : null}
       {editingSku ? (
         <NomenclatureEditDialog
@@ -187,7 +188,8 @@ export function SkuDirectoryTable({ session, reloadKey }: SkuDirectoryTableProps
   );
 }
 
-function SkuDetailsCard({ sku, onClose, onEdit }: { sku: NomenclatureSummary; onClose: () => void; onEdit: () => void }) {
+function SkuDetailsCard({ sku, session, onClose, onEdit }: { sku: NomenclatureSummary; session: AuthSession; onClose: () => void; onEdit: () => void }) {
+  const [showPrint, setShowPrint] = useState(false);
   const details = sku as NomenclatureWithDetails;
   const dimensions = [
     { label: 'Длина', value: details.lengthCm, suffix: 'см' },
@@ -197,6 +199,7 @@ function SkuDetailsCard({ sku, onClose, onEdit }: { sku: NomenclatureSummary; on
     { label: 'Литраж', value: details.volumeLiters, suffix: 'л' },
   ];
   const properties = normalizeProperties(details.properties);
+  const canPrint = session.user.permissionCodes.includes('system:admin') || session.user.permissionCodes.includes('print:write');
 
   return (
     <aside className="sku-details-card" aria-label="Карточка товара">
@@ -240,6 +243,10 @@ function SkuDetailsCard({ sku, onClose, onEdit }: { sku: NomenclatureSummary; on
           <DetailTerm label="Единица" value={details.unit} />
           <DetailTerm label="Честный ЗНАК" value={details.needsChestnyZnak ? 'Да' : 'Нет'} />
         </dl>
+
+        {/* FIX: print from the selected product card with its article already entered. */}
+        {canPrint ? <button className="icon-text-button" type="button" onClick={() => setShowPrint(value => !value)}><Printer size={16} />{showPrint ? 'Скрыть печать' : 'Печать ШК товара'}</button> : null}
+        {canPrint && showPrint ? <SkuLabelForm key={sku.id} session={session} initialSearch={sku.article || sku.barcode || sku.internalSku} /> : null}
 
         <div className="sku-details-card__section">
           <h4>Габариты</h4>

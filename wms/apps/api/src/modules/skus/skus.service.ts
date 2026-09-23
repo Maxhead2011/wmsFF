@@ -33,6 +33,8 @@ export class SkusService {
         ? [
             { name: { contains: filter.search, mode: 'insensitive' } },
             { internalSku: { contains: filter.search, mode: 'insensitive' } },
+            // FIX: marketplace article search is required for label lookup.
+            { article: { contains: filter.search, mode: 'insensitive' } },
             { barcodes: { some: { value: { contains: filter.search } } } },
           ]
         : undefined,
