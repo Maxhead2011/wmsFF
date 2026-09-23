@@ -89,7 +89,8 @@ try {
 
       $server = 'https://wms.logoff.pro'
       $authBody = @{ email = $login.Text.Trim(); password = $password.Text } | ConvertTo-Json
-      $auth = Invoke-RestMethod -Method Post -Uri "$server/api/v1/auth/login" -ContentType 'application/json' -Body $authBody
+      # FIX: Windows PowerShell 5.1 replaces Cyrillic login characters unless JSON is sent as UTF-8 bytes.
+      $auth = Invoke-RestMethod -Method Post -Uri "$server/api/v1/auth/login" -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($authBody))
       $headers = @{ Authorization = "Bearer $($auth.accessToken)" }
       $isNiimbot = $model.SelectedItem -eq 'NIIMBOT B1'
       $width = if ($isNiimbot) { 50 } else { 58 }
