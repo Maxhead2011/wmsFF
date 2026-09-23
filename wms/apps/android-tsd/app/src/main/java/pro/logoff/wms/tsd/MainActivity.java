@@ -4421,7 +4421,8 @@ public class MainActivity extends Activity {
                     : tr("Открытых FBS-заявок пока нет.", "Hozircha ochiq FBS arizalari yo‘q."),
                 LIGHT_GRAY
             ));
-        } else if (requests != null) {
+        } else if (fbsRequests != null && !requests.isEmpty()) {
+            // FIX: initial loading has no server response yet; the filtered list is still non-null.
             String lockedRequestId = fbsRequests.currentRequestId == null ? "" : fbsRequests.currentRequestId;
             for (TsdFbsRequestsResponse.Request request : requests) {
                 boolean isCurrent = !lockedRequestId.isEmpty() && lockedRequestId.equals(request.requestId);
