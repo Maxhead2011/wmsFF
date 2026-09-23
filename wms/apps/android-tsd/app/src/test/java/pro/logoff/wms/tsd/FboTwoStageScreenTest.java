@@ -26,6 +26,20 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: opening either marketplace renders loading before the first server response exists.
+    @Test public void fbsRequestsCanRenderBeforeFirstResponse() throws Exception {
+        for(String market:new String[]{"WILDBERRIES","OZON"})try(var controller=Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity a=controller.get();
+            java.lang.reflect.Field filter=MainActivity.class.getDeclaredField("fbsMarketplaceFilter");filter.setAccessible(true);filter.set(a,market);
+            java.lang.reflect.Field busy=MainActivity.class.getDeclaredField("fbsRequestsBusy");busy.setAccessible(true);busy.setBoolean(a,true);
+            java.lang.reflect.Field data=MainActivity.class.getDeclaredField("fbsRequests");data.setAccessible(true);data.set(a,null);
+            java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderFbsRequestSelectionScreen");render.setAccessible(true);
+            render.invoke(a);
+            assertNotNull(find(a.findViewById(android.R.id.content),"Подождите, загружаю список заявок"));
+            busy.setBoolean(a,false);render.invoke(a);
+            assertNotNull(find(a.findViewById(android.R.id.content),"Открытых FBS-заявок пока нет"));
+        }
+    }
     // TEST: FBS feedback covers the viewport and sold variants retain their existing background.
     @Test public void fbsFeedbackColorsCoverViewport() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
