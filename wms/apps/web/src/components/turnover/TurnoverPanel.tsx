@@ -615,7 +615,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
         {clients.error ? <p className="form-error">{clients.error}</p> : null}
         {report.error ? <p className="form-error">{report.error}</p> : null}
-        {barcode.trim() ? <p className="inline-status">Поиск по ШК выполняется по всем доступным клиентам.</p> : null}
+        {barcode.trim() ? <p className="inline-status">Поиск по ШК выполняется по выбранному клиенту.</p> : null}
       </section>
 
       <section className="turnover-summary-tiles" aria-label="Сводка товарооборота">

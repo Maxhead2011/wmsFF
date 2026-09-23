@@ -325,8 +325,8 @@ export class TurnoverService {
   ) {}
 
   async list(query: ListTurnoverDto, user: AuthUser) {
-    // Exact barcode lookup is intentionally cross-client, but still respects the user's accessible client scope.
-    const clientFilter = this.clientScopes.resolveClientFilter(user, query.barcode?.trim() ? undefined : query.clientId);
+    // FIX: barcode lookup follows the selected client, just like product and KIZ lookup.
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
     const skuWhere = this.buildSkuWhere(query, clientFilter);
     const movementDateRange = dateRange(query.dateFrom, query.dateTo);
     const kiz = query.kiz?.trim();
@@ -605,7 +605,8 @@ export class TurnoverService {
   }
 
   async suggestions(query: TurnoverSuggestionsDto, user: AuthUser) {
-    const clientFilter = this.clientScopes.resolveClientFilter(user, query.scope === 'barcode' ? undefined : query.clientId);
+    // FIX: suggestions must not escape the selected client when barcode search is active.
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
     const search = query.search?.trim();
     const searchText = search ? { contains: search, mode: Prisma.QueryMode.insensitive } : undefined;
     const warehouseScope = await this.resolveWarehouseScope(user, clientFilter);

@@ -6,6 +6,7 @@ import {
 } from '../../lib/api';
 import { PRODUCT_LABEL_TSPL, productLabelBatch, productLabelVariables } from '../../lib/productLabel';
 import { renderProductLabelPng } from '../../lib/productLabelImage';
+import { openLocalSkuPrint } from '../../lib/localSkuPrint';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 import { TsplPreviewCard } from './TsplPreviewCard';
 import './print.css';
@@ -28,6 +29,7 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
   const client = useMemo(() => clients.find(item => item.id === clientId), [clients, clientId]);
   const usablePrinters = printers.filter(item => item.isActive && item.autoProcess && item.connectionType === 'tcp');
   const destinations = [
+    { code: 'LOCAL_BROWSER', name: 'Локальный принтер этого компьютера · выбрать в окне печати' },
     ...stations.map(item => ({ code: `AGENT:${item.id}`, name: `${item.printerName} · ${item.name}${item.lastSeenAt ? ` · связь ${new Date(item.lastSeenAt).toLocaleString('ru-RU')}` : ' · нет связи'}` })),
     ...usablePrinters.map(item => ({ code: item.code, name: item.name })),
   ];
@@ -70,7 +72,11 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
     try {
       // Validate the whole selection before creating any print jobs.
       const labels = productLabelBatch(selected, client.name, quantities, chosenBarcodes);
-      if (printerCode.startsWith('AGENT:')) {
+      if (printerCode === 'LOCAL_BROWSER') {
+        openLocalSkuPrint(labels.map(label => ({ imageBase64: renderProductLabelPng(label.variables), copies: label.copies })));
+        setMessage(`Открыто окно печати: ${labels.reduce((sum, label) => sum + label.copies, 0)} этикеток 40 × 60 мм. Выберите установленный на этом компьютере принтер, масштаб 100% и поля «Нет».`);
+        return;
+      } else if (printerCode.startsWith('AGENT:')) {
         const stationId = printerCode.slice('AGENT:'.length);
         for (const label of labels) {
           await createPrintAgentSkuJob(session.accessToken, { stationId, skuId: label.skuId, barcode: label.variables.barcode, imageBase64: renderProductLabelPng(label.variables), copies: label.copies, widthMm: 40, heightMm: 60 });
