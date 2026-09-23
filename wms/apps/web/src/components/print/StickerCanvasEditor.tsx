@@ -6,9 +6,9 @@ import { fitStickerText, moveStickerBox, type StickerBoxes, type StickerCodeKind
 type Key = keyof StickerBoxes;
 const labels: Record<Key, string> = { client: 'Клиент', top: 'Текст сверху', qr: 'QR', barcode: 'Штрихкод', number: 'Номер', bottom: 'Текст снизу' };
 
-export function StickerCanvasEditor({ width, height, boxes, onChange, clientName, topText, bottomText, value, codeKind, font }: {
+export function StickerCanvasEditor({ width, height, boxes, onChange, clientName, topText, bottomText, value, codeKind, qrLevel, font }: {
   width: number; height: number; boxes: StickerBoxes; onChange: (boxes: StickerBoxes) => void;
-  clientName: string; topText: string; bottomText: string; value: string; codeKind: StickerCodeKind; font: number;
+  clientName: string; topText: string; bottomText: string; value: string; codeKind: StickerCodeKind; qrLevel: 'L' | 'M' | 'Q' | 'H'; font: number;
 }) {
   const [selected, setSelected] = useState<Key>('number');
   const [qrImage, setQrImage] = useState('');
@@ -18,7 +18,7 @@ export function StickerCanvasEditor({ width, height, boxes, onChange, clientName
   const pageHeight = height * 8;
   useEffect(() => {
     let active = true;
-    if (value) void QRCode.toDataURL(value, { margin: 0, width: 256 }).then((data) => { if (active) setQrImage(data); }).catch(() => setQrImage(''));
+    if (value) void QRCode.toDataURL(value, { margin: 0, width: 256, errorCorrectionLevel: qrLevel }).then((data) => { if (active) setQrImage(data); }).catch(() => setQrImage(''));
     else setQrImage('');
     try {
       const canvas = document.createElement('canvas');
@@ -26,7 +26,7 @@ export function StickerCanvasEditor({ width, height, boxes, onChange, clientName
       setBarcodeImage(canvas.toDataURL('image/png'));
     } catch { setBarcodeImage(''); }
     return () => { active = false; };
-  }, [value]);
+  }, [value, qrLevel]);
   const entries: { key: Key; text: string }[] = [
     { key: 'client', text: clientName || 'Клиент' },
     ...(topText ? [{ key: 'top' as const, text: topText }] : []),
