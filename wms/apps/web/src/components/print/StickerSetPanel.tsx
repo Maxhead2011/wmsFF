@@ -21,6 +21,14 @@ import { buildStickerTspl, defaultStickerBoxes, fitStickerText, type StickerBoxe
 
 const NIIMBOT_BROWSER_CODE = 'NIIMBOT_B1_BROWSER';
 
+// FIX: retain only a printer explicitly selected by the operator.
+export function chooseStickerDestination(current: string, stations: PrintAgentStationSummary[], printers: PrintPrinterSummary[]) {
+  if (current === NIIMBOT_BROWSER_CODE) return current;
+  if (current.startsWith('AGENT:') && stations.some((station) => station.id === current.slice(6))) return current;
+  if (printers.some((printer) => printer.code === current && printer.isActive)) return current;
+  return '';
+}
+
 export function StickerSetPanel({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [printers, setPrinters] = useState<PrintPrinterSummary[]>([]);
@@ -65,7 +73,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
   }, [prefix, start, count, step, repeat, digits, direction]);
   const values = sequenceResult.values;
   const availablePrinters = useMemo(
-    () => [{ id: NIIMBOT_BROWSER_CODE, code: NIIMBOT_BROWSER_CODE, name: 'NIIMBOT B1 · Bluetooth этого ноутбука' }, ...stations.map((station) => ({ id: station.id, code: `AGENT:${station.id}`, name: `${station.printerName} · ${station.name}` })), ...printers],
+    () => [...stations.map((station) => ({ id: station.id, code: `AGENT:${station.id}`, name: `${station.printerName} · станция ${station.name}${station.lastSeenAt ? ` · связь ${new Date(station.lastSeenAt).toLocaleString('ru-RU')}` : ' · нет связи'}` })), ...printers, { id: NIIMBOT_BROWSER_CODE, code: NIIMBOT_BROWSER_CODE, name: 'NIIMBOT B1 · Bluetooth этого ноутбука' }],
     [printers, stations],
   );
 
@@ -76,7 +84,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
         setPrinters(nextPrinters.filter((printer) => printer.isActive));
         setStations(nextStations);
         setClientId((current) => current || nextClients[0]?.id || '');
-        setPrinterCode((current) => current || NIIMBOT_BROWSER_CODE);
+        setPrinterCode((current) => chooseStickerDestination(current, nextStations, nextPrinters));
       })
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Не удалось загрузить клиентов или принтеры.'));
   }, [session.accessToken]);
@@ -172,7 +180,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
       <label><span>Повторений каждого номера</span><input min="1" max="500" step="1" type="number" value={repeat} onChange={(event) => setRepeat(event.target.value)} /></label>
       <label><span>Минимум цифр (3 → 001)</span><input disabled={direction === 'fixed'} min="1" max="16" step="1" type="number" value={digits} onChange={(event) => setDigits(event.target.value)} /></label>
       <label><span>Количество номеров</span><input min="1" max="500" step="1" type="number" value={count} onChange={(event) => setCount(event.target.value)} /></label>
-      <label><span>Принтер</span><select value={printerCode} onChange={(event) => setPrinterCode(event.target.value)}><option value="">Выберите принтер</option>{availablePrinters.map((item) => <option key={item.id} value={item.code}>{item.code === NIIMBOT_BROWSER_CODE ? item.name : `${item.code} · ${item.name}`}</option>)}</select></label>
+      <label><span>Куда печатать</span><select value={printerCode} onChange={(event) => setPrinterCode(event.target.value)}><option value="">Выберите принтер</option>{availablePrinters.map((item) => <option key={item.id} value={item.code}>{item.name}</option>)}</select></label>
     </div>
     {printerCode === NIIMBOT_BROWSER_CODE ? <p className="sticker-set__browser-note">Печать напрямую с этого ноутбука: включите NIIMBOT B1, откройте WMS в Chrome или Edge и нажмите «Напечатать». Браузер попросит выбрать принтер один раз.</p> : null}
     <div className="sticker-set__design"><label><span>Ширина, мм</span><input min="20" max="100" type="number" value={width} onChange={(event) => setWidth(event.target.value)} /></label><label><span>Высота, мм</span><input min="20" max="100" type="number" value={height} onChange={(event) => setHeight(event.target.value)} /></label><label><span>Размер шрифта</span><input min="1" max="10" type="number" value={font} onChange={(event) => setFont(event.target.value)} /></label><label><span>Текст сверху</span><input value={topText} onChange={(event) => setTopText(event.target.value)} placeholder="Например: Короб клиента" /></label><label><span>Текст снизу</span><input value={bottomText} onChange={(event) => setBottomText(event.target.value)} placeholder="Например: Москва" /></label><label><span>Вид кода</span><select value={codeKind} onChange={(event) => setCodeKind(event.target.value as StickerCodeKind)}><option value="qr">QR-код</option><option value="code128">Штрихкод Code 128</option><option value="both">QR + Code 128</option></select></label><label><span>Читаемость QR</span><select disabled={!qrEnabled} value={qrLevel} onChange={(event) => setQrLevel(event.target.value as typeof qrLevel)}><option value="L">L · больше данных</option><option value="M">M · стандарт</option><option value="Q">Q · устойчивый</option><option value="H">H · максимальная</option></select></label></div>

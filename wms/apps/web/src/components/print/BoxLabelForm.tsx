@@ -1,16 +1,25 @@
-import { FileText, RefreshCw } from 'lucide-react';
+import { FileText, Printer, RefreshCw } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   fetchBoxes,
   fetchClients,
+  fetchPrintAgentStations,
+  fetchPrintPrinters,
+  createPrintAgentCustomJob,
+  createLabelTemplate,
+  createPrintJobFromTemplate,
   previewBoxLabel,
   type AuthSession,
   type BoxLabelPreview,
   type ClientSummary,
+  type PrintAgentStationSummary,
+  type PrintPrinterSummary,
   type WarehouseBoxSummary,
 } from '../../lib/api';
 import { TsplPreviewCard } from './TsplPreviewCard';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import { renderStickerPng } from './niimbotBrowser';
+import { boxSticker } from './boxSticker';
 
 type BoxLabelFormProps = {
   session: AuthSession;
@@ -23,6 +32,11 @@ export function BoxLabelForm({ session }: BoxLabelFormProps) {
   const [boxCode, setBoxCode] = useState('');
   const [quantity, setQuantity] = useState('0');
   const [preview, setPreview] = useState<BoxLabelPreview | null>(null);
+  const [stations, setStations] = useState<PrintAgentStationSummary[]>([]);
+  const [printers, setPrinters] = useState<PrintPrinterSummary[]>([]);
+  const [destination, setDestination] = useState('');
+  const [copies, setCopies] = useState('1');
+  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setLoading] = useState(false);
   const [isSubmitting, setSubmitting] = useState(false);
@@ -34,6 +48,10 @@ export function BoxLabelForm({ session }: BoxLabelFormProps) {
 
   useEffect(() => {
     void loadClients();
+    // FIX: box labels use the same FBS stations as product labels.
+    Promise.all([fetchPrintAgentStations(session.accessToken), fetchPrintPrinters(session.accessToken)])
+      .then(([nextStations, nextPrinters]) => { setStations(nextStations); setPrinters(nextPrinters.filter((item) => item.isActive && item.autoProcess && item.connectionType === 'tcp')); })
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Не удалось загрузить принтеры.'));
   }, [session.accessToken]);
 
   useEffect(() => {
@@ -108,6 +126,27 @@ export function BoxLabelForm({ session }: BoxLabelFormProps) {
     }
   }
 
+  async function printBox() {
+    if (!selectedClient || !boxCode.trim() || !destination) return;
+    const count = Number(copies);
+    if (!Number.isInteger(count) || count < 1 || count > 100) { setError('Укажите от 1 до 100 этикеток.'); return; }
+    setSubmitting(true); setError(''); setMessage('');
+    try {
+      const lines = Number(quantity);
+      const safeLines = Number.isInteger(lines) && lines >= 0 ? lines : 0;
+      if (destination.startsWith('AGENT:')) {
+        const imageBase64 = await renderStickerPng(boxSticker(selectedClient.name, boxCode.trim(), safeLines), 80, 50);
+        await createPrintAgentCustomJob(session.accessToken, { stationId: destination.slice(6), clientId: selectedClient.id, value: boxCode.trim(), imageBase64, copies: count, widthMm: 80, heightMm: 50 });
+      } else {
+        const label = await previewBoxLabel(session.accessToken, { boxCode: boxCode.trim(), clientName: selectedClient.name, quantity: safeLines });
+        const template = await createLabelTemplate(session.accessToken, { code: `BOX_${Date.now().toString(36)}`, name: `Короб ${boxCode.trim()}`.slice(0, 120), type: 'BOX', widthMm: 80, heightMm: 50, tspl: label.tspl });
+        await createPrintJobFromTemplate(session.accessToken, template.id, { printerCode: destination, copies: count });
+      }
+      setMessage(`${count} этикеток короба ${boxCode.trim()} отправлено на выбранный принтер.`);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось отправить этикетку на принтер.'); }
+    finally { setSubmitting(false); }
+  }
+
   const canSubmit = Boolean(selectedClient && boxCode.trim());
   const safeFileName = `${boxCode.trim() || 'box'}-label.tspl`.replace(/[\\/:*?"<>|]/g, '_');
 
@@ -140,14 +179,35 @@ export function BoxLabelForm({ session }: BoxLabelFormProps) {
           <span>Кол-во строк</span>
           <input min="0" step="1" type="number" value={quantity} onChange={(event) => setQuantity(event.target.value)} />
         </label>
+        <label>
+          <span>Куда печатать</span>
+          <select value={destination} onChange={(event) => setDestination(event.target.value)}>
+            <option value="">Выберите принтер</option>
+            <optgroup label="Станции FBS — печать через агент">
+              {stations.map((station) => <option key={station.id} value={`AGENT:${station.id}`}>{station.printerName} · {station.name}{station.lastSeenAt ? ` · связь ${new Date(station.lastSeenAt).toLocaleString('ru-RU')}` : ' · нет связи'}</option>)}
+            </optgroup>
+            <optgroup label="Сетевые принтеры WMS">
+              {printers.map((printer) => <option key={printer.code} value={printer.code}>{printer.name}</option>)}
+            </optgroup>
+          </select>
+        </label>
+        <label>
+          <span>Сколько этикеток</span>
+          <input min="1" max="100" step="1" type="number" value={copies} onChange={(event) => setCopies(event.target.value)} />
+        </label>
       </div>
 
       {error ? <p className="form-error">{error}</p> : null}
+      {message ? <p className="inline-status">{message}</p> : null}
 
       <div className="print-actions">
         <button className="primary-button" type="submit" disabled={!canSubmit || isSubmitting}>
           <FileText size={16} aria-hidden="true" />
           <span>{isSubmitting ? 'Готовлю' : 'Предпросмотр TSPL'}</span>
+        </button>
+        <button className="primary-button" type="button" disabled={!canSubmit || !destination || isSubmitting} onClick={() => void printBox()}>
+          <Printer size={16} aria-hidden="true" />
+          <span>{isSubmitting ? 'Отправляю…' : 'Напечатать'}</span>
         </button>
         <button className="primary-button print-secondary" type="button" onClick={() => void loadBoxes()} disabled={!clientId || isLoading}>
           <RefreshCw size={16} aria-hidden="true" />
