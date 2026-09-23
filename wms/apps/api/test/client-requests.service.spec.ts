@@ -747,6 +747,62 @@ describe('ClientRequestsService', () => {
     expect(stock.shipClientRequestFromCurrentStock).not.toHaveBeenCalled();
   });
 
+  // TEST: completed FBO must not be repacked manually.
+  it.each([['true', 'COMPLETED', true], ['true', 'CONTROL', false], ['true', null, false], ['false', 'COMPLETED', false]] as const)('FBO close flag=%s phase=%s uses saved packing=%s', async (flag, phase, saved) => {
+    const previous = process.env.WMS_FBO_TWO_STAGE_ENABLED;
+    process.env.WMS_FBO_TWO_STAGE_ENABLED = flag;
+    try {
+    const stock = {
+      shipClientRequest: vi.fn().mockResolvedValue({ status: 'ALREADY_APPLIED', requestId: 'request-1' }),
+      shipClientRequestFromCurrentStock: vi.fn(),
+    };
+    const tx = {
+      clientRequest: {
+        update: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.DONE,
+          title: 'Аварийная отгрузка',
+          destinationCity: 'Казань',
+          items: [],
+          files: [],
+          packages: [],
+          client: { id: 'client-1', code: 'CL-1', name: 'Клиент' },
+        }),
+      },
+      clientRequestEvent: { create: vi.fn().mockResolvedValue({ id: 'event-1' }) },
+      clientNotificationPreference: { findUnique: vi.fn().mockResolvedValue(null) },
+      clientNotification: { create: vi.fn().mockResolvedValue({ id: 'notification-1' }) },
+    };
+    const prisma = {
+      clientRequestBoxSelection: { count: vi.fn().mockResolvedValue(1) },
+      fboAssembly: { findUnique: vi.fn().mockResolvedValue(phase ? { phase } : null) },
+      clientRequest: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'request-1',
+          clientId: 'client-1',
+          type: ClientRequestType.OUTBOUND,
+          status: ClientRequestStatus.PACKED,
+          title: 'Аварийная отгрузка',
+          packages: [],
+        }),
+      },
+      $transaction: vi.fn((callback) => callback(tx)),
+    };
+    const service = new ClientRequestsService(prisma as never, new ClientScopeService(), stock as never);
+
+    await service.updateStatus(
+      'request-1',
+      { status: ClientRequestStatus.DONE, managerComment: 'Сдано после аварийного закрытия' },
+      user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }),
+    );
+
+    expect(stock.shipClientRequest).toHaveBeenCalledTimes(saved ? 1 : 0);
+    expect(stock.shipClientRequestFromCurrentStock).toHaveBeenCalledTimes(saved ? 0 : 1);
+    } finally { if (previous === undefined) delete process.env.WMS_FBO_TWO_STAGE_ENABLED; else process.env.WMS_FBO_TWO_STAGE_ENABLED = previous; }
+  });
+
   it('позволяет клиенту отменить свою заявку до начала сборки', async () => {
     const tx = {
       clientRequest: {
