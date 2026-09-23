@@ -32,6 +32,20 @@ function fixture() {
 
 // TEST: a client-scoped SKU label is handed to the existing Windows print station.
 describe('PrintAgentService', () => {
+  // TEST: old agent sessions must disappear from the printer picker without deleting stations or jobs.
+  it('lists only stations with a recent heartbeat', async () => {
+    const { service, prisma } = fixture();
+    const stations = [
+      { id: 'online', lastSeenAt: new Date(Date.now() - 30_000) },
+      { id: 'stale', lastSeenAt: new Date(Date.now() - 10 * 60_000) },
+      { id: 'never', lastSeenAt: null },
+    ];
+    prisma.fbsPrintStation.findMany.mockImplementation(({ where }) => Promise.resolve(
+      stations.filter((station) => station.lastSeenAt && station.lastSeenAt >= where.lastSeenAt.gte),
+    ));
+    expect(await service.listStations()).toEqual([{ id: 'online', lastSeenAt: expect.any(Date) }]);
+    expect(prisma.fbsPrintStation.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({ enabled: true, lastSeenAt: expect.objectContaining({ gte: expect.any(Date) }) }) }));
+  });
   it('queues a scoped 60 × 40 image for the selected station and copy count', async () => {
     const { service, prisma } = fixture();
     const job = await service.createSkuJob({ stationId: 'station-1', skuId: 'sku-1', barcode: '2041234567890', imageBase64: png, copies: 2, widthMm: 60, heightMm: 40 }, { id: 'user-1' } as never);
