@@ -1615,7 +1615,14 @@ export class ClientRequestsService {
     user: AuthUser,
   ) {
     const comment = normalizeText(dto.managerComment) ?? 'Заявка сдана вручную; остатки списаны автоматически.';
-    const usesRecordedPackages = request.status === ClientRequestStatus.PACKED && request.packages.length > 0;
+    // FIX: completed two-stage FBO already has authoritative packages; ship them without manual repacking.
+    const completedFbo = process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true' &&
+      request.status === ClientRequestStatus.PACKED &&
+      (await this.prisma.fboAssembly.findUnique({
+        where: { requestId: request.id }, select: { phase: true },
+      }))?.phase === 'COMPLETED';
+    const usesRecordedPackages = request.status === ClientRequestStatus.PACKED &&
+      (request.packages.length > 0 || completedFbo);
     const pendingSourceTasks = this.prisma.fbsTsdAssembly?.findMany
       ? await this.prisma.fbsTsdAssembly.findMany({
           where: {
