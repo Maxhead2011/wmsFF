@@ -197,6 +197,8 @@ public class MainActivity extends Activity {
     private TsdInventoryDashboard inventoryDashboard;
     private TsdFbsAssemblyResponse fbsAssembly;
     private TsdFbsRequestsResponse fbsRequests;
+    // FIX: selected marketplace is retained while refreshing and browsing the archive.
+    private String fbsMarketplaceFilter = "";
     private TsdFbsCargoPackingResponse fbsCargoPacking;
     private TsdOzonFboOverview ozonFboOverview;
     private TsdOzonFboPlan ozonFboPlan;
@@ -550,7 +552,9 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.close(); kizSearchScreen=null;renderKizMenu();return; }
-        if (screen == Screen.KIZ_MENU || screen == Screen.MIGRATION_MENU) { renderMainScreen();return; }
+        if (screen == Screen.FBO_PICK_MENU) { renderFboMenu(); return; }
+        if (screen == Screen.FBS_REQUESTS && "logoff".equals(BuildConfig.FLAVOR)) { renderFbsMenu(); return; }
+        if (screen == Screen.KIZ_MENU || screen == Screen.MIGRATION_MENU || screen == Screen.FBO_MENU || screen == Screen.FBS_MENU) { renderMainScreen();return; }
         if (screen == Screen.STOCK_TRANSFER && !fboTransferRequestId.isEmpty()) { returnToFboAfterTransfer(); return; }
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
             if (!fboTwoStageScreen.canLeave()) { showScanningErrorDialog("Дождитесь ответа или повторите неподтверждённый запрос."); return; }
@@ -607,11 +611,11 @@ public class MainActivity extends Activity {
         root.addView(mainStatusLine());
         if (isWarehouseKeeperOnly(session)) {
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
                 view -> openStoragePalletAssembly()
             ));
-            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("МИГРАЦИЯ", v -> renderMigrationMenu()));
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("Миграции", v -> renderMigrationMenu()));
             root.addView(primaryMenuButton(
                 tr("Инвентаризация", "Inventarizatsiya"),
                 view -> renderInventoryMenu()
@@ -619,20 +623,22 @@ public class MainActivity extends Activity {
         } else {
             root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
-            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "Сборка FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
+            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
                 if ("logoff".equals(BuildConfig.FLAVOR)) renderFboMenu(); else openAssemblyRequests();
             }));
-            root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
+            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "FBS" : tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> {
+                if ("logoff".equals(BuildConfig.FLAVOR)) renderFbsMenu(); else openFbsAssembly();
+            }));
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish"), view -> openOzonFboAssembly()));
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 "logoff".equals(BuildConfig.FLAVOR) ? "Упаковка FBO" : tr("Упаковка FBS", "FBS qadoqlash"),
                 view -> { if ("logoff".equals(BuildConfig.FLAVOR)) { fboPacking=true; openAssemblyRequests(); } else openFbsCargoPacking(); }
             ));
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
                 view -> openStoragePalletAssembly()
             ));
-            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("МИГРАЦИЯ", v -> renderMigrationMenu()));
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("Миграции", v -> renderMigrationMenu()));
             root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
             // FIX: group existing KIZ workflows without granting additional access.
             if (KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session) || KizSearchPolicy.canOpen(BuildConfig.FLAVOR, session)) {
@@ -674,7 +680,7 @@ public class MainActivity extends Activity {
     // FIX: navigation only; existing operation screens and role policies are preserved.
     private void renderMigrationMenu() {
         TsdSession session=safeSession();if(session==null || !"logoff".equals(BuildConfig.FLAVOR)){renderMainScreen();return;}
-        screen=Screen.MIGRATION_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("МИГРАЦИЯ"));
+        screen=Screen.MIGRATION_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("Миграции"));
         root.addView(primaryMenuButton("Перемещения",v->openStockTransfer()));
         // FIX: use the tested sorting access policy for the current session and installation.
         if (PalletSortingAccess.canOpen(BuildConfig.FLAVOR, session)) {
@@ -687,6 +693,7 @@ public class MainActivity extends Activity {
                 });
             }));
         }
+        root.addView(primaryMenuButton(tr("Сборка паллетов", "Palletlarni yig‘ish"), v -> openStoragePalletAssembly()));
         root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
     }
     private void renderKizMenu() {
@@ -4311,6 +4318,15 @@ public class MainActivity extends Activity {
         showScanningErrorDialog(statusMessage);
     }
 
+    // FIX: marketplace choice changes navigation only; server reservations remain authoritative.
+    private void renderFbsMenu() {
+        screen = Screen.FBS_MENU;
+        LinearLayout root = baseRoot(); root.addView(header()); root.addView(title("FBS"));
+        root.addView(primaryMenuButton("WB", v -> { fbsMarketplaceFilter = "WILDBERRIES"; openFbsAssembly(); }));
+        root.addView(primaryMenuButton("Ozon", v -> { fbsMarketplaceFilter = "OZON"; openFbsAssembly(); }));
+        root.addView(secondaryButton("Назад", v -> renderMainScreen())); setScrollableContent(root);
+    }
+
     private void openFbsAssembly() {
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
@@ -4375,7 +4391,7 @@ public class MainActivity extends Activity {
         screen = Screen.FBS_REQUESTS;
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title(tr("Сборка FBS — заявки", "FBS yig‘ish — arizalar")));
+        root.addView(title(tr("Сборка FBS — заявки", "FBS yig‘ish — arizalar") + (fbsMarketplaceFilter.isEmpty() ? "" : " · " + fbsMarketplaceName(fbsMarketplaceFilter))));
 
         if (fbsRequestsArchiveMode) {
             root.addView(feedbackView(
@@ -4396,7 +4412,8 @@ public class MainActivity extends Activity {
             ));
         }
 
-        List<TsdFbsRequestsResponse.Request> requests = fbsRequests == null ? null : fbsRequests.requests;
+        List<TsdFbsRequestsResponse.Request> requests = FbsMarketplaceFilter.select(
+            fbsRequests == null ? null : fbsRequests.requests, "logoff".equals(BuildConfig.FLAVOR) ? fbsMarketplaceFilter : "");
         if (!fbsRequestsBusy && (requests == null || requests.isEmpty())) {
             root.addView(feedbackView(
                 fbsRequestsArchiveMode
@@ -4476,7 +4493,9 @@ public class MainActivity extends Activity {
             fbsRequestsArchiveMode ? tr("Обновить архив", "Arxivni yangilash") : tr("Обновить список", "Ro‘yxatni yangilash"),
             view -> loadFbsRequestChoices()
         ));
-        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        root.addView(secondaryButton("logoff".equals(BuildConfig.FLAVOR) ? "Назад к FBS" : tr("В главное меню", "Bosh menyuga"), view -> {
+            if ("logoff".equals(BuildConfig.FLAVOR)) renderFbsMenu(); else renderMainScreen();
+        }));
         setScrollableContent(root);
         refreshHeaderText();
     }
@@ -6565,11 +6584,20 @@ public class MainActivity extends Activity {
 
     // FIX: picking and packing have independent entry points, sharing persisted server progress.
     private void renderFboMenu() {
+        // FIX: both stages are children of FBO; existing marketplace picking remains available.
         screen=Screen.FBO_MENU;
+        LinearLayout root=baseRoot(); root.addView(header()); root.addView(title("FBO"));
+        root.addView(primaryMenuButton("Сборка FBO", v -> renderFboPickingMenu()));
+        root.addView(primaryMenuButton("Упаковка FBO", v -> { fboPacking=true; openAssemblyRequests(); }));
+        root.addView(secondaryButton("Назад", v -> renderMainScreen())); setScrollableContent(root);
+    }
+
+    private void renderFboPickingMenu() {
+        screen=Screen.FBO_PICK_MENU;
         LinearLayout root=baseRoot();root.addView(header());root.addView(title("Сборка FBO"));
         root.addView(primaryMenuButton("FBO WB",v->{fboPacking=false;openAssemblyRequests();}));
         root.addView(primaryMenuButton("FBO Ozon",v->openOzonFboAssembly()));
-        root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
+        root.addView(secondaryButton("Назад",v->renderFboMenu()));setScrollableContent(root);
     }
 
     private void openAssemblyRequests() {
@@ -6627,7 +6655,7 @@ public class MainActivity extends Activity {
 
         root.addView(secondaryButton("Обновить", view -> loadAssemblyRequests()));
         root.addView(secondaryButton("Назад", view -> {
-            if ("logoff".equals(BuildConfig.FLAVOR) && !fboPacking) renderFboMenu(); else renderMainScreen();
+            if ("logoff".equals(BuildConfig.FLAVOR)) { if (fboPacking) renderFboMenu(); else renderFboPickingMenu(); } else renderMainScreen();
         }));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
@@ -8869,7 +8897,9 @@ public class MainActivity extends Activity {
             case MIGRATION_MENU: return "МИГРАЦИЯ";
             case KIZ_MENU: return "КИЗЫ";
             case KIZ_SEARCH: return "Поиск КИЗ";
-            case FBO_MENU: return "Сборка FBO";
+            case FBO_MENU: return "FBO";
+            case FBO_PICK_MENU: return "Сборка FBO";
+            case FBS_MENU: return "FBS";
             case FBO_TWO_STAGE: return fboPacking ? "Упаковка FBO" : "FBO WB";
             case PALLET_SORTING: return "Сортировка и перемещение";
             case RECEIPT: return "Приёмка";
@@ -10068,6 +10098,10 @@ public class MainActivity extends Activity {
             renderMigrationMenu();
         } else if (screen == Screen.KIZ_MENU) {
             renderKizMenu();
+        } else if (screen == Screen.FBS_MENU) {
+            renderFbsMenu();
+        } else if (screen == Screen.FBO_PICK_MENU) {
+            renderFboPickingMenu();
         } else if (screen == Screen.FBO_MENU) {
             renderFboMenu();
         } else if (screen == Screen.ASSEMBLY_LIST) {
@@ -10495,6 +10529,8 @@ public class MainActivity extends Activity {
         KIZ_SEARCH,
         MIGRATION_MENU,
         FBO_MENU,
+        FBO_PICK_MENU,
+        FBS_MENU,
         ASSEMBLY_LIST,
         ASSEMBLY_DETAIL,
         BOX_SEARCH,

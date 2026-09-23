@@ -260,12 +260,12 @@ public class FboTwoStageScreenTest {
             MainActivity a=controller.get();var prefs=a.getSharedPreferences("logoff_wms_tsd_session",0);
             prefs.edit().putString("access_token","test").putString("device_code","TEST").putString("user_id","test").putString("user_name","Test").putString("role_codes",role).commit();
             java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderMainScreen");render.setAccessible(true);render.invoke(a);
-            View root=a.findViewById(android.R.id.content);TextView migration=find(root,"МИГРАЦИЯ"),inventory=find(root,"Инвентаризация"),kiz=find(root,"КИЗЫ");
+            View root=a.findViewById(android.R.id.content);TextView migration=find(root,"Миграции"),inventory=find(root,"Инвентаризация"),kiz=find(root,"КИЗЫ");
             assertNotNull(migration);assertNotNull(inventory);ViewGroup parent=(ViewGroup)migration.getParent();assertEquals(parent.indexOfChild(migration)+1,parent.indexOfChild(inventory));
-            assertNull(find(root,"Сортировка и перемещение"));assertNull(find(root,"Перемещения"));
+            assertNull(find(root,"Сортировка и перемещение"));assertNull(find(root,"Перемещения"));assertNull(find(root,"Сборка паллетов"));
             if(!role.equals("WAREHOUSE_KEEPER")){assertNotNull(kiz);assertEquals(parent.indexOfChild(inventory)+1,parent.indexOfChild(kiz));}
             else assertNull(kiz);
-            migration.performClick();root=a.findViewById(android.R.id.content);assertNotNull(find(root,"Перемещения"));
+            migration.performClick();root=a.findViewById(android.R.id.content);assertNotNull(find(root,"Перемещения"));assertNotNull(find(root,"Сборка паллетов"));
             assertEquals(role.equals("OWNER")||role.equals("ADMIN"),find(root,"Сортировка и перемещение")!=null);
             if(kiz!=null){render.invoke(a);find(a.findViewById(android.R.id.content),"КИЗЫ").performClick();root=a.findViewById(android.R.id.content);assertNotNull(find(root,"Поиск КИЗ"));assertEquals(!role.equals("OPERATOR"),find(root,"Проверка КИЗ")!=null);}
             prefs.edit().clear().commit();
@@ -302,9 +302,15 @@ public class FboTwoStageScreenTest {
             java.lang.reflect.Method render=MainActivity.class.getDeclaredMethod("renderMainScreen");render.setAccessible(true);render.invoke(a);
             View root=a.findViewById(android.R.id.content);
             if("logoff".equals(BuildConfig.FLAVOR)) {
-                assertNotNull(find(root,"Сборка FBO"));assertNotNull(find(root,"Упаковка FBO"));assertNull(find(root,"Упаковка FBS"));assertNull(find(root,"Сборка FBO Ozon"));
+                assertNotNull(find(root,"FBO"));assertNotNull(find(root,"FBS"));assertNull(find(root,"Сборка FBO"));assertNull(find(root,"Упаковка FBO"));assertNull(find(root,"Упаковка FBS"));assertNull(find(root,"Сборка FBO Ozon"));
+                find(root,"FBS").performClick();root=a.findViewById(android.R.id.content);
+                assertNotNull(find(root,"WB"));assertNotNull(find(root,"Ozon"));
+                a.onBackPressed();root=a.findViewById(android.R.id.content);
+                find(root,"FBO").performClick();root=a.findViewById(android.R.id.content);
+                assertNotNull(find(root,"Сборка FBO"));assertNotNull(find(root,"Упаковка FBO"));
                 find(root,"Сборка FBO").performClick();root=a.findViewById(android.R.id.content);
                 assertNotNull(find(root,"FBO WB"));assertNotNull(find(root,"FBO Ozon"));
+                a.onBackPressed();assertNotNull(find(a.findViewById(android.R.id.content),"Упаковка FBO"));
             } else {assertNotNull(find(root,"Упаковка FBS"));assertNotNull(find(root,"Сборка FBO Ozon"));assertNull(find(root,"Упаковка FBO"));}
             a.getSharedPreferences("logoff_wms_tsd_session",0).edit().clear().commit();
         }
