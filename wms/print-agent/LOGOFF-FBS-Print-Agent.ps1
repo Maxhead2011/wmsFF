@@ -7,11 +7,12 @@ function Invoke-WmsApi($method, $path, $body = $null) {
   $cfg = Read-Config
   if (-not $script:token) {
     $authBody = @{ email = $cfg.login; password = $cfg.password } | ConvertTo-Json
-    $auth = Invoke-RestMethod -Method Post -Uri "$($cfg.server)/api/v1/auth/login" -ContentType 'application/json' -Body $authBody
+    # FIX: send Cyrillic WMS logins as UTF-8 bytes in Windows PowerShell 5.1.
+    $auth = Invoke-RestMethod -Method Post -Uri "$($cfg.server)/api/v1/auth/login" -ContentType 'application/json; charset=utf-8' -Body ([System.Text.Encoding]::UTF8.GetBytes($authBody))
     $script:token = $auth.accessToken
   }
-  $request = @{ Method = $method; Uri = "$($cfg.server)/api/v1$path"; Headers = @{ Authorization = "Bearer $script:token" }; ContentType = 'application/json' }
-  if ($null -ne $body) { $request.Body = $body | ConvertTo-Json -Depth 10 }
+  $request = @{ Method = $method; Uri = "$($cfg.server)/api/v1$path"; Headers = @{ Authorization = "Bearer $script:token" }; ContentType = 'application/json; charset=utf-8' }
+  if ($null -ne $body) { $request.Body = [System.Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 10)) }
   try { Invoke-RestMethod @request } catch {
     if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 401) { $script:token = $null; return Invoke-WmsApi $method $path $body }
     throw
