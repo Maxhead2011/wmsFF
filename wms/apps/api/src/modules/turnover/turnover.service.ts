@@ -469,7 +469,8 @@ export class TurnoverService {
   async statistics(query: TurnoverStatisticsDto, user: AuthUser) {
     this.requireInternalStatisticsAccess(user);
 
-    const clientFilter = this.clientScopes.resolveClientFilter(user, query.barcode?.trim() ? undefined : query.clientId);
+    // FIX: statistics use the same selected-client scope as the report and suggestions.
+    const clientFilter = this.clientScopes.resolveClientFilter(user, query.clientId);
     const skuWhere = this.buildSkuWhere(query, clientFilter);
     const movementDateRange = dateRange(query.dateFrom, query.dateTo);
     const groupBy = query.groupBy ?? 'month';
