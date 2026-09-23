@@ -10,7 +10,6 @@ import {
   Eraser,
   Lock,
   RefreshCw,
-  Search,
   ShieldAlert,
   Smartphone,
   Trash2,
@@ -28,7 +27,6 @@ import {
   fetchServiceTelegramSettings,
   purgeServiceClientRequests,
   purgeServiceClientStock,
-  searchServiceKiz,
   testServiceTelegramClient,
   testServiceTelegramFulfillment,
   updateServiceMaintenance,
@@ -40,7 +38,6 @@ import {
   type ServiceClientStockCleanupPreview,
   type ServiceClientStockCleanupResult,
   type ServiceClientStockSummary,
-  type ServiceKizSearchRow,
   type ServiceMaintenanceMode,
   type ServiceSessionSummary,
   type ServiceTelegramGroup,
@@ -86,7 +83,6 @@ const tabs = [
   { id: 'mode', label: 'Режим', icon: Lock },
   { id: 'sessions', label: 'Сессии', icon: Users },
   { id: 'telegram', label: 'Telegram', icon: Bell },
-  { id: 'kiz', label: 'КИЗ', icon: Search },
   { id: 'storageOptimization', label: 'Оптимизация хранения', icon: Boxes },
   { id: 'stock', label: 'Остатки', icon: Database },
   { id: 'requests', label: 'Заявки', icon: Trash2 },
@@ -100,7 +96,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
     if (!session.user.roleCodes.some(role => ['ADMIN', 'OWNER'].includes(role))) return;
     void fetchSizeSubstitutionCapabilities(session.accessToken).then(result => setSizeSubstitutionEnabled(result.enabled)).catch(() => setSizeSubstitutionEnabled(false));
   }, [session.accessToken]);
-  const [activeTab, setActiveTab] = useState<TabId>('mode');
+  const [activeTab, setActiveTab] = useState<TabId | null>(null);
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
   const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [stockPreview, setStockPreview] = useState<LoadState<ServiceClientStockCleanupPreview | null>>({
@@ -116,10 +112,8 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
   const [closingSessionId, setClosingSessionId] = useState('');
   const [telegram, setTelegram] = useState<LoadState<ServiceTelegramSettings | null>>({ status: 'idle', data: null });
   const [telegramGroups, setTelegramGroups] = useState<LoadState<ServiceTelegramGroup[]>>({ status: 'idle', data: [] });
-  const [kizRows, setKizRows] = useState<LoadState<ServiceKizSearchRow[]>>({ status: 'idle', data: [] });
   const [stockConfirmation, setStockConfirmation] = useState('');
   const [requestsConfirmation, setRequestsConfirmation] = useState('');
-  const [kizSearch, setKizSearch] = useState('');
   const [message, setMessage] = useState<string | null>(null);
   const [isBusy, setBusy] = useState(false);
 
@@ -298,18 +292,6 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
     }
   }
 
-  async function runKizSearch() {
-    setKizRows((current) => ({ ...current, status: 'loading', error: undefined }));
-    try {
-      setKizRows({
-        status: 'ready',
-        data: await searchServiceKiz(session.accessToken, { clientId: selectedClientId || undefined, search: kizSearch }),
-      });
-    } catch (caught) {
-      setKizRows({ status: 'error', data: [], error: errorMessage(caught) });
-    }
-  }
-
   async function purgeStock() {
     if (!selectedClientId || stockConfirmation !== stockPreview.data?.confirmationText) {
       return;
@@ -377,31 +359,30 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
         </a>
       </div>
 
-      <div className="service-tabs" role="tablist" aria-label="Разделы сервисного меню">
+      {/* FIX: a tile hub replaces tabs; operations open only after selection. */}
+      {activeTab === null ? <nav className="service-tiles" aria-label="Разделы сервисного меню">
         {tabs.filter(tab => tab.id !== 'sizeSubstitution' || sizeSubstitutionEnabled).map((tab) => {
           const Icon = tab.icon;
           return (
             <button
-              aria-selected={activeTab === tab.id}
-              className={activeTab === tab.id ? 'active' : ''}
+              className="service-tile"
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              role="tab"
               type="button"
             >
-              <Icon size={16} aria-hidden="true" />
+              <Icon size={28} aria-hidden="true" />
               <span>{tab.label}</span>
             </button>
           );
         })}
-      </div>
+      </nav> : <button className="secondary-button service-back" type="button" onClick={() => { setActiveTab(null); setMessage(null); }}>← Все сервисы</button>}
 
-      <ClientSelector
+      {activeTab !== null && <ClientSelector
         clients={clients}
         selectedClientId={selectedClientId}
         onChange={setSelectedClientId}
         onRefresh={() => void loadClients()}
-      />
+      />}
 
       {message ? <div className="service-message">{message}</div> : null}
 
@@ -686,53 +667,6 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
           ) : (
             <p className="panel-message">Настройки Telegram загружаются.</p>
           )}
-        </Section>
-      ) : null}
-
-      {activeTab === 'kiz' ? (
-        <Section title="Поиск КИЗ" icon={<Search size={18} />}>
-          <div className="service-search-row">
-            <input value={kizSearch} onChange={(event) => setKizSearch(event.target.value)} placeholder="Введите номер или фрагмент" />
-            <button className="primary-button" type="button" onClick={() => void runKizSearch()} disabled={kizSearch.trim().length < 3}>
-              Найти
-            </button>
-          </div>
-          {kizRows.status === 'error' ? <div className="service-message service-message--error">{kizRows.error}</div> : null}
-          <TableWrap>
-            <table className="data-table service-table service-table--wide">
-              <thead>
-                <tr>
-                  <th>КИЗ</th>
-                  <th>Товар</th>
-                  <th>Клиент</th>
-                  <th>Короб</th>
-                  <th>Статус</th>
-                  <th>Принят / движение</th>
-                </tr>
-              </thead>
-              <tbody>
-                {kizRows.data.map((row) => (
-                  <tr key={row.id}>
-                    <td>
-                      <strong>{row.value}</strong>
-                      <span>{row.sourceDocument ?? '-'}</span>
-                    </td>
-                    <td>
-                      <strong>{row.sku.name}</strong>
-                      <span>{row.sku.barcodes.map((barcode) => barcode.value).join(', ') || row.sku.internalSku}</span>
-                    </td>
-                    <td>{row.client.name}</td>
-                    <td>{row.box?.code ?? 'Без короба'}</td>
-                    <td>{row.status}</td>
-                    <td>
-                      <span>{formatDateTime(row.createdAt)}</span>
-                      <span>{row.stockMovement?.comment ?? row.stockMovement?.sourceDocument ?? '-'}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableWrap>
         </Section>
       ) : null}
 

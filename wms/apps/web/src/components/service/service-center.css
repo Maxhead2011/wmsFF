@@ -51,31 +51,33 @@
   color: var(--red-dark);
 }
 
-.service-tabs {
+.service-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 14px;
 }
 
-.service-tabs button {
+.service-tile {
   display: flex;
-  min-height: 42px;
-  align-items: center;
+  min-height: 132px;
+  align-items: flex-start;
   justify-content: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 16px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
+  border-radius: 14px;
+  background: #fff;
   color: var(--ink);
-  padding: 0 12px;
+  padding: 22px;
+  font: inherit;
   font-weight: 800;
+  text-align: left;
+  cursor: pointer;
 }
-
-.service-tabs button.active {
-  border-color: rgb(215 25 32 / 0.38);
-  background: #fff8f8;
-  color: var(--red-dark);
-}
+.service-tile svg { color: var(--red-dark); }
+.service-tile:hover { border-color: var(--red-dark); background: #fff8f8; }
+.service-tile:focus-visible { outline: 3px solid var(--red-dark); outline-offset: 3px; }
+.service-back { justify-self: start; }
 
 .service-client-selector {
   display: grid;
@@ -145,7 +147,7 @@
 
 .service-two-columns {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 12px;
 }
 
@@ -195,7 +197,7 @@
 
 .service-telegram-sections__grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 8px;
 }
 
@@ -445,8 +447,8 @@
     padding: 14px;
   }
 
-  .service-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .service-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   }
 
   .service-telegram-sections__grid {
