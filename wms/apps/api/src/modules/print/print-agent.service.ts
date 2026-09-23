@@ -23,8 +23,10 @@ export class PrintAgentService {
 
   // FIX: reuse the working FBS print stations without changing their FBS queue.
   async listStations() {
+    // FIX: hide abandoned agent sessions in label-print selectors; preserve stations and queued jobs.
+    const recentlySeen = new Date(Date.now() - 2 * 60_000);
     return this.prisma.fbsPrintStation.findMany({
-      where: { enabled: true },
+      where: { enabled: true, lastSeenAt: { gte: recentlySeen } },
       orderBy: [{ lastSeenAt: 'desc' }, { name: 'asc' }],
       select: { id: true, name: true, printerName: true, printerModel: true, lastSeenAt: true },
     });
