@@ -1,16 +1,16 @@
 import type { SkuSummary } from './api';
 
-// FIX: product labels use the agreed 40 × 60 mm stock and the barcode from the client card.
+// FIX: product labels use 60 mm width × 40 mm height and the barcode from the client card.
 export const PRODUCT_LABEL_TSPL = [
-  'SIZE 40 mm,60 mm',
+  'SIZE 60 mm,40 mm',
   'GAP 2 mm,0',
   'CLS',
   'TEXT 16,18,"2",0,1,1,"{{clientName}}"',
   'TEXT 16,58,"2",0,1,1,"{{name}}"',
   'TEXT 16,90,"2",0,1,1,"{{article}}"',
   'TEXT 16,122,"2",0,1,1,"{{variant}}"',
-  'BARCODE 16,175,"128",88,1,0,1,1,"{{barcode}}"',
-  'TEXT 16,280,"2",0,1,1,"{{barcode}}"',
+  'BARCODE 16,155,"128",88,1,0,1,1,"{{barcode}}"',
+  'TEXT 16,265,"2",0,1,1,"{{barcode}}"',
   'PRINT 1',
 ].join('\n');
 
@@ -18,7 +18,7 @@ export function productLabelVariables(sku: SkuSummary, clientName: string, chose
   if (chosenBarcode && !sku.barcodes.some(item => item.value === chosenBarcode)) throw new Error('Выбранный штрихкод не принадлежит карточке товара.');
   const barcode = chosenBarcode || sku.barcodes.find(item => item.isPrimary)?.value?.trim() || sku.barcodes[0]?.value?.trim();
   if (!barcode) throw new Error(`У товара «${sku.name}» нет штрихкода в карточке.`);
-  if (barcode.length > 24) throw new Error(`Штрихкод товара «${sku.name}» не помещается на этикетке 40 × 60 мм.`);
+  if (barcode.length > 24) throw new Error(`Штрихкод товара «${sku.name}» не помещается на этикетке 60 × 40 мм.`);
   return {
     clientName: clientName.slice(0, 24), name: sku.name.slice(0, 24),
     article: (sku.article || sku.clientSku || sku.internalSku).slice(0, 24),

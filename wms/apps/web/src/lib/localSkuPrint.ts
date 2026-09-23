@@ -7,12 +7,12 @@ export function buildLocalSkuPrintHtml(images: LocalSkuPrintImage[]) {
   }
   const pages = images.flatMap(image => Array.from({ length: image.copies }, () =>
     `<div class="label-page"><img src="data:image/png;base64,${image.imageBase64}" alt="Этикетка товара"></div>`)).join('');
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>ШК товара · 40 × 60 мм</title><style>
-    @page { size: 40mm 60mm; margin: 0; }
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>ШК товара · 60 × 40 мм</title><style>
+    @page { size: 60mm 40mm; margin: 0; }
     html, body { margin: 0; padding: 0; }
-    .label-page { width: 40mm; height: 60mm; overflow: hidden; break-after: page; page-break-after: always; }
+    .label-page { width: 60mm; height: 40mm; overflow: hidden; break-after: page; page-break-after: always; }
     .label-page:last-child { break-after: auto; page-break-after: auto; }
-    .label-page img { display: block; width: 40mm; height: 60mm; }
+    .label-page img { display: block; width: 60mm; height: 40mm; }
     @media screen { body { background: #eef2f6; } .label-page { background: white; margin: 12px auto; box-shadow: 0 1px 8px #0002; } }
   </style></head><body>${pages}</body></html>`;
 }
