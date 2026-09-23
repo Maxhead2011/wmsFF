@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { PRODUCT_LABEL_TSPL, productLabelBatch, productLabelCopies, productLabelVariables } from './productLabel';
 
-// TEST: synced marketplace card barcode is used on the agreed 40 × 60 label.
+// TEST: synced marketplace card barcode is used on the agreed 60 × 40 landscape label.
 describe('product label', () => {
   const sku = { name: 'Костюм спорт синий', article: 'Костюм_спорт_синий', internalSku: 'SKU-1', color: 'синий', size: '44', barcodes: [{ value: '2041234567890', isPrimary: true }] };
   it('uses the marketplace barcode and card fields', () => {
     expect(productLabelVariables(sku as never, 'ИП Лукин')).toMatchObject({ barcode: '2041234567890', article: 'Костюм_спорт_синий', variant: 'синий / 44' });
-    expect(PRODUCT_LABEL_TSPL).toContain('SIZE 40 mm,60 mm');
+    expect(PRODUCT_LABEL_TSPL).toContain('SIZE 60 mm,40 mm');
   });
   it('rejects missing or oversized barcodes', () => {
     expect(() => productLabelVariables({ ...sku, barcodes: [] } as never, 'ИП Лукин')).toThrow('нет штрихкода');

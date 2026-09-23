@@ -37,7 +37,7 @@ export class PrintAgentService {
     const copies = input.copies ?? 1;
     if (!stationId || !skuId || !barcode) throw new BadRequestException('Укажите станцию, товар и штрихкод.');
     if (!Number.isInteger(copies) || copies < 1 || copies > 100) throw new BadRequestException('Количество этикеток — от 1 до 100.');
-    if (input.widthMm !== 40 || input.heightMm !== 60) throw new BadRequestException('Этикетка товара должна быть 40 × 60 мм.');
+    if (input.widthMm !== 60 || input.heightMm !== 40) throw new BadRequestException('Этикетка товара должна быть 60 × 40 мм (ширина × высота).');
     const station = await this.prisma.fbsPrintStation.findFirst({ where: { id: stationId, enabled: true }, select: { id: true } });
     if (!station) throw new NotFoundException('Печатная станция не найдена или отключена.');
     const sku = await this.prisma.sku.findFirst({
@@ -45,11 +45,11 @@ export class PrintAgentService {
       select: { id: true, clientId: true, name: true, barcodes: { select: { value: true } } },
     });
     if (!sku || !sku.barcodes.some(item => item.value === barcode)) throw new BadRequestException('Штрихкод не найден в доступной карточке товара.');
-    const image = readPng(input.imageBase64, 40, 60);
+    const image = readPng(input.imageBase64, 60, 40);
     return this.prisma.printJob.create({
       data: {
         printerCode: agentPrinterCode(stationId), labelType: 'SKU', status: 'queued', tspl: 'IMAGE/PNG',
-        payload: { source: 'SKU_AGENT', skuId, clientId: sku.clientId, barcode, imageBase64: image, copies, widthMm: 40, heightMm: 60, requestedById: user.id },
+        payload: { source: 'SKU_AGENT', skuId, clientId: sku.clientId, barcode, imageBase64: image, copies, widthMm: 60, heightMm: 40, requestedById: user.id },
       },
       select: { id: true, status: true, printerCode: true, createdAt: true },
     });
