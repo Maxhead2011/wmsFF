@@ -22,4 +22,15 @@ describe('Turnover barcode search client scope', () => {
 
     expect(resolveClientFilter).toHaveBeenCalledWith(user, 'lukin');
   });
+
+  it('keeps the selected client in barcode statistics', async () => {
+    // TEST: the statistics request is separate from the report and must use the same client.
+    const admin = { roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], activeWarehouseId: null } as never;
+    const resolveClientFilter = vi.fn((_user, clientId?: string) => clientId);
+    const service = new TurnoverService({ sku: { findMany: vi.fn(async () => []) } } as never, { resolveClientFilter } as never);
+
+    await service.statistics({ clientId: 'lukin', barcode: '765' } as never, admin);
+
+    expect(resolveClientFilter).toHaveBeenCalledWith(admin, 'lukin');
+  });
 });
