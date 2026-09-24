@@ -11480,7 +11480,7 @@ export async function fetchPrintAgentStations(accessToken: string) {
 }
 
 export async function createPrintAgentSkuJob(accessToken: string, payload: {
-  stationId: string; skuId: string; barcode: string; imageBase64: string; copies: number; widthMm: 60; heightMm: 40;
+  stationId: string; skuId: string; barcode: string; imageBase64: string; copies: number; widthMm: 40 | 60; heightMm: 30 | 40;
 }) {
   return request<{ id: string; status: string }>('/print/agent-jobs', { method: 'POST', body: payload, accessToken });
 }

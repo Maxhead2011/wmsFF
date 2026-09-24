@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRODUCT_LABEL_TSPL, productLabelBatch, productLabelCopies, productLabelVariables } from './productLabel';
+import { PRODUCT_LABEL_TSPL, productLabelBatch, productLabelCopies, productLabelVariables, productLabelTemplate, productMarketplaceVariables } from './productLabel';
 
 // TEST: synced marketplace card barcode is used on the agreed 60 × 40 landscape label.
 describe('product label', () => {
@@ -26,5 +26,28 @@ describe('product label', () => {
     const batch = productLabelBatch([{ ...sku, id: 'sku-1' }, second] as never, 'ИП Лукин', { 'sku-1': '2', 'sku-2': '5' }, {});
     expect(batch.map(item => item.copies)).toEqual([2, 5]);
     expect(() => productLabelBatch([second] as never, 'ИП Лукин', { 'sku-2': '0' }, {})).toThrow();
+  });
+});
+
+describe('selectable marketplace label templates', () => {
+  const sku = { name: 'Костюм летний брючный оверсайз', article: 'Костюм_сантален_черный', internalSku: 'SKU-1', color: 'черный', size: 'XXS', brand: 'LOOK.IN', marketplaceProductId: '379327330:552071802', barcodes: [{ value: '2043472945040', isPrimary: true }] };
+  it('uses synced WB card fields on the Lukin NiceLabel layout', () => {
+    // TEST: the WB nmID and brand must be printed, not a truncated internal article.
+    const variables = productMarketplaceVariables(sku as never, 'ИП Лукин Илья Ильич');
+    expect(variables).toMatchObject({ barcode: '2043472945040', wbArticle: '379327330', brand: 'LOOK (IN)', clientShort: 'Лукин И.И.' });
+    expect(productLabelTemplate('lukin').tspl).toContain('SIZE 60 mm,40 mm');
+    expect(productLabelTemplate('lukin').tspl).toContain('EAC');
+  });
+  it('offers compact WB stock for Trofimova without EAC', () => {
+    const template = productLabelTemplate('wb-compact');
+    expect(template.widthMm).toBe(40);
+    expect(template.heightMm).toBe(30);
+    expect(template.tspl).not.toContain('EAC');
+  });
+  it('leaves absent marketplace fields entirely blank', () => {
+    // TEST: an unavailable brand, color or size must not leave a dangling caption.
+    const vars = productMarketplaceVariables({ ...sku, brand: '', color: '', size: '' } as never, 'ИП Лукин Илья Ильич');
+    expect(vars).toMatchObject({ brandLine: '', colorLine: '', sizeLine: '' });
+    expect(productLabelTemplate('lukin').tspl).toContain('{{brandLine}}');
   });
 });

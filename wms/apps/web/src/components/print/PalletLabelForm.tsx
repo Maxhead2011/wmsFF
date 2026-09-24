@@ -1,16 +1,24 @@
-import { FileText, RefreshCw } from 'lucide-react';
+import { FileText, Printer, RefreshCw } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   fetchClients,
   fetchPallets,
+  fetchPrintAgentStations,
+  fetchPrintPrinters,
+  createPrintAgentCustomJob,
+  createLabelTemplate,
+  createPrintJobFromTemplate,
   previewPalletLabel,
   type AuthSession,
   type ClientSummary,
   type LabelPreview,
   type WarehousePalletSummary,
+  type PrintAgentStationSummary,
+  type PrintPrinterSummary,
 } from '../../lib/api';
 import { TsplPreviewCard } from './TsplPreviewCard';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import { renderSortReferencePng, sortReferenceTspl } from '../../lib/sortReferenceLabel';
 
 type PalletLabelFormProps = {
   session: AuthSession;
@@ -21,6 +29,13 @@ export function PalletLabelForm({ session }: PalletLabelFormProps) {
   const [pallets, setPallets] = useState<WarehousePalletSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [palletCode, setPalletCode] = useState('');
+  const [style, setStyle] = useState<'regular' | 'reference'>('regular');
+  const [stations, setStations] = useState<PrintAgentStationSummary[]>([]);
+  const [printers, setPrinters] = useState<PrintPrinterSummary[]>([]);
+  const [destination, setDestination] = useState('');
+  const [copies, setCopies] = useState('1');
+  const [referencePreview, setReferencePreview] = useState('');
+  const [message, setMessage] = useState('');
   const [boxesCount, setBoxesCount] = useState('0');
   const [preview, setPreview] = useState<LabelPreview | null>(null);
   const [error, setError] = useState('');
@@ -32,7 +47,17 @@ export function PalletLabelForm({ session }: PalletLabelFormProps) {
 
   useEffect(() => {
     void loadClients();
+    Promise.all([fetchPrintAgentStations(session.accessToken), fetchPrintPrinters(session.accessToken)])
+      .then(([nextStations, nextPrinters]) => { setStations(nextStations); setPrinters(nextPrinters.filter(item => item.isActive && item.autoProcess && item.connectionType === 'tcp')); })
+      .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : 'Не удалось загрузить принтеры.'));
   }, [session.accessToken]);
+
+  useEffect(() => {
+    if (style !== 'reference' || !palletCode.trim()) { setReferencePreview(''); return; }
+    let active = true;
+    renderSortReferencePng(palletCode, 'pallet').then(image => { if (active) setReferencePreview(image); }).catch(() => setReferencePreview(''));
+    return () => { active = false; };
+  }, [style, palletCode]);
 
   useEffect(() => {
     if (clientId) {
@@ -116,6 +141,27 @@ export function PalletLabelForm({ session }: PalletLabelFormProps) {
     }
   }
 
+  async function printReference() {
+    if (!selectedClient || !palletCode.trim() || !destination) return;
+    const count = Number(copies);
+    if (!Number.isInteger(count) || count < 1 || count > 100) { setError('Укажите от 1 до 100 этикеток.'); return; }
+    setSubmitting(true); setError(''); setMessage('');
+    try {
+      const code = palletCode.trim();
+      const tspl = sortReferenceTspl(code, 'pallet');
+      if (destination.startsWith('AGENT:')) {
+        await createPrintAgentCustomJob(session.accessToken, { stationId: destination.slice(6), clientId: selectedClient.id,
+          value: code, imageBase64: await renderSortReferencePng(code, 'pallet'), copies: count, widthMm: 60, heightMm: 40 });
+      } else {
+        const template = await createLabelTemplate(session.accessToken, { code: `PALET_SORT_${Date.now().toString(36)}`,
+          name: `Палет-сорт ${code}`.slice(0, 120), type: 'PALLET', widthMm: 60, heightMm: 40, tspl });
+        await createPrintJobFromTemplate(session.accessToken, template.id, { printerCode: destination, copies: count, variables: {} });
+      }
+      setMessage(`${count} этикеток палет-сорта ${code} отправлено на выбранный принтер.`);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось напечатать этикетку палет-сорта.'); }
+    finally { setSubmitting(false); }
+  }
+
   const canSubmit = Boolean(selectedClient && palletCode.trim());
   const safeFileName = `${palletCode.trim() || 'pallet'}-label.tspl`.replace(/[\\/:*?"<>|]/g, '_');
 
@@ -144,6 +190,10 @@ export function PalletLabelForm({ session }: PalletLabelFormProps) {
           </datalist>
         </label>
 
+        <label><span>Макет этикетки</span><select value={style} onChange={event => setStyle(event.target.value as typeof style)}><option value="regular">Обычная паллета · предпросмотр TSPL</option><option value="reference">Как образец WB · все коды = палет-сорт</option></select></label>
+        <label><span>Куда печатать</span><select value={destination} onChange={event => setDestination(event.target.value)}><option value="">Выберите принтер</option><optgroup label="Станции FBS — печать через агент">{stations.map(station => <option key={station.id} value={`AGENT:${station.id}`}>{station.printerName} · {station.name}</option>)}</optgroup><optgroup label="Сетевые принтеры WMS">{printers.map(printer => <option key={printer.code} value={printer.code}>{printer.name}</option>)}</optgroup></select></label>
+        <label><span>Сколько этикеток</span><input min="1" max="100" step="1" type="number" value={copies} onChange={event => setCopies(event.target.value)} /></label>
+
         <label>
           <span>Коробов</span>
           <input min="0" step="1" type="number" value={boxesCount} onChange={(event) => setBoxesCount(event.target.value)} />
@@ -151,6 +201,9 @@ export function PalletLabelForm({ session }: PalletLabelFormProps) {
       </div>
 
       {error ? <p className="form-error">{error}</p> : null}
+      {message ? <p className="inline-status">{message}</p> : null}
+
+      {style === 'reference' ? <div><p>Каждый QR и штрихкод содержит код палет-сорта: <strong>{palletCode || '—'}</strong>.</p>{referencePreview ? <img src={`data:image/png;base64,${referencePreview}`} alt="Предпросмотр этикетки палет-сорта" style={{ width: 'min(100%, 600px)', aspectRatio: '3 / 2' }} /> : null}</div> : null}
 
       <div className="print-actions">
         <button className="primary-button" type="submit" disabled={!canSubmit || isSubmitting}>
@@ -161,6 +214,7 @@ export function PalletLabelForm({ session }: PalletLabelFormProps) {
           <RefreshCw size={16} aria-hidden="true" />
           <span>Обновить паллеты</span>
         </button>
+        {style === 'reference' ? <button className="primary-button" type="button" disabled={!canSubmit || !destination || isSubmitting} onClick={() => void printReference()}><Printer size={16} /><span>{isSubmitting ? 'Отправляю…' : 'Напечатать'}</span></button> : null}
       </div>
 
       {preview ? <TsplPreviewCard preview={preview} fileName={safeFileName} /> : null}

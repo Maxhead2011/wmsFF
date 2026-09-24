@@ -14,6 +14,12 @@ const boxPng = (() => {
   bytes.writeUInt32BE(354, 20);
   return bytes.toString('base64');
 })();
+const compactPng = (() => {
+  const bytes = Buffer.from(png, 'base64');
+  bytes.writeUInt32BE(472, 16);
+  bytes.writeUInt32BE(354, 20);
+  return bytes.toString('base64');
+})();
 
 function fixture() {
   const prisma = {
@@ -51,6 +57,13 @@ describe('PrintAgentService', () => {
     const job = await service.createSkuJob({ stationId: 'station-1', skuId: 'sku-1', barcode: '2041234567890', imageBase64: png, copies: 2, widthMm: 60, heightMm: 40 }, { id: 'user-1' } as never);
     expect(job.printerCode).toBe('AGENT:station-1');
     expect(prisma.printJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'queued', payload: expect.objectContaining({ copies: 2, barcode: '2041234567890' }) }) }));
+  });
+  // TEST: the WB compact marketplace sticker uses its actual 40 × 30 mm stock.
+  it('accepts a 40 × 30 marketplace label but rejects mismatched dimensions', async () => {
+    const { service, prisma } = fixture();
+    await service.createSkuJob({ stationId: 'station-1', skuId: 'sku-1', barcode: '2041234567890', imageBase64: compactPng, widthMm: 40, heightMm: 30 }, { id: 'user-1' } as never);
+    expect(prisma.printJob.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ payload: expect.objectContaining({ widthMm: 40, heightMm: 30 }) }) }));
+    await expect(service.createSkuJob({ stationId: 'station-1', skuId: 'sku-1', barcode: '2041234567890', imageBase64: compactPng, widthMm: 60, heightMm: 30 }, { id: 'user-1' } as never)).rejects.toThrow();
   });
   it('rejects a barcode absent from the card before queueing', async () => {
     const { service, prisma } = fixture();

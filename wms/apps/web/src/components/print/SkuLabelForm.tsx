@@ -4,7 +4,7 @@ import {
   createLabelTemplate, createPrintAgentSkuJob, createPrintJobFromTemplate, fetchClients, fetchPrintAgentStations, fetchPrintPrinters, fetchSkus,
   type AuthSession, type ClientSummary, type PrintAgentStationSummary, type PrintPrinterSummary, type SkuSummary,
 } from '../../lib/api';
-import { PRODUCT_LABEL_TSPL, productLabelBatch, productLabelVariables } from '../../lib/productLabel';
+import { productLabelCopies, productLabelTemplate, productLabelVariables, productMarketplaceVariables, type ProductLabelTemplate } from '../../lib/productLabel';
 import { renderProductLabelPng } from '../../lib/productLabelImage';
 import { openLocalSkuPrint } from '../../lib/localSkuPrint';
 import { useRememberedClientId } from '../../lib/rememberedClient';
@@ -17,6 +17,7 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
   const [stations, setStations] = useState<PrintAgentStationSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [printerCode, setPrinterCode] = useState('');
+  const [templateKind, setTemplateKind] = useState<ProductLabelTemplate>('standard');
   const [search, setSearch] = useState(initialSearch);
   const [results, setResults] = useState<SkuSummary[]>([]);
   const [selected, setSelected] = useState<SkuSummary[]>([]);
@@ -71,22 +72,23 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
     let queued = 0;
     try {
       // Validate the whole selection before creating any print jobs.
-      const labels = productLabelBatch(selected, client.name, quantities, chosenBarcodes);
+      const templateInfo = productLabelTemplate(templateKind);
+      const labels = selected.map(sku => ({ skuId: sku.id, variables: templateKind === 'standard' ? productLabelVariables(sku, client.name, chosenBarcodes[sku.id]) : productMarketplaceVariables(sku, client.name, chosenBarcodes[sku.id]), copies: productLabelCopies(quantities[sku.id] ?? '1') }));
       if (printerCode === 'LOCAL_BROWSER') {
-        openLocalSkuPrint(labels.map(label => ({ imageBase64: renderProductLabelPng(label.variables), copies: label.copies })));
-        setMessage(`Открыто окно печати: ${labels.reduce((sum, label) => sum + label.copies, 0)} этикеток 60 × 40 мм (ширина × высота). Выберите установленный на этом компьютере принтер, масштаб 100% и поля «Нет».`);
+        openLocalSkuPrint(labels.map(label => ({ imageBase64: renderProductLabelPng(label.variables, templateKind), copies: label.copies })), templateInfo.widthMm, templateInfo.heightMm);
+        setMessage(`Открыто окно печати: ${labels.reduce((sum, label) => sum + label.copies, 0)} этикеток ${templateInfo.widthMm} × ${templateInfo.heightMm} мм (ширина × высота). Выберите установленный на этом компьютере принтер, масштаб 100% и поля «Нет».`);
         return;
       } else if (printerCode.startsWith('AGENT:')) {
         const stationId = printerCode.slice('AGENT:'.length);
         for (const label of labels) {
-          await createPrintAgentSkuJob(session.accessToken, { stationId, skuId: label.skuId, barcode: label.variables.barcode, imageBase64: renderProductLabelPng(label.variables), copies: label.copies, widthMm: 60, heightMm: 40 });
+          await createPrintAgentSkuJob(session.accessToken, { stationId, skuId: label.skuId, barcode: label.variables.barcode, imageBase64: renderProductLabelPng(label.variables, templateKind), copies: label.copies, widthMm: templateInfo.widthMm, heightMm: templateInfo.heightMm });
           queued++;
         }
       } else {
         const template = await createLabelTemplate(session.accessToken, {
-          code: `SKU60X40_${Date.now().toString(36)}`,
-          name: `Товары ${client.name} · 60×40`, type: 'SKU', widthMm: 60, heightMm: 40,
-          description: 'Печать штрихкодов по синхронизированным карточкам клиента', tspl: PRODUCT_LABEL_TSPL,
+          code: `SKU_${templateKind.toUpperCase().replace('-', '_')}_${Date.now().toString(36)}`,
+          name: `Товары ${client.name} · ${templateInfo.name}`, type: 'SKU', widthMm: templateInfo.widthMm, heightMm: templateInfo.heightMm,
+          description: 'Печать штрихкодов по синхронизированным карточкам клиента', tspl: templateInfo.tspl,
         });
         for (const label of labels) {
           await createPrintJobFromTemplate(session.accessToken, template.id, { printerCode, variables: label.variables, copies: label.copies });
@@ -102,13 +104,13 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
   const first = selected[0];
   const preview = first && client ? (() => {
     try {
-      const variables = productLabelVariables(first, client.name, chosenBarcodes[first.id]);
-      return { printerLanguage: 'TSPL' as const, tspl: PRODUCT_LABEL_TSPL.replace(/{{(\w+)}}/g, (_, key: keyof typeof variables) => variables[key].replace(/["\r\n\t]/g, ' ')) };
+      const variables = templateKind === 'standard' ? productLabelVariables(first, client.name, chosenBarcodes[first.id]) : productMarketplaceVariables(first, client.name, chosenBarcodes[first.id]);
+      return { printerLanguage: 'TSPL' as const, tspl: productLabelTemplate(templateKind).tspl.replace(/{{(\w+)}}/g, (_, key: string) => (String((variables as unknown as Record<string, string>)[key] ?? '')).replace(/["\r\n\t]/g, ' ')) };
     } catch { return null; }
   })() : null;
 
   return <section className="sku-label-flow" aria-label="Печать ШК товара">
-    <p>Введите часть названия, артикула или штрихкода. Отметьте нужные товары и укажите количество этикеток для каждого. Формат — 60 × 40 мм (ширина × высота).</p>
+    <p>Введите часть названия, артикула или штрихкода. Отметьте нужные товары, выберите шаблон и укажите количество этикеток для каждого.</p>
     <div className="sku-label-flow__filters">
       <label>Клиент<select value={clientId} onChange={event => setClientId(event.target.value)}>{clients.map(item => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
       <label>Поиск<input value={search} onChange={event => setSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void find(); }} placeholder="Часть ШК, артикула или названия" /></label>
@@ -121,6 +123,7 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
     </div>
     {selected.some(item => !results.some(result => result.id === item.id)) ? <div className="sku-label-flow__selected"><strong>Отмечены из предыдущего поиска</strong>{selected.filter(item => !results.some(result => result.id === item.id)).map(item => <div key={item.id} className="sku-label-flow__selected-row"><span>{item.name} · {item.article || item.internalSku}</span><label>Этикеток<input aria-label={`Количество этикеток для ${item.name}`} type="number" min="1" max="100" value={quantities[item.id] ?? '1'} onChange={event => setQuantities(current => ({ ...current, [item.id]: event.target.value }))} /></label><button type="button" className="secondary-button" onClick={() => toggle(item)}>Убрать</button></div>)}</div> : null}
     <div className="sku-label-flow__filters">
+      <label>Шаблон этикетки<select value={templateKind} onChange={event => setTemplateKind(event.target.value as ProductLabelTemplate)}><option value="standard">Обычная · 60 × 40 мм</option><option value="lukin">По образцу Лукина · 60 × 40 мм</option><option value="wb-compact">WB компактная · 40 × 30 мм</option></select></label>
       <label>Принтер<select value={printerCode} onChange={event => setPrinterCode(event.target.value)}><option value="">Выберите подключённый принтер</option>{destinations.map(item => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
       <span>Выбрано товаров: {selected.length}</span>
     </div>
@@ -130,6 +133,6 @@ export function SkuLabelForm({ session, initialSearch = '' }: { session: AuthSes
       <button className="primary-button" type="button" disabled={busy || !selected.length || !printerCode || !client} onClick={() => void print()}><Printer size={16} />{busy ? 'Отправляю…' : `Напечатать ${selected.length} товаров`}</button>
       <button className="secondary-button" type="button" disabled={!search.trim() || busy} onClick={() => void find()}><RefreshCw size={16} />Обновить поиск</button>
     </div>
-    {preview && <><p>Предпросмотр первого выбранного товара · {first.name}</p><TsplPreviewCard preview={preview} fileName={`${first.internalSku}-60x40.tspl`} /></>}
+    {preview && <><p>Предпросмотр первого выбранного товара · {first.name}</p><TsplPreviewCard preview={preview} fileName={`${first.internalSku}-${productLabelTemplate(templateKind).widthMm}x${productLabelTemplate(templateKind).heightMm}.tspl`} /></>}
   </section>;
 }
