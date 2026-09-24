@@ -24,6 +24,16 @@ public class FbsAssemblyUiTest {
         org.junit.Assert.assertEquals("", FbsAssemblyUi.wbStickerNumber(task));
     }
 
+
+    // TEST: both marketplaces use physical picking; legacy and sold terminals keep their workflow.
+    @Test
+    public void physicalPickRequiresBothOurAppAndServerSupport() {
+        assertTrue(FbsAssemblyUi.usesPhysicalPickConfirmation("logoff", "OZON", true));
+        assertTrue(FbsAssemblyUi.usesPhysicalPickConfirmation("logoff", "WILDBERRIES", true));
+        assertFalse(FbsAssemblyUi.usesPhysicalPickConfirmation("logoff", "OZON", false));
+        assertFalse(FbsAssemblyUi.usesPhysicalPickConfirmation("ffullhab", "OZON", true));
+        assertFalse(FbsAssemblyUi.usesPhysicalPickConfirmation("platform", "WILDBERRIES", true));
+    }
     @Test
     public void guidesBarcodeAndKizButReturnsToStickerScreen() {
         // TEST: рабочее окно ведёт сотрудника ровно через ШК и КИЗ.

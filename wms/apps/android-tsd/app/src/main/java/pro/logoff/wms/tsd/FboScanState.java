@@ -6,14 +6,39 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 // FIX: barcode and KIZ are a pair; an unanswered command keeps its original id.
 final class FboScanState {
+    // FIX: manual additions intentionally reopen a closed carton; ordinary packing must report duplicates.
+    static boolean alreadyPackedBox(TsdFboPlan plan, String code, boolean manual) {
+        if (!plan.reusablePackingEnabled || manual || code == null || plan.boxes == null) return false;
+        for (TsdFboPlan.Box box : plan.boxes)
+            if (box.closed && box.quantity > 0 && code.trim().equalsIgnoreCase(box.code)) return true;
+        return false;
+    }
+    // FIX: picking every unit from a shelf bin does not mean taking the bin itself.
+    static boolean reusableBin(TsdFboPlan plan, String code) {
+        return plan.reusablePackingEnabled && code != null && code.toUpperCase(java.util.Locale.ROOT).startsWith("FFL_LKBBOX_");
+    }
+    static String wholePickTitle(TsdFboPlan plan, String code) {
+        return reusableBin(plan, code) ? "Весь товар из бокса отобран" : "Короб забран целиком";
+    }
     // FIX: changing entry point never changes the persisted phase or performs a stock operation.
     static boolean phaseAllowed(boolean packing,String phase) {
         return packing ? "PACKING".equals(phase)||"CONTROL".equals(phase)||"COMPLETED".equals(phase)
             : "NOT_STARTED".equals(phase)||"PICKING".equals(phase);
     }
     String pallet = "", source = "", target = "", barcode = "";
+    // FIX: navigation survives reopening; pending stock commands are stored independently.
+    Map<String,String> checkpoint() {
+        Map<String,String> p=new LinkedHashMap<>();p.put("palletCode",pallet);p.put("sourceBoxCode",source);
+        p.put("targetBoxCode",target);p.put("barcode",barcode);return p;
+    }
+    void restoreCheckpoint(Map<String,String> value) {
+        if(value==null)return;pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
+        target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");
+    }
     private Map<String,String> pending;
-    Map<String,String> prepare(String action, String kiz) {
+    Map<String,String> prepare(String action, String kiz) { return prepare(action, kiz, null); }
+    // FIX: persist quantity together with the operation id so a retry cannot change it.
+    Map<String,String> prepare(String action, String kiz, Integer confirmedQuantity) {
         if (pending != null) return new LinkedHashMap<>(pending);
         Map<String,String> p = new LinkedHashMap<>(); p.put("action",action); p.put("operationId",UUID.randomUUID().toString());
         if (!pallet.isEmpty()) p.put("palletCode",pallet);
@@ -21,6 +46,7 @@ final class FboScanState {
         if (!target.isEmpty()) p.put("targetBoxCode",target);
         if (!barcode.isEmpty()) p.put("barcode",barcode);
         if (kiz != null && !kiz.isEmpty()) p.put("kiz",kiz);
+        if (confirmedQuantity != null) p.put("confirmedQuantity", String.valueOf(confirmedQuantity));
         pending = p; return new LinkedHashMap<>(p);
     }
     void restore(Map<String,String> value) {
@@ -32,13 +58,25 @@ final class FboScanState {
         for(TsdFboPlan.Route r:plan.route)if(r.pallet.equals(pallet)&&r.boxCode.equalsIgnoreCase(code.trim())){source=r.boxCode;return true;}
         return false;
     }
-    void reconcile(TsdFboPlan plan) {
+    // FIX: workflow selection never changes the persisted collection phase.
+    static String screenPhase(TsdFboPlan plan, boolean packing) {
+        return packing && plan.parallelPackingSupported && plan.picked > 0 && "PICKING".equals(plan.phase) ? "PACKING" : plan.phase;
+    }
+    void reconcile(TsdFboPlan plan) { reconcile(plan, false); }
+    void reconcile(TsdFboPlan plan, boolean packing) {
+        String phase = screenPhase(plan, packing);
         boolean hasPallet=false,hasSource=false,hasTarget=false;
         for(TsdFboPlan.Route r:plan.route){if(r.pallet.equals(pallet))hasPallet=true;if(r.pallet.equals(pallet)&&r.boxCode.equals(source))hasSource=true;}
         for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(target)&&!b.closed)hasTarget=true;
         if(!hasPallet)pallet="";
         if(!hasSource)source="";
-        if(!hasTarget||!"PACKING".equals(plan.phase))target="";
+        if(!hasTarget||!"PACKING".equals(phase))target="";
+        if(("PICKING".equals(phase)&&source.isEmpty())||("PACKING".equals(phase)&&target.isEmpty()))barcode="";
+        if(!barcode.isEmpty()){
+            boolean needed=false;if(plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
+                if(barcode.equals(line.barcode)&&("PICKING".equals(phase)?line.remaining>0:"PACKING".equals(phase)&&line.picked>line.packed))needed=true;
+            if(!needed)barcode="";
+        }
     }
     Map<String,String> pending() { return pending == null ? null : new LinkedHashMap<>(pending); }
     void accepted() { pending=null; barcode=""; }

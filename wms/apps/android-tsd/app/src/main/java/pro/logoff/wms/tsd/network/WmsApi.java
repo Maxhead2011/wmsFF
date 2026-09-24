@@ -20,8 +20,16 @@ import okhttp3.MultipartBody;
 public interface WmsApi {
     @GET("api/v1/tsd/requests/{id}/fbo")
     Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
+    @GET("api/v1/tsd/requests/{id}/fbo")
+    Call<TsdFboPlan> getFboPlanAtLocation(@Header("Authorization") String authorization,@Path("id") String id,
+        @Query("palletCode") String palletCode,@Query("sourceBoxCode") String sourceBoxCode);
     @POST("api/v1/tsd/requests/{id}/fbo/actions")
     Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+    // FIX: only opted-in LOGOFF terminals use independent acknowledgement and read-only status.
+    @POST("api/v1/tsd/requests/{id}/fbo/actions/ack")
+    Call<TsdFboAcknowledgement> acknowledgeFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+    @POST("api/v1/tsd/requests/{id}/fbo/actions/status")
+    Call<TsdFboAcknowledgement> fboOperationStatus(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
     // FIX: isolated physical KIZ search; no stock or assembly operations.
     @GET("api/v1/tsd/kiz-search")
     Call<List<TsdKizSearch>> listKizSearch(@Header("Authorization") String authorization);
@@ -32,6 +40,8 @@ public interface WmsApi {
     // FIX: read-only administrator lookup; no stock or marketplace mutations.
     @POST("api/v1/inventory/kiz-location/check")
     Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);
+    @POST("api/v1/inventory/kiz-location/reviews/{id}/decision")
+    Call<Map<String,Object>> decideKizReview(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String,Object> request);
     // ADDED: independent administrator sorting; ordinary transfer APIs are unchanged.
     @GET("api/v1/pallet-sorting")
     Call<List<Map<String, Object>>> listPalletSortings(@Header("Authorization") String authorization);

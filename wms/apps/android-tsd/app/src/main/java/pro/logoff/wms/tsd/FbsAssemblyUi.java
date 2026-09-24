@@ -19,6 +19,12 @@ final class FbsAssemblyUi {
         return task.wbStickerNumber == null ? "" : task.wbStickerNumber.trim();
     }
 
+    // FIX: the new button is enabled only after both app and API support physical picking.
+    static boolean usesPhysicalPickConfirmation(String flavor, String marketplace, boolean supported) {
+        return supported && "logoff".equals(flavor) &&
+            ("OZON".equalsIgnoreCase(marketplace) || "WILDBERRIES".equalsIgnoreCase(marketplace));
+    }
+
     static boolean shouldUseGuidedScanDialog(String state) {
         // FIX: после короба ШК и КИЗ сканируются в отдельном рабочем окне.
         return "SCAN_BARCODE".equals(state) || "SCAN_KIZ".equals(state) || "SCAN_NEW_KIZ".equals(state);
