@@ -1,0 +1,32 @@
+name: Verify our WMS production baseline
+on:
+  pull_request:
+    paths:
+      - 'wms/baselines/**'
+      - 'wms/scripts/release_baseline.py'
+      - 'wms/scripts/tests/test_release_baseline.py'
+      - '.github/workflows/production-baseline.yml'
+  push:
+    paths:
+      - 'wms/baselines/**'
+      - 'wms/scripts/release_baseline.py'
+      - 'wms/scripts/tests/test_release_baseline.py'
+      - '.github/workflows/production-baseline.yml'
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test baseline guard
+        working-directory: wms
+        env:
+          BASELINE_TEST_TMP: '${{ github.workspace }}/work/baseline-tests'
+        run: python -m unittest discover -s scripts/tests -p test_release_baseline.py
+      - name: Verify committed production artifacts
+        working-directory: wms
+        run: python scripts/release_baseline.py verify
