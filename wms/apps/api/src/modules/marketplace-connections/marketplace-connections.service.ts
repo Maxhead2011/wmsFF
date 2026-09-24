@@ -25023,7 +25023,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         order.marketplace === MarketplaceType.WILDBERRIES &&
         Boolean(order.id) &&
         Boolean(order.connectionId),
-    );
+    ).map(order => ({ ...order }));
     if (relevantOrders.length === 0) {
       return result;
     }
@@ -25115,6 +25115,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const approvedSizeTaskIds = await approvedSizeRoutes(this.prisma, [...taskByKey.values()]);
+    // FIX: marketplace snapshots may omit relabel metadata after a route was repaired.
+    // Revalidate the saved source before the batch stock/reservation reads; never blindly retain it.
+    if (process.env.WMS_FBS_RELABEL_ROUTE_REPAIR_ENABLED === 'true' && !storesWithoutBoxes) {
+      for (const order of relevantOrders) {
+        const saved = taskByKey.get(selectionKey(order.connectionId, order.id));
+        if (order.relabeling || order.category !== 'active' || !order.product ||
+            !saved?.sourceSkuId || !saved.relabelRequired || saved.skuId !== order.product.id ||
+            !['RESERVED', 'WAITING_STOCK'].includes(saved.status) || saved.boxId ||
+            saved.sourceBarcode || saved.barcode || saved.kiz || saved.relabelConfirmedAt ||
+            saved.completedAt || approvedSizeTaskIds.has(saved.id) || retainDovoz1049Route(saved)) continue;
+        const route = await findFbsRelabelRoute(this.prisma, {
+          clientId, warehouseId: order.request?.warehouseId ?? saved.stockWarehouseId ?? null,
+          skuId: saved.skuId, taskId: saved.id, quantity: Math.max(1, order.itemCount),
+          exactSourceId: saved.sourceSkuId,
+        }, skuId => this.fbsTsdReservationRows({clientId, skuId, excludeTaskId: saved.id}));
+        if (route) order.relabeling = {required: true, sourceSkuId: route.sourceSkuId,
+          sourceProductName: route.sourceProductName, sourceArticle: route.sourceArticle,
+          sourceBarcodes: route.sourceBarcodes};
+      }
+    }
     const reservableOrders = relevantOrders.filter((order) => {
       if (approvedSizeTaskIds.has(taskByKey.get(selectionKey(order.connectionId, order.id))?.id ?? '')) return false;
       if (retainDovoz1049Route(taskByKey.get(selectionKey(order.connectionId, order.id)))) return false;
