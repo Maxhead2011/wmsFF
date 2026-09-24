@@ -1,0 +1,10 @@
+{
+  "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts": {
+    "before": "e817cff647442b98e707207556a54cf2ee91662852ef8ed5015b1a1bac4d88d1",
+    "after": "f0d370ee691e4b4161567c7cccd734cf93bfc5286e601e9a4a1637da0d4926dc"
+  },
+  "wms/apps/api/src/common/stock/fbs-request-auto-status.ts": {
+    "before": null,
+    "after": "b59d0a339135310b56361439dfcc1dd8c244e8c61bac52fb9ece97ea077e995c"
+  }
+}
