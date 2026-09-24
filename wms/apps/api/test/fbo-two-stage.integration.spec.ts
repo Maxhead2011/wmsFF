@@ -4,6 +4,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { FboTwoStageService } from '../src/modules/tsd/fbo-two-stage.service';
+import { FboProblemsService } from '../src/modules/administration/fbo-problems.service';
 import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
 import { StockBalancesService } from '../src/modules/stock/stock-balances.service';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
@@ -39,7 +40,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await p.stockBalance.create({ data: { balanceKey: randomUUID(), clientId: client, warehouseId: wh, skuId: other, boxId: partial, status: 'AVAILABLE', quantity: 1 } });
         marks = [];
         for (let i = 0; i < 5; i++)
-            marks.push(await p.productMark.create({ data: { clientId: client, skuId: sku, boxId: i < 2 ? whole : partial, value: `010468099259845521${String(i).padStart(13, 'A')}\u001d91EE12\u001d92${client}`, status: 'AVAILABLE' } }));
+            marks.push(await p.productMark.create({ data: { clientId: client, skuId: sku, boxId: i < 2 ? whole : partial, value: `010468099259845521${client.replaceAll('-','').slice(0,12)}${i}\u001d91EE12\u001d92${client}`, status: 'AVAILABLE' } }));
         await p.clientRequest.create({ data: { id: request, clientId: client, warehouseId: wh, type: 'OUTBOUND', title: 'FBO regression', items: { create: { id: line, skuId: sku, barcode: '2051234567890', quantity: 4 } } } });
         const balances = new StockBalancesService(p as never, scopes as never);
         stock = new StockOperationsService(p as never, scopes as never, balances);
@@ -65,11 +66,191 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await p.barcode.deleteMany({ where: { sku: { clientId: client } } });
         await p.sku.deleteMany({ where: { clientId: client } });
         await p.client.deleteMany({ where: { id: client } });
+        await p.userRole.deleteMany({where:{userId:uid}});
+        await p.userWarehouse.deleteMany({where:{userId:uid}});
         await p.user.deleteMany({ where: { id: uid } });
         await p.warehouse.deleteMany({ where: { id: wh } });
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: closing a short pick preserves the order, prevents late picks, and ships only physical units.
+    it('closes a partial pick and completes actual packing without reducing the original order', async () => {
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const stop = { action: 'STOP_PICK', operationId: randomUUID() };
+        const closed = await svc.act(request, stop, user);
+        expect(closed).toMatchObject({ phase: 'PACKING', needed: 2, plannedNeeded: 4, picked: 2, packingNeeded: 2, unpicked: 2 });
+        expect(await svc.act(request, stop, user)).toMatchObject({ phase: 'PACKING', packingNeeded: 2 });
+        expect((await p.clientRequestItem.findUniqueOrThrow({ where: { id: line } })).quantity).toBe(4);
+        await expect(act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value })).rejects.toThrow();
+        await expect(act('SORTED')).rejects.toThrow();
+        await expect(svc.wbFile(request, user)).rejects.toThrow();
+        await act('PACK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        await act('SORTED');
+        await expect(act('FINISH')).rejects.toThrow();
+        await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole });
+        const finish = { action: 'FINISH', operationId: randomUUID() };
+        expect(await svc.act(request, finish, user)).toMatchObject({ phase: 'COMPLETED', packed: 2 });
+        await svc.act(request, finish, user);
+        const files = new ClientRequestMarketplaceFilesService(p as never, scopes as never);
+        for (const file of [await files.getWbProductsTemplate(request, user), await svc.wbFile(request, user)]) {
+            const workbook = XLSX.read(file.content, { type: 'buffer' });
+            const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }) as unknown[][];
+            expect(rows.slice(1).map(row => [row[0], row[1]])).toEqual([['2051234567890', 2]]);
+        }
+        await stock.shipClientRequest({ requestId: request, idempotencyKey: randomUUID() }, user);
+        expect((await p.clientRequest.findUniqueOrThrow({ where: { id: request } })).status).toBe('DONE');
+        expect((await p.stockBalance.aggregate({ where: { boxId: partial, skuId: sku, status: 'AVAILABLE' }, _sum: { quantity: true } }))._sum.quantity).toBe(3);
+        expect((await p.clientRequestItem.findUniqueOrThrow({ where: { id: line } })).quantity).toBe(4);
+    });
+    // TEST: concurrent retries and a competing physical scan cannot leave an unaccounted picked unit.
+    it('serializes closing with a concurrent scan and keeps the closure valid after rollout disablement', async () => {
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        await act('START');
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        const stop = { action: 'STOP_PICK', operationId: randomUUID() };
+        const result = await Promise.allSettled([
+            svc.act(request, stop, user), svc.act(request, stop, user),
+            act('PICK_UNIT', { sourceBoxCode: 'FFL_' + partial, barcode: '2051234567890', kiz: marks[2].value }),
+        ]);
+        expect(result[0].status).toBe('fulfilled');
+        expect(result[1].status).toBe('fulfilled');
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'false');
+        const plan = await svc.plan(request, user);
+        expect(plan.phase).toBe('PACKING');
+        expect(plan.needed).toBe(plan.picked);
+        expect(plan.plannedNeeded).toBe(4);
+        expect(plan.picked).toBe(result[2].status === 'fulfilled' ? 3 : 2);
+        expect(await p.auditLog.count({ where: { entityId: request, action: 'FBO_PICK_CLOSED' } })).toBe(1);
+    });
+    // TEST: neither disabled installations nor empty picks can silently close an order.
+    it('rejects premature and disabled short-pick completion', async () => {
+        await act('START');
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'true');
+        await expect(act('STOP_PICK')).rejects.toThrow();
+        await act('PICK_BOX', { sourceBoxCode: 'FFL_' + whole });
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED', 'false');
+        await expect(act('STOP_PICK')).rejects.toThrow();
+        await expect(act('FINISH_PICK')).rejects.toThrow();
+        expect(await svc.plan(request, user)).toMatchObject({ phase: 'PICKING', needed: 4 });
+    });
+    async function recovery() {
+        vi.stubEnv('WMS_FBO_PROBLEMS_ENABLED','true');
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED','true');
+        await p.role.upsert({where:{code:'OWNER'},create:{code:'OWNER',name:'Owner'},update:{}});
+        const role=await p.role.findUniqueOrThrow({where:{code:'OWNER'}});
+        await p.userRole.create({data:{userId:uid,roleId:role.id}});
+        const balances=new StockBalancesService(p as never,scopes as never);
+        return new FboProblemsService(p as never,svc,balances,{assertStockMovementsAllowed:async()=>{}} as never,new ClientRequestMarketplaceFilesService(p as never,scopes as never));
+    }
+    // TEST: whole-box splitting once, packing multiple exact units, idempotent replay and WB documents.
+    it('recovers a whole box into a loose parcel without a second AVAILABLE debit',async()=>{
+        const admin=await recovery();await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});await act('STOP_PICK');
+        vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED','true');
+        await act('MANUAL_OPEN_BOX',{targetBoxCode:'FFL_'+target});
+        const chosen=await p.fboAssemblyUnit.findMany({where:{requestId:request}});
+        const preview=await admin.preview(request,{action:'PACK_UNITS',unitIds:chosen.map(u=>u.id),targetBoxCode:'FFL_'+target,reason:'Переложены в общий короб',physicalConfirmed:true},user);
+        const before=await p.stockMovement.count({where:{clientId:client,status:'AVAILABLE'}});
+        await Promise.all([admin.apply(request,preview.token,user),admin.apply(request,preview.token,user)]);
+        await admin.apply(request,preview.token,user);
+        expect(await p.stockMovement.count({where:{clientId:client,status:'AVAILABLE'}})).toBe(before);
+        expect(await p.fboAssemblyUnit.count({where:{requestId:request,state:'PACKED'}})).toBe(2);
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_RECOVERY_APPLIED'}})).toBe(1);
+        const confirmation=await admin.preview(request,{action:'CONFIRM_BOXES',boxCodes:['FFL_'+target],reason:'Проверены обе единицы',physicalConfirmed:true},user);
+        await admin.apply(request,confirmation.token,user);
+        const finish=await admin.preview(request,{action:'FINISH',reason:'Физически упаковка завершена',physicalConfirmed:true},user);
+        await admin.apply(request,finish.token,user);
+        expect((await admin.document(request,user,'products')).content.length).toBeGreaterThan(100);
+        expect((await admin.document(request,user,'packages')).content.length).toBeGreaterThan(100);
+    });
+    // TEST: an intervening stock change invalidates the entire operation before any mutation.
+    it('rejects a stale preview and leaves packing untouched',async()=>{
+        const admin=await recovery();await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});await act('STOP_PICK');
+        const preview=await admin.preview(request,{action:'ADD_BOXES',boxCodes:['FFL_'+whole],reason:'Короб проверен',physicalConfirmed:true},user);
+        await p.stockBalance.updateMany({where:{boxId:whole,status:'PACKING'},data:{quantity:{decrement:1}}});
+        await expect(admin.apply(request,preview.token,user)).rejects.toThrow('изменились');
+        expect(await p.fboAssemblyBox.count({where:{requestId:request}})).toBe(0);
+    });
+    // TEST: unknown historical location is never replaced with the current pallet; export matches report.
+    it('exports picking evidence and the same filtered quantity to Excel',async()=>{
+        const admin=await recovery();await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});
+        const report=await admin.report(request,user,{worker:'picker'});
+        expect(report).toHaveLength(1);expect(report[0]).toMatchObject({quantity:2,pallet:'Не зафиксирован',mode:'Целиком'});
+        const book=XLSX.read(await admin.excel(request,user,{worker:'picker'}),{type:'buffer'});
+        const rows=XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]]) as Record<string,unknown>[];
+        expect(rows[0]['Количество']).toBe(2);expect(rows[0]['Паллет при отборе']).toBe('Не зафиксирован');
+        expect(await admin.report(request,user,{worker:'Someone else'})).toEqual([]);
+    });
+    // TEST: closed short picking can still receive a manually recovered unit in the same shipment.
+    it('increases the frozen packing target after manual recovery without inflating the original order',async()=>{
+        vi.stubEnv('WMS_FBO_CLOSE_PICK_ENABLED','true');vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED','true');
+        await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});await act('STOP_PICK');
+        await act('OPEN_BOX',{targetBoxCode:'FFL_'+target});
+        const result=await act('MANUAL_PACK_UNIT',{targetBoxCode:'FFL_'+target,barcode:'2051234567890',kiz:marks[2].value});
+        expect(result).toMatchObject({needed:3,picked:3,plannedNeeded:4,packed:1});
+    });
+    // TEST: only the admin's stored warehouse scope applies, regardless of header selection.
+    it('checks persisted roles, branch assignment, and disabled rollout on every endpoint',async()=>{
+        const admin=await recovery();await act('START');
+        vi.stubEnv('WMS_FBO_PROBLEMS_ENABLED','false');await expect(admin.details(request,user)).rejects.toThrow('выключены');
+        expect(await admin.capabilities(user)).toEqual({enabled:false});
+        vi.stubEnv('WMS_FBO_PROBLEMS_ENABLED','true');
+        await p.clientRequest.update({where:{id:request},data:{title:'FBO 1220_01'}});
+        expect((await admin.list(user,'1220-01')).map(r=>r.id)).toContain(request);
+        const role=await p.role.upsert({where:{code:'ADMIN'},create:{code:'ADMIN',name:'Admin'},update:{}});
+        await p.userRole.deleteMany({where:{userId:uid}});await p.userRole.create({data:{userId:uid,roleId:role.id}});
+        await expect(admin.details(request,user)).rejects.toThrow('закреплённый');
+        await p.userWarehouse.create({data:{userId:uid,warehouseId:wh,canRead:true,canWrite:true}});
+        expect((await admin.details(request,{...user,activeWarehouseId:'another-selected-branch'})).request.id).toBe(request);
+        await p.userWarehouse.updateMany({where:{userId:uid},data:{canWrite:false}});
+        await expect(admin.list(user)).rejects.toThrow('закреплённый');
+    });
+    // TEST: compensation restores exactly one blocked mark; replay cannot create another unit.
+    it('reverses a proven phantom writeoff and preserves its original movement',async()=>{
+        const admin=await recovery();await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});await act('STOP_PICK');await act('PACK_BOX',{sourceBoxCode:'FFL_'+whole});
+        const unit=await p.fboAssemblyUnit.findFirstOrThrow({where:{requestId:request,markId:marks[0].id}});
+        await p.stockBalance.updateMany({where:{boxId:whole,status:'PACKING'},data:{quantity:{decrement:1}}});
+        const removed=await p.stockMovement.create({data:{clientId:client,skuId:sku,boxId:whole,type:'INVENTORY_ADJUSTMENT',quantity:-1,status:'PACKING',sourceDocument:'Контроль фантомных остатков',idempotencyKey:'admin-phantom-stock:'+randomUUID()}});
+        await p.productMark.update({where:{id:marks[0].id},data:{boxId:null,status:'BLOCKED',sourceDocument:'Снят с остатка автоматическим контролем: КИЗ уже отгружен'}});
+        const body={action:'REVERSE_WRITEOFF' as const,unitIds:[unit.id],movementId:removed.id,reason:'Ошибочное снятие, товар в коробе',physicalConfirmed:true};
+        const preview=await admin.preview(request,body,user);expect(preview.summary.packingStockChange).toBe(1);
+        await admin.apply(request,preview.token,user);await admin.apply(request,preview.token,user);
+        expect((await p.stockBalance.aggregate({where:{boxId:whole,status:'PACKING'},_sum:{quantity:true}}))._sum.quantity).toBe(2);
+        expect(await p.stockMovement.count({where:{idempotencyKey:'fbo-reverse:'+removed.id}})).toBe(1);
+        expect((await p.stockMovement.findUniqueOrThrow({where:{id:removed.id}})).quantity).toBe(-1);
+        expect(await p.productMark.findUnique({where:{id:marks[0].id}})).toMatchObject({boxId:whole,status:'PACKING'});
+        await expect(admin.preview(request,body,user)).rejects.toThrow();
+    });
+    // TEST: a late mismatch rolls back all confirmations, not just the failing box.
+    it('rolls back batch confirmation if one box differs from recorded units',async()=>{
+        const admin=await recovery();await packed();
+        const targetBox=await p.box.findUniqueOrThrow({where:{code:'FFL_'+target}});
+        const damaged=await p.stockBalance.updateMany({where:{boxId:targetBox.id,status:'PACKING'},data:{quantity:{decrement:1}}});
+        expect(damaged.count).toBe(1);
+        const preview=await admin.preview(request,{action:'CONFIRM_BOXES',boxCodes:['FFL_'+whole,'FFL_'+target],reason:'Проверены физически',physicalConfirmed:true},user);
+        await expect(admin.apply(request,preview.token,user)).rejects.toThrow();
+        expect(await p.fboAssemblyBox.count({where:{requestId:request,confirmedAt:{not:null}}})).toBe(0);
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_RECOVERY_APPLIED'}})).toBe(0);
+    });
+    // TEST: each administrative stage retains ordinary service invariants and original demand.
+    it('closes picking, splits a whole box and records every recovery reason',async()=>{
+        const admin=await recovery();await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});
+        for(const input of [{action:'CLOSE_PICK' as const},{action:'SPLIT_BOXES' as const,boxCodes:['FFL_'+whole]}]){
+            const preview=await admin.preview(request,{...input,reason:'Физически короб разобран',physicalConfirmed:true},user);
+            await admin.apply(request,preview.token,user);
+        }
+        expect((await svc.plan(request,user)).wholeBoxes).toEqual([]);
+        expect((await svc.plan(request,user)).picked).toBe(2);
+        expect((await p.clientRequestItem.findUniqueOrThrow({where:{id:line}})).quantity).toBe(4);
+        expect(await p.auditLog.count({where:{entityId:request,action:'FBO_RECOVERY_APPLIED'}})).toBe(2);
+    });
+    it('adds selected whole boxes and leaves other picked units untouched',async()=>{
+        const admin=await recovery();await picked();
+        const preview=await admin.preview(request,{action:'ADD_BOXES',boxCodes:['FFL_'+whole],reason:'Короб физически в поставке',physicalConfirmed:true},user);
+        await admin.apply(request,preview.token,user);
+        expect((await svc.plan(request,user))).toMatchObject({picked:4,packed:2,looseRemaining:2});
+    });
     async function manualReady() {
         vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED', 'true');
         await picked();

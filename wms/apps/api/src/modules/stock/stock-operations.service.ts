@@ -2,7 +2,7 @@ import { reconcileDoneRequestPacking } from '../../common/stock/done-request-pac
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { createHash, randomUUID } from 'node:crypto';
-import { isFboTwoStageRequest } from '../tsd/fbo-two-stage-policy';
+import { closedFboItems, fboTwoStageEnabled, isFboTwoStageRequest } from '../tsd/fbo-two-stage-policy';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { assertSortingAdmin, sortingKizIdentity } from '../inventory/pallet-sorting-policy';
 import { sortingSettledBoxTaskIds } from './sorting-settled-box-tasks';
@@ -1898,6 +1898,8 @@ export class StockOperationsService {
       }
 
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Упаковка');
+      // FIX: a closed short FBO pick packages its frozen actual target, never edits the order.
+      if (fboTransaction) await this.applyClosedFboTarget(tx, request);
       this.ensureRequestCanMove(request, 'упаковывать');
 
       this.assertRequestWarehouse(request, warehouseId);
@@ -1998,6 +2000,8 @@ export class StockOperationsService {
     const result = await this.prisma.$transaction(async (tx) => {
       const doneAt = new Date();
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
+      // FIX: shipment follows the same target as packing, including an intentional short pick.
+      const closedFboPick = await this.applyClosedFboTarget(tx, request);
 
       // Упаковка через ТСД или аварийный workflow могла завершиться без начислений.
       // Перед закрытием восстанавливаем их по фактическим упаковочным местам.
@@ -2060,7 +2064,8 @@ export class StockOperationsService {
         throw new BadRequestException('Отгрузка доступна только после упаковки заявки.');
       }
 
-      await this.ensurePackedStockIsInShipping(
+      // FIX: a closed FBO shipment must not silently replenish a missing packed unit from AVAILABLE.
+      if (!closedFboPick) await this.ensurePackedStockIsInShipping(
         tx,
         request,
         `complete-pack-before-ship:${request.id}:${baseKey}`,
@@ -3681,6 +3686,13 @@ export class StockOperationsService {
     }
 
     return { lines };
+  }
+
+  private async applyClosedFboTarget<T extends { id: string; items: Array<{ id: string; quantity: number }> }>(tx: Prisma.TransactionClient, request: T) {
+    if (!fboTwoStageEnabled()) return false;
+    const assembly = await tx.fboAssembly.findUnique({ where: { requestId: request.id }, select: { pickClosure: true } });
+    if (assembly?.pickClosure) request.items = closedFboItems(request.items, assembly.pickClosure).filter(i => i.quantity > 0);
+    return !!assembly?.pickClosure;
   }
 
   private async loadOutboundRequest(

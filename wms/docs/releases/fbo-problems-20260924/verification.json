@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "newRegressions": 0,
+  "serverBaselineFailedTests": 205,
+  "serverCandidateInitialFailedTests": 207,
+  "initialExtraFailures": "Two legacy expectations adjusted to existing server policy; policy source is unchanged",
+  "focusedApiPassed": 62,
+  "webPassed": 256,
+  "navigationPassed": 1,
+  "images": {
+    "api": "sha256:1458299f4560c6d98fd5628cafc68adccf209ac14c135ddafafc18b987fe6153",
+    "web": "sha256:804aa5d1718508b85d218be570de52cb3073e9a075a368f41425ee03d9ecc6cb"
+  },
+  "productionPatchSha256": "4dfee399902a545e8e0fd235f7477984859e9646cd5d45f79ae4aa606ce91277"
+}

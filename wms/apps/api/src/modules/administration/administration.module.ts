@@ -1,4 +1,9 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
+import { FboProblemsController } from './fbo-problems.controller';
+import { FboProblemsService } from './fbo-problems.service';
+import { FboTwoStageService } from '../tsd/fbo-two-stage.service';
+import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
 import { AdministrationController } from './administration.controller';
 import { AdministrationService } from './administration.service';
 import { MarketplaceConnectionsModule } from '../marketplace-connections/marketplace-connections.module';
@@ -11,10 +16,11 @@ import { InventoryModule } from '../inventory/inventory.module';
 import { AdministrationMarketplaceStockControlController } from './administration-marketplace-stock-control.controller';
 
 @Module({
-  imports: [MarketplaceConnectionsModule, StockModule, InventoryModule],
-  controllers: [AdministrationController, AdministrationMarketplaceStockControlController],
+  imports: [AuthModule, MarketplaceConnectionsModule, StockModule, InventoryModule],
+  controllers: [AdministrationController, AdministrationMarketplaceStockControlController, FboProblemsController],
   // ADDED: Internal API diagnostics are isolated from existing technical-work repair logic.
   providers: [
+    FboProblemsService, FboTwoStageService, ClientRequestMarketplaceFilesService,
     AdministrationService,
     AdministrationTechnicalWorkService,
     AdministrationInternalApiService,
