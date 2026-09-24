@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 208,
+  "versionName": "0.1.208-sequential-picking",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "c6e70e2bd86c5c9cf0607091ac8fe62feeca77d9728c28800b33758c5d329e4a"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 206,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 206,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 206,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 206,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 206,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 206,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "551c8a62712faa519b19e0e0e0521296db0dd38ec9d5554b8c46b656bbb816d7",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

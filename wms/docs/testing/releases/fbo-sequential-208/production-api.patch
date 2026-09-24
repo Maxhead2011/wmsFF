@@ -1,0 +1,247 @@
+--- a/wms/apps/api/src/modules/marketplace-connections/fbs-sequential-route.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/fbs-sequential-route.ts
+@@ -0,0 +1,11 @@
++export const fbsSequentialEnabled = () => process.env.WMS_FBS_SEQUENTIAL_PICK_ENABLED === 'true';
++// FIX: an order on the physically selected box precedes other boxes on the pallet.
++export function fbsLocationRank(codes: string[], box: string | null | undefined, pallet: Set<string>) {
++  return box && codes.includes(box) ? 2 : codes.some(code => pallet.has(code)) ? 1 : 0;
++}
++// FIX: eligible boxes have already been reduced by reservations; a hint cannot create stock.
++export function fbsContinuationBox<T extends { code: string; quantity: number }>(
++  eligible: T[], previous: string | null | undefined, required: number,
++): T | undefined {
++  return fbsSequentialEnabled() ? eligible.find(b => b.code === previous && b.quantity >= required) : undefined;
++}
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -2,6 +2,7 @@
+ import { isUntouchedAutoAssembly, isUntouchedBackgroundAssembly, autoAssemblyOzonError } from './auto-assembly-eligibility';
+ import { withFbsAssemblyLock } from './fbs-assembly-lock';
+ import { activeDuplicateGroups, calculateActiveDuplicateQuantities, commonDuplicateReserve, exactDuplicateSource, validateActiveDuplicatePairs, unavailableDuplicateChrtIds } from './duplicate-stock-runtime';
++import { fbsSequentialEnabled, fbsLocationRank, fbsContinuationBox } from './fbs-sequential-route';
+ import { findFbsRelabelRoute, RelabelRoute } from './fbs-relabel-route';
+ import { approvedSizeRoutes } from './fbs-size-substitution-route';
+ import { WbStockSyncWorker, withWbStockPlan, captureWbStockPlan, assertFreshWbStockPlan, isUrgentWbStockSync, urgentWbStockScope, registerWbStockPlan, expandWbStockScope } from './wb-stock-sync-queue';
+@@ -6028,6 +6029,8 @@
+       where: {
+         status: 'COMPLETED',
+         ...(selectedRequestId ? { requestId: selectedRequestId } : { deviceCode }),
++        // FIX: another picker in the same request must not redirect this terminal.
++        ...(fbsSequentialEnabled() ? { deviceCode, workerUserId: user.id } : {}),
+       },
+       orderBy: { completedAt: 'desc' },
+       select: { requestId: true, supplyId: true, boxCode: true },
+@@ -6161,6 +6164,8 @@
+           left: (typeof candidates)[number],
+           right: (typeof candidates)[number],
+         ) => {
++          if (fbsSequentialEnabled()) return fbsLocationRank(right.storageBoxes.map(b => b.code), previousBatch?.boxCode, preferredPalletBoxCodes) -
++            fbsLocationRank(left.storageBoxes.map(b => b.code), previousBatch?.boxCode, preferredPalletBoxCodes);
+           const leftOnCurrentPallet = left.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
+           const rightOnCurrentPallet = right.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
+           return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
+@@ -6321,6 +6326,8 @@
+           const storageBoxes = stockSource.storageBoxes
+             .filter((box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE)
+             .sort((left, right) => {
++              if (fbsSequentialEnabled()) return fbsLocationRank([right.code], previousBatch?.boxCode, preferredPalletBoxCodes) -
++                fbsLocationRank([left.code], previousBatch?.boxCode, preferredPalletBoxCodes);
+               const leftOnCurrentPallet = preferredPalletBoxCodes.has(left.code);
+               const rightOnCurrentPallet = preferredPalletBoxCodes.has(right.code);
+               return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
+@@ -16515,6 +16522,7 @@
+           where: {
+             requestId: task.requestId,
+             deviceCode: task.deviceCode,
++            ...(fbsSequentialEnabled() ? { workerUserId: user.id } : {}),
+             status: 'COMPLETED',
+             boxCode: { not: null },
+           },
+@@ -16565,8 +16573,10 @@
+               }) === 0 && box.quantity >= task.itemCount,
+           ) ?? null
+         : null;
++    const continuationBox = fbsContinuationBox(storageBoxes, previousCompleted?.boxCode, task.itemCount);
+     const preferredLocation =
+       locationsByBox.get(scannedStorageBox?.code ?? '') ??
++      locationsByBox.get(continuationBox?.code ?? '') ??
+       locationsByBox.get(liveReservedStorageBox?.code ?? '') ??
+       locationsByBox.get(previousCompleted?.boxCode ?? '') ??
+       locationsByBox.get(storageBoxes.find((box) => locationsByBox.has(box.code))?.code ?? '') ??
+@@ -16582,6 +16592,7 @@
+     });
+     const recommendedBoxCode =
+       scannedStorageBox?.code ??
++      continuationBox?.code ??
+       liveReservedStorageBox?.code ??
+       storageBoxes[0]?.code ??
+       null;
+@@ -16623,6 +16634,7 @@
+     return {
+       // FIX: the accepted old scan leads directly to the new physical KIZ scan, also after reload.
+       state: kizRelabelProposal ? 'SCAN_NEW_KIZ' : state,
++      sequentialPickingEnabled: fbsSequentialEnabled(),
+       kizRelabelProposal,
+       message,
+       task: {
+@@ -17726,6 +17738,14 @@
+ 
+   private async fbsTsdSourceBoxUsage(task: FbsTsdAssemblyRecord) {
+     if (!task.boxId || !task.boxCode) return null;
++    // FIX: rebuild the counter from accepted server records after a lost reply or application restart.
++    const pickedUnits = fbsSequentialEnabled()
++      ? (await this.prisma.fbsTsdAssembly.aggregate({
++          where: { clientId: task.clientId, requestId: task.requestId, boxId: task.boxId,
++            workerUserId: task.workerUserId, status: 'COMPLETED' },
++          _sum: { itemCount: true },
++        }))._sum.itemCount ?? 0
++      : undefined;
+ 
+     // Сначала читаем только содержимое физически отсканированного короба.
+     // Затем берём незавершённые FBS-заказы этой заявки только по найденным SKU.
+@@ -17758,7 +17778,7 @@
+     });
+     const boxSkuIds = uniqueStrings(balances.map((balance) => balance.skuId));
+     if (boxSkuIds.length === 0) {
+-      return { boxCode: task.boxCode, units: 0, positions: 0, orders: 0, items: [] };
++      return { boxCode: task.boxCode, pickedUnits, units: 0, positions: 0, orders: 0, items: [] };
+     }
+ 
+     const requestTasks = await this.prisma.fbsTsdAssembly.findMany({
+@@ -17874,6 +17894,7 @@
+ 
+     return {
+       boxCode: task.boxCode,
++      pickedUnits,
+       units,
+       positions: items.length,
+       orders,
+--- a/wms/apps/api/src/modules/tsd/fbo-local-route.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-local-route.ts
+@@ -0,0 +1,29 @@
++export type FboRouteContext = { sourceBoxCode?: string; palletCode?: string };
++export const fboLocalRouteEnabled = () => process.env.WMS_FBO_LOCAL_ROUTE_ENABLED === 'true';
++
++// FIX: location is a preference among already authorized, non-busy boxes, never a reservation.
++export function prioritizeFboLocation<T extends {
++  code: string;
++  balances: Array<{ skuId: string; status: string; quantity: number }>;
++  storagePlacement?: { pallet: { code: string } } | null;
++  pallet?: { code: string } | null;
++}>(boxes: T[], demand: Record<string, number>, context: FboRouteContext,
++  wholeOrder: (boxes: T[], demand: Record<string, number>) => T[]): T[] {
++  const pallet = context.palletCode?.trim();
++  if (!pallet) return wholeOrder(boxes, demand);
++  const remaining = { ...demand };
++  const here = boxes.filter(b => (b.storagePlacement?.pallet.code ?? b.pallet?.code) === pallet);
++  const selected = here.filter(b => b.code === context.sourceBoxCode);
++  const result: T[] = [];
++  const consume = (group: T[]) => {
++    for (const box of group) {
++      result.push(box);
++      for (const b of box.balances) if (b.status === 'AVAILABLE' && b.quantity > 0)
++        remaining[b.skuId] = Math.max(0, (remaining[b.skuId] ?? 0) - b.quantity);
++    }
++  };
++  consume(selected);
++  consume(wholeOrder(here.filter(b => !selected.includes(b)), remaining));
++  consume(wholeOrder(boxes.filter(b => !here.includes(b)), remaining));
++  return result;
++}
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.controller.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.controller.ts
+@@ -1,4 +1,5 @@
+-import { Body, Controller, Get, Param, Post, Res, StreamableFile, UseInterceptors } from '@nestjs/common';
++import { FboRouteDto } from './dto/fbo-route.dto';
++import { Body, Controller, Get, Param, Post, Query, Res, StreamableFile, UseInterceptors } from '@nestjs/common';
+ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+ import type { Response } from 'express';
+ import { CurrentUser } from '../auth/decorators/current-user.decorator';
+@@ -16,8 +17,8 @@
+ 
+   @Get()
+   @RequirePermissions('stock:read')
+-  plan(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+-    return this.fbo.plan(id, user);
++  plan(@Param('id') id: string, @CurrentUser() user: AuthUser, @Query() route: FboRouteDto) {
++    return this.fbo.plan(id, user, route);
+   }
+ 
+   @Post('actions')
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -12,6 +12,7 @@
+ import { StockOperationsService } from '../stock/stock-operations.service';
+ import { closedFboItems, fboClosePickEnabled, fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
+ import { FboActionDto } from './dto/fbo-action.dto';
++import { FboRouteContext, fboLocalRouteEnabled, prioritizeFboLocation } from './fbo-local-route';
+ import type { RecoveryInput } from '../administration/fbo-problems-policy';
+ const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
+     parentRequest: { select: { id: true, number: true, fboRequestCode: true } }, childRequests: { select: { id: true, number: true, status: true, fboRequestCode: true } },
+@@ -152,14 +153,14 @@
+         assertWarehouseAccess(user, r, mode);
+         return r;
+     }
+-    async plan(id: string, user: AuthUser) {
++    async plan(id: string, user: AuthUser, context: FboRouteContext = {}) {
+         if (!fboTwoStageEnabled())
+             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
+         const started = Date.now();
+         try { return await this.prisma.$transaction(async (tx) => {
+             const r = await this.load(tx, id, user, 'read');
+             this.requireFbo(r);
+-            return this.snapshot(tx, r);
++            return this.snapshot(tx, r, context);
+         }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
+         } finally {
+             if (this.fastAcknowledgementEnabled()) this.logger.log(JSON.stringify({ event: 'fbo_plan', requestId: id, durationMs: Date.now() - started }));
+@@ -175,7 +176,7 @@
+         if (r.pickWaveRequests.some(w => ['PENDING', 'SUBMITTED'].includes(w.wave.balanceReviewStatus)))
+             throw new ConflictException('Сначала завершите проверку балансов волны.');
+     }
+-    private async snapshot(tx: Prisma.TransactionClient, r: Request) {
++    private async snapshot(tx: Prisma.TransactionClient, r: Request, context: FboRouteContext = {}) {
+         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
+         const units = assembly?.units ?? [];
+         // FIX: expose persisted physical progress to the web monitor, including who scanned each unit.
+@@ -202,10 +203,11 @@
+                 l.requiresKiz = true;
+         boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
+         // FIX: an exact whole box wins over loose stock in an earlier mixed box.
+-        const prioritized = prioritizeFboWholeBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand, (box, remaining) =>
++        const prioritized = prioritizeFboLocation(boxes.filter(b => !busyBoxes.has(b.id)), demand,
++            fboLocalRouteEnabled() ? context : {}, (candidates, needed) => prioritizeFboWholeBoxes(candidates, needed, (box, remaining) =>
+             wholeBoxDecision(box.balances, remaining, box.productMarks.map(m => ({ ...m, identity: identity(m.value) })),
+                 box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)),
+-                new Set(lines.filter(l => l.requiresKiz).map(l => l.skuId))));
++                new Set(lines.filter(l => l.requiresKiz).map(l => l.skuId)))));
+         for (const box of prioritized) {
+             if (busyBoxes.has(box.id)) continue;
+             const tasks: Array<{
+@@ -231,7 +233,7 @@
+                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
+                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
+         }
+-        return { reusablePackingEnabled: reusablePackingEnabled(), remainderTransferEnabled: process.env.WMS_FBO_REMAINDER_TRANSFER_ENABLED === 'true', parentRequest: r.parentRequest, childRequests: r.childRequests,
++        return { localRouteEnabled: fboLocalRouteEnabled(), reusablePackingEnabled: reusablePackingEnabled(), remainderTransferEnabled: process.env.WMS_FBO_REMAINDER_TRANSFER_ENABLED === 'true', parentRequest: r.parentRequest, childRequests: r.childRequests,
+             manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+             observedAt: new Date().toISOString(),
+             pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
+@@ -254,7 +256,7 @@
+     }
+     async act(id: string, dto: FboActionDto, user: AuthUser) {
+         await this.executeAction(id, dto, user);
+-        return this.plan(id, user);
++        return this.plan(id, user, dto);
+     }
+     private async executeAction(id: string, dto: FboActionDto, user: AuthUser) {
+         if (!fboTwoStageEnabled())
+--- a/wms/apps/api/src/modules/tsd/dto/fbo-route.dto.ts
++++ b/wms/apps/api/src/modules/tsd/dto/fbo-route.dto.ts
+@@ -0,0 +1,6 @@
++import { IsOptional, IsString, MaxLength } from 'class-validator';
++// FIX: bounded per-terminal routing hints; no database state or reservations.
++export class FboRouteDto {
++  @IsOptional() @IsString() @MaxLength(200) sourceBoxCode?: string;
++  @IsOptional() @IsString() @MaxLength(200) palletCode?: string;
++}

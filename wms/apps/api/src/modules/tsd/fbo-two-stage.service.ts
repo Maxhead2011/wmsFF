@@ -12,6 +12,7 @@ import { StockBalancesService } from '../stock/stock-balances.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { closedFboItems, fboClosePickEnabled, fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
 import { FboActionDto } from './dto/fbo-action.dto';
+import { FboRouteContext, fboLocalRouteEnabled, prioritizeFboLocation } from './fbo-local-route';
 import type { RecoveryInput } from '../administration/fbo-problems-policy';
 const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
@@ -117,13 +118,13 @@ export class FboTwoStageService {
         assertWarehouseAccess(user, r, mode);
         return r;
     }
-    async plan(id: string, user: AuthUser) {
+    async plan(id: string, user: AuthUser, context: FboRouteContext = {}) {
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
         return this.prisma.$transaction(async (tx) => {
             const r = await this.load(tx, id, user, 'read');
             this.requireFbo(r);
-            return this.snapshot(tx, r);
+            return this.snapshot(tx, r, context);
         }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
     }
     private requireFbo(r: Request) {
@@ -136,7 +137,7 @@ export class FboTwoStageService {
         if (r.pickWaveRequests.some(w => ['PENDING', 'SUBMITTED'].includes(w.wave.balanceReviewStatus)))
             throw new ConflictException('Сначала завершите проверку балансов волны.');
     }
-    private async snapshot(tx: Prisma.TransactionClient, r: Request) {
+    private async snapshot(tx: Prisma.TransactionClient, r: Request, context: FboRouteContext = {}) {
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
         const lines = remainingFboLines(closedFboItems(r.items, assembly?.pickClosure), units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
@@ -160,9 +161,10 @@ export class FboTwoStageService {
                 l.requiresKiz = true;
         boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
         // FIX: an exact whole box wins over loose stock in an earlier mixed box.
-        const prioritized = prioritizeFboWholeBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand, (box, remaining) =>
+        const prioritized = prioritizeFboLocation(boxes.filter(b => !busyBoxes.has(b.id)), demand,
+            fboLocalRouteEnabled() ? context : {}, (candidates, needed) => prioritizeFboWholeBoxes(candidates, needed, (box, remaining) =>
             wholeBoxDecision(box.balances, remaining, box.productMarks.map(m => ({ ...m, identity: identity(m.value) })),
-                box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId))));
+                box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)))));
         for (const box of prioritized) {
             if (busyBoxes.has(box.id)) continue;
             const tasks: Array<{
@@ -188,7 +190,7 @@ export class FboTwoStageService {
                 wholeBoxQuantity: decision.allowed ? decision.quantity : 0,
                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
-        return { reusablePackingEnabled: reusablePackingEnabled(), manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+        return { localRouteEnabled: fboLocalRouteEnabled(), reusablePackingEnabled: reusablePackingEnabled(), manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
 
             // FIX: existing terminals receive the actual packing target; WMS also retains the original plan.
             closePickSupported: fboClosePickEnabled(), pickClosed: !!assembly?.pickClosure,
@@ -474,7 +476,7 @@ export class FboTwoStageService {
                 await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
             }
         }
-        return this.plan(id, user);
+        return this.plan(id, user, dto);
     }
     // FIX: recover a missed physical pick and pack atomically using the exact scanned mark.
     private async manualPack(tx: Prisma.TransactionClient, r: Request, dto: FboActionDto, user: AuthUser, key: string) {

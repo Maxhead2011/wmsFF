@@ -1,0 +1,302 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 207 // FIX: explain repeat scans of packed FBO cartons.
+-            versionName = "0.1.207-fbs-loading"
++            versionCode = 208 // FIX: explain repeat scans of packed FBO cartons.
++            versionName = "0.1.208-sequential-picking"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FboTwoStageScreen.java
+@@ -260,7 +260,7 @@
+             boolean accepted=state.scanLocation(plan,value);
+             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
+             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";
+-            if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);render();return;
++            if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);if(accepted&&plan.localRouteEnabled){refresh();}else render();return;
+         }
+         if("PACKING".equals(screenPhase())&&state.target.isEmpty()){
+             // FIX: mode selection is navigation only; never convert a wrong scan into the other action.
+@@ -296,7 +296,7 @@
+         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
+         state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
+     }
+-    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
++    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
+     // FIX: the compact receipt clears the durable request before any route recalculation.
+     private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FbsSequentialPick.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/FbsSequentialPick.java
+@@ -0,0 +1,48 @@
++package pro.logoff.wms.tsd;
++
++import java.util.HashSet;
++import java.util.Set;
++import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
++
++// FIX: only this live session's physical box confirmation may be reused. Restart requires a scan.
++final class FbsSequentialPick {
++    private String owner = "", request = "", box = "";
++    private final Set<String> completed = new HashSet<>();
++    private final Set<String> attempted = new HashSet<>();
++    private int picked;
++    private int remaining = -1;
++    void clear() { owner = request = box = ""; picked = 0; remaining = -1; completed.clear(); attempted.clear(); }
++    void acceptedBox(String session, TsdFbsAssemblyResponse response) {
++        if (response == null || !response.sequentialPickingEnabled || response.task == null) return;
++        TsdFbsAssemblyResponse.Task t = response.task;
++        if (t.requestId == null || t.sourceWithoutBox || t.scannedBoxCode == null || t.scannedBoxCode.isEmpty()) return;
++        if (!session.equals(owner) || !t.requestId.equals(request) || !t.scannedBoxCode.equals(box)) {
++            clear(); owner = session; request = t.requestId; box = t.scannedBoxCode;
++        }
++        if (t.sourceBoxUsage != null) {
++            remaining = t.sourceBoxUsage.units;
++            if (t.sourceBoxUsage.pickedUnits != null) picked = t.sourceBoxUsage.pickedUnits;
++        }
++    }
++    void completed(String session, TsdFbsAssemblyResponse response) {
++        if (matches(session, response) && "COMPLETED".equals(response.state)
++            && box.equals(response.task.scannedBoxCode) && completed.add(response.task.id)) {
++            picked += Math.max(1, response.task.itemCount);
++            if (remaining >= 0) remaining = Math.max(0, remaining - Math.max(1, response.task.itemCount));
++        }
++    }
++    private boolean matches(String session, TsdFbsAssemblyResponse response) {
++        return response != null && response.sequentialPickingEnabled && response.task != null
++            && !box.isEmpty() && owner.equals(session) && request.equals(response.task.requestId);
++    }
++    String continueBox(String session, TsdFbsAssemblyResponse response) {
++        if (!matches(session, response)) { clear(); return null; }
++        // FIX: never switch an already started order, a relabel flow, or a different recommended box.
++        if (!"SCAN_BOX".equals(response.state) || response.task.sourceWithoutBox
++            || !box.equals(response.task.recommendedBoxCode)) return null;
++        return attempted.add(response.task.id) ? box : null;
++    }
++    int picked() { return picked; }
++    int remaining() { return remaining; }
++    String box() { return box; }
++}
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
+@@ -4353,6 +4353,7 @@
+     }
+ 
+     private void openFbsAssembly() {
++        fbsSequentialPick.clear();
+         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+             resumeMandatoryFbsAudit();
+             return;
+@@ -4539,6 +4540,8 @@
+         loadNextFbsAssembly();
+     }
+ 
++    private final FbsSequentialPick fbsSequentialPick = new FbsSequentialPick();
++
+     private void loadNextFbsAssembly() {
+         if (pendingFbsAction() != null) { renderFbsAssemblyScreen(); return; }
+         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
+@@ -4573,6 +4576,13 @@
+                 fbsBusy = false;
+                 fbsFeedbackColor = 0;
+                 fbsAssembly = loaded;
++                // FIX: repeat normal server validation, not the physical pallet/box scans.
++                String continueBox = "logoff".equals(BuildConfig.FLAVOR)
++                    ? fbsSequentialPick.continueBox(voiceSession, loaded) : null;
++                if (continueBox != null) {
++                    executeFbsAction("scan-box", "boxCode", continueBox);
++                    return;
++                }
+                 statusMessage = nonEmpty(loaded.message, tr("Следуйте подсказке.", "Ko‘rsatmaga amal qiling."));
+                 renderFbsAssemblyScreen();
+             });
+@@ -5591,6 +5601,13 @@
+                             : tr("После ШК подтвердите сборку.", "SHKdan keyin yig‘ishni tasdiqlang.")),
+             scanKiz ? Color.rgb(254, 240, 138) : BOX_MOVEMENT_BLUE
+         ));
++        // FIX: count confirmed units once, and show the server's current remaining box demand.
++        if (fbsAssembly != null && fbsAssembly.sequentialPickingEnabled
++            && fbsSequentialPick.box().equals(task.scannedBoxCode) && !fbsSequentialPick.box().isEmpty()) {
++            content.addView(messageView(tr("Короб: ", "Quti: ") + task.scannedBoxCode + " · " +
++                tr("Отобрано: ", "Olindi: ") + fbsSequentialPick.picked() +
++                (fbsSequentialPick.remaining() < 0 ? "" : " · " + tr("Осталось: ", "Qoldi: ") + fbsSequentialPick.remaining())));
++        }
+         EditText dialogInput = input(scanKiz
+             ? tr("Сканируйте КИЗ Data Matrix", "Data Matrix KIZni skanerlang")
+             : tr("Сканируйте ШК товара", "Mahsulot SHKini skanerlang"));
+@@ -6129,6 +6146,9 @@
+             }
+             TsdFbsAssemblyResponse updated = response.body();
+             mainHandler.post(() -> {
++                // FIX: a delayed continuation must never attach to another login or task.
++                if (!actionOwnerKey.equals(fbsSessionOwnerKey(safeSession())) || fbsAssembly == null
++                    || fbsAssembly.task == null || !taskId.equals(fbsAssembly.task.id)) return;
+                 if ("logoff".equals(BuildConfig.FLAVOR) && !actionOwnerKey.equals(fbsSessionOwnerKey(safeSession()))) return;
+                 if ("logoff".equals(BuildConfig.FLAVOR) && !FbsPendingAction.clear(getSharedPreferences("fbs-pending",0),session.userId)) {
+                     showFbsError("Сервер принял операцию, но подтверждение не сохранено на ТСД. Повторите отправку.",true);return;
+@@ -6137,6 +6157,10 @@
+                 fbsBusy = false;
+                 speakFbsScan(action,submittedState,value,response.code(),updated,actionOwnerKey,taskId);
+                 fbsAssembly = updated;
++                if ("release".equals(action) || "undo-kiz".equals(action)) fbsSequentialPick.clear();
++                if ("scan-box".equals(action) || "scan-any".equals(action))
++                    fbsSequentialPick.acceptedBox(actionOwnerKey, updated);
++                fbsSequentialPick.completed(actionOwnerKey, updated);
+                 boolean problemWasReportedAfterBoxScan =
+                     !previousBoxCode.isEmpty() && "release".equals(action);
+                 boolean switchedToAnotherTask =
+@@ -6213,6 +6237,7 @@
+     }
+ 
+     private void reloadFbsAfterStaleTask(String message) {
++        fbsSequentialPick.clear();
+         online = true;
+         fbsBusy = false;
+         fbsAssembly = null;
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdFboPlan.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdFboPlan.java
+@@ -3,6 +3,7 @@
+ 
+ public class TsdFboPlan {
+     public boolean parallelPackingSupported;
++    public boolean localRouteEnabled;
+     public String requestId, title, phase;
+     public int needed, picked, packed, looseRemaining, shortage;
+     public boolean compositionChanged, manualPackingEnabled, reusablePackingEnabled;
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdFbsAssemblyResponse.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/TsdFbsAssemblyResponse.java
+@@ -3,6 +3,7 @@
+ import java.util.List;
+ 
+ public class TsdFbsAssemblyResponse {
++    public boolean sequentialPickingEnabled;
+     public String state;
+     public String message;
+     public Task task;
+@@ -69,6 +70,7 @@
+     }
+ 
+     public static class SourceBoxUsage {
++        public Integer pickedUnits;
+         public String boxCode;
+         public int units;
+         public int positions;
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/WmsApi.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/network/WmsApi.java
+@@ -20,6 +20,9 @@
+ public interface WmsApi {
+     @GET("api/v1/tsd/requests/{id}/fbo")
+     Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
++    @GET("api/v1/tsd/requests/{id}/fbo")
++    Call<TsdFboPlan> getFboPlanAtLocation(@Header("Authorization") String authorization,@Path("id") String id,
++        @Query("palletCode") String palletCode,@Query("sourceBoxCode") String sourceBoxCode);
+     @POST("api/v1/tsd/requests/{id}/fbo/actions")
+     Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+     // FIX: only opted-in LOGOFF terminals use independent acknowledgement and read-only status.
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboFastConfirmationTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FboFastConfirmationTest.java
+@@ -50,11 +50,11 @@
+             WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(call,method,values)->{
+                 if(!method.getName().equals("execute"))return null;calls.add(m.getName());
+                 if(m.getName().equals("fboOperationStatus")){TsdFboAcknowledgement ack=new TsdFboAcknowledgement();ack.requestId="request";ack.operationId="saved-operation";ack.action="PICK_UNIT";ack.accepted=true;return Response.success(ack);}
+-                if(m.getName().equals("getFboPlan"))return Response.success(plan());
++                if(m.getName().equals("getFboPlanAtLocation"))return Response.success(plan());
+                 throw new AssertionError("Restart must not replay the stock mutation");
+             }));
+             FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",user,"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{});
+-            try{idle(s);assertEquals(Arrays.asList("fboOperationStatus","getFboPlan"),calls);assertNull(state(s).pending());assertTrue(text(a.findViewById(android.R.id.content),"Принято: 1 шт."));}
++            try{idle(s);assertEquals(Arrays.asList("fboOperationStatus","getFboPlanAtLocation"),calls);assertNull(state(s).pending());assertTrue(text(a.findViewById(android.R.id.content),"Принято: 1 шт."));}
+             finally{s.close();a.getSharedPreferences("fbo-pending",0).edit().clear().commit();}
+         }
+     }
+@@ -69,7 +69,7 @@
+             WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(call,method,values)->{
+                 if(!method.getName().equals("execute"))return null;
+                 if(m.getName().equals("fboOperationStatus")){TsdFboAcknowledgement ack=new TsdFboAcknowledgement();ack.requestId="request";ack.operationId="manual-saved";ack.action="MANUAL_PACK_UNIT";ack.accepted=true;return Response.success(ack);}
+-                if(m.getName().equals("getFboPlan")){TsdFboPlan p=plan();p.phase="PACKING";p.manualPackingEnabled=true;TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="TARGET";p.boxes.add(b);return Response.success(p);}
++                if(m.getName().equals("getFboPlanAtLocation")){TsdFboPlan p=plan();p.phase="PACKING";p.manualPackingEnabled=true;TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="TARGET";p.boxes.add(b);return Response.success(p);}
+                 writes.incrementAndGet();throw new AssertionError("No second mutation after saved manual receipt");
+             }));
+             FboScanFeedback voice=new FboScanFeedback(){public void play(boolean ok){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
+@@ -81,10 +81,10 @@
+     private void exercise(boolean loseResponse,boolean failRoute,boolean accepted)throws Exception {
+         if(!"logoff".equals(BuildConfig.FLAVOR))return;
+         try(var c=Robolectric.buildActivity(Activity.class).setup()){
+-            Activity a=c.get();String user=UUID.randomUUID().toString();AtomicInteger reads=new AtomicInteger(),writes=new AtomicInteger(),checks=new AtomicInteger();List<String> ids=new ArrayList<>();
++            Activity a=c.get();String user=UUID.randomUUID().toString();AtomicInteger reads=new AtomicInteger(),writes=new AtomicInteger(),checks=new AtomicInteger();List<String> ids=new ArrayList<>();List<String> locations=new ArrayList<>();
+             WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(call,method,values)->{
+                 if(!method.getName().equals("execute"))return null;
+-                if(m.getName().equals("getFboPlan")){if(reads.incrementAndGet()>1&&failRoute)throw new java.io.IOException("route timeout");return Response.success(plan());}
++                if(m.getName().equals("getFboPlanAtLocation")){locations.add(args[2]+":"+args[3]);if(reads.incrementAndGet()>1&&failRoute)throw new java.io.IOException("route timeout");return Response.success(plan());}
+                 if(m.getName().equals("actFbo"))throw new AssertionError("Legacy mutation should not be called");
+                 Map<?,?> payload=(Map<?,?>)args[2];ids.add((String)payload.get("operationId"));
+                 if(m.getName().equals("acknowledgeFbo")){writes.incrementAndGet();if(loseResponse)throw new java.io.IOException("response lost");}
+@@ -93,11 +93,11 @@
+             }));
+             FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",user,"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{});
+             try {
+-                idle(s);state(s).barcode="2051234567890";send(s);
++                idle(s);state(s).pallet="PALLET";state(s).source="BOX";state(s).barcode="2051234567890";send(s);
+                 for(int i=0;i<400;i++){Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(100));Thread.sleep(10);if(accepted&&state(s).pending()==null&&reads.get()>1)break;if(!accepted&&checks.get()>=3)break;}
+                 idle(s);assertEquals(1,writes.get());assertEquals(1,new HashSet<>(ids).size());
+                 if(loseResponse)assertTrue(checks.get()>0);
+-                if(accepted){assertNull(state(s).pending());assertFalse(a.getSharedPreferences("fbo-pending",0).contains(user+":request"));assertTrue(text(a.findViewById(android.R.id.content),"Принято: 1 шт."));}
++                if(accepted){assertTrue("Refresh must retain the physical location",locations.contains("PALLET:BOX"));assertNull(state(s).pending());assertFalse(a.getSharedPreferences("fbo-pending",0).contains(user+":request"));assertTrue(text(a.findViewById(android.R.id.content),"Принято: 1 шт."));}
+                 else{assertNotNull(state(s).pending());assertEquals(3,checks.get());assertTrue(a.getSharedPreferences("fbo-pending",0).contains(user+":request"));}
+                 if(failRoute){assertFalse(s.scannerField().isEnabled());assertFalse(text(a.findViewById(android.R.id.content),"Повторить отправку"));}
+             }finally{s.close();a.getSharedPreferences("fbo-pending",0).edit().clear().commit();}
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FbsSequentialPickTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/FbsSequentialPickTest.java
+@@ -0,0 +1,47 @@
++package pro.logoff.wms.tsd;
++import org.junit.Test;
++import static org.junit.Assert.*;
++import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
++public class FbsSequentialPickTest {
++    private TsdFbsAssemblyResponse response(String id, String state) {
++        TsdFbsAssemblyResponse r = new TsdFbsAssemblyResponse(); r.sequentialPickingEnabled = true;
++        r.state = state; r.task = new TsdFbsAssemblyResponse.Task(); r.task.id = id;
++        r.task.requestId = "request"; r.task.scannedBoxCode = "A"; r.task.recommendedBoxCode = "A";
++        r.task.itemCount = 1; return r;
++    }
++    // TEST: several completed orders in one physical box, without double-counting a repeated response.
++    @Test public void continuesPairsAndCountsOnlyOnce() {
++        FbsSequentialPick s = new FbsSequentialPick();
++        TsdFbsAssemblyResponse first = response("one", "SCAN_BARCODE");
++        first.task.sourceBoxUsage = new TsdFbsAssemblyResponse.SourceBoxUsage(); first.task.sourceBoxUsage.units = 3;
++        s.acceptedBox("user", first);
++        assertEquals(3, s.remaining());
++        s.completed("user", response("one", "READY_TO_COMPLETE")); assertEquals(0, s.picked());
++        s.completed("user", response("one", "COMPLETED")); s.completed("user", response("one", "COMPLETED"));
++        assertEquals(1, s.picked()); assertEquals(2, s.remaining());
++        assertEquals("A", s.continueBox("user", response("two", "SCAN_BOX")));
++        assertNull(s.continueBox("user", response("two", "SCAN_BOX")));
++        s.completed("user", response("two", "COMPLETED")); assertEquals(2, s.picked());
++    }
++    @Test public void neverReusesAnotherSessionOrRequestOrStartedTask() {
++        FbsSequentialPick s = new FbsSequentialPick(); s.acceptedBox("user", response("one", "SCAN_BARCODE"));
++        assertNull(s.continueBox("user", response("two", "SCAN_KIZ")));
++        TsdFbsAssemblyResponse other = response("two", "SCAN_BOX"); other.task.recommendedBoxCode = "B";
++        assertNull(s.continueBox("user", other));
++        other.task.requestId = "other"; assertNull(s.continueBox("user", other)); assertEquals("", s.box());
++        s.acceptedBox("user", response("one", "SCAN_BARCODE"));
++        assertNull(s.continueBox("other", response("two", "SCAN_BOX"))); assertEquals("", s.box());
++    }
++    @Test public void restartAndDisabledServerRequirePhysicalScan() {
++        FbsSequentialPick s = new FbsSequentialPick(); assertNull(s.continueBox("user", response("one", "SCAN_BOX")));
++        TsdFbsAssemblyResponse disabled = response("one", "SCAN_BARCODE"); disabled.sequentialPickingEnabled = false;
++        s.acceptedBox("user", disabled); assertEquals("", s.box());
++    }
++    @Test public void serverRestoresCounterAfterLostCompletionReply() {
++        FbsSequentialPick s = new FbsSequentialPick();
++        TsdFbsAssemblyResponse next = response("next", "SCAN_BARCODE");
++        next.task.sourceBoxUsage = new TsdFbsAssemblyResponse.SourceBoxUsage();
++        next.task.sourceBoxUsage.pickedUnits = 5; next.task.sourceBoxUsage.units = 2;
++        s.acceptedBox("user", next); assertEquals(5, s.picked()); assertEquals(2, s.remaining());
++    }
++}

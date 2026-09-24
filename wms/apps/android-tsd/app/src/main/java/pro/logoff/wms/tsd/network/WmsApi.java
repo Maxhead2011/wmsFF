@@ -20,6 +20,9 @@ import okhttp3.MultipartBody;
 public interface WmsApi {
     @GET("api/v1/tsd/requests/{id}/fbo")
     Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
+    @GET("api/v1/tsd/requests/{id}/fbo")
+    Call<TsdFboPlan> getFboPlanAtLocation(@Header("Authorization") String authorization,@Path("id") String id,
+        @Query("palletCode") String palletCode,@Query("sourceBoxCode") String sourceBoxCode);
     @POST("api/v1/tsd/requests/{id}/fbo/actions")
     Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
     // FIX: isolated physical KIZ search; no stock or assembly operations.

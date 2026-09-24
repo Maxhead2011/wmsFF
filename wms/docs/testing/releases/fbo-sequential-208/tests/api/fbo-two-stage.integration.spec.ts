@@ -168,7 +168,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
     }
     // TEST: whole-box splitting once, packing multiple exact units, idempotent replay and WB documents.
     it('recovers a whole box into a loose parcel without a second AVAILABLE debit',async()=>{
-        const admin=await recovery();await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});await act('STOP_PICK');
+        const admin=await recovery();vi.stubEnv('WMS_FBO_FAST_ACK_ENABLED','true');vi.stubEnv('WMS_FBO_PARALLEL_PACKING_ENABLED','true');await act('START');await act('PICK_BOX',{sourceBoxCode:'FFL_'+whole});await act('STOP_PICK');
         vi.stubEnv('WMS_FBO_MANUAL_PACKING_ENABLED','true');
         await act('MANUAL_OPEN_BOX',{targetBoxCode:'FFL_'+target});
         const chosen=await p.fboAssemblyUnit.findMany({where:{requestId:request}});
@@ -738,7 +738,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
     it('preserves legacy assemblies and blocks legacy bulk pick/pack once the new flow starts', async () => {
         await expect(stock.pickClientRequest({ requestId: request }, user)).rejects.toThrow('поштучный отбор');
         await p.stockMovement.create({ data: { clientId: client, warehouseId: wh, skuId: sku, status: 'PACKING', quantity: 1, type: 'PICK', sourceDocument: request } });
-        expect(await svc.eligible(request, user)).toBe(false);
+        await expect(svc.eligible(request, user)).rejects.toThrow('Старый режим сборки ФБО отключён');
         await expect(act('START')).rejects.toThrow('старым способом');
         await p.stockMovement.deleteMany({ where: { sourceDocument: request } });
         await act('START');
@@ -748,7 +748,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
     });
     it('keeps an existing TSD movement workflow in legacy mode even before bulk picking', async () => {
         await p.tsdOperation.create({ data: { deviceId: 'test', operationKey: randomUUID(), operationType: 'move_scan', payload: { requestId: request }, status: 'ACCEPTED' } });
-        expect(await svc.eligible(request, user)).toBe(false);
+        await expect(svc.eligible(request, user)).rejects.toThrow('Старый режим сборки ФБО отключён');
         await expect(act('START')).rejects.toThrow('старым способом');
     });
     it('keeps punctuation and physical identity across scanner formats without replacing the stored KIZ', async () => {

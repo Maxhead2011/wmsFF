@@ -1,0 +1,37 @@
+{
+  "passed": true,
+  "before": {
+    "images": {
+      "api": "sha256:3deec4531b3f2bb71825b1860c100394fa56c7ce24836f16d52d914cfdb36bdf",
+      "web": "sha256:62f7a2c4c5c398fdece9626b69aae984e80e6b57690dd70ca0887e4639e39f68"
+    },
+    "metadata": {
+      "versionCode": 207,
+      "versionName": "0.1.207-fbs-loading",
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbs-loading-207.apk",
+      "sha256": "5b4a4b624296d2ed4021f3830f9de033a567744aa1eecb3c13e708fd5ccde948",
+      "size": 5370263,
+      "releasedAt": "2026-09-23T01:51:20.538020+00:00",
+      "releaseNotes": "Fix crash when opening WB or Ozon FBS requests before loading finishes. Install over the existing app without deleting data."
+    }
+  },
+  "webImage": "sha256:65e9e9ac1f797024c90f67b629757a4c64dfd5032d51c6b10716b0aed1ddf56c",
+  "metadata": {
+    "versionCode": 208,
+    "versionName": "0.1.208-sequential-picking",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-sequential-picking-208.apk",
+    "sha256": "846f06e5509609b70e7470d29f7b98ab447bd33ca68a03baa5041c2331f33692",
+    "size": 5374359,
+    "releasedAt": "2026-09-24T14:30:02.321867+00:00",
+    "releaseNotes": "FBO picking prioritizes the current box and pallet. FBS can pick multiple barcode/KIZ pairs from one confirmed box. Install over the existing app without deleting data."
+  },
+  "changes": [
+    "/usr/share/nginx/html/downloads/logoff-tsd-sequential-picking-208.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.json"
+  ],
+  "signatureMatches": true,
+  "signedContentsMatch": true,
+  "existingAssetsAndPrintAgentsPreserved": true,
+  "builderAssetsVerified": true
+}

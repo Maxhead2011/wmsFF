@@ -1,3 +1,4 @@
+import { fbsSequentialEnabled, fbsLocationRank, fbsContinuationBox } from './fbs-sequential-route';
 import { findFbsRelabelRoute, RelabelRoute } from './fbs-relabel-route';
 import { approvedSizeRoutes } from './fbs-size-substitution-route';
 import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
@@ -5752,6 +5753,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: {
         status: 'COMPLETED',
         ...(selectedRequestId ? { requestId: selectedRequestId } : { deviceCode }),
+        // FIX: another picker in the same request must not redirect this terminal.
+        ...(fbsSequentialEnabled() ? { deviceCode, workerUserId: user.id } : {}),
       },
       orderBy: { completedAt: 'desc' },
       select: { requestId: true, supplyId: true, boxCode: true },
@@ -5876,6 +5879,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           left: (typeof candidates)[number],
           right: (typeof candidates)[number],
         ) => {
+          if (fbsSequentialEnabled()) return fbsLocationRank(right.storageBoxes.map(b => b.code), previousBatch?.boxCode, preferredPalletBoxCodes) -
+            fbsLocationRank(left.storageBoxes.map(b => b.code), previousBatch?.boxCode, preferredPalletBoxCodes);
           const leftOnCurrentPallet = left.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
           const rightOnCurrentPallet = right.storageBoxes.some((box) => preferredPalletBoxCodes.has(box.code));
           return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
@@ -6034,6 +6039,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           const storageBoxes = stockSource.storageBoxes
             .filter((box) => box.quantity > 0 && box.status === StockStatus.AVAILABLE)
             .sort((left, right) => {
+              if (fbsSequentialEnabled()) return fbsLocationRank([right.code], previousBatch?.boxCode, preferredPalletBoxCodes) -
+                fbsLocationRank([left.code], previousBatch?.boxCode, preferredPalletBoxCodes);
               const leftOnCurrentPallet = preferredPalletBoxCodes.has(left.code);
               const rightOnCurrentPallet = preferredPalletBoxCodes.has(right.code);
               return Number(rightOnCurrentPallet) - Number(leftOnCurrentPallet);
@@ -15817,6 +15824,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           where: {
             requestId: task.requestId,
             deviceCode: task.deviceCode,
+            ...(fbsSequentialEnabled() ? { workerUserId: user.id } : {}),
             status: 'COMPLETED',
             boxCode: { not: null },
           },
@@ -15867,8 +15875,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               }) === 0 && box.quantity >= task.itemCount,
           ) ?? null
         : null;
+    const continuationBox = fbsContinuationBox(storageBoxes, previousCompleted?.boxCode, task.itemCount);
     const preferredLocation =
       locationsByBox.get(scannedStorageBox?.code ?? '') ??
+      locationsByBox.get(continuationBox?.code ?? '') ??
       locationsByBox.get(liveReservedStorageBox?.code ?? '') ??
       locationsByBox.get(previousCompleted?.boxCode ?? '') ??
       locationsByBox.get(storageBoxes.find((box) => locationsByBox.has(box.code))?.code ?? '') ??
@@ -15884,6 +15894,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     const recommendedBoxCode =
       scannedStorageBox?.code ??
+      continuationBox?.code ??
       liveReservedStorageBox?.code ??
       storageBoxes[0]?.code ??
       null;
@@ -15925,6 +15936,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return {
       // FIX: the accepted old scan leads directly to the new physical KIZ scan, also after reload.
       state: kizRelabelProposal ? 'SCAN_NEW_KIZ' : state,
+      sequentialPickingEnabled: fbsSequentialEnabled(),
       kizRelabelProposal,
       message,
       task: {
@@ -17017,6 +17029,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async fbsTsdSourceBoxUsage(task: FbsTsdAssemblyRecord) {
     if (!task.boxId || !task.boxCode) return null;
+    // FIX: rebuild the counter from accepted server records after a lost reply or application restart.
+    const pickedUnits = fbsSequentialEnabled()
+      ? (await this.prisma.fbsTsdAssembly.aggregate({
+          where: { clientId: task.clientId, requestId: task.requestId, boxId: task.boxId,
+            workerUserId: task.workerUserId, status: 'COMPLETED' },
+          _sum: { itemCount: true },
+        }))._sum.itemCount ?? 0
+      : undefined;
 
     // Сначала читаем только содержимое физически отсканированного короба.
     // Затем берём незавершённые FBS-заказы этой заявки только по найденным SKU.
@@ -17049,7 +17069,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     const boxSkuIds = uniqueStrings(balances.map((balance) => balance.skuId));
     if (boxSkuIds.length === 0) {
-      return { boxCode: task.boxCode, units: 0, positions: 0, orders: 0, items: [] };
+      return { boxCode: task.boxCode, pickedUnits, units: 0, positions: 0, orders: 0, items: [] };
     }
 
     const requestTasks = await this.prisma.fbsTsdAssembly.findMany({
@@ -17165,6 +17185,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     return {
       boxCode: task.boxCode,
+      pickedUnits,
       units,
       positions: items.length,
       orders,
