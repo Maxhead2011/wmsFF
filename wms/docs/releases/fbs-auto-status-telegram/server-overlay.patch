@@ -1,0 +1,72 @@
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts
+@@ -25 +25,2 @@
+-import { fbsRequestAutoStatusEnabled, reconcileFbsRequestStatus } from '../../common/stock/fbs-request-auto-status';
++import { fbsRequestAutoStatusEnabled, reconcileFbsRequestStatus, type FbsAutoStatusChange } from '../../common/stock/fbs-request-auto-status';
++import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
+@@ -722,0 +724 @@
++    private readonly telegram?: TelegramNotificationService,
+@@ -14700,0 +14703 @@
++    const statusChanges: FbsAutoStatusChange[] = [];
+@@ -14788 +14791 @@
+-      await reconcileFbsRequestStatus(tx, completedTask.requestId, { stage: 'PICK', occurredAt: completedTask.completedAt!, actorId: user.id });
++      await reconcileFbsRequestStatus(tx, completedTask.requestId, { stage: 'PICK', occurredAt: completedTask.completedAt!, actorId: user.id }, statusChanges);
+@@ -14791,0 +14795 @@
++    await this.notifyFbsAutoStatusChanges(statusChanges);
+@@ -16355,0 +16360 @@
++    const statusChanges: FbsAutoStatusChange[] = [];
+@@ -16359 +16364 @@
+-    }), { timeout: 30_000 });
++    }, statusChanges), { timeout: 30_000 });
+@@ -16360,0 +16366,17 @@
++    await this.notifyFbsAutoStatusChanges(statusChanges);
++  }
++
++  private async notifyFbsAutoStatusChanges(changes: FbsAutoStatusChange[]) {
++    const labels: Partial<Record<ClientRequestStatus, string>> = { SUBMITTED: 'Подана', IN_REVIEW: 'На рассмотрении', APPROVED: 'Согласована', IN_WORK: 'В работе', PACKED: 'Упаковано', DONE: 'Сдано' };
++    for (const change of changes) {
++      try {
++        // FIX: use the existing client routing and FBS preferences, after commit only.
++        await this.telegram?.notifyClient(change.clientId, [
++          'LOGOFF WMS: изменён статус заявки FBS.',
++          `Заявка №${change.number}: ${change.title}`,
++          `Статус: ${labels[change.from] ?? change.from} → ${labels[change.to] ?? change.to}`,
++        ].join('\n'), 'FBS');
++      } catch {
++        this.logger.warn(`Telegram notification failed for FBS request ${change.number}; status remains committed.`);
++      }
++    }
+@@ -18069,0 +18092 @@
++        const statusChanges: FbsAutoStatusChange[] = [];
+@@ -18073 +18096 @@
+-          if (job.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: user.id });
++          if (job.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: user.id }, statusChanges);
+@@ -18075,0 +18099 @@
++        await this.notifyFbsAutoStatusChanges(statusChanges);
+@@ -18115,0 +18140 @@
++        const statusChanges: FbsAutoStatusChange[] = [];
+@@ -18118 +18143 @@
+-          if (print.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId });
++          if (print.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId }, statusChanges);
+@@ -18119,0 +18145 @@
++        await this.notifyFbsAutoStatusChanges(statusChanges);
+--- a/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts
++++ b/wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts
+@@ -11,0 +12 @@
++import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
+@@ -29 +30 @@
+-  imports: [AuthModule, LogisticsModule],
++  imports: [AuthModule, LogisticsModule, ClientNotificationsModule],
+--- a/wms/apps/api/src/common/stock/fbs-request-auto-status.ts
++++ b/wms/apps/api/src/common/stock/fbs-request-auto-status.ts
+@@ -6,0 +7 @@
++export type FbsAutoStatusChange = { clientId: string; requestId: string; number: number; title: string; from: ClientRequestStatus; to: ClientRequestStatus };
+@@ -11 +12 @@
+-export async function reconcileFbsRequestStatus(tx: Prisma.TransactionClient, requestId: string, trigger: Trigger) {
++export async function reconcileFbsRequestStatus(tx: Prisma.TransactionClient, requestId: string, trigger: Trigger, changes?: FbsAutoStatusChange[]) {
+@@ -15 +16 @@
+-    id: true, clientId: true, type: true, status: true,
++    id: true, number: true, title: true, clientId: true, type: true, status: true,
+@@ -59,0 +61,2 @@
++  // FIX: collect the actual transition; the caller sends only after transaction commit.
++  changes?.push({ clientId: request.clientId, requestId, number: request.number, title: request.title, from: request.status, to: target });

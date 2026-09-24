@@ -4,15 +4,16 @@ import { ClientRequestStatus, Prisma } from '@prisma/client';
 export const fbsRequestAutoStatusEnabled = () => process.env.WMS_FBS_REQUEST_AUTO_STATUS_ENABLED === 'true';
 export const FBS_AUTO_STATUS_TITLE = 'Статус FBS изменён автоматически';
 type Trigger = { stage: 'START' | 'PICK' | 'SOS_PRINT'; occurredAt: Date; actorId?: string | null };
+export type FbsAutoStatusChange = { clientId: string; requestId: string; number: number; title: string; from: ClientRequestStatus; to: ClientRequestStatus };
 const rank: Partial<Record<ClientRequestStatus, number>> = { SUBMITTED: 0, IN_REVIEW: 0, APPROVED: 0, IN_WORK: 1, PACKED: 2, DONE: 3 };
 const orderKey = (row: { marketplace: string; connectionId: string; orderId: string }) => JSON.stringify([row.marketplace, row.connectionId, row.orderId]);
 
 // Caller owns the transaction. A request lock serializes concurrent final picks/prints.
-export async function reconcileFbsRequestStatus(tx: Prisma.TransactionClient, requestId: string, trigger: Trigger) {
+export async function reconcileFbsRequestStatus(tx: Prisma.TransactionClient, requestId: string, trigger: Trigger, changes?: FbsAutoStatusChange[]) {
   if (!fbsRequestAutoStatusEnabled()) return;
   await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${requestId} FOR UPDATE`;
   const request = await tx.clientRequest.findUnique({ where: { id: requestId }, select: {
-    id: true, clientId: true, type: true, status: true,
+    id: true, number: true, title: true, clientId: true, type: true, status: true,
     items: { select: { id: true, skuId: true, quantity: true } },
     fbsOrderLinks: { select: { marketplace: true, connectionId: true, orderId: true, syncStatus: true } },
   } });
@@ -57,5 +58,7 @@ export async function reconcileFbsRequestStatus(tx: Prisma.TransactionClient, re
     title: FBS_AUTO_STATUS_TITLE, statusFrom: request.status, statusTo: target, createdByUserId: trigger.actorId ?? null,
     body: target === 'DONE' ? 'Все товары обработаны через SOS WB 2, печать и складское списание подтверждены.' :
       target === 'PACKED' ? 'Отбор всех товаров заявки завершён.' : 'Сотрудник приступил к сборке FBS.' } });
+  // FIX: collect the actual transition; the caller sends only after transaction commit.
+  changes?.push({ clientId: request.clientId, requestId, number: request.number, title: request.title, from: request.status, to: target });
   return target;
 }
