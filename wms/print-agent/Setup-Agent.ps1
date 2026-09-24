@@ -124,6 +124,22 @@ try {
       } | ConvertTo-Json
       $station = Invoke-RestMethod -Method Post -Uri "$server/api/v1/marketplace-connections/fbs/print-stations" -Headers $headers -ContentType 'application/json' -Body $stationBody
 
+      # FIX: a running old task rejects Start-ScheduledTask and keeps using the previous agent process.
+      $previousTask = Get-ScheduledTask -TaskName 'LOGOFF FBS Print Agent' -ErrorAction SilentlyContinue
+      if ($previousTask -and $previousTask.State -in @('Running', 'Queued')) {
+        $status.Text = 'Stopping the previous print agent...'
+        [System.Windows.Forms.Application]::DoEvents()
+        Stop-ScheduledTask -TaskName 'LOGOFF FBS Print Agent'
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+          Start-Sleep -Milliseconds 500
+          $previousTask = Get-ScheduledTask -TaskName 'LOGOFF FBS Print Agent' -ErrorAction SilentlyContinue
+          if (-not $previousTask -or $previousTask.State -notin @('Running', 'Queued')) { break }
+        }
+        if ($previousTask -and $previousTask.State -in @('Running', 'Queued')) {
+          throw 'The previous print agent is still running. Stop it in Windows Task Scheduler and try again.'
+        }
+      }
+
       @{
         server = $server; login = $login.Text.Trim(); password = $password.Text
         stationId = $station.id; stationName = $station.name; printerName = $station.printerName

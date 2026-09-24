@@ -12,6 +12,16 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 class StartupStatusTest(unittest.TestCase):
+    # TEST: reconnecting station 2409 must stop the previous running task before replacing its config.
+    def test_setup_stops_previous_task_before_reconnect(self):
+        source = (ROOT / 'Setup-Agent.ps1').read_text(encoding='utf-8-sig')
+        stop = source.index("Stop-ScheduledTask -TaskName 'LOGOFF FBS Print Agent'")
+        config = source.index('stationId = $station.id; stationName')
+        register = source.index("Register-ScheduledTask -TaskName 'LOGOFF FBS Print Agent'")
+        self.assertLess(stop, config)
+        self.assertLess(stop, register)
+        self.assertIn('Get-ScheduledTask', source[stop:register])
+
     # TEST: Setup must wait for a fresh heartbeat instead of treating task launch as success.
     def test_setup_confirms_station_online_after_starting_task(self):
         source = (ROOT / 'Setup-Agent.ps1').read_text(encoding='utf-8-sig')
