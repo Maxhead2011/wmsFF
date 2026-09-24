@@ -43,6 +43,8 @@ describe('WB sticker number in TSD response', () => {
     const response = await service.formatFbsTsdAssembly(withSticker, worker, '');
     expect(response.task.wbStickerNumber).toBe('0057894 0051');
     expect(response.task.orderSticker).toBeNull();
+    // TEST: LOGOFF TSD must receive the physical-pick mode and hide sticker image/printing.
+    expect(response.task.physicalPickConfirmation).toBe(true);
     expect((await service.formatFbsTsdAssembly({ ...withSticker, marketplace: MarketplaceType.OZON }, worker, '')).task.wbStickerNumber).toBeNull();
     expect((await service.formatFbsTsdAssembly(task, worker, '')).task.wbStickerNumber).toBeNull();
   });
