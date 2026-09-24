@@ -1,0 +1,91 @@
+--- a/dist/modules/tsd/tsd-device.controller.js
++++ b/dist/modules/tsd/tsd-device.controller.js
+@@ -16,6 +16,7 @@
+ const common_1 = require("@nestjs/common");
+ const platform_express_1 = require("@nestjs/platform-express");
+ const swagger_1 = require("@nestjs/swagger");
++const tsd_fbs_user_decorator_1 = require("./tsd-fbs-user.decorator");
+ const current_user_decorator_1 = require("../auth/decorators/current-user.decorator");
+ const public_decorator_1 = require("../auth/decorators/public.decorator");
+ const require_permissions_decorator_1 = require("../auth/decorators/require-permissions.decorator");
+@@ -579,7 +580,7 @@
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Query)('deviceCode')),
+     __param(1, (0, common_1.Query)('requestId')),
+-    __param(2, (0, current_user_decorator_1.CurrentUser)()),
++    __param(2, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [Object, Object, Object]),
+     __metadata("design:returntype", void 0)
+@@ -694,7 +695,7 @@
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+     __param(1, (0, common_1.Body)()),
+-    __param(2, (0, current_user_decorator_1.CurrentUser)()),
++    __param(2, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object, Object]),
+     __metadata("design:returntype", void 0)
+@@ -705,7 +706,7 @@
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+     __param(1, (0, common_1.Body)()),
+-    __param(2, (0, current_user_decorator_1.CurrentUser)()),
++    __param(2, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object, Object]),
+     __metadata("design:returntype", void 0)
+@@ -716,7 +717,7 @@
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+     __param(1, (0, common_1.Body)()),
+-    __param(2, (0, current_user_decorator_1.CurrentUser)()),
++    __param(2, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object, Object]),
+     __metadata("design:returntype", void 0)
+@@ -727,7 +728,7 @@
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+     __param(1, (0, common_1.Body)()),
+-    __param(2, (0, current_user_decorator_1.CurrentUser)()),
++    __param(2, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object, Object]),
+     __metadata("design:returntype", void 0)
+@@ -738,7 +739,7 @@
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+     __param(1, (0, common_1.Body)()),
+-    __param(2, (0, current_user_decorator_1.CurrentUser)()),
++    __param(2, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object, Object]),
+     __metadata("design:returntype", void 0)
+@@ -748,7 +749,7 @@
+     (0, swagger_1.ApiBearerAuth)(),
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+-    __param(1, (0, current_user_decorator_1.CurrentUser)()),
++    __param(1, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object]),
+     __metadata("design:returntype", void 0)
+@@ -758,7 +759,7 @@
+     (0, swagger_1.ApiBearerAuth)(),
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+-    __param(1, (0, current_user_decorator_1.CurrentUser)()),
++    __param(1, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object]),
+     __metadata("design:returntype", void 0)
+@@ -768,7 +769,7 @@
+     (0, swagger_1.ApiBearerAuth)(),
+     (0, require_permissions_decorator_1.RequirePermissions)('stock:write'),
+     __param(0, (0, common_1.Param)('id')),
+-    __param(1, (0, current_user_decorator_1.CurrentUser)()),
++    __param(1, (0, tsd_fbs_user_decorator_1.CurrentFbsTsdUser)()),
+     __metadata("design:type", Function),
+     __metadata("design:paramtypes", [String, Object]),
+     __metadata("design:returntype", void 0)
