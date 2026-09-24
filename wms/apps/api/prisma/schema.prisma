@@ -2734,7 +2734,7 @@ model FbsReshipmentClaim {
 
 model FbsWebKizStickerPrint {
   id          String   @id @default(uuid())
-  kiz         String   @unique
+  kiz         String
   orderId     String
   assemblyId  String
   clientId    String
@@ -2745,6 +2745,7 @@ model FbsWebKizStickerPrint {
   printedAt   DateTime @default(now())
 
   @@unique([orderId, assemblyId])
+  @@index([kiz])
   @@index([clientId, printedAt])
   @@index([requestId, printedAt])
 }
