@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { buildLocalSkuPrintHtml } from './localSkuPrint';
+import { describe, expect, it, vi } from 'vitest';
+import { buildLocalSkuPrintHtml, openLocalSkuPrint } from './localSkuPrint';
 
 describe('local SKU printing', () => {
   it('creates one 60 × 40 mm landscape page for every requested copy', () => {
@@ -21,5 +21,23 @@ describe('local SKU printing', () => {
     // TEST: both serial templates must open on the installed local printer at the selected paper size.
     expect(buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }], 50, 30)).toContain('@page { size: 50mm 30mm; margin: 0; }');
     expect(() => buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }], 0, 30)).toThrow();
+  });
+  it('opens the dialog even when the popup never fires load and keeps a manual print button', async () => {
+    // TEST: about:blank may already be loaded before document.write; waiting only for load left labels on screen.
+    let printClick: (() => void) | undefined;
+    const popup = {
+      addEventListener: vi.fn(), focus: vi.fn(), print: vi.fn(),
+      document: {
+        images: [{ decode: () => Promise.resolve() }], open: vi.fn(), write: vi.fn(), close: vi.fn(),
+        getElementById: () => ({ addEventListener: (_event: string, callback: () => void) => { printClick = callback; } }),
+      },
+    } as unknown as Window;
+    openLocalSkuPrint([{ imageBase64: 'AAAA', copies: 1 }], 60, 40, popup);
+    await vi.waitFor(() => expect(popup.print).toHaveBeenCalledTimes(1));
+    expect(popup.focus).toHaveBeenCalled();
+    expect(printClick).toBeTypeOf('function');
+    printClick?.();
+    expect(popup.print).toHaveBeenCalledTimes(2);
+    expect(buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }])).toContain('id="local-print-action"');
   });
 });
