@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "before": "sha256:3deec4531b3f2bb71825b1860c100394fa56c7ce24836f16d52d914cfdb36bdf",
+  "after": "sha256:03d6cba4047b9187de54661b06dc00b27209bf913d7a011a09f3ab4df7f72414",
+  "changes": [
+    "/app/apps/api/dist/modules/marketplace-connections/fbs-sequential-route.js",
+    "/app/apps/api/dist/modules/marketplace-connections/marketplace-connections.service.js",
+    "/app/apps/api/dist/modules/tsd/dto/fbo-route.dto.js",
+    "/app/apps/api/dist/modules/tsd/fbo-local-route.js",
+    "/app/apps/api/dist/modules/tsd/fbo-two-stage.controller.js",
+    "/app/apps/api/dist/modules/tsd/fbo-two-stage.service.js",
+    "/app/apps/api/src/modules/marketplace-connections/fbs-sequential-route.ts",
+    "/app/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts",
+    "/app/apps/api/src/modules/tsd/dto/fbo-route.dto.ts",
+    "/app/apps/api/src/modules/tsd/fbo-local-route.ts",
+    "/app/apps/api/src/modules/tsd/fbo-two-stage.controller.ts",
+    "/app/apps/api/src/modules/tsd/fbo-two-stage.service.ts"
+  ],
+  "unrelatedSourceDistSchemaPreserved": true,
+  "configPreserved": true
+}
