@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { PalletSortingService } from '../src/modules/inventory/pallet-sorting.service';
 
 const state = () => ({ id: 'session', clientId: 'client', warehouseId: 'wh', stage: 'CHECKING', sourceCode: 'PALLET', sourcePalletId: 'pallet', sources: [{ id: 'a', code: 'A', scanned: false, archived: false }], targets: [], moves: [], pendingRoutes: [], version: 1 });
@@ -121,4 +122,51 @@ it('rejects a stale command before stock checks or mutations', async () => {
   f.service.assertMovementAllowed = vi.fn();
   await expect(f.service.action('session', { operationId: 'new', version: 2, action: 'COMPLETE' }, { id: 'admin', roleCodes: ['ADMIN'], activeWarehouseId: 'wh' })).rejects.toThrow('изменилась');
   expect(f.service.assertMovementAllowed).not.toHaveBeenCalled();
+});
+
+it('retries a serializable sorting move after a database write conflict', async () => {
+  // TEST: a P2034 raised inside the physical stock move must replay the whole transaction.
+  vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
+  const f = fixture();
+  const user = { id: 'admin', roleCodes: ['ADMIN'], activeWarehouseId: 'wh' };
+  const dto = { operationId: 'move-once', version: 1, action: 'MOVE', barcode: 'barcode', kiz: 'kiz' };
+  const tx = { auditLog: { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn() } };
+  f.service.prisma = { $transaction: vi.fn(async (run: any) => run(tx)) };
+  f.service.load = vi.fn().mockImplementation(async () => state());
+  f.service.assertMovementAllowed = vi.fn();
+  f.service.runAction = vi.fn()
+    .mockRejectedValueOnce(new Prisma.PrismaClientKnownRequestError('write conflict', { code: 'P2034', clientVersion: 'test' }))
+    .mockResolvedValue(undefined);
+  f.service.save = vi.fn();
+
+  const result = await f.service.action('session', dto, user);
+  expect(result.version).toBe(2);
+  expect(f.service.prisma.$transaction).toHaveBeenCalledTimes(2);
+  expect(f.service.runAction).toHaveBeenCalledTimes(2);
+  expect(f.service.save).toHaveBeenCalledTimes(1);
+  expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+});
+
+it('stops after three write conflicts with a retryable response', async () => {
+  // TEST: a persistent database conflict must not become an unbounded retry or HTTP 500.
+  vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
+  const f = fixture();
+  const failure = new Prisma.PrismaClientKnownRequestError('write conflict', { code: 'P2034', clientVersion: 'test' });
+  f.service.prisma = { $transaction: vi.fn().mockRejectedValue(failure) };
+  await expect(f.service.action('session', { operationId: 'busy', version: 1, action: 'MOVE' },
+    { id: 'admin', roleCodes: ['ADMIN'], activeWarehouseId: 'wh' }))
+    .rejects.toMatchObject({ status: 409 });
+  expect(f.service.prisma.$transaction).toHaveBeenCalledTimes(3);
+});
+
+it('does not retry unrelated sorting failures', async () => {
+  // TEST: validation and other errors keep their original meaning.
+  vi.stubEnv('WMS_PALLET_SORTING_ENABLED', 'true');
+  const f = fixture();
+  const failure = new Error('other failure');
+  f.service.prisma = { $transaction: vi.fn().mockRejectedValue(failure) };
+  await expect(f.service.action('session', { operationId: 'other', version: 1, action: 'MOVE' },
+    { id: 'admin', roleCodes: ['ADMIN'], activeWarehouseId: 'wh' }))
+    .rejects.toBe(failure);
+  expect(f.service.prisma.$transaction).toHaveBeenCalledTimes(1);
 });
