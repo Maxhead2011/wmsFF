@@ -15626,7 +15626,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       task.boxCode ?? '',
       previousCompleted?.boxCode ?? '',
     ]);
-    const placements = needsStorageRouting && locationBoxCodes.length
+    // FIX: the scanned box location remains part of the active route after
+    // the picker advances from box selection to barcode and relabel scans.
+    const placements = (needsStorageRouting || Boolean(task.boxId)) && locationBoxCodes.length
       ? await this.prisma.storagePalletBox.findMany({
           where: { boxCode: { in: locationBoxCodes } },
           include: { pallet: { include: { zone: true } } },
@@ -15681,6 +15683,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
     const recommendedBoxCode =
       scannedStorageBox?.code ??
+      // FIX: after a physical box scan, later relabel stages do not reload the
+      // candidate-box list. Keep the scanned route visible in WMS and TSD.
+      (task.boxId ? task.boxCode : null) ??
       liveReservedStorageBox?.code ??
       storageBoxes[0]?.code ??
       null;
