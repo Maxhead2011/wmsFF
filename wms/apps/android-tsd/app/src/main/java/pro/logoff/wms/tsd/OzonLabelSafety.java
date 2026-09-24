@@ -6,6 +6,11 @@ final class OzonLabelSafety {
     private OzonLabelSafety() {
     }
 
+    // FIX: our terminals show the posting number without decoding any label.
+    static boolean usesTextInstruction(String flavor) {
+        return "logoff".equals(flavor);
+    }
+
     static boolean canRenderOnTsd(String contentType) {
         if (contentType == null) return false;
         String normalized = contentType.trim().toLowerCase(Locale.ROOT);

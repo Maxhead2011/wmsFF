@@ -3,6 +3,7 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFbsAssemblyResponse {
+    public boolean sequentialPickingEnabled;
     public String state;
     public String message;
     public Task task;
@@ -24,6 +25,10 @@ public class TsdFbsAssemblyResponse {
         public Product product;
         public Relabeling relabeling;
         public int itemCount;
+        // FIX: server-confirmed unit count, also used to make scan retries safe.
+        public int scannedItemCount;
+        public boolean perUnitScanning;
+        public boolean physicalPickConfirmation;
         public boolean sourceWithoutBox;
         public boolean requiresKiz;
         public String recommendedBoxCode;
@@ -65,6 +70,7 @@ public class TsdFbsAssemblyResponse {
     }
 
     public static class SourceBoxUsage {
+        public Integer pickedUnits;
         public String boxCode;
         public int units;
         public int positions;

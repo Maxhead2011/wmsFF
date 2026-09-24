@@ -94,6 +94,8 @@ import pro.logoff.wms.tsd.network.TsdFbsRequestsResponse;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
 import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
+import pro.logoff.wms.tsd.network.TsdRelabelPrintJob;
+import pro.logoff.wms.tsd.network.TsdPrintStation;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdStoragePalletResponse;
 import pro.logoff.wms.tsd.network.TsdTransferResponse;
@@ -182,15 +184,27 @@ public class MainActivity extends Activity {
     private KizLocationScreen kizLocationScreen;
     private KizSearchScreen kizSearchScreen; // FIX: preserve the published physical search.
     private FboTwoStageScreen fboTwoStageScreen;
+    private FboScanFeedback assemblyScanVoice;
+    private final FbsStepVoice fbsStepVoice = new FbsStepVoice(); // FIX: deduplicate confirmed stage prompts.
+    private String assemblyScanVoiceOwner;
+    private boolean assemblyVoicePaused;
+    private final PersonalEventVoice personalEvents = new PersonalEventVoice();
+    private String fboTransferRequestId="";
     private boolean fboPacking;
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
+    private String activeRelabelPrintId = "";
+    private String activeRelabelPrintStatus = "";
+    private boolean relabelPrintBusy;
+    private int relabelPrintPolls;
     private TsdInventorySession activeInventory;
     private TsdInventoryBox activeInventoryBox;
     private TsdInventoryDashboard inventoryDashboard;
     private TsdFbsAssemblyResponse fbsAssembly;
     private TsdFbsRequestsResponse fbsRequests;
+    // FIX: selected marketplace is retained while refreshing and browsing the archive.
+    private String fbsMarketplaceFilter = "";
     private TsdFbsCargoPackingResponse fbsCargoPacking;
     private TsdOzonFboOverview ozonFboOverview;
     private TsdOzonFboPlan ozonFboPlan;
@@ -272,6 +286,7 @@ public class MainActivity extends Activity {
     private boolean receiptClosingBox;
     private ReceiptCloseBatch receiptCloseBatch;
     private boolean fbsBusy;
+    private boolean retryingFbsAction;
     private boolean fbsRequestsBusy;
     private boolean fbsRequestsArchiveMode;
     private boolean fbsCargoBusy;
@@ -392,6 +407,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        closeAssemblyScanVoice();
         if (fboTwoStageScreen != null) fboTwoStageScreen.close();
         if (kizSearchScreen != null) kizSearchScreen.close();
         if (kizLocationScreen != null) kizLocationScreen.close();
@@ -519,6 +535,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        assemblyVoicePaused=true;closeAssemblyScanVoice();
         if (phoneBarcodeView != null) {
             phoneBarcodeView.pause();
         }
@@ -527,6 +544,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onResume() {
+        assemblyVoicePaused=false;
         super.onResume();
         if (
             phoneBarcodeView != null &&
@@ -541,7 +559,10 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.close(); kizSearchScreen=null;renderKizMenu();return; }
-        if (screen == Screen.KIZ_MENU || screen == Screen.MIGRATION_MENU) { renderMainScreen();return; }
+        if (screen == Screen.FBO_PICK_MENU) { renderFboMenu(); return; }
+        if (screen == Screen.FBS_REQUESTS && "logoff".equals(BuildConfig.FLAVOR)) { renderFbsMenu(); return; }
+        if (screen == Screen.KIZ_MENU || screen == Screen.MIGRATION_MENU || screen == Screen.FBO_MENU || screen == Screen.FBS_MENU) { renderMainScreen();return; }
+        if (screen == Screen.STOCK_TRANSFER && !fboTransferRequestId.isEmpty()) { returnToFboAfterTransfer(); return; }
         if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
             if (!fboTwoStageScreen.canLeave()) { showScanningErrorDialog("Дождитесь ответа или повторите неподтверждённый запрос."); return; }
             fboTwoStageScreen.close(); fboTwoStageScreen = null; loadAssemblyRequests(); return;
@@ -580,6 +601,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderMainScreen() {
+        fboTransferRequestId="";
         if (kizLocationScreen != null) { kizLocationScreen.close(); kizLocationScreen = null; }
         TsdSession session = safeSession();
         if (session == null) {
@@ -596,11 +618,11 @@ public class MainActivity extends Activity {
         root.addView(mainStatusLine());
         if (isWarehouseKeeperOnly(session)) {
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
                 view -> openStoragePalletAssembly()
             ));
-            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("МИГРАЦИЯ", v -> renderMigrationMenu()));
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("Миграции", v -> renderMigrationMenu()));
             root.addView(primaryMenuButton(
                 tr("Инвентаризация", "Inventarizatsiya"),
                 view -> renderInventoryMenu()
@@ -608,20 +630,22 @@ public class MainActivity extends Activity {
         } else {
             root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
-            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "Сборка FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
+            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
                 if ("logoff".equals(BuildConfig.FLAVOR)) renderFboMenu(); else openAssemblyRequests();
             }));
-            root.addView(primaryMenuButton(tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> openFbsAssembly()));
+            root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "FBS" : tr("Сборка FBS", "FBS buyurtmasini yig‘ish"), view -> {
+                if ("logoff".equals(BuildConfig.FLAVOR)) renderFbsMenu(); else openFbsAssembly();
+            }));
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Сборка FBO Ozon", "Ozon FBO yig‘ish"), view -> openOzonFboAssembly()));
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 "logoff".equals(BuildConfig.FLAVOR) ? "Упаковка FBO" : tr("Упаковка FBS", "FBS qadoqlash"),
                 view -> { if ("logoff".equals(BuildConfig.FLAVOR)) { fboPacking=true; openAssemblyRequests(); } else openFbsCargoPacking(); }
             ));
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 tr("Сборка паллетов", "Palletlarni yig‘ish"),
                 view -> openStoragePalletAssembly()
             ));
-            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("МИГРАЦИЯ", v -> renderMigrationMenu()));
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton("Миграции", v -> renderMigrationMenu()));
             root.addView(primaryMenuButton(tr("Инвентаризация", "Inventarizatsiya"), view -> renderInventoryMenu()));
             // FIX: group existing KIZ workflows without granting additional access.
             if (KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session) || KizSearchPolicy.canOpen(BuildConfig.FLAVOR, session)) {
@@ -663,7 +687,7 @@ public class MainActivity extends Activity {
     // FIX: navigation only; existing operation screens and role policies are preserved.
     private void renderMigrationMenu() {
         TsdSession session=safeSession();if(session==null || !"logoff".equals(BuildConfig.FLAVOR)){renderMainScreen();return;}
-        screen=Screen.MIGRATION_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("МИГРАЦИЯ"));
+        screen=Screen.MIGRATION_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("Миграции"));
         root.addView(primaryMenuButton("Перемещения",v->openStockTransfer()));
         // FIX: use the tested sorting access policy for the current session and installation.
         if (PalletSortingAccess.canOpen(BuildConfig.FLAVOR, session)) {
@@ -676,6 +700,7 @@ public class MainActivity extends Activity {
                 });
             }));
         }
+        root.addView(primaryMenuButton(tr("Сборка паллетов", "Palletlarni yig‘ish"), v -> openStoragePalletAssembly()));
         root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
     }
     private void renderKizMenu() {
@@ -698,8 +723,23 @@ public class MainActivity extends Activity {
             kizLocationScreen = null;
             renderMainScreen();
         });
+        speakPersonalEvent(PersonalEventVoice.Cue.KIZ_CHECK);
     }
 
+    // FIX: enter the existing transfer menu and reload FBO from the server on return.
+    private void openFboRemainderTransfer() {
+        if(assemblyPlan==null)return;
+        fboTransferRequestId=assemblyPlan.id;
+        if(fboTwoStageScreen!=null){fboTwoStageScreen.close();fboTwoStageScreen=null;}
+        openStockTransfer();
+    }
+    private void returnToFboAfterTransfer() {
+        if(transferBusy||!transferSelectedItems.isEmpty()||transferPendingKizItem!=null){
+            showScanningErrorDialog("Завершите перемещение или отмените выбранные товары перед возвратом в сборку.");return;
+        }
+        String requestId=fboTransferRequestId;fboTransferRequestId="";
+        if(!requestId.isEmpty()){fboPacking=false;loadAssemblyPlan(requestId);}
+    }
     private void openStockTransfer() {
         transferWorkflow = null;
         transferOperationKey = "";
@@ -875,7 +915,8 @@ public class MainActivity extends Activity {
         if (transferBusy) {
             root.addView(messageView(tr("Проверяю…", "Tekshirilmoqda…")));
         }
-        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        if(!fboTransferRequestId.isEmpty()) root.addView(secondaryButton("Вернуться в сборку ФБО",view->returnToFboAfterTransfer()));
+        else root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
@@ -1300,6 +1341,7 @@ public class MainActivity extends Activity {
             }
             TsdStoragePalletResponse loaded = response.body();
             mainHandler.post(() -> {
+                if(screen!=Screen.STORAGE_PALLET || !fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
                 online = true;
                 storagePalletAssembly = loaded;
                 prepareStoragePalletRecovery(loaded);
@@ -1308,6 +1350,7 @@ public class MainActivity extends Activity {
                 }
                 statusMessage = safeText(loaded.message);
                 renderStoragePalletAssemblyScreen();
+                if(screen==Screen.STORAGE_PALLET && fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))speakPersonalEvent(PersonalEventVoice.Cue.PALLET);
             });
         });
     }
@@ -2329,7 +2372,56 @@ public class MainActivity extends Activity {
         }
     }
 
+    // FIX: an unavailable dashboard must not prevent opening the required box check.
+    private void openMandatoryFbsAuditRecoverably() {
+        TsdSession session = safeSession();
+        if (session == null || inventoryRequestBusy) return;
+        final String owner = fbsSessionOwnerKey(session), box = mandatoryFbsAuditBoxCode;
+        final String savedId = mandatoryFbsAuditSessionId, client = mandatoryFbsAuditClientId;
+        final String auditTask = mandatoryFbsKizAuditTaskId;
+        inventoryRequestBusy = true;
+        activeInventory = null;
+        activeInventoryBox = null;
+        statusMessage = tr("Открываю проверку короба…", "Quti tekshiruvi ochilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String,Object> request = new LinkedHashMap<>();
+            request.put("type", "BOX_CHECK"); request.put("clientId", client);
+            request.put("title", auditTask.isEmpty() ? "Обязательная проверка после сборки FBS · " + box : "Проверка КИЗ FBS · " + box + " · " + auditTask);
+            request.put("comment", "[FBS_MANDATORY_BOX_CHECK] " + (auditTask.isEmpty()
+                ? "Короб выбран в FBS, но нужный товар не был подтверждён."
+                : "[FBS_KIZ_STOCK_CHECK] " + auditTask + "; расхождение при отборе. Сканировать только содержимое короба. Уже отобранный товар сюда не возвращать."));
+            MandatoryFbsAuditLoader.Result loaded = MandatoryFbsAuditLoader.load(api, session.authorizationHeader(), savedId, box, request, id -> {
+                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !box.equals(mandatoryFbsAuditBoxCode)) throw new IOException("Сессия сотрудника изменилась.");
+                if (progressStore == null || !progressStore.edit().putString("mandatory_fbs_audit_session", id).commit()) throw new IOException("Не удалось сохранить номер проверки на ТСД. Повторите открытие.");
+                mainHandler.post(() -> {
+                    if (owner.equals(fbsSessionOwnerKey(safeSession())) && box.equals(mandatoryFbsAuditBoxCode)) mandatoryFbsAuditSessionId = id;
+                });
+            }, this::inventoryHttpError);
+            mainHandler.post(() -> {
+                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !box.equals(mandatoryFbsAuditBoxCode)) return;
+                inventoryRequestBusy = false; online = true;
+                activeInventory = loaded.session; activeInventoryBox = loaded.box;
+                mandatoryFbsAuditSessionId = loaded.session.id;
+                persistMandatoryFbsAuditState();
+                statusMessage = tr("Проверка открыта. Отсканируйте содержимое короба.", "Tekshiruv ochildi. Quti tarkibini skanerlang.");
+                if (!continueAfterMandatoryFbsAuditIfReady()) renderInventoryCountScreen();
+            });
+            // Optional administrator dashboard is loaded after the usable check, never before it.
+            try {
+                Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
+                if (response.isSuccessful() && response.body() != null) mainHandler.post(() -> {
+                    if (owner.equals(fbsSessionOwnerKey(safeSession())) && box.equals(mandatoryFbsAuditBoxCode) && screen == Screen.INVENTORY_COUNT) {
+                        inventoryDashboard = response.body(); renderInventoryCountScreen();
+                    }
+                });
+            } catch (IOException ignored) { /* The opened check remains usable; retry is available after any required action failure. */ }
+        });
+    }
+
     private void startMandatoryFbsAuditSession() {
+        if ("logoff".equals(BuildConfig.FLAVOR)) { openMandatoryFbsAuditRecoverably(); return; }
         TsdSession session = safeSession();
         if (session == null) return;
         activeInventory = null;
@@ -2421,6 +2513,7 @@ public class MainActivity extends Activity {
     }
 
     private void loadMandatoryFbsAuditSession() {
+        if ("logoff".equals(BuildConfig.FLAVOR)) { openMandatoryFbsAuditRecoverably(); return; }
         TsdSession session = safeSession();
         if (session == null) return;
         screen = Screen.INVENTORY_COUNT;
@@ -2490,10 +2583,12 @@ public class MainActivity extends Activity {
             }
             TsdInventoryDashboard loaded = response.body();
             mainHandler.post(() -> {
+                if(screen!=Screen.INVENTORY_START || !fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
                 online = true;
                 inventoryDashboard = loaded;
                 statusMessage = "";
                 renderInventoryStartScreen();
+                if("BOX_CHECK".equals(type) && screen==Screen.INVENTORY_START && fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))speakPersonalEvent(PersonalEventVoice.Cue.RECOUNT);
             });
         });
     }
@@ -2748,6 +2843,13 @@ public class MainActivity extends Activity {
             ));
         }
         if (activeInventory == null) {
+            // FIX: preserve the mandatory gate but provide an actionable recovery screen.
+            if ("logoff".equals(BuildConfig.FLAVOR) && mandatoryFbsAuditActive) {
+                root.addView(messageView(nonEmpty(statusMessage, tr("Проверка не открыта. Повторите подключение.", "Tekshiruv ochilmagan. Qayta urinib ko‘ring."))));
+                View retry = secondaryButton(tr("Повторить открытие проверки", "Tekshiruvni qayta ochish"), view -> resumeMandatoryFbsAudit());
+                retry.setEnabled(!inventoryRequestBusy); root.addView(retry);
+                setScrollableContent(root); return;
+            }
             root.addView(messageView(tr("Инвентаризация не открыта.", "Inventarizatsiya ochilmagan.")));
             if (!mandatoryFbsAuditActive) {
                 root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> openInventoryMode(inventoryType)));
@@ -3166,6 +3268,15 @@ public class MainActivity extends Activity {
         int finalQuantity = quantity;
         final Map<String, Object> request = inventoryKizScan.payload(scannedValue,
             mandatoryFbsAuditActive ? 1 : finalQuantity, inventoryCaptureKiz);
+        if ("logoff".equals(BuildConfig.FLAVOR) && (session.hasRole("ADMIN") || session.hasRole("OWNER"))) {
+            request.put("allowScanCorrection", true);
+        }
+        submitInventoryScan(session, auditBoxId, barcode, request);
+    }
+
+    // FIX: confirmation resends the exact captured pair; editing the input cannot replace it.
+    private void submitInventoryScan(TsdSession session, String auditBoxId, String barcode, Map<String, Object> request) {
+        if (inventoryRequestBusy || activeInventoryBox == null || !auditBoxId.equals(activeInventoryBox.id)) return;
         inventoryRequestBusy = true;
         statusMessage = tr("Учитываю товар…", "Tovar hisobga olinmoqda…");
         renderInventoryCountScreen();
@@ -3188,6 +3299,21 @@ public class MainActivity extends Activity {
                 online = true;
                 inventoryRequestBusy = false;
                 if (activeInventoryBox == null || !auditBoxId.equals(activeInventoryBox.id)) return;
+                if ("SCAN_CONFLICT".equals(counted.scanState)) {
+                    statusMessage = "Этот КИЗ уже учтён с другим ШК. Проверьте фактический товар.";
+                    renderInventoryCountScreen();
+                    if (InventoryScanCorrection.allowed(BuildConfig.FLAVOR, session.hasRole("ADMIN"), session.hasRole("OWNER"), counted.replaceEvidenceToken)) {
+                        new AlertDialog.Builder(this)
+                            .setTitle("Проверить пару ШК–КИЗ")
+                            .setMessage("Было: " + nonEmpty(counted.previousSkuName, "—") + "\nСейчас: " + nonEmpty(counted.skuName, barcode)
+                                + "\nКИЗ: " + String.valueOf(request.get("kiz"))
+                                + "\nПодтверждение перенесёт одну единицу между строками. Общее количество не изменится.")
+                            .setPositiveButton("Скан верный", (dialog, which) -> submitInventoryScan(session, auditBoxId, barcode,
+                                InventoryScanCorrection.confirmed(request, counted.replaceEvidenceToken)))
+                            .setNegativeButton("Отмена", null).show();
+                    }
+                    return;
+                }
                 if ("SCAN_KIZ".equals(counted.scanState)) {
                     inventoryKizScan.awaitKiz(barcode);
                     statusMessage = tr("ШК принят. Теперь отсканируйте КИЗ.", "SHK qabul qilindi. Endi KIZni skanerlang.");
@@ -4085,7 +4211,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton(tr("К списку поставок", "Yetkazib berishlar ro‘yxatiga"), view -> renderOzonFboPlansScreen()));
         root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         setScrollableContent(root);
-        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus();
+        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus(); AssemblyAutoFocus.request(ozonFboScanInput);
         refreshHeaderText();
     }
 
@@ -4099,13 +4225,16 @@ public class MainActivity extends Activity {
         for (TsdOzonFboPlan.Box box : ozonFboPlan.boxes) {
             if (box != null && code.equals(nonEmpty(box.boxCode, "").toUpperCase(Locale.ROOT))) {
                 if (box.isClosed()) {
+                    speakAssemblyScan(false,code);
                     showOzonFboError(tr("Этот короб уже закрыт.", "Bu quti allaqachon yopilgan."));
                     return;
                 }
+                speakAssemblyScan(true,code);
                 selectOzonFboBox(box);
                 return;
             }
         }
+        speakAssemblyScan(false,code);
         showOzonFboError(tr("Короб не относится к выбранной поставке FBO Ozon.", "Quti tanlangan Ozon FBO yetkazib berishiga tegishli emas."));
     }
 
@@ -4171,7 +4300,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton(tr("К списку коробов", "Qutilar ro‘yxatiga"), view -> renderOzonFboBoxesScreen()));
         root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
         setScrollableContent(root);
-        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus();
+        if (ozonFboScanInput != null) ozonFboScanInput.requestFocus(); AssemblyAutoFocus.request(ozonFboScanInput);
         refreshHeaderText();
     }
 
@@ -4184,9 +4313,12 @@ public class MainActivity extends Activity {
             return;
         }
         if (isCurrentOzonFboBoxCode(code)) {
+            speakAssemblyScan(false,code);
             showOzonFboError(tr("Сейчас нужен ШК товара, а не номер короба WMS.", "Hozir mahsulot SHKi kerak, WMS quti raqami emas."));
             return;
         }
+        String scanBoxId=ozonFboBox.id;
+        String scanOwner=fbsSessionOwnerKey(session);
         ozonFboBusy = true;
         Map<String, String> body = new LinkedHashMap<>();
         body.put("code", code);
@@ -4196,11 +4328,15 @@ public class MainActivity extends Activity {
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
                 String message = responseErrorMessage(response, tr("Товар не принят в короб FBO Ozon.", "Tovar Ozon FBO qutisiga qabul qilinmadi."));
-                mainHandler.post(() -> showOzonFboError(message));
+                mainHandler.post(() -> {
+                    if(ozonFboBox!=null&&scanBoxId.equals(ozonFboBox.id)&&scanOwner.equals(fbsSessionOwnerKey(safeSession()))&&AssemblyScanVoice.rejected(response.code()))speakAssemblyScan(false,code);
+                    showOzonFboError(message);
+                });
                 return;
             }
             TsdOzonFboPlan.Box updated = response.body();
             mainHandler.post(() -> {
+                if(ozonFboBox!=null&&scanBoxId.equals(ozonFboBox.id)&&scanOwner.equals(fbsSessionOwnerKey(safeSession())))speakAssemblyScan(true,code);
                 online = true;
                 ozonFboBusy = false;
                 ozonFboFeedbackColor = BOX_FOUND_GREEN;
@@ -4270,7 +4406,17 @@ public class MainActivity extends Activity {
         showScanningErrorDialog(statusMessage);
     }
 
+    // FIX: marketplace choice changes navigation only; server reservations remain authoritative.
+    private void renderFbsMenu() {
+        screen = Screen.FBS_MENU;
+        LinearLayout root = baseRoot(); root.addView(header()); root.addView(title("FBS"));
+        root.addView(primaryMenuButton("WB", v -> { fbsMarketplaceFilter = "WILDBERRIES"; openFbsAssembly(); }));
+        root.addView(primaryMenuButton("Ozon", v -> { fbsMarketplaceFilter = "OZON"; openFbsAssembly(); }));
+        root.addView(secondaryButton("Назад", v -> renderMainScreen())); setScrollableContent(root);
+    }
+
     private void openFbsAssembly() {
+        fbsSequentialPick.clear();
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
             return;
@@ -4290,6 +4436,7 @@ public class MainActivity extends Activity {
     }
 
     private void loadFbsRequestChoices() {
+        if (pendingFbsAction() != null) { renderFbsAssemblyScreen(); return; }
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
             return;
@@ -4334,7 +4481,7 @@ public class MainActivity extends Activity {
         screen = Screen.FBS_REQUESTS;
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title(tr("Сборка FBS — заявки", "FBS yig‘ish — arizalar")));
+        root.addView(title(tr("Сборка FBS — заявки", "FBS yig‘ish — arizalar") + (fbsMarketplaceFilter.isEmpty() ? "" : " · " + fbsMarketplaceName(fbsMarketplaceFilter))));
 
         if (fbsRequestsArchiveMode) {
             root.addView(feedbackView(
@@ -4355,7 +4502,8 @@ public class MainActivity extends Activity {
             ));
         }
 
-        List<TsdFbsRequestsResponse.Request> requests = fbsRequests == null ? null : fbsRequests.requests;
+        List<TsdFbsRequestsResponse.Request> requests = FbsMarketplaceFilter.select(
+            fbsRequests == null ? null : fbsRequests.requests, "logoff".equals(BuildConfig.FLAVOR) ? fbsMarketplaceFilter : "");
         if (!fbsRequestsBusy && (requests == null || requests.isEmpty())) {
             root.addView(feedbackView(
                 fbsRequestsArchiveMode
@@ -4363,7 +4511,8 @@ public class MainActivity extends Activity {
                     : tr("Открытых FBS-заявок пока нет.", "Hozircha ochiq FBS arizalari yo‘q."),
                 LIGHT_GRAY
             ));
-        } else if (requests != null) {
+        } else if (fbsRequests != null && !requests.isEmpty()) {
+            // FIX: initial loading has no server response yet; the filtered list is still non-null.
             String lockedRequestId = fbsRequests.currentRequestId == null ? "" : fbsRequests.currentRequestId;
             for (TsdFbsRequestsResponse.Request request : requests) {
                 boolean isCurrent = !lockedRequestId.isEmpty() && lockedRequestId.equals(request.requestId);
@@ -4435,7 +4584,9 @@ public class MainActivity extends Activity {
             fbsRequestsArchiveMode ? tr("Обновить архив", "Arxivni yangilash") : tr("Обновить список", "Ro‘yxatni yangilash"),
             view -> loadFbsRequestChoices()
         ));
-        root.addView(secondaryButton(tr("В главное меню", "Bosh menyuga"), view -> renderMainScreen()));
+        root.addView(secondaryButton("logoff".equals(BuildConfig.FLAVOR) ? "Назад к FBS" : tr("В главное меню", "Bosh menyuga"), view -> {
+            if ("logoff".equals(BuildConfig.FLAVOR)) renderFbsMenu(); else renderMainScreen();
+        }));
         setScrollableContent(root);
         refreshHeaderText();
     }
@@ -4445,13 +4596,17 @@ public class MainActivity extends Activity {
             return;
         }
         selectedFbsRequestId = request.requestId;
+        personalEvents.selected(selectedFbsRequestId);
         fbsAssembly = null;
         fbsFeedbackColor = 0;
         statusMessage = tr("Открываю выбранную FBS-заявку...", "Tanlangan FBS arizasi ochilmoqda...");
         loadNextFbsAssembly();
     }
 
+    private final FbsSequentialPick fbsSequentialPick = new FbsSequentialPick();
+
     private void loadNextFbsAssembly() {
+        if (pendingFbsAction() != null) { renderFbsAssemblyScreen(); return; }
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
             return;
@@ -4464,9 +4619,10 @@ public class MainActivity extends Activity {
         screen = Screen.FBS_ASSEMBLY;
         fbsBusy = true;
         renderFbsAssemblyScreen();
+        final String voiceRequest=selectedFbsRequestId, voiceSession=fbsSessionOwnerKey(session);
         runBackground(() -> {
             Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
-                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode, selectedFbsRequestId)
+                .nextFbsAssembly(session.authorizationHeader(), session.deviceCode, voiceRequest)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
                 String message = responseErrorMessage(response, tr(
@@ -4478,10 +4634,18 @@ public class MainActivity extends Activity {
             }
             TsdFbsAssemblyResponse loaded = response.body();
             mainHandler.post(() -> {
+                if(screen!=Screen.FBS_ASSEMBLY || !voiceSession.equals(fbsSessionOwnerKey(safeSession())) || !java.util.Objects.equals(voiceRequest,selectedFbsRequestId))return;
                 online = true;
                 fbsBusy = false;
                 fbsFeedbackColor = 0;
                 fbsAssembly = loaded;
+                // FIX: repeat normal server validation, not the physical pallet/box scans.
+                String continueBox = "logoff".equals(BuildConfig.FLAVOR)
+                    ? fbsSequentialPick.continueBox(voiceSession, loaded) : null;
+                if (continueBox != null) {
+                    executeFbsAction("scan-box", "boxCode", continueBox);
+                    return;
+                }
                 statusMessage = nonEmpty(loaded.message, tr("Следуйте подсказке.", "Ko‘rsatmaga amal qiling."));
                 renderFbsAssemblyScreen();
             });
@@ -4521,6 +4685,21 @@ public class MainActivity extends Activity {
     }
 
     private void renderFbsAssemblyScreen() {
+        // FIX: do not advance the queue or accept another scan until this request is resolved.
+        FbsPendingAction pending = pendingFbsAction();
+        if (pending != null) {
+            if (pending.snapshot != null) fbsAssembly = pending.snapshot;
+            screen = Screen.FBS_ASSEMBLY; dismissFbsGuidedScanDialog(); fbsScanInput = null;
+            LinearLayout waiting = baseRoot(); waiting.addView(header()); waiting.addView(title("Сборка FBS"));
+            waiting.addView(messageView(pending.snapshot == null ? "Сохранённый запрос повреждён. Обратитесь к менеджеру; повторно товар не сканируйте."
+                : "Заказ №" + pending.snapshot.task.orderId + "\n" + (fbsBusy ? "Отправка запроса…" : "Подтверждение не получено. Повторное сканирование не требуется.")));
+            if (!statusMessage.isEmpty()) waiting.addView(messageView(statusMessage));
+            Button retry = primaryMenuButton("Повторить отправку", v -> retryFbsAction());
+            retry.setEnabled(!fbsBusy && pending.snapshot != null); waiting.addView(retry);
+            Button settings = secondaryButton("Настройки и вход", v -> renderSettingsScreen());
+            settings.setEnabled(!fbsBusy); waiting.addView(settings);
+            setScrollableContent(waiting); return;
+        }
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
             return;
@@ -4530,6 +4709,13 @@ public class MainActivity extends Activity {
             fbsScanInput = null;
         }
         LinearLayout root = baseRoot();
+        // FIX: feedback covers the entire FBS screen, with a text status as well as color.
+        if("logoff".equals(BuildConfig.FLAVOR)){
+            boolean transmitting=fbsBusy&&fbsFeedbackColor==BOX_DUPLICATE_BLUE;
+            root.setBackgroundColor(AssemblyScreenFeedback.background(true,transmitting,fbsFeedbackColor));
+            String feedback=transmitting?"Отправка / повторная отправка запроса":AssemblyScreenFeedback.label(false,fbsFeedbackColor);
+            if(!feedback.isEmpty())root.addView(messageView(feedback));
+        }
         root.addView(header());
         root.addView(title(tr("Сборка FBS", "FBS buyurtmasini yig‘ish")));
         int completedToday = fbsAssembly != null && fbsAssembly.progress != null
@@ -4552,6 +4738,8 @@ public class MainActivity extends Activity {
             ));
         }
 
+        if(!fbsBusy && online && fbsFeedbackColor!=BOX_NOT_NEEDED_RED)
+            speakPersonalEvent(personalEvents.fbs(selectedFbsRequestId,fbsAssembly));
         TsdFbsAssemblyResponse.Task task = fbsAssembly == null ? null : fbsAssembly.task;
         if (task == null) {
             dismissFbsGuidedScanDialog();
@@ -4600,6 +4788,13 @@ public class MainActivity extends Activity {
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
         boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        // FIX: show the order quantity before picking and after every unit scan.
+        if ("OZON".equalsIgnoreCase(task.marketplace) && OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+            root.addView(feedbackView(ozonQuantityInstruction(task), Color.rgb(254, 240, 138)));
+        }
+        speakFbsPrompt(fbsStepVoice.step(BuildConfig.FLAVOR,
+            !fbsBusy && online && fbsFeedbackColor != BOX_NOT_NEEDED_RED && !assemblyVoicePaused,
+            fbsSessionOwnerKey(safeSession()), task.id, state));
         boolean guidedScanDialog = FbsAssemblyUi.shouldUseGuidedScanDialog(state);
         if (!guidedScanDialog) dismissFbsGuidedScanDialog();
         if (!"WAIT_MARKETPLACE_LABEL".equals(state)) {
@@ -4622,6 +4817,8 @@ public class MainActivity extends Activity {
         ));
         boolean orderStickerReady = false;
         Button stickerAppliedButton = null;
+        boolean physicalPickConfirmation = FbsAssemblyUi.usesPhysicalPickConfirmation(
+            BuildConfig.FLAVOR, task.marketplace, task.physicalPickConfirmation);
         if ("READY_TO_COMPLETE".equals(state)) {
             String taskMarketplace = nonEmpty(task.marketplace, "WILDBERRIES");
             boolean localOnlyRecovery = FbsLocalRecoveryPolicy.canCompleteWithoutSticker(
@@ -4631,7 +4828,15 @@ public class MainActivity extends Activity {
             );
             boolean hasRenderableSticker = task.orderSticker != null
                 && !nonEmpty(task.orderSticker.imageBase64, "").isEmpty();
-            if (localOnlyRecovery && !hasRenderableSticker) {
+            if (physicalPickConfirmation) {
+                // FIX: no WB/Ozon label download, decoding, rendering or printing at the picking step.
+                root.addView(feedbackView(
+                    tr("ПОДТВЕРДИТЕ ФИЗИЧЕСКИЙ ОТБОР\nЗаказ №", "MAHSULOT OLINGANINI TASDIQLANG\nBuyurtma №") +
+                        nonEmpty(task.orderId, "-") + "\n" + Math.max(1, task.itemCount) + tr(" ед.", " dona"),
+                    BOX_FOUND_GREEN
+                ));
+                orderStickerReady = true;
+            } else if (localOnlyRecovery && !hasRenderableSticker) {
                 // FIX: a delivery-recovery order is already complete/shipped in WB,
                 // so WB legitimately returns an empty sticker list on every refresh.
                 root.addView(feedbackView(
@@ -4660,7 +4865,7 @@ public class MainActivity extends Activity {
                     ));
                 }
                 stickerAppliedButton = primaryMenuButton(
-                    localOnlyRecovery && !hasRenderableSticker
+                    physicalPickConfirmation || (localOnlyRecovery && !hasRenderableSticker)
                         ? tr("ТОВАР ОТОБРАН", "MAHSULOT OLINDI")
                         : tr("НАКЛЕЙКА НАКЛЕЕНА", "STIKER YOPISHTIRILDI"),
                     view -> completeFbsAssembly()
@@ -4956,6 +5161,8 @@ public class MainActivity extends Activity {
             root.addView(secondaryButton(tr("Взять другую единицу", "Boshqa mahsulotni olish"),
                 view -> executeFbsAction("cancel-kiz-relabel", null, null)));
         } else if ("SCAN_NEW_KIZ".equals(state)) {
+            // FIX: persistent mandatory warning also survives re-entry into the picking screen.
+            if ("logoff".equals(BuildConfig.FLAVOR)) root.addView(feedbackView("КИЗ НЕОБХОДИМО ЗАМЕНИТЬ", Color.rgb(254, 240, 138)));
             root.addView(feedbackView(tr("Наклейте новый КИЗ на эту единицу и отсканируйте его. Старую этикетку сохраните до завершения операции.",
                 "Shu mahsulotga yangi KIZ yopishtiring va skanerlang. Amal tugaguncha eski yorliqni saqlang."), Color.rgb(254, 240, 138)));
             root.addView(primaryMenuButton(tr("Сканировать новый КИЗ", "Yangi KIZni skanerlash"),
@@ -5031,7 +5238,8 @@ public class MainActivity extends Activity {
 
         if (!"COMPLETED".equals(state) && !task.kizAccepted) {
             root.addView(secondaryButton(
-                tr("Проблема с товаром — отложить", "Mahsulotda muammo — keyinga qoldirish"),
+                "logoff".equals(BuildConfig.FLAVOR) && !nonEmpty(task.scannedBoxCode,"").isEmpty() && nonEmpty(task.scannedBarcode,"").isEmpty()
+                    ? "В коробе нет нужного товара" : tr("Проблема с товаром — отложить", "Mahsulotda muammo — keyinga qoldirish"),
                 view -> confirmReleaseFbsAssembly()
             ));
         }
@@ -5047,9 +5255,9 @@ public class MainActivity extends Activity {
             showFbsGuidedScanDialog(state, task, productName, article, color, size, marketplaceName);
         } else if (stickerAppliedButton != null && orderStickerReady) {
             stickerAppliedButton.setFocusableInTouchMode(true);
-            stickerAppliedButton.requestFocus();
+            stickerAppliedButton.requestFocus(); AssemblyAutoFocus.request(stickerAppliedButton);
         } else if (fbsScanInput != null) {
-            fbsScanInput.requestFocus();
+            fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
         }
         refreshHeaderText();
     }
@@ -5096,10 +5304,27 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    // FIX: the same quantity is visible on the main screen and inside the scan dialog.
+    private String ozonQuantityInstruction(TsdFbsAssemblyResponse.Task task) {
+        String quantity = tr("В ЗАКАЗЕ: ", "BUYURTMADA: ") + Math.max(1, task.itemCount) + tr(" ЕД.", " DONA");
+        if (!task.perUnitScanning) return quantity;
+        return quantity + "\n" + tr("ОТСКАНИРОВАНО: ", "SKANERLANGAN: ") + task.scannedItemCount +
+            tr(" ИЗ ", " / ") + Math.max(1, task.itemCount);
+    }
+
     private boolean renderOzonOrderSticker(
         LinearLayout root,
         TsdFbsAssemblyResponse.Task task
     ) {
+        // FIX: no label bytes, image decoder or PDF renderer on our TSD.
+        if (OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+            root.addView(feedbackView(
+                tr("НАКЛЕЙТЕ НАКЛЕЙКУ OZON\n№ ", "OZON STIKERINI YOPISHTIRING\n№ ") + nonEmpty(task.orderId, "-"),
+                Color.rgb(254, 240, 138)
+            ));
+            root.addView(fbsOrderStickerWarehouseBanner(task));
+            return !nonEmpty(task.orderId, "").isEmpty();
+        }
         if (task.orderSticker == null || nonEmpty(task.orderSticker.imageBase64, "").isEmpty()) {
             root.addView(feedbackView(
                 tr("Этикетка Ozon ещё не загрузилась. Нажмите «Обновить» и не завершайте заказ без этикетки.",
@@ -5400,7 +5625,7 @@ public class MainActivity extends Activity {
         String marketplaceName
     ) {
         if (!FbsAssemblyUi.shouldUseGuidedScanDialog(state) || task == null) return;
-        String dialogKey = nonEmpty(task.id, "-") + "|" + state;
+        String dialogKey = nonEmpty(task.id, "-") + "|" + state + "|" + task.scannedItemCount;
         if (
             fbsGuidedScanDialog != null &&
             fbsGuidedScanDialog.isShowing() &&
@@ -5414,6 +5639,13 @@ public class MainActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(18), dp(8), dp(18), 0);
+        // FIX: the automatic scanner dialog must show the replacement warning too.
+        if ("logoff".equals(BuildConfig.FLAVOR) && "SCAN_NEW_KIZ".equals(state)) {
+            content.addView(feedbackView("КИЗ НЕОБХОДИМО ЗАМЕНИТЬ", Color.rgb(254, 240, 138)));
+        }
+        if ("OZON".equalsIgnoreCase(task.marketplace) && OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
+            content.addView(feedbackView(ozonQuantityInstruction(task), Color.rgb(254, 240, 138)));
+        }
         content.addView(feedbackView(
             (scanKiz
                 ? tr("ШАГ 2 ИЗ 2 · ОТСКАНИРУЙТЕ КИЗ", "2-QADAM · KIZNI SKANERLANG")
@@ -5422,10 +5654,23 @@ public class MainActivity extends Activity {
                 tr("Артикул: ", "Artikul: ") + article + "\n" +
                 tr("Цвет: ", "Rang: ") + color + " · " + tr("Размер: ", "O‘lcham: ") + size + "\n" +
                 (scanKiz
-                    ? tr("После приёма КИЗ откроется наклейка ", "KIZ qabul qilingach stiker ochiladi: ") + marketplaceName
-                    : tr("После ШК это окно переключится на КИЗ.", "SHKdan keyin oyna KIZga o‘tadi.")),
+                    ? task.physicalPickConfirmation
+                        ? tr("После КИЗ нажмите «ТОВАР ОТОБРАН».", "KIZdan keyin «MAHSULOT OLINDI»ni bosing.")
+                        : tr("После приёма КИЗ откроется наклейка ", "KIZ qabul qilingach stiker ochiladi: ") + marketplaceName
+                    : task.perUnitScanning && task.itemCount > 1
+                        ? tr("Сканируйте ШК каждой единицы товара.", "Har bir mahsulot SHKini skanerlang.")
+                        : task.requiresKiz
+                            ? tr("После ШК это окно переключится на КИЗ.", "SHKdan keyin oyna KIZga o‘tadi.")
+                            : tr("После ШК подтвердите сборку.", "SHKdan keyin yig‘ishni tasdiqlang.")),
             scanKiz ? Color.rgb(254, 240, 138) : BOX_MOVEMENT_BLUE
         ));
+        // FIX: count confirmed units once, and show the server's current remaining box demand.
+        if (fbsAssembly != null && fbsAssembly.sequentialPickingEnabled
+            && fbsSequentialPick.box().equals(task.scannedBoxCode) && !fbsSequentialPick.box().isEmpty()) {
+            content.addView(messageView(tr("Короб: ", "Quti: ") + task.scannedBoxCode + " · " +
+                tr("Отобрано: ", "Olindi: ") + fbsSequentialPick.picked() +
+                (fbsSequentialPick.remaining() < 0 ? "" : " · " + tr("Осталось: ", "Qoldi: ") + fbsSequentialPick.remaining())));
+        }
         EditText dialogInput = input(scanKiz
             ? tr("Сканируйте КИЗ Data Matrix", "Data Matrix KIZni skanerlang")
             : tr("Сканируйте ШК товара", "Mahsulot SHKini skanerlang"));
@@ -5458,6 +5703,7 @@ public class MainActivity extends Activity {
         dialog.setCanceledOnTouchOutside(false);
         dialog.setOnShowListener(ignored -> {
             dialogInput.requestFocus();
+            AssemblyAutoFocus.request(dialogInput,()->fbsGuidedScanDialog==dialog&&dialog.isShowing()&&!fbsBusy);
         });
         dialog.setOnDismissListener(ignored -> {
             if (fbsGuidedScanDialog == dialog) {
@@ -5511,7 +5757,7 @@ public class MainActivity extends Activity {
                 // field and be submitted again by the hardware scanner.
                 if (fbsScanInput != null) {
                     fbsScanInput.setText("");
-                    fbsScanInput.requestFocus();
+                    fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
                 }
                 showFbsError(kizError, true);
                 return;
@@ -5713,9 +5959,11 @@ public class MainActivity extends Activity {
 
     private void confirmReleaseFbsAssembly() {
         if (fbsAssembly == null || fbsAssembly.task == null || fbsBusy) return;
+        boolean missingProduct="logoff".equals(BuildConfig.FLAVOR) && !nonEmpty(fbsAssembly.task.scannedBoxCode,"").isEmpty()
+            && nonEmpty(fbsAssembly.task.scannedBarcode,"").isEmpty();
         new TsdUi.DialogBuilder(this)
-            .setTitle(tr("Отложить заказ?", "Buyurtmani keyinga qoldirasizmi?"))
-            .setMessage(tr(
+            .setTitle(missingProduct ? "В коробе нет нужного товара?" : tr("Отложить заказ?", "Buyurtmani keyinga qoldirasizmi?"))
+            .setMessage(missingProduct ? "Короб найден, но нужного товара внутри нет. Подтвердите, чтобы отложить заказ и перейти к предусмотренной проверке короба. Если отсутствует сам короб на паллете, используйте «Нет короба на паллете»." : tr(
                 "Заказ вернётся в очередь. Используйте это только если товар или короб найти невозможно.",
                 "Buyurtma navbatga qaytadi. Faqat mahsulot yoki qutini topib bo‘lmasa foydalaning."
             ))
@@ -5820,7 +6068,22 @@ public class MainActivity extends Activity {
         });
     }
 
+    private FbsPendingAction pendingFbsAction() {
+        if (!"logoff".equals(BuildConfig.FLAVOR)) return null;
+        TsdSession session=safeSession();if(session==null)return null;
+        try{return FbsPendingAction.read(getSharedPreferences("fbs-pending",0),session.userId);}
+        catch(RuntimeException error){return new FbsPendingAction();}
+    }
+
+    private void retryFbsAction() {
+        if(fbsBusy)return;FbsPendingAction pending=pendingFbsAction();
+        if(pending==null||pending.snapshot==null)return;
+        fbsAssembly=pending.snapshot;retryingFbsAction=true;
+        try{executeFbsAction(pending.action,pending.field,pending.value);}finally{retryingFbsAction=false;}
+    }
+
     private void executeFbsAction(String action, String field, String value) {
+        if (pendingFbsAction() != null && !retryingFbsAction) { renderFbsAssemblyScreen(); return; }
         TsdSession session = safeSession();
         TsdFbsAssemblyResponse.Task currentTask = fbsAssembly == null ? null : fbsAssembly.task;
         if (session == null || currentTask == null || fbsBusy) return;
@@ -5832,6 +6095,21 @@ public class MainActivity extends Activity {
             return;
         }
         String actionOwnerKey = fbsSessionOwnerKey(session);
+        // FIX: persist the exact server compare-and-set counter, KIZ and proposal before sending.
+        FbsPendingAction stored = pendingFbsAction();
+        Map<String,Object> requestPayload = new LinkedHashMap<>();
+        if (field != null) requestPayload.put(field,value);
+        if (currentTask.perUnitScanning) requestPayload.put("scannedItemCount",currentTask.scannedItemCount);
+        requestPayload.put("supportsKizRelabel",true);
+        if ("scan-kiz-move".equals(action)) requestPayload.put("confirmBoxMove",true);
+        if ("SCAN_NEW_KIZ".equals(submittedState) && "scan-kiz".equals(action)) requestPayload.putAll(FbsKizRelabelRequest.confirm(value,relabelProposalId,false));
+        if ("cancel-kiz-relabel".equals(action)) { requestPayload.put("cancelKizRelabel",true); requestPayload.put("kizRelabelProposalId",relabelProposalId); }
+        FbsPendingAction command;
+        if ("logoff".equals(BuildConfig.FLAVOR)) command = stored == null ? FbsPendingAction.create(action,field,value,fbsAssembly,requestPayload) : stored;
+        else { command=new FbsPendingAction();command.payload=requestPayload; }
+        if ("logoff".equals(BuildConfig.FLAVOR) && !command.save(getSharedPreferences("fbs-pending",0),session.userId)) {
+            showFbsError("Запрос не отправлен: не удалось сохранить его на ТСД. Проверьте свободную память.",true); return;
+        }
         String previousBoxCode = nonEmpty(currentTask.scannedBoxCode, "");
         boolean previousBoxWasNotPicked =
             !previousBoxCode.isEmpty() && nonEmpty(currentTask.scannedBarcode, "").isEmpty();
@@ -5850,17 +6128,7 @@ public class MainActivity extends Activity {
         String taskId = currentTask.id;
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Map<String, Object> payload = new LinkedHashMap<>();
-            if (field != null) payload.put(field, value);
-            payload.put("supportsKizRelabel", true);
-            if ("scan-kiz-move".equals(action)) payload.put("confirmBoxMove", true);
-            if ("SCAN_NEW_KIZ".equals(submittedState) && "scan-kiz".equals(action)) {
-                payload.putAll(FbsKizRelabelRequest.confirm(value, relabelProposalId, false));
-            }
-            if ("cancel-kiz-relabel".equals(action)) {
-                payload.put("cancelKizRelabel", true);
-                payload.put("kizRelabelProposalId", relabelProposalId);
-            }
+            Map<String, Object> payload = new LinkedHashMap<>(command.payload);
             Response<TsdFbsAssemblyResponse> response;
             if ("scan-any".equals(action)) {
                 response = api.scanFbsCode(session.authorizationHeader(), taskId, payload).execute();
@@ -5882,8 +6150,22 @@ public class MainActivity extends Activity {
                     "Операция не выполнена. Повторите сканирование.",
                     "Amal bajarilmadi. Qayta skanerlang."
                 ));
-                if (FbsTaskSafety.isStaleTaskConflict(response.code(), errorDetails.code)) {
-                    mainHandler.post(() -> reloadFbsAfterStaleTask(errorDetails.message));
+                if ("logoff".equals(BuildConfig.FLAVOR) && FbsPendingAction.definitive(response.code())) {
+                    if (!FbsPendingAction.clear(getSharedPreferences("fbs-pending",0),session.userId)) {
+                        mainHandler.post(() -> { if(actionOwnerKey.equals(fbsSessionOwnerKey(safeSession())))showFbsError("Ответ получен, но не сохранён на ТСД. Повторите отправку.",true); });return;
+                    }
+                }
+                if (FbsTaskSafety.isStaleTaskConflict(response.code(), errorDetails.code)
+                    || ("logoff".equals(BuildConfig.FLAVOR) && FbsPendingAction.definitive(response.code()) && FbsNextStep.changed(errorDetails.code,errorDetails.message))) {
+                    mainHandler.post(() -> {
+                        if ("logoff".equals(BuildConfig.FLAVOR) && !actionOwnerKey.equals(fbsSessionOwnerKey(safeSession()))) return;
+                        if ("logoff".equals(BuildConfig.FLAVOR)) {
+                            fbsBusy=false;dismissFbsGuidedScanDialog();
+                            new TsdUi.DialogBuilder(this).setTitle("Задание изменилось")
+                                .setMessage(FbsNextStep.explain(errorDetails.code,errorDetails.message,currentTask.kizAccepted||!nonEmpty(currentTask.scannedBarcode,"").isEmpty()))
+                                .setPositiveButton("К списку заявок",(d,w)->{fbsAssembly=null;loadFbsRequestChoices();}).setCancelable(false).show();
+                        } else reloadFbsAfterStaleTask(errorDetails.message);
+                    });
                     return;
                 }
                 if (FbsTaskSafety.requiresKizAudit(BuildConfig.FLAVOR, response.code(), errorDetails.code,
@@ -5913,21 +6195,35 @@ public class MainActivity extends Activity {
                     response.code()
                 );
                 mainHandler.post(() -> {
+                    if ("logoff".equals(BuildConfig.FLAVOR) && !actionOwnerKey.equals(fbsSessionOwnerKey(safeSession()))) return;
                     if (clearRejectedScan && fbsScanInput != null) {
                         // FIX: a rejected product barcode or KIZ must never remain in the
                         // scanner field and be submitted again by the operator.
                         fbsScanInput.setText("");
-                        fbsScanInput.requestFocus();
+                        fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
                     }
-                    showFbsError(errorDetails.message, response.code() < 500);
+                    speakFbsScan(action,submittedState,value,response.code(),null,actionOwnerKey,taskId);
+                    showFbsError("logoff".equals(BuildConfig.FLAVOR) ? FbsNextStep.explain(errorDetails.code,errorDetails.message,currentTask.kizAccepted||!nonEmpty(currentTask.scannedBarcode,"").isEmpty()) : errorDetails.message, response.code() < 500);
                 });
                 return;
             }
             TsdFbsAssemblyResponse updated = response.body();
             mainHandler.post(() -> {
+                // FIX: a delayed continuation must never attach to another login or task.
+                if (!actionOwnerKey.equals(fbsSessionOwnerKey(safeSession())) || fbsAssembly == null
+                    || fbsAssembly.task == null || !taskId.equals(fbsAssembly.task.id)) return;
+                if ("logoff".equals(BuildConfig.FLAVOR) && !actionOwnerKey.equals(fbsSessionOwnerKey(safeSession()))) return;
+                if ("logoff".equals(BuildConfig.FLAVOR) && !FbsPendingAction.clear(getSharedPreferences("fbs-pending",0),session.userId)) {
+                    showFbsError("Сервер принял операцию, но подтверждение не сохранено на ТСД. Повторите отправку.",true);return;
+                }
                 online = true;
                 fbsBusy = false;
+                speakFbsScan(action,submittedState,value,response.code(),updated,actionOwnerKey,taskId);
                 fbsAssembly = updated;
+                if ("release".equals(action) || "undo-kiz".equals(action)) fbsSequentialPick.clear();
+                if ("scan-box".equals(action) || "scan-any".equals(action))
+                    fbsSequentialPick.acceptedBox(actionOwnerKey, updated);
+                fbsSequentialPick.completed(actionOwnerKey, updated);
                 boolean problemWasReportedAfterBoxScan =
                     !previousBoxCode.isEmpty() && "release".equals(action);
                 boolean switchedToAnotherTask =
@@ -6004,6 +6300,7 @@ public class MainActivity extends Activity {
     }
 
     private void reloadFbsAfterStaleTask(String message) {
+        fbsSequentialPick.clear();
         online = true;
         fbsBusy = false;
         fbsAssembly = null;
@@ -6027,6 +6324,7 @@ public class MainActivity extends Activity {
         fbsFeedbackColor = BOX_NOT_NEEDED_RED;
         statusMessage = message;
         playFbsError();
+        speakFbsPrompt(FboPackingVoice.Cue.ERROR); // FIX: includes locally rejected KIZ scans.
         renderFbsAssemblyScreen();
         showScanningErrorDialog(message);
     }
@@ -6039,6 +6337,45 @@ public class MainActivity extends Activity {
         playFbsError();
         renderFbsRequestSelectionScreen();
         showScanningErrorDialog(message);
+    }
+
+    // FIX: share the offline voice with FBS WB/Ozon and FBO Ozon, keeping KIZ and background callbacks silent.
+    private void speakFbsPrompt(FboPackingVoice.Cue cue) {
+        // FIX: never speak from a background screen, paused activity or sold application.
+        if (cue == null || screen != Screen.FBS_ASSEMBLY || assemblyVoicePaused
+            || isFinishing() || isDestroyed() || !"logoff".equals(BuildConfig.FLAVOR)) return;
+        String owner = safeSession() == null ? null : safeSession().userId;
+        if (!java.util.Objects.equals(owner, assemblyScanVoiceOwner)) closeAssemblyScanVoice();
+        if (assemblyScanVoice == null) {
+            assemblyScanVoice = new FboScanFeedback.Voice(this, owner);
+            assemblyScanVoiceOwner = owner;
+        }
+        assemblyScanVoice.prompt(cue);
+    }
+
+    private void closeAssemblyScanVoice() {
+        if(assemblyScanVoice!=null){assemblyScanVoice.close();assemblyScanVoice=null;assemblyScanVoiceOwner=null;}
+    }
+    // FIX: all entry phrases share the existing cancellable offline voice and exact account gate.
+    private void speakPersonalEvent(PersonalEventVoice.Cue cue){
+        TsdSession session=safeSession();
+        if(cue==null||session==null||assemblyVoicePaused||isFinishing()||isDestroyed()||!new PersonalScanVoice(session.userId).personal)return;
+        if(!java.util.Objects.equals(session.userId,assemblyScanVoiceOwner))closeAssemblyScanVoice();
+        if(assemblyScanVoice==null){assemblyScanVoice=new FboScanFeedback.Voice(this,session.userId);assemblyScanVoiceOwner=session.userId;}
+        assemblyScanVoice.event(cue);
+    }
+    private void speakAssemblyScan(Boolean accepted,String code) { speakAssemblyScan(accepted,code,"scan:"+screen); }
+    private void speakAssemblyScan(Boolean accepted,String code,String errorKey) {
+        if(accepted==null||assemblyVoicePaused||isFinishing()||isDestroyed()||!"logoff".equals(BuildConfig.FLAVOR)||AssemblyScanVoice.isKiz(code))return;
+        if(screen!=Screen.FBS_ASSEMBLY&&screen!=Screen.OZON_FBO_BOXES&&screen!=Screen.OZON_FBO_ASSEMBLY)return;
+        String voiceOwner=safeSession()==null?null:safeSession().userId;
+        if(!java.util.Objects.equals(voiceOwner,assemblyScanVoiceOwner))closeAssemblyScanVoice();
+        if(assemblyScanVoice==null){assemblyScanVoice=new FboScanFeedback.Voice(this,voiceOwner);assemblyScanVoiceOwner=voiceOwner;}
+        assemblyScanVoice.scan(accepted,errorKey);
+    }
+    private void speakFbsScan(String action,String state,String code,int status,TsdFbsAssemblyResponse result,String owner,String taskId) {
+        if(screen!=Screen.FBS_ASSEMBLY||!owner.equals(fbsSessionOwnerKey(safeSession()))||fbsAssembly==null||fbsAssembly.task==null||!taskId.equals(fbsAssembly.task.id))return;
+        speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code,"fbs:"+action+":"+state+":"+status+":"+(result==null?"rejected":String.valueOf(result.message)));
     }
 
     private void playFbsSuccess() {
@@ -6468,11 +6805,20 @@ public class MainActivity extends Activity {
 
     // FIX: picking and packing have independent entry points, sharing persisted server progress.
     private void renderFboMenu() {
+        // FIX: both stages are children of FBO; existing marketplace picking remains available.
         screen=Screen.FBO_MENU;
+        LinearLayout root=baseRoot(); root.addView(header()); root.addView(title("FBO"));
+        root.addView(primaryMenuButton("Сборка FBO", v -> renderFboPickingMenu()));
+        root.addView(primaryMenuButton("Упаковка FBO", v -> { fboPacking=true; openAssemblyRequests(); }));
+        root.addView(secondaryButton("Назад", v -> renderMainScreen())); setScrollableContent(root);
+    }
+
+    private void renderFboPickingMenu() {
+        screen=Screen.FBO_PICK_MENU;
         LinearLayout root=baseRoot();root.addView(header());root.addView(title("Сборка FBO"));
         root.addView(primaryMenuButton("FBO WB",v->{fboPacking=false;openAssemblyRequests();}));
         root.addView(primaryMenuButton("FBO Ozon",v->openOzonFboAssembly()));
-        root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
+        root.addView(secondaryButton("Назад",v->renderFboMenu()));setScrollableContent(root);
     }
 
     private void openAssemblyRequests() {
@@ -6530,7 +6876,7 @@ public class MainActivity extends Activity {
 
         root.addView(secondaryButton("Обновить", view -> loadAssemblyRequests()));
         root.addView(secondaryButton("Назад", view -> {
-            if ("logoff".equals(BuildConfig.FLAVOR) && !fboPacking) renderFboMenu(); else renderMainScreen();
+            if ("logoff".equals(BuildConfig.FLAVOR)) { if (fboPacking) renderFboMenu(); else renderFboPickingMenu(); } else renderMainScreen();
         }));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
@@ -6888,6 +7234,8 @@ public class MainActivity extends Activity {
                 online = true;
                 assemblyPlan = plan;
                 activeRelabelTask = null;
+                activeRelabelPrintId = "";
+                activeRelabelPrintStatus = "";
                 selectedRelabelBox = "";
                 selectedMoveSourceBox = "";
                 selectedMoveTargetBox = "";
@@ -6908,7 +7256,7 @@ public class MainActivity extends Activity {
             TsdSession session = safeSession(); if (session == null) return;
             if (fboTwoStageScreen != null) fboTwoStageScreen.close();
             screen = Screen.FBO_TWO_STAGE;
-            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();});
+            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();},this::openFboRemainderTransfer);
             return;
         }
         if (isAssemblyPackedOnServer()) {
@@ -7052,7 +7400,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton("Обновить", view -> renderBoxSearchScreen()));
         root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
         setScrollableContent(root);
-        assemblyScanInput.requestFocus();
+        assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         refreshHeaderText();
     }
 
@@ -7135,8 +7483,12 @@ public class MainActivity extends Activity {
                 }
             }
             root.addView(multilineSecondaryButton(box + "\nОсталось: " + remaining, view -> {
+                if (!box.equals(selectedRelabelBox)) {
+                    activeRelabelTask = null;
+                    activeRelabelPrintId = "";
+                    activeRelabelPrintStatus = "";
+                }
                 selectedRelabelBox = box;
-                activeRelabelTask = null;
                 renderRelabelBoxScreen();
             }));
         }
@@ -7166,8 +7518,20 @@ public class MainActivity extends Activity {
             ? "Сканируйте старый ШК товара"
             : "Товар: " + emptyAsDash(activeRelabelTask.name) +
                 "\nРазмер: " + emptyAsDash(activeRelabelTask.size) +
-                "\nСканируйте новый ШК: " + activeRelabelTask.newBarcode));
+                "\nЦелевой ШК: " + activeRelabelTask.newBarcode +
+                (RelabelPrintGate.canVerify(activeRelabelPrintStatus)
+                    ? "\nНаклейте новый ШК и сканируйте его для проверки."
+                    : "\nСначала напечатайте 2 этикетки.")));
+        if (activeRelabelTask != null) {
+            String printText = "FAILED".equals(activeRelabelPrintStatus)
+                ? "Повторно напечатать 2 ШК"
+                : activeRelabelPrintId.isEmpty() ? "Напечатать 2 ШК" : "Проверить печать";
+            Button printButton = primaryMenuButton(printText, view -> requestRelabelPrint());
+            printButton.setEnabled(!relabelPrintBusy && !RelabelPrintGate.canVerify(activeRelabelPrintStatus));
+            root.addView(printButton);
+        }
         assemblyScanInput = input(activeRelabelTask == null ? "Старый ШК" : "Новый ШК");
+        assemblyScanInput.setEnabled(activeRelabelTask == null || RelabelPrintGate.canVerify(activeRelabelPrintStatus));
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitRelabelScan();
             return true;
@@ -7194,8 +7558,168 @@ public class MainActivity extends Activity {
             root.addView(messageView(statusMessage));
         }
         setScrollableContent(root);
-        assemblyScanInput.requestFocus();
+        if (assemblyScanInput.isEnabled()) { assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput); }
         refreshHeaderText();
+    }
+
+    private void requestRelabelPrint() {
+        if (assemblyPlan == null || activeRelabelTask == null || relabelPrintBusy) return;
+        if (!activeRelabelPrintId.isEmpty() && !"FAILED".equals(activeRelabelPrintStatus)) {
+            relabelPrintPolls = 0;
+            pollRelabelPrint(activeRelabelPrintId);
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) return;
+        String requestId = assemblyPlan.id;
+        relabelPrintBusy = true;
+        renderRelabelBoxScreen();
+        runBackground(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Response<List<TsdPrintStation>> response = api.relabelPrintStations(session.authorizationHeader(), requestId).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось найти печатную станцию.");
+                List<TsdPrintStation> stations = response.body();
+                mainHandler.post(() -> {
+                relabelPrintBusy = false;
+                if (screen != Screen.RELABEL_BOX || assemblyPlan == null || !requestId.equals(assemblyPlan.id)) return;
+                if (!failure.isEmpty()) { statusMessage = failure; renderRelabelBoxScreen(); return; }
+                if (stations == null || stations.isEmpty()) {
+                    statusMessage = "Нет доступной станции 58 × 40 мм. Проверьте тихий агент печати.";
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                if (stations.size() == 1) { submitRelabelPrint(stations.get(0)); return; }
+                String[] labels = new String[stations.size()];
+                for (int i = 0; i < stations.size(); i++) {
+                    labels[i] = stations.get(i).name + " · " + stations.get(i).printerName;
+                }
+                new AlertDialog.Builder(this).setTitle("Куда напечатать 2 ШК")
+                    .setItems(labels, (dialog, which) -> submitRelabelPrint(stations.get(which)))
+                    .setNegativeButton("Отмена", null).show();
+                renderRelabelBoxScreen();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    relabelPrintBusy = false;
+                    statusMessage = "Нет связи со станцией печати. Повторите попытку.";
+                    if (screen == Screen.RELABEL_BOX) renderRelabelBoxScreen();
+                });
+            }
+        });
+    }
+
+    private void submitRelabelPrint(TsdPrintStation station) {
+        if (assemblyPlan == null || activeRelabelTask == null || relabelPrintBusy) return;
+        TsdSession session = safeSession();
+        if (session == null) return;
+        TsdRelabelTask task = activeRelabelTask;
+        String requestId = assemblyPlan.id;
+        if ("FAILED".equals(activeRelabelPrintStatus)) {
+            activeRelabelPrintId = UUID.randomUUID().toString();
+        } else if (activeRelabelPrintId.isEmpty()) {
+            activeRelabelPrintId = RelabelPrintGate.printId(requestId, task.sourceBox,
+                task.oldBarcode, task.newBarcode, task.size == null ? "" : task.size,
+                Math.max(task.doneQuantity, doneInt(relabelKey(task))), session.userId);
+        }
+        String printId = activeRelabelPrintId;
+        activeRelabelPrintStatus = "QUEUED";
+        relabelPrintPolls = 0;
+        relabelPrintBusy = true;
+        statusMessage = "Отправляю 2 ШК на " + station.name + "…";
+        renderRelabelBoxScreen();
+        runBackground(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Map<String, String> body = new LinkedHashMap<>();
+                body.put("printId", printId);
+                body.put("stationId", station.id);
+                body.put("sourceBox", task.sourceBox);
+                body.put("oldBarcode", task.oldBarcode);
+                body.put("newBarcode", task.newBarcode);
+                body.put("size", task.size == null ? "" : task.size);
+                Response<TsdRelabelPrintJob> response = api.printRelabelTarget(session.authorizationHeader(), requestId, body).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось отправить ШК на печать.");
+                TsdRelabelPrintJob job = response.body();
+                mainHandler.post(() -> {
+                relabelPrintBusy = false;
+                if (screen != Screen.RELABEL_BOX || !printId.equals(activeRelabelPrintId)) return;
+                if (!failure.isEmpty() || job == null) {
+                    statusMessage = failure.isEmpty() ? "Пустой ответ станции печати." : failure;
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                updateRelabelPrint(job);
+                if (!"PRINTED".equals(job.status) && !"FAILED".equals(job.status)) {
+                    mainHandler.postDelayed(() -> pollRelabelPrint(printId), 2000L);
+                }
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    relabelPrintBusy = false;
+                    statusMessage = "Связь прервалась. Проверьте печать: повторная пара не будет отправлена автоматически.";
+                    if (screen == Screen.RELABEL_BOX) renderRelabelBoxScreen();
+                });
+            }
+        });
+    }
+
+    private void pollRelabelPrint(String printId) {
+        if (assemblyPlan == null || activeRelabelTask == null || relabelPrintBusy ||
+            !printId.equals(activeRelabelPrintId) || screen != Screen.RELABEL_BOX) return;
+        if (++relabelPrintPolls > 30) {
+            statusMessage = "Станция пока не подтвердила печать. Проверьте принтер и нажмите «Проверить печать».";
+            renderRelabelBoxScreen();
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) return;
+        String requestId = assemblyPlan.id;
+        relabelPrintBusy = true;
+        runBackground(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Response<TsdRelabelPrintJob> response = api.relabelPrintStatus(session.authorizationHeader(), requestId, printId).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось проверить печать.");
+                TsdRelabelPrintJob job = response.body();
+                mainHandler.post(() -> {
+                relabelPrintBusy = false;
+                if (screen != Screen.RELABEL_BOX || !printId.equals(activeRelabelPrintId)) return;
+                if (response.code() == 404) {
+                    activeRelabelPrintId = "";
+                    activeRelabelPrintStatus = "";
+                    statusMessage = "Задание печати не было создано. Нажмите «Напечатать 2 ШК».";
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                if (!failure.isEmpty() || job == null) {
+                    statusMessage = failure.isEmpty() ? "Станция не ответила. Нажмите «Проверить печать»." : failure;
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                updateRelabelPrint(job);
+                if (!"PRINTED".equals(job.status) && !"FAILED".equals(job.status)) {
+                    mainHandler.postDelayed(() -> pollRelabelPrint(printId), 2000L);
+                }
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    relabelPrintBusy = false;
+                    statusMessage = "Нет связи с WMS. Нажмите «Проверить печать» после восстановления связи.";
+                    if (screen == Screen.RELABEL_BOX) renderRelabelBoxScreen();
+                });
+            }
+        });
+    }
+
+    private void updateRelabelPrint(TsdRelabelPrintJob job) {
+        activeRelabelPrintStatus = nonEmpty(job.status, "");
+        statusMessage = "PRINTED".equals(job.status)
+            ? "2 ШК напечатаны. Наклейте новый ШК и подтвердите проверочным сканом."
+            : "FAILED".equals(job.status)
+                ? "Печать не удалась: " + nonEmpty(job.error, "Проверьте принтер.")
+                : "Задание печати в очереди. Дождитесь двух этикеток.";
+        renderRelabelBoxScreen();
     }
 
     private void submitRelabelScan() {
@@ -7214,13 +7738,17 @@ public class MainActivity extends Activity {
             for (TsdRelabelTask task : safeRelabelTasks()) {
                 if (selectedRelabelBox.equals(task.sourceBox) && remainingRelabel(task) > 0 && code.equals(task.oldBarcode)) {
                     activeRelabelTask = task;
-                    statusMessage = "Старый ШК принят. Сканируйте новый ШК.";
+                    activeRelabelPrintId = "";
+                    activeRelabelPrintStatus = "";
+                    statusMessage = "Старый ШК принят. Напечатайте 2 новых ШК.";
                     assemblyScanInput.setText("");
                     renderRelabelBoxScreen();
                     return;
                 }
             }
             statusMessage = "Неверный товар для перемаркировки: " + code;
+        } else if (!RelabelPrintGate.canVerify(activeRelabelPrintStatus)) {
+            statusMessage = "Сначала дождитесь печати двух новых ШК.";
         } else if (code.equals(activeRelabelTask.newBarcode)) {
             TsdRelabelTask completedTask = activeRelabelTask;
             int done = Math.max(completedTask.doneQuantity, doneInt(relabelKey(completedTask))) + 1;
@@ -7234,6 +7762,8 @@ public class MainActivity extends Activity {
             progress.put("size", completedTask.size == null ? "" : completedTask.size);
             enqueueAssemblyProgress(progress);
             statusMessage = "Переклейка подтверждена: " + done + " / " + activeRelabelTask.quantity;
+            activeRelabelPrintId = "";
+            activeRelabelPrintStatus = "";
             if (remainingRelabel(activeRelabelTask) <= 0) {
                 activeRelabelTask = null;
             }
@@ -7340,7 +7870,7 @@ public class MainActivity extends Activity {
         }));
         root.addView(secondaryButton("Назад", view -> renderAssemblyDetailScreen()));
         setScrollableContent(root);
-        assemblyScanInput.requestFocus();
+        assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         refreshHeaderText();
     }
 
@@ -7404,7 +7934,7 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton("Назад к заявке", view -> renderAssemblyDetailScreen()));
         setScrollableContent(root);
         if (assemblyScanInput != null) {
-            assemblyScanInput.requestFocus();
+            assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
         }
         refreshHeaderText();
     }
@@ -8721,6 +9251,12 @@ public class MainActivity extends Activity {
         if (TsdUi.enabled()) { payload.put("uiLanguage", uiLanguage); payload.put("screenshotLanguage", "ru"); }
         payload.put("reportedAt", System.currentTimeMillis());
 
+        // FIX: the active FBO screen owns its request; stale FBS/legacy plans must not overwrite it.
+        if ("logoff".equals(BuildConfig.FLAVOR) && screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) {
+            payload.putAll(fboTwoStageScreen.monitorPayload());
+            return payload;
+        }
+
         if (activeInventory != null) {
             payload.put("inventorySessionId", activeInventory.id);
             payload.put("inventoryType", nonEmpty(activeInventory.type, inventoryType));
@@ -8779,7 +9315,9 @@ public class MainActivity extends Activity {
             case MIGRATION_MENU: return "МИГРАЦИЯ";
             case KIZ_MENU: return "КИЗЫ";
             case KIZ_SEARCH: return "Поиск КИЗ";
-            case FBO_MENU: return "Сборка FBO";
+            case FBO_MENU: return "FBO";
+            case FBO_PICK_MENU: return "Сборка FBO";
+            case FBS_MENU: return "FBS";
             case FBO_TWO_STAGE: return fboPacking ? "Упаковка FBO" : "FBO WB";
             case PALLET_SORTING: return "Сортировка и перемещение";
             case RECEIPT: return "Приёмка";
@@ -8910,6 +9448,9 @@ public class MainActivity extends Activity {
         }
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
+        if("logoff".equals(BuildConfig.FLAVOR)&&screen==Screen.FBS_ASSEMBLY){
+            scroll.setFillViewport(true);scroll.setBackground(root.getBackground());
+        }
         scroll.addView(root);
         setContentView(scroll);
     }
@@ -9975,6 +10516,10 @@ public class MainActivity extends Activity {
             renderMigrationMenu();
         } else if (screen == Screen.KIZ_MENU) {
             renderKizMenu();
+        } else if (screen == Screen.FBS_MENU) {
+            renderFbsMenu();
+        } else if (screen == Screen.FBO_PICK_MENU) {
+            renderFboPickingMenu();
         } else if (screen == Screen.FBO_MENU) {
             renderFboMenu();
         } else if (screen == Screen.ASSEMBLY_LIST) {
@@ -10402,6 +10947,8 @@ public class MainActivity extends Activity {
         KIZ_SEARCH,
         MIGRATION_MENU,
         FBO_MENU,
+        FBO_PICK_MENU,
+        FBS_MENU,
         ASSEMBLY_LIST,
         ASSEMBLY_DETAIL,
         BOX_SEARCH,

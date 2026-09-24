@@ -13,6 +13,7 @@ import { StorageLocationsService } from '../warehouse/storage-locations.service'
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
 import { TsdAssemblyService } from './tsd-assembly.service';
+import { TsdRelabelPrintService } from './tsd-relabel-print.service';
 import { TsdDeviceService } from './tsd-device.service';
 import { TsdReceiptService } from './tsd-receipt.service';
 import { TsdAuditInterceptor } from './tsd-audit.interceptor';
@@ -28,6 +29,7 @@ export class TsdDeviceController {
   constructor(
     private readonly devices: TsdDeviceService,
     private readonly assembly: TsdAssemblyService,
+    private readonly relabelPrint: TsdRelabelPrintService,
     private readonly receipts: TsdReceiptService,
     private readonly marketplace: MarketplaceConnectionsService,
     private readonly storageLocations: StorageLocationsService,
@@ -593,6 +595,28 @@ export class TsdDeviceController {
   @RequirePermissions('stock:write')
   getRelabel(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.assembly.getRequestStage(id, 'relabel', user);
+  }
+
+  // FIX: printing a target label is separate from the verifying scan and never completes a relabel task.
+  @Get('requests/:id/relabel/print-stations')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  listRelabelPrintStations(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.relabelPrint.stations(id, user);
+  }
+
+  @Post('requests/:id/relabel/print')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  printRelabelTarget(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.relabelPrint.create(id, body, user);
+  }
+
+  @Get('requests/:id/relabel/print/:printId')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  relabelPrintStatus(@Param('id') id: string, @Param('printId') printId: string, @CurrentUser() user: AuthUser) {
+    return this.relabelPrint.status(id, printId, user);
   }
 
   @Post('requests/:id/relabel/scan-source')

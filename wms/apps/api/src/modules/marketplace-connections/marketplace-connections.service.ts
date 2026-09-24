@@ -17329,10 +17329,23 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async claimFbsPrintJob(stationId: string, _user: AuthUser) {
     await this.prisma.fbsPrintStation.update({ where: { id: stationId }, data: { lastSeenAt: new Date(), lastError: null } });
     const stale = new Date(Date.now() - 120_000);
-    const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' }, { status: 'CLAIMED', claimedAt: { lt: stale } }] }, orderBy: { createdAt: 'asc' } });
+    const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' },
+      // FIX: an uncertain physical relabel print must not automatically print another pair.
+      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { not: 'TSD_RELABEL' } }] }, orderBy: { createdAt: 'asc' } });
     if (!job) return null;
-    // FIX: use queued job metadata so direct WMS and TSD-initiated prints share one layout.
-    const sortingLabel = await buildFbsSortingLabel(job);
+    // FIX: the existing quiet agent prints both images. A relabel job contains
+    // two identical target-product labels instead of an FBS order/sorting pair.
+    const sortingLabel = job.source === 'TSD_RELABEL'
+      ? { contentType: 'image/png' as const, imageBase64: job.stickerBase64,
+          widthMm: 58, heightMm: 40, templateVersion: 'tsd-relabel-lukin-v1' }
+      : await buildFbsSortingLabel(job);
+    if (job.source === 'TSD_RELABEL') {
+      // FIX: two agents polling one station cannot both print the same relabel pair.
+      const claimed = await this.prisma.fbsPrintJob.updateMany({ where: { id: job.id, status: 'QUEUED' },
+        data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
+      if (!claimed.count) return null;
+      return { ...await this.prisma.fbsPrintJob.findUniqueOrThrow({ where: { id: job.id } }), sortingLabel };
+    }
     const claimed = await this.prisma.fbsPrintJob.update({ where: { id: job.id }, data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
     return { ...claimed, sortingLabel };
   }
@@ -17343,9 +17356,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const job = wbOrderStockLifecycleEnabled()
       ? await this.prisma.fbsPrintJob.findUniqueOrThrow({ where: { id } })
       : await this.prisma.fbsPrintJob.update({ where: { id }, data });
-    await this.prisma.auditLog.create({ data: { userId: user.id, action: success ? 'FBS_TWO_LABELS_PRINTED' : 'FBS_TWO_LABELS_PRINT_FAILED', entity: 'FbsPrintJob', entityId: job.id, payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
+    await this.prisma.auditLog.create({ data: { userId: user.id,
+      action: job.source === 'TSD_RELABEL'
+        ? success ? 'TSD_RELABEL_TWO_LABELS_PRINTED' : 'TSD_RELABEL_TWO_LABELS_PRINT_FAILED'
+        : success ? 'FBS_TWO_LABELS_PRINTED' : 'FBS_TWO_LABELS_PRINT_FAILED',
+      entity: 'FbsPrintJob', entityId: job.id,
+      payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
     // FIX: only the successful print-agent acknowledgement is a shipment trigger.
-    if (success && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
+    if (success && job.source !== 'TSD_RELABEL' && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
       const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: job.assemblyId } });
       if (task.marketplace === MarketplaceType.WILDBERRIES) {
         const cached = this.fbsOrdersCache.get(task.clientId)?.value.orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId);

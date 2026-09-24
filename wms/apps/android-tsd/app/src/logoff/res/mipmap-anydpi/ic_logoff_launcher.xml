@@ -1,0 +1,4 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- FIX: real mipmap resource for legacy Android launchers. -->
+    <item android:drawable="@drawable/logoff_launcher_legacy" />
+</layer-list>

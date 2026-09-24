@@ -13,4 +13,7 @@ public class TsdInventoryLine {
     // ADDED: optional response fields for LOGOFF barcode/KIZ counting.
     public String scanState;
     public boolean duplicate;
+    // FIX: explicit scan correction challenge; never treated as a counted unit.
+    public String replaceEvidenceToken;
+    public String previousSkuName;
 }

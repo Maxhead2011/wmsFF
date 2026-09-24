@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 188 // FIX: show WB sticker digits above picking completion.
-            versionName = "0.1.188-fbs-timeouts"
+            versionCode = 210 // FIX: print two target barcodes before verifying relabeling.
+            versionName = "0.1.210-relabel-print"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

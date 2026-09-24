@@ -2,9 +2,12 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFboPlan {
+    public boolean parallelPackingSupported;
+    public boolean localRouteEnabled;
     public String requestId, title, phase;
     public int needed, picked, packed, looseRemaining, shortage;
-    public boolean compositionChanged;
+    public boolean compositionChanged, manualPackingEnabled, reusablePackingEnabled;
+    public boolean fastAcknowledgementSupported;
     public List<Line> lines;
     public List<Route> route;
     public List<Box> boxes;
@@ -17,6 +20,7 @@ public class TsdFboPlan {
     public static class Route {
         public String boxCode, pallet, zone;
         public boolean wholeBox, recount;
+        public int wholeBoxQuantity, remainderQuantity;
         public List<Task> tasks;
     }
     public static class Task { public String skuId, barcode, name; public int quantity; public boolean requiresKiz; }
