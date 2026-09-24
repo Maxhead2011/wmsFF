@@ -17,7 +17,7 @@ import { printB1Stickers, renderStickerPng } from './niimbotBrowser';
 import { StickerCanvasEditor } from './StickerCanvasEditor';
 import { TsplPreviewCard } from './TsplPreviewCard';
 import { stickerSequence, type StickerSequence } from '../../lib/stickerSequence';
-import { buildStickerTspl, defaultStickerBoxes, fitStickerText, type StickerBoxes, type StickerCodeKind, type StickerLayout } from '../../lib/stickerLayout';
+import { buildStickerTspl, fitStickerText, type StickerBoxes, type StickerCodeKind, type StickerLayout } from '../../lib/stickerLayout';
 
 const NIIMBOT_BROWSER_CODE = 'NIIMBOT_B1_BROWSER';
 
@@ -27,6 +27,31 @@ export function chooseStickerDestination(current: string, stations: PrintAgentSt
   if (current.startsWith('AGENT:') && stations.some((station) => station.id === current.slice(6))) return current;
   if (printers.some((printer) => printer.code === current && printer.isActive)) return current;
   return '';
+}
+
+// FIX: compute positions from the actual paper size, including the movable FFL caption.
+export function serialBoxLayout(width: number, height: number, codeKind: StickerCodeKind): StickerLayout {
+  const w = width * 8;
+  const h = height * 8;
+  const qrSide = Math.max(50, Math.floor(Math.min(125, h - 110, codeKind === 'both' ? w * .25 : w - 48) / 25) * 25);
+  const qrY = Math.max(44, Math.round((h - qrSide - 40) / 2));
+  const qrX = codeKind === 'both' ? 24 : Math.round((w - qrSide) / 2);
+  const barcodeY = codeKind === 'both' ? qrY + 10 : Math.max(66, Math.round(h * .27));
+  const barcodeX = codeKind === 'both' ? qrX + qrSide + 16 : 24;
+  const barcodeHeight = codeKind === 'both' ? Math.min(70, h - barcodeY - 65) : Math.min(100, h - barcodeY - 65);
+  const numberY = Math.min(h - 43, Math.max(qrY + qrSide, barcodeY + barcodeHeight) + 12);
+  return {
+    width, height, font: 3, codeKind, qrLevel: 'M', qrModule: 4, barcodeHeight,
+    topText: '', bottomText: '', qrX, qrY, barcodeX, barcodeY, numberY,
+    boxes: {
+      client: { x: 16, y: 12, width: w - 32, height: 32 },
+      top: { x: 16, y: 48, width: w - 32, height: 28 },
+      qr: { x: qrX, y: qrY, width: qrSide, height: qrSide },
+      barcode: { x: barcodeX, y: barcodeY, width: w - barcodeX - 24, height: barcodeHeight },
+      number: { x: 16, y: numberY, width: w - 32, height: 34 },
+      bottom: { x: 16, y: h - 34, width: w - 32, height: 24 },
+    },
+  };
 }
 
 export function StickerSetPanel({ session }: { session: AuthSession }) {
@@ -42,8 +67,8 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
   const [repeat, setRepeat] = useState('1');
   const [digits, setDigits] = useState('3');
   const [direction, setDirection] = useState<StickerSequence['direction']>('up');
-  const [width, setWidth] = useState('50');
-  const [height, setHeight] = useState('30');
+  const [width, setWidth] = useState('60');
+  const [height, setHeight] = useState('40');
   const [font, setFont] = useState('3');
   const [topText, setTopText] = useState('');
   const [bottomText, setBottomText] = useState('');
@@ -58,7 +83,7 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
   const [barcodeX, setBarcodeX] = useState('16');
   const [barcodeY, setBarcodeY] = useState('175');
   const [numberY, setNumberY] = useState('280');
-  const [boxes, setBoxes] = useState<StickerBoxes>(() => defaultStickerBoxes({ width: 50, height: 30, font: 3, codeKind: 'qr', qrLevel: 'M', qrModule: 4, barcodeHeight: 70, topText: '', bottomText: '', qrX: 20, qrY: 45, barcodeX: 16, barcodeY: 120, numberY: 175 }));
+  const [boxes, setBoxes] = useState<StickerBoxes>(() => serialBoxLayout(60, 40, 'qr').boxes!);
   const [printerCode, setPrinterCode] = useState('');
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof previewLabelTemplate>> | null>(null);
   const [message, setMessage] = useState('');
@@ -93,16 +118,25 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
     const printer = printers.find((item) => item.code === printerCode);
     if (!printer && printerCode !== NIIMBOT_BROWSER_CODE && !printerCode.startsWith('AGENT:')) return;
     const isNiimbot = printerCode === NIIMBOT_BROWSER_CODE || `${printer?.code ?? ''} ${printer?.name ?? ''}`.toUpperCase().includes('NIIMBOT');
-    setWidth(isNiimbot ? '50' : '40');
-    setHeight(isNiimbot ? '30' : '60');
+    setWidth(isNiimbot ? '50' : '60');
+    setHeight(isNiimbot ? '30' : '40');
     const compact = isNiimbot;
-    setQrY(compact ? (codeKind === 'both' ? '35' : '45') : '82');
+    const next = serialBoxLayout(compact ? 50 : 60, compact ? 30 : 40, codeKind);
+    setQrY(String(next.qrY));
     setQrModule(compact && codeKind === 'both' ? '3' : '4');
-    setBarcodeY(compact ? (codeKind === 'both' ? '120' : '85') : '220');
-    setBarcodeHeight(compact && codeKind === 'both' ? '42' : '70');
-    setNumberY(compact ? '175' : '335');
-    setBoxes(defaultStickerBoxes({ width: compact ? 50 : 40, height: compact ? 30 : 60, font: positive(font, 3), codeKind, qrLevel, qrModule: compact && codeKind === 'both' ? 3 : 4, barcodeHeight: compact && codeKind === 'both' ? 42 : 70, topText, bottomText, qrX: coordinate(qrX, 20), qrY: compact ? (codeKind === 'both' ? 35 : 45) : 82, barcodeX: coordinate(barcodeX, 16), barcodeY: compact ? (codeKind === 'both' ? 120 : 85) : 220, numberY: compact ? 175 : 335 }));
-  }, [printerCode, printers, codeKind]);
+    setBarcodeY(String(next.barcodeY));
+    setBarcodeHeight(String(next.barcodeHeight));
+    setNumberY(String(next.numberY));
+    setBoxes(next.boxes!);
+  }, [printerCode, printers]);
+
+  function changePaperSize(nextWidth: string, nextHeight: string) {
+    setWidth(nextWidth);
+    setHeight(nextHeight);
+    const parsedWidth = Number(nextWidth);
+    const parsedHeight = Number(nextHeight);
+    if (parsedWidth >= 20 && parsedHeight >= 20) setBoxes(serialBoxLayout(parsedWidth, parsedHeight, codeKind).boxes!);
+  }
 
   async function createSet(mode: 'preview' | 'print') {
     if (!client || values.length === 0) return;
@@ -183,8 +217,8 @@ export function StickerSetPanel({ session }: { session: AuthSession }) {
       <label><span>Куда печатать</span><select value={printerCode} onChange={(event) => setPrinterCode(event.target.value)}><option value="">Выберите принтер</option>{availablePrinters.map((item) => <option key={item.id} value={item.code}>{item.name}</option>)}</select></label>
     </div>
     {printerCode === NIIMBOT_BROWSER_CODE ? <p className="sticker-set__browser-note">Печать напрямую с этого ноутбука: включите NIIMBOT B1, откройте WMS в Chrome или Edge и нажмите «Напечатать». Браузер попросит выбрать принтер один раз.</p> : null}
-    <div className="sticker-set__design"><label><span>Ширина, мм</span><input min="20" max="100" type="number" value={width} onChange={(event) => setWidth(event.target.value)} /></label><label><span>Высота, мм</span><input min="20" max="100" type="number" value={height} onChange={(event) => setHeight(event.target.value)} /></label><label><span>Размер шрифта</span><input min="1" max="10" type="number" value={font} onChange={(event) => setFont(event.target.value)} /></label><label><span>Текст сверху</span><input value={topText} onChange={(event) => setTopText(event.target.value)} placeholder="Например: Короб клиента" /></label><label><span>Текст снизу</span><input value={bottomText} onChange={(event) => setBottomText(event.target.value)} placeholder="Например: Москва" /></label><label><span>Вид кода</span><select value={codeKind} onChange={(event) => setCodeKind(event.target.value as StickerCodeKind)}><option value="qr">QR-код</option><option value="code128">Штрихкод Code 128</option><option value="both">QR + Code 128</option></select></label><label><span>Читаемость QR</span><select disabled={!qrEnabled} value={qrLevel} onChange={(event) => setQrLevel(event.target.value as typeof qrLevel)}><option value="L">L · больше данных</option><option value="M">M · стандарт</option><option value="Q">Q · устойчивый</option><option value="H">H · максимальная</option></select></label></div>
-    <StickerCanvasEditor width={positive(width, 50)} height={positive(height, 30)} boxes={boxes} onChange={setBoxes} clientName={client?.name ?? ''} topText={topText} bottomText={bottomText} value={values[0] ?? ''} codeKind={codeKind} qrLevel={qrLevel} font={positive(font, 3)} />
+    <div className="sticker-set__design"><label><span>Ширина, мм</span><input min="20" max="100" type="number" value={width} onChange={(event) => changePaperSize(event.target.value, height)} /></label><label><span>Высота, мм</span><input min="20" max="100" type="number" value={height} onChange={(event) => changePaperSize(width, event.target.value)} /></label><label><span>Размер шрифта</span><input min="1" max="10" type="number" value={font} onChange={(event) => setFont(event.target.value)} /></label><label><span>Текст сверху</span><input value={topText} onChange={(event) => setTopText(event.target.value)} placeholder="Например: Короб клиента" /></label><label><span>Текст снизу</span><input value={bottomText} onChange={(event) => setBottomText(event.target.value)} placeholder="Например: Москва" /></label><label><span>Вид кода</span><select value={codeKind} onChange={(event) => { const next = event.target.value as StickerCodeKind; setCodeKind(next); setBoxes(serialBoxLayout(positive(width, 60), positive(height, 40), next).boxes!); }}><option value="qr">QR-код</option><option value="code128">Штрихкод Code 128</option><option value="both">QR + Code 128</option></select></label><label><span>Читаемость QR</span><select disabled={!qrEnabled} value={qrLevel} onChange={(event) => setQrLevel(event.target.value as typeof qrLevel)}><option value="L">L · больше данных</option><option value="M">M · стандарт</option><option value="Q">Q · устойчивый</option><option value="H">H · максимальная</option></select></label></div>
+    <StickerCanvasEditor width={positive(width, 50)} height={positive(height, 30)} boxes={boxes} onChange={setBoxes} clientName={client?.name ?? ''} topText={topText} bottomText={bottomText} value={values[0] ?? ''} valueLabel="Подпись FFL под кодом" codeKind={codeKind} qrLevel={qrLevel} font={positive(font, 3)} />
     <div className="sticker-set__sequence"><b>Будет напечатано: {values.length} этикеток</b><span>{values.slice(0, 5).join(' · ')}{values.length > 5 ? ` · … · ${values[values.length - 1]}` : ''}</span></div>
     {sequenceResult.error ? <p className="form-error" role="alert">{sequenceResult.error}</p> : null}
     {error || message ? <p className={error ? 'form-error' : 'inline-status'}>{error || message}</p> : null}

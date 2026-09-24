@@ -6,9 +6,9 @@ import { fitStickerText, moveStickerBox, type StickerBoxes, type StickerCodeKind
 type Key = keyof StickerBoxes;
 const labels: Record<Key, string> = { client: 'Клиент', top: 'Текст сверху', qr: 'QR', barcode: 'Штрихкод', number: 'Номер', bottom: 'Текст снизу' };
 
-export function StickerCanvasEditor({ width, height, boxes, onChange, clientName, topText, bottomText, value, codeKind, qrLevel, font }: {
+export function StickerCanvasEditor({ width, height, boxes, onChange, clientName, topText, bottomText, value, codeKind, qrLevel, font, valueLabel = 'Номер' }: {
   width: number; height: number; boxes: StickerBoxes; onChange: (boxes: StickerBoxes) => void;
-  clientName: string; topText: string; bottomText: string; value: string; codeKind: StickerCodeKind; qrLevel: 'L' | 'M' | 'Q' | 'H'; font: number;
+  clientName: string; topText: string; bottomText: string; value: string; codeKind: StickerCodeKind; qrLevel: 'L' | 'M' | 'Q' | 'H'; font: number; valueLabel?: string;
 }) {
   const [selected, setSelected] = useState<Key>('number');
   const [qrImage, setQrImage] = useState('');
@@ -32,7 +32,7 @@ export function StickerCanvasEditor({ width, height, boxes, onChange, clientName
     ...(topText ? [{ key: 'top' as const, text: topText }] : []),
     ...(codeKind !== 'code128' ? [{ key: 'qr' as const, text: '▦' }] : []),
     ...(codeKind !== 'qr' ? [{ key: 'barcode' as const, text: '||||||||||||||||' }] : []),
-    { key: 'number', text: value || 'Номер' },
+    { key: 'number', text: value || valueLabel },
     ...(bottomText ? [{ key: 'bottom' as const, text: bottomText }] : []),
   ];
 
@@ -71,14 +71,14 @@ export function StickerCanvasEditor({ width, height, boxes, onChange, clientName
         }
         return <div key={key} className={`sticker-set__object sticker-set__object--${key}${selected === key ? ' is-selected' : ''}${!fitted && key !== 'qr' && key !== 'barcode' ? ' is-overflow' : ''}`}
           style={{ left: box.x, top: box.y, width: box.width, height: box.height, fontSize: fitted?.size }}
-          title={labels[key]} onPointerDown={(event) => pointerDown(event, key, 'move')} onPointerMove={pointerMove} onPointerUp={() => { gesture.current = null; }}>
+          title={key === 'number' ? valueLabel : labels[key]} onPointerDown={(event) => pointerDown(event, key, 'move')} onPointerMove={pointerMove} onPointerUp={() => { gesture.current = null; }}>
           {key === 'qr' && qrImage ? <img src={qrImage} alt="" draggable={false} /> : key === 'barcode' && barcodeImage ? <img src={barcodeImage} alt="" draggable={false} /> : <span>{fitted ? fitted.lines.map((line, index) => <span key={index}>{line}<br /></span>) : text}</span>}
-          <i onPointerDown={(event) => pointerDown(event, key, 'resize')} aria-label={`Изменить размер: ${labels[key]}`} />
+          <i onPointerDown={(event) => pointerDown(event, key, 'resize')} aria-label={`Изменить размер: ${key === 'number' ? valueLabel : labels[key]}`} />
         </div>;
       })}
     </div></div>
-    <div className="sticker-set__positions"><b>Расположение и размер</b><p>Перетащите элемент на этикетке. Потяните за правый нижний угол, чтобы изменить размер. Текст автоматически увеличивается до доступного размера.</p>
-      <label>Элемент<select value={selected} onChange={(event) => setSelected(event.target.value as Key)}>{entries.map(({ key }) => <option key={key} value={key}>{labels[key]}</option>)}</select></label>
+    <div className="sticker-set__positions"><b>Расположение и размер</b><p>Чтобы передвинуть подпись FFL, зажмите её прямо на белой этикетке и перетащите мышью. Синий угол меняет размер поля. Ниже можно выбрать любой элемент и точно задать его положение.</p>
+      <label>Элемент<select value={selected} onChange={(event) => setSelected(event.target.value as Key)}>{entries.map(({ key }) => <option key={key} value={key}>{key === 'number' ? valueLabel : labels[key]}</option>)}</select></label>
       {(['x', 'y', 'width', 'height'] as const).map((property) => <label key={property}>{({ x: 'X', y: 'Y', width: 'Ширина', height: 'Высота' })[property]}<input type="number" min="0" value={boxes[selected][property]} onChange={(event) => onChange({ ...boxes, [selected]: { ...boxes[selected], [property]: Number(event.target.value) } })} /></label>)}
     </div>
   </div>;

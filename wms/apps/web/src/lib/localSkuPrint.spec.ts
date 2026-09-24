@@ -13,4 +13,8 @@ describe('local SKU printing', () => {
     expect(html.match(/data:image\/png;base64,AAAA/g)).toHaveLength(2);
     expect(html.match(/data:image\/png;base64,BBBB/g)).toHaveLength(1);
   });
+  it('uses 40 × 30 mm pages for the compact marketplace template', () => {
+    // TEST: a compact PNG must not be sent to a 60 × 40 printer page.
+    expect(buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }], 40, 30)).toContain('@page { size: 40mm 30mm; margin: 0; }');
+  });
 });

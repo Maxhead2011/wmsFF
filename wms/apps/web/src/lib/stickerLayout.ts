@@ -5,6 +5,8 @@ export type StickerLayout = {
   height: number;
   font: number;
   codeKind: StickerCodeKind;
+  barcodeHumanReadable?: boolean;
+  barcodeModule?: number;
   qrLevel: 'L' | 'M' | 'Q' | 'H';
   qrModule: number;
   barcodeHeight: number;
@@ -87,7 +89,10 @@ export function buildStickerTspl(input: StickerLayout) {
   lines.push(block(boxes.client, 'clientName'));
   if (input.topText) lines.push(block(boxes.top, 'topText'));
   if (hasQr) lines.push(`QRCODE ${boxes.qr.x},${boxes.qr.y},${input.qrLevel},${clamp(Math.round(boxes.qr.width / 25), 1, 10)},A,0,"{{qrValue}}"`);
-  if (hasBarcode) lines.push(`BARCODE ${boxes.barcode.x},${boxes.barcode.y},"128",${boxes.barcode.height},1,0,${clamp(Math.round(boxes.barcode.width / 100), 1, 4)},${clamp(Math.round(boxes.barcode.width / 100), 1, 4)},"{{barcodeValue}}"`);
+  if (hasBarcode) {
+    const module = input.barcodeModule ?? clamp(Math.round(boxes.barcode.width / 100), 1, 4);
+    lines.push(`BARCODE ${boxes.barcode.x},${boxes.barcode.y},"128",${boxes.barcode.height},${input.barcodeHumanReadable === false ? 0 : 1},0,${module},${module},"{{barcodeValue}}"`);
+  }
   lines.push(block(boxes.number, 'barcodeValue'));
   if (input.bottomText) lines.push(block(boxes.bottom, 'bottomText'));
   lines.push('PRINT 1');
