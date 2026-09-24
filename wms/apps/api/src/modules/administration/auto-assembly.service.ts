@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
+import { recoverFailedAutoAssemblies } from '../marketplace-connections/auto-assembly-recovery';
 import { emptyAutoAssembly, nextAutoAssembly, parseAutoAssembly, type AutoAssemblyConfig } from './auto-assembly-policy';
 const PREFIX = 'fbs.autoAssembly.config.';
 const RUN = 'fbs.autoAssembly.run.';
@@ -67,10 +68,14 @@ export class AutoAssemblyService implements OnModuleInit, OnModuleDestroy {
     try { await this.prisma.systemSetting.create({ data: { key, value: { startedAt, status: 'RUNNING', slot }, updatedByUserId: user.id } }); }
     catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') return; throw error; }
     let result: unknown;
+    let recovered: Awaited<ReturnType<typeof recoverFailedAutoAssemblies>> = [];
     try {
+      // FIX: existing WMS ownership must not permanently hide a failed WB operation.
+      recovered = await recoverFailedAutoAssemblies(this.prisma, id, user.id, config);
       const report = await this.marketplace.runAutoAssembly(id, config, user);
-      result = { startedAt, completedAt: new Date().toISOString(), status: report.groups.some(g => g.error) ? 'PARTIAL' : 'DONE', slot, ...report };
-    } catch (error) { result = { startedAt, completedAt: new Date().toISOString(), status: 'ERROR', slot, error: error instanceof Error ? error.message : 'Ошибка запуска' }; }
+      const groups = [...recovered, ...report.groups];
+      result = { startedAt, completedAt: new Date().toISOString(), status: groups.some(g => g.error) ? 'PARTIAL' : 'DONE', slot, ...report, groups };
+    } catch (error) { result = { startedAt, completedAt: new Date().toISOString(), status: 'ERROR', slot, groups: recovered, error: error instanceof Error ? error.message : 'Ошибка запуска' }; }
     await this.prisma.systemSetting.update({ where: { key }, data: { value: result as Prisma.InputJsonValue } });
     return result;
   }
