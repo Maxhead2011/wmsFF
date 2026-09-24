@@ -3,6 +3,22 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 function Read-Config { Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+
+# FIX: errors before the first heartbeat were previously invisible to the operator.
+function Write-AgentError([string]$stage, $errorRecord) {
+  try {
+    $message = [string]$errorRecord.Exception.Message
+    $message = $message -replace '(?i)Bearer\s+\S+', 'Bearer [hidden]'
+    $line = "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$stage] $message"
+    $errorKey = "[$stage] $message"
+    if ($errorKey -eq $script:lastAgentError -and ((Get-Date) - $script:lastAgentErrorAt).TotalSeconds -lt 60) { return }
+    $script:lastAgentError = $errorKey
+    $script:lastAgentErrorAt = Get-Date
+    $logPath = Join-Path $PSScriptRoot 'agent.log'
+    if ((Test-Path -LiteralPath $logPath) -and (Get-Item -LiteralPath $logPath).Length -gt 65536) { Clear-Content -LiteralPath $logPath }
+    Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+  } catch { }
+}
 function Invoke-WmsApi($method, $path, $body = $null) {
   $cfg = Read-Config
   if (-not $script:token) {
@@ -69,9 +85,14 @@ function Print-SortingLabel($job, [string]$printer, [int]$widthMm, [int]$heightM
   finally { $small.Dispose(); $big.Dispose(); $center.Dispose(); $graphics.Dispose(); $bitmap.Dispose(); $memory.Dispose() }
 }
 
-$cfg = Read-Config
-$installed = [Drawing.Printing.PrinterSettings]::InstalledPrinters
-if (-not ($installed -contains $cfg.printerName)) { throw "Printer '$($cfg.printerName)' is not installed." }
+try {
+  $cfg = Read-Config
+  $installed = [Drawing.Printing.PrinterSettings]::InstalledPrinters
+  if (-not ($installed -contains $cfg.printerName)) { throw "Printer '$($cfg.printerName)' is not installed for this Windows user." }
+} catch {
+  Write-AgentError 'startup' $_
+  throw
+}
 while ($true) {
   try {
     Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/heartbeat" @{} | Out-Null
@@ -99,6 +120,9 @@ while ($true) {
         }
       }
     }
-  } catch { $script:token = $null }
+  } catch {
+    Write-AgentError 'connection' $_
+    $script:token = $null
+  }
   Start-Sleep -Seconds 2
 }
