@@ -1,8 +1,8 @@
 export type LocalSkuPrintImage = { imageBase64: string; copies: number };
 
 // FIX: use the browser's printer dialog for a locally installed printer, without creating a WMS queue job.
-export function buildLocalSkuPrintHtml(images: LocalSkuPrintImage[], widthMm: 40 | 60 = 60, heightMm: 30 | 40 = 40) {
-  if (!images.length || images.some(image => !/^[A-Za-z0-9+/]+={0,2}$/.test(image.imageBase64) || !Number.isInteger(image.copies) || image.copies < 1)) {
+export function buildLocalSkuPrintHtml(images: LocalSkuPrintImage[], widthMm = 60, heightMm = 40) {
+  if (![widthMm, heightMm].every(value => Number.isInteger(value) && value >= 20 && value <= 150) || !images.length || images.some(image => !/^[A-Za-z0-9+/]+={0,2}$/.test(image.imageBase64) || !Number.isInteger(image.copies) || image.copies < 1)) {
     throw new Error('Не удалось подготовить этикетки для локальной печати.');
   }
   const pages = images.flatMap(image => Array.from({ length: image.copies }, () =>
@@ -17,9 +17,9 @@ export function buildLocalSkuPrintHtml(images: LocalSkuPrintImage[], widthMm: 40
   </style></head><body>${pages}</body></html>`;
 }
 
-export function openLocalSkuPrint(images: LocalSkuPrintImage[], widthMm: 40 | 60 = 60, heightMm: 30 | 40 = 40) {
+export function openLocalSkuPrint(images: LocalSkuPrintImage[], widthMm = 60, heightMm = 40, openedWindow?: Window | null) {
   const html = buildLocalSkuPrintHtml(images, widthMm, heightMm);
-  const printWindow = window.open('', '_blank');
+  const printWindow = openedWindow ?? window.open('', '_blank');
   if (!printWindow) throw new Error('Браузер заблокировал окно печати. Разрешите всплывающие окна для WMS.');
   printWindow.addEventListener('load', () => {
     void Promise.all(Array.from(printWindow.document.images).map(image => image.decode().catch(() => undefined)))

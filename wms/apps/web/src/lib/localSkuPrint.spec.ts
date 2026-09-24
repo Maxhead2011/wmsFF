@@ -17,4 +17,9 @@ describe('local SKU printing', () => {
     // TEST: a compact PNG must not be sent to a 60 × 40 printer page.
     expect(buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }], 40, 30)).toContain('@page { size: 40mm 30mm; margin: 0; }');
   });
+  it('supports local serial box paper without accepting unsafe dimensions', () => {
+    // TEST: both serial templates must open on the installed local printer at the selected paper size.
+    expect(buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }], 50, 30)).toContain('@page { size: 50mm 30mm; margin: 0; }');
+    expect(() => buildLocalSkuPrintHtml([{ imageBase64: 'AAAA', copies: 1 }], 0, 30)).toThrow();
+  });
 });

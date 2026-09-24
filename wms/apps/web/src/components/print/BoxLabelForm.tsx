@@ -11,7 +11,9 @@ import { buildStickerTspl, type StickerCodeKind } from '../../lib/stickerLayout'
 import { StickerCanvasEditor } from './StickerCanvasEditor';
 import { renderStickerPng } from './niimbotBrowser';
 import { BOX_LABEL_HEIGHT_MM, BOX_LABEL_WIDTH_MM, boxLabelBoxes, boxSticker, boxStickerLayout } from './boxSticker';
-import { renderSortReferencePng, sortReferenceTspl } from '../../lib/sortReferenceLabel';
+import { defaultSortReferenceText, renderSortReferencePng, sortReferenceTspl } from '../../lib/sortReferenceLabel';
+import { SortReferenceLabelEditor } from './SortReferenceLabelEditor';
+import { openLocalSkuPrint } from '../../lib/localSkuPrint';
 
 export function BoxLabelForm({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -20,7 +22,7 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
   const [boxCode, setBoxCode] = useState('');
   const [codeKind, setCodeKind] = useState<StickerCodeKind>('code128');
   const [style, setStyle] = useState<'regular' | 'reference'>('regular');
-  const [referencePreview, setReferencePreview] = useState('');
+  const [referenceText, setReferenceText] = useState(() => defaultSortReferenceText(''));
   const [layoutBoxes, setLayoutBoxes] = useState(() => boxLabelBoxes('code128'));
   const [stations, setStations] = useState<PrintAgentStationSummary[]>([]);
   const [printers, setPrinters] = useState<PrintPrinterSummary[]>([]);
@@ -43,12 +45,6 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
   }, [session.accessToken]);
 
   useEffect(() => { if (clientId) void loadBoxes(clientId); }, [clientId]);
-  useEffect(() => {
-    if (style !== 'reference' || !boxCode.trim()) { setReferencePreview(''); return; }
-    let active = true;
-    renderSortReferencePng(boxCode, 'box').then(image => { if (active) setReferencePreview(image); }).catch(() => setReferencePreview(''));
-    return () => { active = false; };
-  }, [style, boxCode]);
 
   async function loadClients() {
     setLoading(true); setError('');
@@ -66,7 +62,7 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
     try {
       const list = await fetchBoxes(session.accessToken, { clientId: nextClientId });
       setBoxes(list);
-      setBoxCode(current => current || list[0]?.code || '');
+      if (!boxCode && list[0]) { setBoxCode(list[0].code); setReferenceText(defaultSortReferenceText(list[0].code)); }
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Не удалось загрузить короба.'); }
     finally { setLoading(false); }
   }
@@ -74,7 +70,10 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
   function changeClient(nextClientId: string) {
     setClientId(nextClientId);
     setBoxCode('');
+    setReferenceText(defaultSortReferenceText(''));
   }
+
+  function changeBoxCode(code: string) { setBoxCode(code); setReferenceText(defaultSortReferenceText(code)); }
 
   function changeCodeKind(next: StickerCodeKind) {
     setCodeKind(next);
@@ -89,9 +88,17 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
     try {
       // FIX: preview, agent PNG and network TSPL share the operator's code kind and movable layout.
       const code = boxCode.trim();
-      const tspl = style === 'reference' ? sortReferenceTspl(code, 'box') : buildStickerTspl(boxStickerLayout(codeKind, layoutBoxes, code));
+      const tspl = style === 'reference' ? sortReferenceTspl(code, 'box', referenceText) : buildStickerTspl(boxStickerLayout(codeKind, layoutBoxes, code));
+      if (destination === 'LOCAL_BROWSER') {
+        const localWindow = window.open('', '_blank');
+        if (!localWindow) throw new Error('Браузер заблокировал окно печати. Разрешите всплывающие окна для WMS.');
+        const imageBase64 = style === 'reference' ? await renderSortReferencePng(code, 'box', referenceText) : await renderStickerPng(boxSticker(selectedClient.name, code, codeKind, layoutBoxes), BOX_LABEL_WIDTH_MM, BOX_LABEL_HEIGHT_MM);
+        openLocalSkuPrint([{ imageBase64, copies: count }], BOX_LABEL_WIDTH_MM, BOX_LABEL_HEIGHT_MM, localWindow);
+        setMessage(`Открыто окно печати: ${count} этикеток. Выберите местный принтер, масштаб 100% и поля «Нет».`);
+        return;
+      }
       if (destination.startsWith('AGENT:')) {
-        const imageBase64 = style === 'reference' ? await renderSortReferencePng(code, 'box') : await renderStickerPng(boxSticker(selectedClient.name, code, codeKind, layoutBoxes), BOX_LABEL_WIDTH_MM, BOX_LABEL_HEIGHT_MM);
+        const imageBase64 = style === 'reference' ? await renderSortReferencePng(code, 'box', referenceText) : await renderStickerPng(boxSticker(selectedClient.name, code, codeKind, layoutBoxes), BOX_LABEL_WIDTH_MM, BOX_LABEL_HEIGHT_MM);
         await createPrintAgentCustomJob(session.accessToken, {
           stationId: destination.slice(6), clientId: selectedClient.id, value: code,
           imageBase64, copies: count, widthMm: BOX_LABEL_WIDTH_MM, heightMm: BOX_LABEL_HEIGHT_MM,
@@ -118,7 +125,7 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
         {clients.length === 0 ? <option value="">Клиенты не найдены</option> : null}
         {clients.map(client => <option key={client.id} value={client.id}>{client.code} - {client.name}</option>)}
       </select></label>
-      <label><span>Короб / код FFL</span><input list="print-boxes" value={boxCode} onChange={event => setBoxCode(event.target.value)} required />
+      <label><span>Короб / код FFL</span><input list="print-boxes" value={boxCode} onChange={event => changeBoxCode(event.target.value)} required />
         <datalist id="print-boxes">{boxes.map(box => <option key={box.id} value={box.code} />)}</datalist>
       </label>
       <label><span>Макет этикетки</span><select value={style} onChange={event => setStyle(event.target.value as typeof style)}><option value="regular">Клиент + FFL · свободное расположение</option><option value="reference">Как образец WB · все коды = номер короба</option></select></label>
@@ -127,6 +134,7 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
       </select></label>
       <label><span>Куда печатать</span><select value={destination} onChange={event => setDestination(event.target.value)}>
         <option value="">Выберите принтер</option>
+        <option value="LOCAL_BROWSER">Локальный принтер этого компьютера · выбрать в окне печати</option>
         <optgroup label="Станции FBS — печать через агент">{stations.map(station => <option key={station.id} value={`AGENT:${station.id}`}>{station.printerName} · {station.name}</option>)}</optgroup>
         <optgroup label="Сетевые принтеры WMS">{printers.map(printer => <option key={printer.code} value={printer.code}>{printer.name}</option>)}</optgroup>
       </select></label>
@@ -134,7 +142,7 @@ export function BoxLabelForm({ session }: { session: AuthSession }) {
     </div>
     {style === 'regular' ? <StickerCanvasEditor width={BOX_LABEL_WIDTH_MM} height={BOX_LABEL_HEIGHT_MM} boxes={layoutBoxes} onChange={setLayoutBoxes}
       clientName={selectedClient?.name ?? ''} topText="" bottomText="" value={boxCode.trim()} codeKind={codeKind} qrLevel="M" font={4} valueLabel="Подпись с кодом FFL" />
-      : <div><p>Все QR и штрихкоды содержат код короба: <strong>{boxCode || '—'}</strong>.</p>{referencePreview ? <img src={`data:image/png;base64,${referencePreview}`} alt="Предпросмотр этикетки короба" style={{ width: 'min(100%, 600px)', aspectRatio: '3 / 2' }} /> : null}</div>}
+      : <div><p>Все QR и штрихкоды содержат код короба: <strong>{boxCode || '—'}</strong>.</p><SortReferenceLabelEditor code={boxCode} kind="box" fields={referenceText} onChange={setReferenceText} /></div>}
     {error ? <p className="form-error">{error}</p> : null}
     {message ? <p className="inline-status">{message}</p> : null}
     <div className="print-actions">
