@@ -64,25 +64,9 @@ function Print-OneLabel([byte[]]$bytes, [string]$printer, [int]$widthMm, [int]$h
 }
 
 function Print-SortingLabel($job, [string]$printer, [int]$widthMm, [int]$heightMm) {
-  $bitmap = [Drawing.Bitmap]::new([int]($widthMm / 25.4 * 300), [int]($heightMm / 25.4 * 300))
-  $graphics = [Drawing.Graphics]::FromImage($bitmap)
-  $graphics.Clear([Drawing.Color]::White)
-  $graphics.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
-  $center = [Drawing.StringFormat]::new(); $center.Alignment = 'Center'
-  $small = [Drawing.Font]::new('Arial', 12, [Drawing.FontStyle]::Bold)
-  $big = [Drawing.Font]::new('Arial', 21, [Drawing.FontStyle]::Bold)
-  $device = if ([string]::IsNullOrWhiteSpace($job.deviceCode)) { 'TSD' } else { [string]$job.deviceCode }
-  $request = if ($null -eq $job.requestNumber) { '-' } else { ('{0:D6}' -f [int]$job.requestNumber) }
-  $lines = @(@('TSD', $device), @('WMS REQUEST', $request), @('ORDER', [string]$job.orderId), @('WAREHOUSE', [string]$job.warehouseName))
-  $widthPx = $bitmap.Width; $row = [Math]::Floor($bitmap.Height / 4); $y = 0
-  foreach ($line in $lines) {
-    $graphics.DrawString($line[0], $small, [Drawing.Brushes]::Black, [Drawing.RectangleF]::new(0, $y, $widthPx, $row * 0.35), $center)
-    $graphics.DrawString($line[1], $big, [Drawing.Brushes]::Black, [Drawing.RectangleF]::new(0, $y + $row * 0.30, $widthPx, $row * 0.70), $center)
-    $y += $row
-  }
-  $memory = [IO.MemoryStream]::new()
-  try { $bitmap.Save($memory, [Drawing.Imaging.ImageFormat]::Png); Print-OneLabel $memory.ToArray() $printer $widthMm $heightMm }
-  finally { $small.Dispose(); $big.Dispose(); $center.Dispose(); $graphics.Dispose(); $bitmap.Dispose(); $memory.Dispose() }
+  # FIX: exactly the same server-rendered image as direct WMS printing; no second template.
+  if (-not $job.sortingLabel.imageBase64 -or $job.sortingLabel.contentType -ne 'image/png') { throw 'Update the WMS server: sorting label is unavailable.' }
+  Print-OneLabel ([Convert]::FromBase64String($job.sortingLabel.imageBase64)) $printer $widthMm $heightMm
 }
 
 try {
@@ -99,8 +83,22 @@ while ($true) {
     $job = Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/claim" @{}
     if ($job) {
       try {
-        Print-OneLabel ([Convert]::FromBase64String($job.stickerBase64)) $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
-        Print-SortingLabel $job $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
+        $primaryImage = [Convert]::FromBase64String($job.stickerBase64)
+        $isRelabel = $job.source -eq 'TSD_RELABEL'
+        # FIX: validate the full pair before printing either WB/service or two relabel labels.
+        if (-not $job.sortingLabel.imageBase64 -or $job.sortingLabel.contentType -ne 'image/png') {
+          throw 'The second label image is unavailable. Refresh the task before printing.'
+        }
+        $secondImage = [Convert]::FromBase64String($job.sortingLabel.imageBase64)
+        if ($isRelabel -and [Convert]::ToBase64String($primaryImage) -cne [Convert]::ToBase64String($secondImage)) {
+          throw 'Relabel target label images do not match.'
+        }
+        Print-OneLabel $primaryImage $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
+        if ($isRelabel) {
+          Print-OneLabel $secondImage $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
+        } else {
+          Print-SortingLabel $job $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
+        }
         Invoke-WmsApi Post "/marketplace-connections/fbs/print-jobs/$($job.id)/result" @{ success = $true } | Out-Null
       } catch {
         Invoke-WmsApi Post "/marketplace-connections/fbs/print-jobs/$($job.id)/result" @{ success = $false; error = $_.Exception.Message } | Out-Null
