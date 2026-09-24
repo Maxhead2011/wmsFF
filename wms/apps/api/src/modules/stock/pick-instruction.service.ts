@@ -2793,7 +2793,19 @@ function relabelNote(item: WarehouseInventoryItem, demand: WarehouseDemand) {
     return '';
   }
 
-  return `переклеить на ${demand.targetArt || demand.relabelTargetBarcode || demand.artSeller || demand.barcode}`;
+  // FIX: TSD must receive the exact target barcode, not only its seller article.
+  return relabelBarcodeNote(
+    demand.relabelSourceBarcode || item.barcode,
+    demand.relabelTargetBarcode || demand.barcode,
+    demand.targetArt || demand.artSeller,
+  );
+}
+
+export function relabelBarcodeNote(sourceBarcode: string, targetBarcode: string, targetArticle: string) {
+  if (sourceBarcode.trim() && targetBarcode.trim()) {
+    return `перемаркировать ${sourceBarcode.trim()} -> ${targetBarcode.trim()}`;
+  }
+  return `переклеить на ${targetArticle || targetBarcode}`;
 }
 
 function isExactBarcodeMatch(item: WarehouseInventoryItem, demand: WarehouseDemand) {

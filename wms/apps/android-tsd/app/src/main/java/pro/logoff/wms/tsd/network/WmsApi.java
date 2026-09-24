@@ -361,6 +361,18 @@ public interface WmsApi {
         @Path("id") String id
     );
 
+    // FIX: the quiet-print station receives two target-product labels before verification.
+    @GET("api/v1/tsd/requests/{id}/relabel/print-stations")
+    Call<List<TsdPrintStation>> relabelPrintStations(@Header("Authorization") String authorization, @Path("id") String id);
+
+    @POST("api/v1/tsd/requests/{id}/relabel/print")
+    Call<TsdRelabelPrintJob> printRelabelTarget(@Header("Authorization") String authorization,
+        @Path("id") String id, @Body Map<String, String> request);
+
+    @GET("api/v1/tsd/requests/{id}/relabel/print/{printId}")
+    Call<TsdRelabelPrintJob> relabelPrintStatus(@Header("Authorization") String authorization,
+        @Path("id") String id, @Path("printId") String printId);
+
     @GET("api/v1/tsd/requests/{id}/boxless-packing")
     Call<TsdBoxlessPackingResponse> getBoxlessPacking(
         @Header("Authorization") String authorization,

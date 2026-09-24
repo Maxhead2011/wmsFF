@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 209 // FIX: explain repeat scans of packed FBO cartons.
-            versionName = "0.1.209-audit-retry"
+            versionCode = 210 // FIX: print two target barcodes before verifying relabeling.
+            versionName = "0.1.210-relabel-print"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

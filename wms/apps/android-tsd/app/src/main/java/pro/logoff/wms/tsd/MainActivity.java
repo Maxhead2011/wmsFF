@@ -94,6 +94,8 @@ import pro.logoff.wms.tsd.network.TsdFbsRequestsResponse;
 import pro.logoff.wms.tsd.network.TsdMovementTask;
 import pro.logoff.wms.tsd.network.TsdOperationRequest;
 import pro.logoff.wms.tsd.network.TsdRelabelTask;
+import pro.logoff.wms.tsd.network.TsdRelabelPrintJob;
+import pro.logoff.wms.tsd.network.TsdPrintStation;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdStoragePalletResponse;
 import pro.logoff.wms.tsd.network.TsdTransferResponse;
@@ -192,6 +194,10 @@ public class MainActivity extends Activity {
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
+    private String activeRelabelPrintId = "";
+    private String activeRelabelPrintStatus = "";
+    private boolean relabelPrintBusy;
+    private int relabelPrintPolls;
     private TsdInventorySession activeInventory;
     private TsdInventoryBox activeInventoryBox;
     private TsdInventoryDashboard inventoryDashboard;
@@ -7228,6 +7234,8 @@ public class MainActivity extends Activity {
                 online = true;
                 assemblyPlan = plan;
                 activeRelabelTask = null;
+                activeRelabelPrintId = "";
+                activeRelabelPrintStatus = "";
                 selectedRelabelBox = "";
                 selectedMoveSourceBox = "";
                 selectedMoveTargetBox = "";
@@ -7475,8 +7483,12 @@ public class MainActivity extends Activity {
                 }
             }
             root.addView(multilineSecondaryButton(box + "\nОсталось: " + remaining, view -> {
+                if (!box.equals(selectedRelabelBox)) {
+                    activeRelabelTask = null;
+                    activeRelabelPrintId = "";
+                    activeRelabelPrintStatus = "";
+                }
                 selectedRelabelBox = box;
-                activeRelabelTask = null;
                 renderRelabelBoxScreen();
             }));
         }
@@ -7506,8 +7518,20 @@ public class MainActivity extends Activity {
             ? "Сканируйте старый ШК товара"
             : "Товар: " + emptyAsDash(activeRelabelTask.name) +
                 "\nРазмер: " + emptyAsDash(activeRelabelTask.size) +
-                "\nСканируйте новый ШК: " + activeRelabelTask.newBarcode));
+                "\nЦелевой ШК: " + activeRelabelTask.newBarcode +
+                (RelabelPrintGate.canVerify(activeRelabelPrintStatus)
+                    ? "\nНаклейте новый ШК и сканируйте его для проверки."
+                    : "\nСначала напечатайте 2 этикетки.")));
+        if (activeRelabelTask != null) {
+            String printText = "FAILED".equals(activeRelabelPrintStatus)
+                ? "Повторно напечатать 2 ШК"
+                : activeRelabelPrintId.isEmpty() ? "Напечатать 2 ШК" : "Проверить печать";
+            Button printButton = primaryMenuButton(printText, view -> requestRelabelPrint());
+            printButton.setEnabled(!relabelPrintBusy && !RelabelPrintGate.canVerify(activeRelabelPrintStatus));
+            root.addView(printButton);
+        }
         assemblyScanInput = input(activeRelabelTask == null ? "Старый ШК" : "Новый ШК");
+        assemblyScanInput.setEnabled(activeRelabelTask == null || RelabelPrintGate.canVerify(activeRelabelPrintStatus));
         assemblyScanInput.setOnEditorActionListener((view, actionId, event) -> {
             submitRelabelScan();
             return true;
@@ -7534,8 +7558,168 @@ public class MainActivity extends Activity {
             root.addView(messageView(statusMessage));
         }
         setScrollableContent(root);
-        assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput);
+        if (assemblyScanInput.isEnabled()) { assemblyScanInput.requestFocus(); AssemblyAutoFocus.request(assemblyScanInput); }
         refreshHeaderText();
+    }
+
+    private void requestRelabelPrint() {
+        if (assemblyPlan == null || activeRelabelTask == null || relabelPrintBusy) return;
+        if (!activeRelabelPrintId.isEmpty() && !"FAILED".equals(activeRelabelPrintStatus)) {
+            relabelPrintPolls = 0;
+            pollRelabelPrint(activeRelabelPrintId);
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) return;
+        String requestId = assemblyPlan.id;
+        relabelPrintBusy = true;
+        renderRelabelBoxScreen();
+        runBackground(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Response<List<TsdPrintStation>> response = api.relabelPrintStations(session.authorizationHeader(), requestId).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось найти печатную станцию.");
+                List<TsdPrintStation> stations = response.body();
+                mainHandler.post(() -> {
+                relabelPrintBusy = false;
+                if (screen != Screen.RELABEL_BOX || assemblyPlan == null || !requestId.equals(assemblyPlan.id)) return;
+                if (!failure.isEmpty()) { statusMessage = failure; renderRelabelBoxScreen(); return; }
+                if (stations == null || stations.isEmpty()) {
+                    statusMessage = "Нет доступной станции 58 × 40 мм. Проверьте тихий агент печати.";
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                if (stations.size() == 1) { submitRelabelPrint(stations.get(0)); return; }
+                String[] labels = new String[stations.size()];
+                for (int i = 0; i < stations.size(); i++) {
+                    labels[i] = stations.get(i).name + " · " + stations.get(i).printerName;
+                }
+                new AlertDialog.Builder(this).setTitle("Куда напечатать 2 ШК")
+                    .setItems(labels, (dialog, which) -> submitRelabelPrint(stations.get(which)))
+                    .setNegativeButton("Отмена", null).show();
+                renderRelabelBoxScreen();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    relabelPrintBusy = false;
+                    statusMessage = "Нет связи со станцией печати. Повторите попытку.";
+                    if (screen == Screen.RELABEL_BOX) renderRelabelBoxScreen();
+                });
+            }
+        });
+    }
+
+    private void submitRelabelPrint(TsdPrintStation station) {
+        if (assemblyPlan == null || activeRelabelTask == null || relabelPrintBusy) return;
+        TsdSession session = safeSession();
+        if (session == null) return;
+        TsdRelabelTask task = activeRelabelTask;
+        String requestId = assemblyPlan.id;
+        if ("FAILED".equals(activeRelabelPrintStatus)) {
+            activeRelabelPrintId = UUID.randomUUID().toString();
+        } else if (activeRelabelPrintId.isEmpty()) {
+            activeRelabelPrintId = RelabelPrintGate.printId(requestId, task.sourceBox,
+                task.oldBarcode, task.newBarcode, task.size == null ? "" : task.size,
+                Math.max(task.doneQuantity, doneInt(relabelKey(task))), session.userId);
+        }
+        String printId = activeRelabelPrintId;
+        activeRelabelPrintStatus = "QUEUED";
+        relabelPrintPolls = 0;
+        relabelPrintBusy = true;
+        statusMessage = "Отправляю 2 ШК на " + station.name + "…";
+        renderRelabelBoxScreen();
+        runBackground(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Map<String, String> body = new LinkedHashMap<>();
+                body.put("printId", printId);
+                body.put("stationId", station.id);
+                body.put("sourceBox", task.sourceBox);
+                body.put("oldBarcode", task.oldBarcode);
+                body.put("newBarcode", task.newBarcode);
+                body.put("size", task.size == null ? "" : task.size);
+                Response<TsdRelabelPrintJob> response = api.printRelabelTarget(session.authorizationHeader(), requestId, body).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось отправить ШК на печать.");
+                TsdRelabelPrintJob job = response.body();
+                mainHandler.post(() -> {
+                relabelPrintBusy = false;
+                if (screen != Screen.RELABEL_BOX || !printId.equals(activeRelabelPrintId)) return;
+                if (!failure.isEmpty() || job == null) {
+                    statusMessage = failure.isEmpty() ? "Пустой ответ станции печати." : failure;
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                updateRelabelPrint(job);
+                if (!"PRINTED".equals(job.status) && !"FAILED".equals(job.status)) {
+                    mainHandler.postDelayed(() -> pollRelabelPrint(printId), 2000L);
+                }
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    relabelPrintBusy = false;
+                    statusMessage = "Связь прервалась. Проверьте печать: повторная пара не будет отправлена автоматически.";
+                    if (screen == Screen.RELABEL_BOX) renderRelabelBoxScreen();
+                });
+            }
+        });
+    }
+
+    private void pollRelabelPrint(String printId) {
+        if (assemblyPlan == null || activeRelabelTask == null || relabelPrintBusy ||
+            !printId.equals(activeRelabelPrintId) || screen != Screen.RELABEL_BOX) return;
+        if (++relabelPrintPolls > 30) {
+            statusMessage = "Станция пока не подтвердила печать. Проверьте принтер и нажмите «Проверить печать».";
+            renderRelabelBoxScreen();
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) return;
+        String requestId = assemblyPlan.id;
+        relabelPrintBusy = true;
+        runBackground(() -> {
+            try {
+                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                Response<TsdRelabelPrintJob> response = api.relabelPrintStatus(session.authorizationHeader(), requestId, printId).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось проверить печать.");
+                TsdRelabelPrintJob job = response.body();
+                mainHandler.post(() -> {
+                relabelPrintBusy = false;
+                if (screen != Screen.RELABEL_BOX || !printId.equals(activeRelabelPrintId)) return;
+                if (response.code() == 404) {
+                    activeRelabelPrintId = "";
+                    activeRelabelPrintStatus = "";
+                    statusMessage = "Задание печати не было создано. Нажмите «Напечатать 2 ШК».";
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                if (!failure.isEmpty() || job == null) {
+                    statusMessage = failure.isEmpty() ? "Станция не ответила. Нажмите «Проверить печать»." : failure;
+                    renderRelabelBoxScreen();
+                    return;
+                }
+                updateRelabelPrint(job);
+                if (!"PRINTED".equals(job.status) && !"FAILED".equals(job.status)) {
+                    mainHandler.postDelayed(() -> pollRelabelPrint(printId), 2000L);
+                }
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    relabelPrintBusy = false;
+                    statusMessage = "Нет связи с WMS. Нажмите «Проверить печать» после восстановления связи.";
+                    if (screen == Screen.RELABEL_BOX) renderRelabelBoxScreen();
+                });
+            }
+        });
+    }
+
+    private void updateRelabelPrint(TsdRelabelPrintJob job) {
+        activeRelabelPrintStatus = nonEmpty(job.status, "");
+        statusMessage = "PRINTED".equals(job.status)
+            ? "2 ШК напечатаны. Наклейте новый ШК и подтвердите проверочным сканом."
+            : "FAILED".equals(job.status)
+                ? "Печать не удалась: " + nonEmpty(job.error, "Проверьте принтер.")
+                : "Задание печати в очереди. Дождитесь двух этикеток.";
+        renderRelabelBoxScreen();
     }
 
     private void submitRelabelScan() {
@@ -7554,13 +7738,17 @@ public class MainActivity extends Activity {
             for (TsdRelabelTask task : safeRelabelTasks()) {
                 if (selectedRelabelBox.equals(task.sourceBox) && remainingRelabel(task) > 0 && code.equals(task.oldBarcode)) {
                     activeRelabelTask = task;
-                    statusMessage = "Старый ШК принят. Сканируйте новый ШК.";
+                    activeRelabelPrintId = "";
+                    activeRelabelPrintStatus = "";
+                    statusMessage = "Старый ШК принят. Напечатайте 2 новых ШК.";
                     assemblyScanInput.setText("");
                     renderRelabelBoxScreen();
                     return;
                 }
             }
             statusMessage = "Неверный товар для перемаркировки: " + code;
+        } else if (!RelabelPrintGate.canVerify(activeRelabelPrintStatus)) {
+            statusMessage = "Сначала дождитесь печати двух новых ШК.";
         } else if (code.equals(activeRelabelTask.newBarcode)) {
             TsdRelabelTask completedTask = activeRelabelTask;
             int done = Math.max(completedTask.doneQuantity, doneInt(relabelKey(completedTask))) + 1;
@@ -7574,6 +7762,8 @@ public class MainActivity extends Activity {
             progress.put("size", completedTask.size == null ? "" : completedTask.size);
             enqueueAssemblyProgress(progress);
             statusMessage = "Переклейка подтверждена: " + done + " / " + activeRelabelTask.quantity;
+            activeRelabelPrintId = "";
+            activeRelabelPrintStatus = "";
             if (remainingRelabel(activeRelabelTask) <= 0) {
                 activeRelabelTask = null;
             }

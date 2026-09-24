@@ -6,6 +6,7 @@ import { WarehouseModule } from '../warehouse/warehouse.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { TsdDeviceController } from './tsd-device.controller';
 import { TsdAssemblyService } from './tsd-assembly.service';
+import { TsdRelabelPrintService } from './tsd-relabel-print.service';
 import { TsdDeviceService } from './tsd-device.service';
 import { TsdOperationLogService } from './tsd-operation-log.service';
 import { TsdPayloadParser } from './tsd-payload.parser';
@@ -25,6 +26,7 @@ import { ClientRequestMarketplaceFilesService } from '../client-requests/client-
     FboTwoStageService,
     ClientRequestMarketplaceFilesService,
     TsdAssemblyService,
+    TsdRelabelPrintService,
     TsdDeviceService,
     TsdOperationLogService,
     TsdPayloadParser,
