@@ -96,7 +96,12 @@ if ! grep -q '^ANALYTICS_DATABASE_URL=' "$ENV_FILE"; then
 fi
 
 cd "$COMPOSE_DIR"
-docker compose --env-file ../.env build
+# FIX: reject an API image whose compiled relabel helper cannot satisfy TSD imports.
+docker compose --env-file ../.env build web
+API_IMAGE="$(docker compose --env-file ../.env build --quiet api)"
+docker run --rm --network none \
+  --mount "type=bind,src=$APP_DIR/wms/infra/scripts/fbs-runtime-export-check.cjs,dst=/check.cjs,readonly" \
+  --entrypoint node "$API_IMAGE" /check.cjs
 docker compose --env-file ../.env up -d postgres analytics-postgres redis
 docker compose --env-file ../.env up -d api web
 docker compose --env-file ../.env --profile compose-nginx rm -sf nginx >/dev/null 2>&1 || true
