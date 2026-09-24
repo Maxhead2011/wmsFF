@@ -1986,8 +1986,10 @@ export class StockOperationsService {
   }
 
   async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+    let fboShipment = false;
     if (process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true') {
       const fbo = await this.prisma.fboAssembly.findUnique({where:{requestId:dto.requestId}});
+      fboShipment = Boolean(fbo);
       if(fbo && fbo.phase !== 'COMPLETED') throw new BadRequestException('Сначала подтвердите все короба поставки ФБО.');
     }
     await this.inventoryLock?.assertStockMovementsAllowed();
@@ -1995,6 +1997,8 @@ export class StockOperationsService {
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
 
     const result = await this.prisma.$transaction(async (tx) => {
+      // FIX: serialize FBO confirmations before checking stock and billing idempotency.
+      if (fboShipment) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${dto.requestId} FOR UPDATE`;
       const doneAt = new Date();
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
 
@@ -2131,7 +2135,8 @@ export class StockOperationsService {
         clientId: request.clientId,
         shippedLines: this.formatFulfillmentLines(plan, 'shippedQuantity'),
       };
-    });
+    // FIX: large FBO shipments must not expire at Prisma's default five seconds.
+    }, fboShipment ? { maxWait: 10_000, timeout: 180_000 } : undefined);
 
     const logistics =
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
