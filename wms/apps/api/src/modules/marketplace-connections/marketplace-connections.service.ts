@@ -17364,7 +17364,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const task = candidates[0];
     if (!task.kiz) throw new BadRequestException('У найденного заказа КИЗ не сохранён.');
     const existing = await this.prisma.fbsWebKizStickerPrint.findFirst({
-      where: { OR: [{ kiz: task.kiz }, {
+      // FIX: the selected task identifies cabinet and attempt; KIZ alone is historical evidence.
+      where: process.env.WMS_FBS_PRINT_ATTEMPT_SCOPE_ENABLED === 'true'
+        ? { clientId: task.clientId, orderId: task.orderId, assemblyId: task.id }
+        : { OR: [{ kiz: task.kiz }, {
         orderId: task.orderId,
         // FIX: a deliberately created repeat may print once for its new attempt.
         ...(hasFbsAttemptHistory() &&
