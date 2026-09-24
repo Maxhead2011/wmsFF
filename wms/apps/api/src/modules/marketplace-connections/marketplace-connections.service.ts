@@ -10156,8 +10156,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : `Неверный товар. Нужен «${task.productName}», арт. ${task.article ?? 'не указан'}. Верните товар и отсканируйте правильный ШК.`,
       );
     }
-    // FIX: marked size replacement waits for old/new KIZ scans before any stock conversion.
+    // FIX: a duplicate sales article of the same physical size keeps its existing KIZ.
     if (pendingSizeKizRelabel(task)) {
+      if (await this.sameSizeFbsRelabel(task)) {
+        const updated = await this.completeFbsTsdRelabeling(task, barcode, user);
+        return this.formatFbsTsdAssembly(updated, user, 'Новый ШК принят. Отсканируйте прежний КИЗ этой единицы.');
+      }
+      // Marked size replacement still waits for both old/new KIZ scans before stock conversion.
       const updated = await this.updateFbsTsdUnderLease(task, user, { barcode, errorMessage: null });
       return this.formatFbsTsdAssembly(updated, user, 'Новый ШК принят. Отсканируйте СТАРЫЙ КИЗ снимаемой маркировки, затем новый КИЗ.');
     }
@@ -10175,6 +10180,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ? 'Переклейка подтверждена. Подтвердите сборку.'
           : 'Товар верный. Подтвердите сборку.',
     );
+  }
+
+  private async sameSizeFbsRelabel(task: FbsTsdAssemblyRecord): Promise<boolean> {
+    if (!pendingSizeKizRelabel(task) || task.itemCount !== 1) return false;
+    const variants = await this.prisma.sku.findMany({
+      where: { clientId: task.clientId, id: { in: [task.sourceSkuId!, task.skuId] } },
+      select: { id: true, size: true },
+    });
+    const size = (id: string | null) => variants.find((sku) => sku.id === id)?.size?.replace(/\s+/g, '').toLocaleUpperCase('ru-RU');
+    return Boolean(size(task.sourceSkuId) && size(task.sourceSkuId) === size(task.skuId));
   }
 
   private async completeFbsTsdRelabeling(
@@ -10362,11 +10377,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (kizFormatError) {
       throw new BadRequestException(kizFormatError);
     }
-    // FIX: never submit the source-size KIZ to WB as the new ordered size.
+    // FIX: a task opened before the same-size fix must finish with the existing physical KIZ too.
+    let sameSizeRelabel = false;
+    if (await this.sameSizeFbsRelabel(task)) {
+      const proposal = await readPhysicalKizRelabel(this.prisma, task, user);
+      if (proposal) {
+        await this.withFbsTsdLeaseTransaction(task, user, tx => cancelPhysicalKizRelabel(tx, task, user, proposal.id,
+          fresh => this.requireCurrentFbsTsdLease(fresh, user)));
+      }
+      task = await this.completeFbsTsdRelabeling(task, task.barcode, user);
+      sameSizeRelabel = true;
+    }
+    // A different physical size still needs both old/new KIZ scans before WB submission.
     if (pendingSizeKizRelabel(task) && payload.confirmKizRelabel !== true) {
       return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
     }
-    if (payload.confirmKizRelabel === true) {
+    // FIX: retrying an old TSD confirmation after article conversion must not revive a cancelled proposal.
+    const activeReplacement = payload.confirmKizRelabel === true && !sameSizeRelabel &&
+      (!task.relabelConfirmedAt || Boolean(await readPhysicalKizRelabel(this.prisma, task, user)));
+    if (activeReplacement) {
       if (!physicalKizRelabelEnabled()) throw new ForbiddenException('Переклейка КИЗ в этом окружении выключена.');
       const proposalId = requiredFbsTsdText(payload.kizRelabelProposalId, 'Сначала отсканируйте старый КИЗ.');
       if (await this.findPreviousWildberriesKizUsage(task.clientId, kiz, task.id)) {
@@ -15702,7 +15731,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     let state = fbsTsdStage(task);
-    const kizRelabelProposal = state === 'SCAN_KIZ' ? await readPhysicalKizRelabel(this.prisma, task, user) : null;
+    const savedKizRelabelProposal = state === 'SCAN_KIZ' ? await readPhysicalKizRelabel(this.prisma, task, user) : null;
+    // FIX: old same-size proposals must not restore the incorrect "new KIZ" screen.
+    const kizRelabelProposal = savedKizRelabelProposal && !await this.sameSizeFbsRelabel(task) ? savedKizRelabelProposal : null;
     const needsStorageRouting = state === 'SCAN_BOX' || state === 'SCAN_SOURCE_BOX';
     const needsSourceBoxUsage = state === 'SCAN_BARCODE';
     const stockSkuId =
@@ -15978,6 +16009,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         // must be supplied by the manager when the request is closed.
         sourceBoxPending: task.sourceBoxPending,
         requiresKiz: task.requiresKiz,
+        // FIX: the LOGOFF TSD shows only the sticker number and physical-pick confirmation.
+        physicalPickConfirmation: task.marketplace === MarketplaceType.WILDBERRIES || task.marketplace === MarketplaceType.OZON,
         recommendedBoxCode,
         // FIX: detailed alternative/next routes never leave the employee API.
         recommendedLocation,
