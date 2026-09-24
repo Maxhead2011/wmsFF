@@ -57,11 +57,11 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'administration',
     name: 'Администрирование',
-    prefixes: ['/administration', '/administration/marketplace-stock-control'],
+    prefixes: ['/administration', '/administration/marketplace-stock-control', '/administration/fbo-problems'],
     // FIX: include the client stock-control list and update handlers.
-    routeCount: 39, // ADDED: send/list TSD monitor messages.
+    routeCount: 47, // FIX: eight FBO capability/recovery/report/document endpoints.
     description: 'Диагностика WMS, технические работы, настройки, аудит, контроль внутренних API и включение/отключение отправки остатков на МП по клиентам.',
-    logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.'],
+    logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.', 'Проблемы FBO: исправления по предпросмотру только ADMIN своего филиала и OWNER; отчёт об отборе и Excel.'],
     dependencies: ['Основная БД', 'Права system:admin'],
   },
   {

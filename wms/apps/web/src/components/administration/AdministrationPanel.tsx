@@ -34,6 +34,7 @@ import {
   fetchAdministrationAudit,
   fetchAdministrationDocumentation,
   fetchAdministrationOverview,
+  fetchFboRecoveryCapabilities,
   fetchAdministrationPhantomStocks,
   fetchAdministrationSettings,
   fetchAdministrationWorkspaceVisibility,
@@ -60,6 +61,7 @@ import { AdministrationPhantomStockPanel } from './AdministrationPhantomStock';
 import { AdministrationTsdWorkloadsPanel } from './AdministrationTsdWorkloads';
 import { AdministrationFbsErrorCorrection } from './AdministrationFbsErrorCorrection';
 import { AdministrationTechnicalWork } from './AdministrationTechnicalWork';
+import { AdministrationFboProblems, canManageFboProblems } from './AdministrationFboProblems';
 import { AdministrationMarketplaceStockControl, canManageMarketplaceStockControl } from './AdministrationMarketplaceStockControl';
 
 type AdministrationPanelProps = {
@@ -67,9 +69,10 @@ type AdministrationPanelProps = {
   onOpenWorkspace: (id: WorkspaceId) => void;
 };
 
-type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
+type TabId = 'fbo-problems' | 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
 
 const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
+  { id: 'fbo-problems', label: 'Проблемы FBO', icon: Boxes },
   { id: 'overview', label: 'Центр управления', icon: Crown },
   // ADDED: One entry point for diagnostics and verified repair actions.
   { id: 'technical-work', label: 'Тех. работы', icon: Wrench },
@@ -101,6 +104,12 @@ const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]
 
 export function AdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [fboEnabled,setFboEnabled]=useState(false);
+  useEffect(()=>{
+    let current=true;setFboEnabled(false);
+    if(canManageFboProblems(session))void fetchFboRecoveryCapabilities(session.accessToken).then(r=>{if(current)setFboEnabled(r.enabled);}).catch(()=>{});
+    return ()=>{current=false;};
+  },[session.accessToken]);
   const [overview, setOverview] = useState<AdministrationOverview | null>(null);
   const [settings, setSettings] = useState<AdministrationSetting[]>([]);
   const [visibility, setVisibility] = useState<AdministrationWorkspaceVisibility | null>(null);
@@ -303,6 +312,7 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
 
       <nav className="admin-tabs" aria-label="Разделы администрирования">
         {tabs.map((tab) => {
+          if (tab.id === 'fbo-problems' && (!fboEnabled||!canManageFboProblems(session))) return null;
           if (tab.id === 'marketplace-stock-control' && !canManageMarketplaceStockControl(session)) return null;
           const Icon = tab.icon;
           return (
@@ -333,6 +343,8 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
       {error ? <div className="admin-message admin-message--error"><AlertTriangle size={18} />{error}</div> : null}
 
       {activeTab === 'overview' && overview ? (
+        <>
+        {fboEnabled&&canManageFboProblems(session)&&<button type="button" className="admin-card" style={{textAlign:'left'}} onClick={()=>setActiveTab('fbo-problems')}><Boxes size={24}/><strong>Проблемы FBO</strong><span>Исправление этапов, сверка коробов и Excel-отчёт об отборе</span></button>}
         <OverviewTab
           overview={overview}
           optimization={optimization}
@@ -340,10 +352,12 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
           onOptimize={optimizePerformance}
           onOpenWorkspace={onOpenWorkspace}
         />
+        </>
       ) : null}
       {activeTab === 'stock-check' ? <AdministrationStockCheck session={session} /> : null}
       {activeTab === 'marketplace-stock-control' ? <AdministrationMarketplaceStockControl session={session} /> : null}
       {activeTab === 'technical-work' ? <AdministrationTechnicalWork session={session} /> : null}
+      {activeTab === 'fbo-problems' && fboEnabled ? <AdministrationFboProblems session={session} /> : null}
       {activeTab === 'error-correction' ? <AdministrationFbsErrorCorrection session={session} /> : null}
       {activeTab === 'tsd-workloads' ? <AdministrationTsdWorkloadsPanel session={session} /> : null}
       {activeTab === 'phantom-stock' ? (

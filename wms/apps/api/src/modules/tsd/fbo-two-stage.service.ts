@@ -10,8 +10,9 @@ import { assertWarehouseAccess } from '../client-requests/client-request-warehou
 import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
 import { StockBalancesService } from '../stock/stock-balances.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
-import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
+import { closedFboItems, fboClosePickEnabled, fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
 import { FboActionDto } from './dto/fbo-action.dto';
+import type { RecoveryInput } from '../administration/fbo-problems-policy';
 const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
 type Request = Prisma.ClientRequestGetPayload<{
@@ -30,6 +31,78 @@ const composition = (r: Request) => hash(r.items.map(i => [i.id, i.skuId, i.barc
 @Injectable()
 export class FboTwoStageService {
     constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly balances: StockBalancesService, private readonly stock: StockOperationsService, private readonly lock: InventoryLockService, private readonly files: ClientRequestMarketplaceFilesService) { }
+    // FIX: administrative recovery reuses exactly the same transactional packing invariants.
+    // The administration service authorizes, locks, checks preview freshness and records the receipt.
+    async recoverInTransaction(tx: Prisma.TransactionClient, id: string, input: RecoveryInput, user: AuthUser, key: string) {
+        await this.lock.assertStockMovementsAllowed();
+        const proxy = new Proxy(tx, { get: (o, k) => k === '$transaction' ? async (fn: (db: Prisma.TransactionClient) => unknown) => fn(tx) : o[k as keyof typeof o] }) as PrismaService;
+        const svc = new FboTwoStageService(proxy, this.scopes, this.balances, this.stock, this.lock, this.files);
+        const r = await this.load(tx, id, user, 'write'); this.requireFbo(r);
+        const assembly = await tx.fboAssembly.findUniqueOrThrow({ where: { requestId: id } });
+        if (!['PICKING','PACKING','CONTROL'].includes(assembly.phase) || !['SUBMITTED','APPROVED','IN_WORK'].includes(r.status)) throw new ConflictException('Заявка уже завершена или недоступна.');
+        let sequence = 0;
+        const act = (action: string, fields: Partial<FboActionDto> = {}) => svc.act(id, { action, operationId: `${key}:${sequence++}`, ...fields }, user);
+        const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
+        const select = (codes: string[], supplied?: string[]) => {
+            if (supplied?.some(c => !codes.includes(c))) throw new ConflictException('Выбранный короб больше не доступен для действия.');
+            return supplied?.length ? supplied : codes;
+        };
+        const packing = async () => {
+            if (!['PACKING','CONTROL'].includes(assembly.phase)) throw new ConflictException('Сначала завершите отбор.');
+            if (assembly.phase === 'CONTROL') await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
+        };
+        if (input.action === 'CLOSE_PICK') return act('STOP_PICK');
+        if (input.action === 'ADD_BOXES') {
+            await packing();
+            for (const code of select([...new Set(units.filter(u=>u.state==='PICKED'&&u.wholeBox).map(u=>u.sourceBoxCode))],input.boxCodes)) await act('PACK_BOX',{sourceBoxCode:code});
+        } else if (input.action === 'SPLIT_BOXES') {
+            await packing();
+            for(const code of select([...new Set(units.filter(u=>u.state==='PICKED'&&u.wholeBox).map(u=>u.sourceBoxCode))],input.boxCodes)) {
+                const source=units.find(u=>u.sourceBoxCode===code)!;
+                await this.unpackPickedWholeBox(tx,r,source.sourceBoxId,user,`${key}:split:${source.sourceBoxId}`);
+            }
+        } else if (input.action === 'PACK_UNITS') {
+            await packing();
+            const chosen=units.filter(u=>input.unitIds!.includes(u.id));
+            if(chosen.length!==input.unitIds!.length||chosen.some(u=>u.state!=='PICKED')) throw new ConflictException('Выбранные единицы уже изменены.');
+            const parcel=await tx.fboAssemblyBox.findUnique({where:{requestId_boxCode:{requestId:id,boxCode:input.targetBoxCode!}}});
+            if(!parcel||parcel.wholeBox) throw new ConflictException('Выберите сформированный короб поштучной упаковки.');
+            await this.requireIdleBox(tx,parcel.boxId,id);
+            await tx.fboAssemblyBox.update({where:{id:parcel.id},data:{closedAt:null,confirmedAt:null,confirmedByUserId:null}});
+            const split = new Set<string>();
+            for(const unit of chosen) {
+                if(unit.wholeBox && !split.has(unit.sourceBoxId)) {
+                    await this.unpackPickedWholeBox(tx,r,unit.sourceBoxId,user,`${key}:split:${unit.sourceBoxId}`);
+                    split.add(unit.sourceBoxId);
+                }
+                if (unit.kiz) await act('PACK_UNIT',{targetBoxCode:parcel.boxCode,barcode:unit.barcode,kiz:unit.kiz});
+                else {
+                    // FIX: preserve the selected unit identity for unmarked stock too.
+                    const holding = await tx.box.findUniqueOrThrow({where:{code:`FBO-PICK-${id}`}});
+                    await this.move(tx,r,unit.skuId,holding.id,parcel.boxId,'PACKING','PACKING',1,`${key}:unit:${unit.id}`,user);
+                    await tx.fboAssemblyUnit.update({where:{id:unit.id},data:{state:'PACKED',targetBoxId:parcel.boxId,targetBoxCode:parcel.boxCode,packedAt:new Date(),packedByUserId:user.id}});
+                }
+            }
+            await this.validatePackedBox(tx,r,parcel.boxId,await tx.fboAssemblyUnit.findMany({where:{requestId:id}}));
+            if(parcel.closedAt) await act('CLOSE_BOX',{targetBoxCode:parcel.boxCode});
+        } else if(input.action==='CONFIRM_BOXES') {
+            if(!['PACKING','CONTROL'].includes(assembly.phase)) throw new ConflictException('Сначала завершите отбор.');
+            const parcels=await tx.fboAssemblyBox.findMany({where:{requestId:id}});
+            for(const code of select(parcels.map(b=>b.boxCode),input.boxCodes)) {
+                const b=parcels.find(b=>b.boxCode===code)!;
+                if(!units.some(u=>u.targetBoxId===b.boxId&&u.state==='PACKED')) throw new ConflictException(`Пустой короб ${code}.`);
+                try{await this.validatePackedBox(tx,r,b.boxId,units);}catch(e){throw new ConflictException(`${code}: ${(e as Error).message}`);}
+                await tx.fboAssemblyBox.update({where:{id:b.id},data:{closedAt:b.closedAt??new Date(),confirmedAt:b.confirmedAt??new Date(),confirmedByUserId:b.confirmedByUserId??user.id}});
+            }
+        } else if(input.action==='FINISH') {
+            if(assembly.phase==='PACKING') await act('SORTED');
+            await act('FINISH');
+            // FIX: both documents must be constructible before committing completion.
+            const documents = new ClientRequestMarketplaceFilesService(proxy,this.scopes);
+            await documents.getWbProductsTemplate(id,user);
+            await documents.getWbPackagingTemplate(id,user);
+        }
+    }
     async eligible(requestId: string, user: AuthUser) {
         if (!fboTwoStageEnabled())
             return false;
@@ -66,7 +139,7 @@ export class FboTwoStageService {
     private async snapshot(tx: Prisma.TransactionClient, r: Request) {
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
-        const lines = remainingFboLines(r.items, units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
+        const lines = remainingFboLines(closedFboItems(r.items, assembly?.pickClosure), units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
             name: i.name || i.sku!.name, article: i.sku!.article, size: i.sku!.size, requiresKiz: (i.sku!.needsChestnyZnak && !i.sku!.isUnmarked) || units.some(u => u.skuId === i.skuId && !!u.markId),
             needed: i.needed, picked: i.picked, packed: i.packed, remaining: i.remaining }));
         const demand: Record<string, number> = {};
@@ -116,6 +189,12 @@ export class FboTwoStageService {
                 remainderQuantity: Math.max(0, box.balances.filter(b => b.status === 'AVAILABLE').reduce((sum, b) => sum + Math.max(0, b.quantity), 0) - tasks.reduce((sum, t) => sum + t.quantity, 0)) });
         }
         return { reusablePackingEnabled: reusablePackingEnabled(), manualPackingEnabled: process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true', requestId: r.id, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+
+            // FIX: existing terminals receive the actual packing target; WMS also retains the original plan.
+            closePickSupported: fboClosePickEnabled(), pickClosed: !!assembly?.pickClosure,
+            plannedNeeded: r.items.reduce((s, i) => s + i.quantity, 0),
+            unpicked: assembly?.pickClosure ? r.items.reduce((s, i) => s + i.quantity, 0) - lines.reduce((s, l) => s + l.needed, 0) : 0,
+            packingNeeded: lines.reduce((s, l) => s + l.needed, 0),
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
@@ -162,7 +241,7 @@ export class FboTwoStageService {
             if (a.compositionHash !== composition(r))
                 throw new ConflictException('Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.');
             const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
-            const lines = remainingFboLines(r.items, units);
+            const lines = remainingFboLines(closedFboItems(r.items, a.pickClosure), units);
             const requirePhase = (phase: string) => { if (a!.phase !== phase)
                 throw new ConflictException('Этап изменился. Обновите заявку.'); };
             if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
@@ -212,6 +291,7 @@ export class FboTwoStageService {
                     chosen = [{ skuId: line.skuId!, mark }];
                 }
                 const holding = whole ? source : await tx.box.upsert({ where: { code: `FBO-PICK-${id}` }, create: { code: `FBO-PICK-${id}`, clientId: r.clientId, warehouseId: r.warehouseId, status: 'fbo-picking' }, update: {} });
+                const pickedUnitIds: string[] = [];
                 for (const pick of chosen) {
                     const line = lines.find(l => l.skuId === pick.skuId && l.remaining > 0)!;
                     line.remaining--;
@@ -221,6 +301,7 @@ export class FboTwoStageService {
                             throw new ConflictException('Неоднозначный КИЗ.');
                     }
                     const unitId = randomUUID();
+                    pickedUnitIds.push(unitId);
                     const movement = await this.move(tx, r, pick.skuId, source.id, holding.id, 'AVAILABLE', 'PACKING', 1, `${key}:${unitId}`, user);
                     if (pick.mark) {
                         const changed = await tx.productMark.updateMany({ where: { id: pick.mark.id, boxId: source.id, status: 'AVAILABLE' }, data: { boxId: holding.id, status: 'PACKING', stockMovementId: movement.id } });
@@ -230,7 +311,23 @@ export class FboTwoStageService {
                     await tx.fboAssemblyUnit.create({ data: { id: unitId, requestId: id, requestItemId: line.id, skuId: pick.skuId, barcode: line.barcode!,
                             markId: pick.mark?.id, activeMarkId: pick.mark?.id, kiz: pick.mark?.value, sourceBoxId: source.id, sourceBoxCode: source.code, wholeBox: whole, pickedByUserId: user.id } });
                 }
+                if (process.env.WMS_FBO_PROBLEMS_ENABLED === 'true') {
+                    const location = await tx.box.findUniqueOrThrow({where:{id:source.id},include:{storagePlacement:{include:{pallet:true}},pallet:true}});
+                    await tx.auditLog.create({data:{userId:user.id,entity:'ClientRequest',entityId:id,action:'FBO_PICK_LOCATION',payload:{unitIds:pickedUnitIds,operationId:dto.operationId,whole,pallet:location.storagePlacement?.pallet.code ?? location.pallet?.code ?? null}}});
+                }
                 await this.releaseDisplacedRoutes(tx, source.id, source.code, [...new Set(chosen.map(p => p.skuId))]);
+            }
+            else if (dto.action === 'STOP_PICK') {
+                // FIX: serialized with scans, frozen once, and replayed through the durable receipt above.
+                if (!fboClosePickEnabled()) throw new NotFoundException('Завершение отбора с недобором выключено.');
+                requirePhase('PICKING');
+                if (!units.length) throw new ConflictException('Нет отобранного товара. Пустую заявку нельзя передать на упаковку.');
+                const pickClosure = { version: 1, userId: user.id, closedAt: new Date().toISOString(),
+                    quantities: Object.fromEntries(lines.map(l => [l.id, l.picked])),
+                    requested: Object.fromEntries(r.items.map(i => [i.id, i.quantity])) };
+                closedFboItems(r.items, pickClosure);
+                await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING', pickClosure } });
+                await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_PICK_CLOSED', entity: 'ClientRequest', entityId: id, payload: pickClosure } });
             }
             else if (dto.action === 'FINISH_PICK') {
                 requirePhase('PICKING');
@@ -440,7 +537,16 @@ export class FboTwoStageService {
                 markId: mark.id, activeMarkId: mark.id, kiz: mark.value, sourceBoxId: source.id, sourceBoxCode: source.code,
                 wholeBox: false, pickedByUserId: user.id, ...packed } });
             const refreshed = await this.load(tx, r.id, user, 'write');
-            await tx.fboAssembly.update({ where: { requestId: r.id }, data: { compositionHash: composition(refreshed) } });
+            // FIX: a recovered manual unit must join the closed packing target as well.
+            const assembly = await tx.fboAssembly.findUniqueOrThrow({where:{requestId:r.id}});
+            let pickClosure: Prisma.InputJsonObject | undefined;
+            if (assembly.pickClosure) {
+                const quantities = Object.fromEntries(closedFboItems(r.items, assembly.pickClosure).map(i=>[i.id,i.quantity]));
+                quantities[line.id] = Math.max(quantities[line.id] ?? 0, units.filter(u=>u.requestItemId===line!.id).length + 1);
+                pickClosure = {...(assembly.pickClosure as Prisma.JsonObject),quantities};
+                closedFboItems(refreshed.items,pickClosure as Prisma.JsonObject);
+            }
+            await tx.fboAssembly.update({ where: { requestId: r.id }, data: { compositionHash: composition(refreshed),...(pickClosure?{pickClosure}:{}) } });
             await this.releaseDisplacedRoutes(tx, source.id, source.code, [sku.id]);
             await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_MANUAL_PICK_RECOVERED', entity: 'ClientRequest', entityId: r.id,
                 payload: { operationId: dto.operationId, sourceBoxCode: source.code, targetBoxCode: target.code, markId: mark.id, barcode: dto.barcode, addedQuantity } } });
