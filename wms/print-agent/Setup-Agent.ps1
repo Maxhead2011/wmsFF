@@ -78,6 +78,29 @@ try {
 
   $form.Controls.AddRange(@($title, $hint, $printerLabel, $printer, $modelLabel, $model, $nameLabel, $name, $button, $status))
 
+  # FIX: task registration is not proof that the background agent reached WMS.
+  function Wait-StationOnline($server, $headers, $stationId, $previousSeenAt) {
+    $previous = if ($previousSeenAt) { [DateTimeOffset]::Parse([string]$previousSeenAt) } else { [DateTimeOffset]::MinValue }
+    for ($attempt = 0; $attempt -lt 15; $attempt++) {
+      Start-Sleep -Seconds 1
+      [System.Windows.Forms.Application]::DoEvents()
+      try {
+        $stations = Invoke-RestMethod -Method Get -Uri "$server/api/v1/marketplace-connections/fbs/print-stations" -Headers $headers
+        $current = @($stations) | Where-Object { $_.id -eq $stationId } | Select-Object -First 1
+        if ($current -and $current.online -and $current.lastSeenAt -and [DateTimeOffset]::Parse([string]$current.lastSeenAt) -gt $previous) { return }
+      } catch { }
+    }
+    $taskInfo = Get-ScheduledTaskInfo -TaskName 'LOGOFF FBS Print Agent' -ErrorAction SilentlyContinue
+    $task = Get-ScheduledTask -TaskName 'LOGOFF FBS Print Agent' -ErrorAction SilentlyContinue
+    $details = "Task: $($task.State); result: $($taskInfo.LastTaskResult)."
+    $logPath = Join-Path $PSScriptRoot 'agent.log'
+    if (Test-Path -LiteralPath $logPath) {
+      $lastError = Get-Content -LiteralPath $logPath -Tail 1 -ErrorAction SilentlyContinue
+      if ($lastError) { $details += " Agent: $lastError" }
+    }
+    throw "The print agent did not connect to WMS within 15 seconds. $details Log: $logPath"
+  }
+
   $button.Add_Click({
     try {
       if (-not $login.Text.Trim() -or -not $password.Text -or -not $printer.SelectedItem) {
@@ -114,6 +137,10 @@ try {
       Register-ScheduledTask -TaskName 'LOGOFF FBS Print Agent' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
       Start-ScheduledTask -TaskName 'LOGOFF FBS Print Agent'
 
+      $status.Text = 'Waiting for the first signal from the print agent...'
+      [System.Windows.Forms.Application]::DoEvents()
+      Wait-StationOnline $server $headers $station.id $station.lastSeenAt
+
       $status.Text = 'Ready. The print station is connected.'
       $button.Text = 'READY'
       [System.Windows.Forms.MessageBox]::Show('Print station connected. Select it in the FBS Assembly app.', 'LOGOFF', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
@@ -121,6 +148,7 @@ try {
       $status.ForeColor = [System.Drawing.Color]::Firebrick
       $status.Text = $_.Exception.Message
       $button.Enabled = $true
+      [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'LOGOFF connection error', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     }
   })
 
