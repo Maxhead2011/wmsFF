@@ -1,0 +1,780 @@
+--- a/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
++++ b/wms/apps/api/src/modules/administration/administration-internal-api.service.ts
+@@ -72,11 +72,11 @@
+   {
+     id: 'administration',
+     name: 'Администрирование',
+-    prefixes: ['/administration', '/administration/marketplace-stock-control', '/administration/auto-assembly'],
++    prefixes: ['/administration', '/administration/marketplace-stock-control', '/administration/auto-assembly', '/administration/fbo-problems'],
+     // FIX: include the client stock-control list and update handlers.
+-    routeCount: 46, // FIX: client reserve, SKU exclusions and recommendation limits.
++    routeCount: 54, // FIX: client reserve, SKU exclusions and recommendation limits.
+     description: 'Диагностика WMS, технические работы, настройки, аудит, контроль внутренних API и включение/отключение отправки остатков на МП по клиентам.',
+-    logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.'],
++    logic: ['Собирает административные показатели и журнал действий.', 'Диагностирует заявки, паллет-сорты, короба, КИЗ и задания ТСД.', 'Разрешает только серверные, повторно проверяемые исправления.', 'Проблемы FBO: исправления по предпросмотру только ADMIN своего филиала и OWNER; отчёт об отборе и Excel.'],
+     dependencies: ['Основная БД', 'Права system:admin'],
+   },
+   {
+--- a/wms/apps/api/src/modules/administration/administration.module.ts
++++ b/wms/apps/api/src/modules/administration/administration.module.ts
+@@ -1,3 +1,7 @@
++import { FboProblemsController } from './fbo-problems.controller';
++import { FboProblemsService } from './fbo-problems.service';
++import { FboTwoStageService } from '../tsd/fbo-two-stage.service';
++import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
+ import { Module } from '@nestjs/common';
+ import { AutoAssemblyController } from './auto-assembly.controller';
+ import { AutoAssemblyService } from './auto-assembly.service';
+@@ -15,9 +19,9 @@
+ 
+ @Module({
+   imports: [AuthModule, MarketplaceConnectionsModule, StockModule, InventoryModule],
+-  controllers: [AutoAssemblyController, AdministrationController, AdministrationMarketplaceStockControlController],
++  controllers: [FboProblemsController, AutoAssemblyController, AdministrationController, AdministrationMarketplaceStockControlController],
+   // ADDED: Internal API diagnostics are isolated from existing technical-work repair logic.
+-  providers: [
++  providers: [FboProblemsService, FboTwoStageService, ClientRequestMarketplaceFilesService, 
+     AutoAssemblyService,
+     AdministrationService,
+     AdministrationTechnicalWorkService,
+--- a/wms/apps/api/src/modules/administration/fbo-problems-policy.ts
++++ b/wms/apps/api/src/modules/administration/fbo-problems-policy.ts
+@@ -0,0 +1,54 @@
++import { ForbiddenException, BadRequestException } from '@nestjs/common';
++export const recoveryActions = ['CLOSE_PICK', 'ADD_BOXES', 'PACK_UNITS', 'SPLIT_BOXES', 'CONFIRM_BOXES', 'FINISH', 'REVERSE_WRITEOFF'] as const;
++export type RecoveryAction = typeof recoveryActions[number];
++export type RecoveryInput = {
++    action: RecoveryAction;
++    boxCodes?: string[];
++    unitIds?: string[];
++    targetBoxCode?: string;
++    movementId?: string;
++    reason: string;
++    physicalConfirmed: boolean;
++};
++// FIX: persisted assignment, never the branch chosen in the header, grants admin access.
++export function recoveryWarehouse(actor: {
++    status: string;
++    isDemo?: boolean;
++    roles: {
++        role: {
++            code: string;
++        };
++    }[];
++    warehouseScopes: {
++        warehouseId: string;
++        canRead: boolean;
++        canWrite: boolean;
++    }[];
++} | null) {
++    if (!actor || actor.status !== 'ACTIVE' || actor.isDemo)
++        throw new ForbiddenException('Только администратор и собственник.');
++    if (actor.roles.some(r => r.role.code === 'OWNER'))
++        return null;
++    if (!actor.roles.some(r => r.role.code === 'ADMIN') || actor.warehouseScopes.length !== 1 || !actor.warehouseScopes[0].canRead || !actor.warehouseScopes[0].canWrite)
++        throw new ForbiddenException('Нужен один закреплённый филиал администратора.');
++    return actor.warehouseScopes[0].warehouseId;
++}
++export function recoveryInput(body: RecoveryInput): RecoveryInput {
++    if (!body || !recoveryActions.includes(body.action) || typeof body.reason !== 'string' || body.reason.trim().length < 5 || body.reason.length > 1000 || body.physicalConfirmed !== true)
++        throw new BadRequestException('Выберите действие, укажите причину и подтвердите физический факт.');
++    for (const values of [body.boxCodes, body.unitIds])
++        if (values !== undefined && (!Array.isArray(values) || values.length > 2000 || values.some(x => typeof x !== 'string' || !x || x.length > 100) || new Set(values).size !== values.length))
++            throw new BadRequestException('Некорректный список.');
++    for (const value of [body.targetBoxCode, body.movementId])
++        if (value !== undefined && (typeof value !== 'string' || !value.trim() || value.length > 100))
++            throw new BadRequestException('Некорректный код короба или движения.');
++    if (['ADD_BOXES', 'CONFIRM_BOXES'].includes(body.action) && !body.boxCodes?.length)
++        throw new BadRequestException('Выберите короба или нажмите «Выбрать все».');
++    if (body.action === 'PACK_UNITS' && (!body.unitIds?.length || !body.targetBoxCode))
++        throw new BadRequestException('Выберите товар и короб упаковки.');
++    if (body.action === 'REVERSE_WRITEOFF' && (!body.movementId || body.unitIds?.length !== 1))
++        throw new BadRequestException('Выберите одно списание и одну упакованную единицу.');
++    if (body.action === 'SPLIT_BOXES' && !body.boxCodes?.length)
++        throw new BadRequestException('Выберите короба для разбора.');
++    return { action: body.action, reason: body.reason.trim(), physicalConfirmed: true, ...(body.boxCodes ? { boxCodes: [...body.boxCodes].sort() } : {}), ...(body.unitIds ? { unitIds: [...body.unitIds].sort() } : {}), ...(body.targetBoxCode ? { targetBoxCode: body.targetBoxCode.trim() } : {}), ...(body.movementId ? { movementId: body.movementId } : {}) };
++}
+--- a/wms/apps/api/src/modules/administration/fbo-problems.controller.ts
++++ b/wms/apps/api/src/modules/administration/fbo-problems.controller.ts
+@@ -0,0 +1,74 @@
++import { Body, Controller, Get, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
++import type { Response } from 'express';
++import type { AuthUser } from '../auth/auth.types';
++import { CurrentUser } from '../auth/decorators/current-user.decorator';
++import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
++import { FboProblemsService, ReportFilter } from './fbo-problems.service';
++import type { RecoveryInput } from './fbo-problems-policy';
++@Controller('administration/fbo-problems')
++@RequirePermissions('system:admin')
++export class FboProblemsController {
++    constructor(private readonly service: FboProblemsService) { }
++    @Get('capabilities')
++    capabilities(
++    @CurrentUser()
++    user: AuthUser) { return this.service.capabilities(user); }
++    @Get()
++    list(
++    @CurrentUser()
++    user: AuthUser,
++    @Query('search')
++    search?: string) { return this.service.list(user, search); }
++    @Get(':id')
++    details(
++    @Param('id')
++    id: string,
++    @CurrentUser()
++    user: AuthUser) { return this.service.details(id, user); }
++    @Post(':id/preview')
++    preview(
++    @Param('id')
++    id: string,
++    @Body()
++    body: RecoveryInput,
++    @CurrentUser()
++    user: AuthUser) { return this.service.preview(id, body, user); }
++    @Post(':id/apply')
++    apply(
++    @Param('id')
++    id: string,
++    @Body()
++    body: {
++        token: string;
++    },
++    @CurrentUser()
++    user: AuthUser) { return this.service.apply(id, body.token, user); }
++    @Get(':id/report')
++    report(
++    @Param('id')
++    id: string,
++    @Query()
++    filter: ReportFilter,
++    @CurrentUser()
++    user: AuthUser) { return this.service.report(id, user, filter); }
++    @Get(':id/report.xlsx')
++    async excel(
++    @Param('id')
++    id: string,
++    @Query()
++    filter: ReportFilter,
++    @CurrentUser()
++    user: AuthUser,
++    @Res({ passthrough: true })
++    res: Response) { res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', 'attachment; filename="fbo-picking.xlsx"'); return new StreamableFile(await this.service.excel(id, user, filter)); }
++    @Get(':id/files/:kind')
++    async file(
++    @Param('id')
++    id: string,
++    @Param('kind')
++    kind: string,
++    @CurrentUser()
++    user: AuthUser,
++    @Res({ passthrough: true })
++    res: Response) { const file = await this.service.document(id, user, kind); res.setHeader('Content-Type', file.mimeType); res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`); return new StreamableFile(file.content); }
++}
+--- a/wms/apps/api/src/modules/administration/fbo-problems.service.ts
++++ b/wms/apps/api/src/modules/administration/fbo-problems.service.ts
+@@ -0,0 +1,265 @@
++import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
++import { createHash, randomUUID } from 'node:crypto';
++import { Prisma } from '@prisma/client';
++import * as XLSX from 'xlsx';
++import { PrismaService } from '../../common/prisma/prisma.service';
++import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
++import { FboTwoStageService } from '../tsd/fbo-two-stage.service';
++import { StockBalancesService } from '../stock/stock-balances.service';
++import { ClientRequestMarketplaceFilesService } from '../client-requests/client-request-marketplace-files.service';
++import type { AuthUser } from '../auth/auth.types';
++import { RecoveryInput, recoveryInput, recoveryWarehouse } from './fbo-problems-policy';
++const digest = (x: unknown) => createHash('sha256').update(JSON.stringify(x)).digest('hex');
++type DB = Prisma.TransactionClient;
++export type ReportFilter = {
++    worker?: string;
++    pallet?: string;
++    from?: string;
++    to?: string;
++    state?: string;
++};
++@Injectable()
++export class FboProblemsService {
++    constructor(private readonly prisma: PrismaService, private readonly fbo: FboTwoStageService, private readonly balances: StockBalancesService, private readonly lock: InventoryLockService, private readonly files: ClientRequestMarketplaceFilesService) { }
++    async capabilities(user: AuthUser) {
++        const actor = await this.prisma.user.findUnique({ where: { id: user.id }, include: { roles: { include: { role: true } }, warehouseScopes: true } });
++        recoveryWarehouse(actor);
++        return { enabled: process.env.WMS_FBO_PROBLEMS_ENABLED === 'true' && process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true' };
++    }
++    private async access(db: DB, user: AuthUser, id?: string) {
++        if (process.env.WMS_FBO_PROBLEMS_ENABLED !== 'true' || process.env.WMS_FBO_TWO_STAGE_ENABLED !== 'true')
++            throw new NotFoundException('Проблемы FBO выключены.');
++        const actor = await db.user.findUnique({ where: { id: user.id }, include: { roles: { include: { role: true } }, warehouseScopes: true } });
++        const branch = recoveryWarehouse(actor);
++        if (id) {
++            const r = await db.clientRequest.findUnique({ where: { id }, include: { _count: { select: { fbsOrderLinks: true } }, fboAssembly: true } });
++            if (!r || r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || !r.fboAssembly)
++                throw new NotFoundException('Двухэтапная заявка FBO не найдена.');
++            if (branch && r.warehouseId !== branch)
++                throw new ForbiddenException('Заявка другого филиала.');
++        }
++        return branch;
++    }
++    async list(user: AuthUser, search = '') {
++        const branch = await this.access(this.prisma, user);
++        const q = search.trim().replace(/^№\s*/, '').slice(0, 100), number = Number(q.replace(/^0+/, ''));
++        const variants=[...new Set([q,q.replaceAll('-','_'),q.replaceAll('_','-')])];
++        return this.prisma.clientRequest.findMany({ where: { type: 'OUTBOUND', fbsOrderLinks: { none: {} }, fboAssembly: { isNot: null }, ...(branch ? { warehouseId: branch } : {}), ...(q ? { OR: [...variants.map(contains=>({title:{contains,mode:'insensitive' as const}})), ...(Number.isSafeInteger(number) ? [{ number }] : [])] } : {}) }, select: { id: true, number: true, title: true, status: true, warehouse: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 100 });
++    }
++    private async state(db: DB, id: string) {
++        const request = await db.clientRequest.findUniqueOrThrow({ where: { id }, include: { items: { orderBy: { id: 'asc' } } } });
++        const assembly = await db.fboAssembly.findUniqueOrThrow({ where: { requestId: id }, include: { units: { orderBy: { id: 'asc' } }, boxes: { orderBy: { id: 'asc' } } } });
++        const boxIds = [...new Set([...assembly.units.flatMap(u => [u.sourceBoxId, u.targetBoxId]), ...assembly.boxes.map(b => b.boxId)].filter((s): s is string => !!s))];
++        const balances = await db.stockBalance.findMany({ where: { boxId: { in: boxIds } }, orderBy: { id: 'asc' } });
++        const marks = await db.productMark.findMany({ where: { id: { in: assembly.units.map(u => u.markId).filter((s): s is string => !!s) } }, orderBy: { id: 'asc' } });
++        return { request, assembly, balances, marks };
++    }
++    async details(id: string, user: AuthUser) {
++        return this.prisma.$transaction(async (db) => {
++            await this.access(db, user, id);
++            const s = await this.state(db, id);
++            const users = await db.user.findMany({ where: { id: { in: [...new Set(s.assembly.units.map(u => u.pickedByUserId))] } }, select: { id: true, name: true } });
++            const movements = await db.stockMovement.findMany({ where: { boxId: { in: s.assembly.boxes.map(b => b.boxId) }, clientId: s.request.clientId, type: 'INVENTORY_ADJUSTMENT', quantity: -1, status: 'PACKING' }, orderBy: { createdAt: 'desc' }, take: 200 });
++            const boxes = s.assembly.boxes.map(b => {
++                const units = s.assembly.units.filter(u => u.targetBoxId === b.boxId && u.state === 'PACKED');
++                const actual = s.balances.filter(x => x.boxId === b.boxId && x.quantity !== 0);
++                const mismatches: string[] = [];
++                for (const sku of new Set([...units.map(u => u.skuId), ...actual.map(x => x.skuId)])) {
++                    const expected = units.filter(u => u.skuId === sku).length, quantity = actual.filter(x => x.skuId === sku).reduce((n, x) => n + x.quantity, 0);
++                    if (expected !== quantity)
++                        mismatches.push(`${sku}: упаковка ${expected}, остаток ${quantity}`);
++                }
++                if (s.assembly.phase !== 'COMPLETED' && units.some(u => u.markId && !s.marks.some(m => m.id === u.markId && m.boxId === b.boxId && m.status === 'PACKING')))
++                    mismatches.push('Не совпадают привязки КИЗ');
++                return { ...b, quantity: units.length, mismatches };
++            });
++            return { request: { id, number: s.request.number, title: s.request.title, status: s.request.status }, phase: s.assembly.phase, units: s.assembly.units, boxes, movements, users, pendingWhole: [...new Set(s.assembly.units.filter(u => u.state === 'PICKED' && u.wholeBox).map(u => u.sourceBoxCode))] };
++        }, { isolationLevel: 'RepeatableRead', timeout: 30000 });
++    }
++    // FIX: preview uses the same state fingerprint as apply; no inventory mutation occurs here.
++    async preview(id: string, body: RecoveryInput, user: AuthUser) {
++        const input = recoveryInput(body);
++        return this.prisma.$transaction(async (db) => {
++            await this.access(db, user, id);
++            const s = await this.state(db, id);
++            if (s.assembly.phase === 'COMPLETED')
++                throw new ConflictException('Упаковка завершена; доступны отчёт и документы.');
++            if (!['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(s.request.status))
++                throw new ConflictException('Заявка недоступна для исправления.');
++            if (input.action === 'CLOSE_PICK') {
++                if (s.assembly.phase !== 'PICKING' || process.env.WMS_FBO_CLOSE_PICK_ENABLED !== 'true')
++                    throw new ConflictException('Завершение отбора недоступно на этом этапе.');
++            }
++            else if (!['PACKING', 'CONTROL'].includes(s.assembly.phase))
++                throw new ConflictException('Сначала завершите отбор.');
++            const token = randomUUID(), revision = digest(s), units = s.assembly.units.filter(u => input.unitIds?.includes(u.id));
++            if (input.unitIds && units.length !== input.unitIds.length)
++                throw new BadRequestException('Единица не входит в заявку.');
++            const whole = [...new Set(s.assembly.units.filter(u => u.state === 'PICKED' && u.wholeBox).map(u => u.sourceBoxCode))];
++            const affectedBoxes = input.boxCodes?.length ? input.boxCodes : input.action === 'ADD_BOXES' ? whole : input.action === 'CONFIRM_BOXES' ? s.assembly.boxes.map(b => b.boxCode) : [];
++            if (['ADD_BOXES', 'SPLIT_BOXES'].includes(input.action) && affectedBoxes.some(c => !whole.includes(c)))
++                throw new ConflictException('Короб уже упакован или не отобран целиком.');
++            if (input.action === 'CONFIRM_BOXES' && affectedBoxes.some(c => !s.assembly.boxes.some(b => b.boxCode === c)))
++                throw new ConflictException('Короб не входит в поставку.');
++            if (input.action === 'PACK_UNITS' && (units.some(u => u.state !== 'PICKED') || !s.assembly.boxes.some(b => b.boxCode === input.targetBoxCode && !b.wholeBox)))
++                throw new ConflictException('Выберите отобранный товар и короб поштучной упаковки.');
++            if (input.action === 'FINISH' && (!s.assembly.boxes.length || s.assembly.boxes.some(b => !b.confirmedAt) || s.assembly.units.some(u => u.state === 'PICKED')))
++                throw new ConflictException('Упакуйте все отобранные товары и подтвердите короба.');
++            if (input.action === 'REVERSE_WRITEOFF')
++                await this.reverse(db, id, input, user, token, true);
++            const picked = s.assembly.units.filter(u => u.state !== 'RETURNED').length, packed = s.assembly.units.filter(u => u.state === 'PACKED').length;
++            const affectedUnits = input.unitIds ? units : s.assembly.units.filter(u => input.action === 'CLOSE_PICK' || input.action === 'FINISH' ? u.state !== 'RETURNED' : affectedBoxes.includes(input.action === 'CONFIRM_BOXES' ? u.targetBoxCode ?? '' : u.sourceBoxCode) && u.state !== 'RETURNED');
++            const summary = { phase: s.assembly.phase, action: input.action, affectedBoxes, units: affectedUnits.map(u => ({ id: u.id, barcode: u.barcode, kiz: u.kiz, source: u.sourceBoxCode, target: input.targetBoxCode ?? u.targetBoxCode })), picked, packed, requested: s.request.items.reduce((n, i) => n + i.quantity, 0), availableStockChange: 0, packingStockChange: input.action === 'REVERSE_WRITEOFF' ? 1 : input.action === 'FINISH' ? -packed : 0, shippingStockChange: input.action === 'FINISH' ? packed : 0, warning: input.action === 'REVERSE_WRITEOFF' ? 'Восстановление отменяет одно списание. История прежних отгрузок КИЗ сохраняется.' : input.action === 'SPLIT_BOXES' ? 'Товар всех выбранных коробов перейдёт в поштучную упаковку. Отбор сохранится.' : input.action === 'CLOSE_PICK' ? 'К упаковке останется фактически отобранный товар. Исходное количество заказа сохраняется.' : null };
++            await db.auditLog.create({ data: { id: token, userId: user.id, entity: 'ClientRequest', entityId: id, action: 'FBO_RECOVERY_PREVIEW', payload: { input: input as unknown as Prisma.InputJsonValue, revision, summary } } });
++            return { token, summary };
++        }, { isolationLevel: 'RepeatableRead', timeout: 30000 });
++    }
++    async apply(id: string, token: string, user: AuthUser) {
++        if (typeof token !== 'string' || token.length > 100)
++            throw new BadRequestException('Нужен предпросмотр.');
++        const execute = () => this.prisma.$transaction(async (db) => {
++            await db.$queryRaw `SELECT id FROM "ClientRequest" WHERE id=${id} FOR UPDATE`;
++            await this.access(db, user, id);
++            const preview = await db.auditLog.findUnique({ where: { id: token } });
++            if (!preview || preview.action !== 'FBO_RECOVERY_PREVIEW' || preview.entityId !== id || preview.userId !== user.id)
++                throw new ForbiddenException('Предпросмотр недоступен.');
++            const receipt = await db.auditLog.findUnique({ where: { id: `fbo-recovery:${token}` } });
++            if (receipt)
++                return { applied: true, repeated: true, result: receipt.payload };
++            const payload = preview.payload as unknown as {
++                input: RecoveryInput;
++                revision: string;
++            };
++            if (Date.now() - preview.createdAt.getTime() > 600000)
++                throw new ConflictException('Предпросмотр устарел. Повторите проверку.');
++            const before = await this.state(db, id);
++            if (digest(before) !== payload.revision)
++                throw new ConflictException('Состав или остатки изменились. Повторите предпросмотр.');
++            await this.lock.assertStockMovementsAllowed();
++            if (payload.input.action === 'REVERSE_WRITEOFF')
++                await this.reverse(db, id, payload.input, user, token);
++            else
++                await this.fbo.recoverInTransaction(db, id, payload.input, user, token);
++            const after = await this.state(db, id);
++            const result = { action: payload.input.action, reason: payload.input.reason, before: { phase: before.assembly.phase, boxes: before.assembly.boxes, units: before.assembly.units, balances: before.balances, marks: before.marks }, after: { phase: after.assembly.phase, boxes: after.assembly.boxes, units: after.assembly.units, balances: after.balances, marks: after.marks } };
++            await db.auditLog.create({ data: { id: `fbo-recovery:${token}`, userId: user.id, entity: 'ClientRequest', entityId: id, action: 'FBO_RECOVERY_APPLIED', payload: JSON.parse(JSON.stringify(result)) } });
++            await db.clientRequestEvent.create({ data: { requestId: id, clientId: after.request.clientId, createdByUserId: user.id, eventType: 'COMMENT', title: 'Исправление FBO администратором', body: `${payload.input.action}: ${payload.input.reason}` } });
++            return { applied: true, repeated: false, result: { phase: after.assembly.phase } };
++        }, { isolationLevel: 'Serializable', timeout: 120000 });
++        // FIX: retry only a rolled-back serialization conflict, retaining the same preview receipt.
++        for (let attempt = 0;; attempt++)
++            try {
++                return await execute();
++            }
++            catch (error) {
++                if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt >= 2)
++                    throw error;
++            }
++    }
++    private async reverse(db: DB, id: string, input: RecoveryInput, user: AuthUser, token: string, dryRun = false) {
++        const s = await this.state(db, id);
++        if (!['PACKING', 'CONTROL'].includes(s.assembly.phase))
++            throw new ConflictException('Восстановление доступно до завершения упаковки.');
++        const unit = s.assembly.units.find(u => u.id === input.unitIds![0]);
++        const move = await db.stockMovement.findUnique({ where: { id: input.movementId! } });
++        if (!unit || unit.state !== 'PACKED' || !unit.markId || !move || move.quantity !== -1 || move.type !== 'INVENTORY_ADJUSTMENT' || move.status !== 'PACKING' || move.boxId !== unit.targetBoxId || move.skuId !== unit.skuId || move.clientId !== s.request.clientId || (move.warehouseId && move.warehouseId !== s.request.warehouseId) || move.createdAt < unit.packedAt! || !move.idempotencyKey?.startsWith('admin-phantom-stock:'))
++            throw new ConflictException('Допустима отмена одного списания фантомного остатка из короба этой заявки.');
++        const reverseKey = `fbo-reverse:${move.id}`;
++        if (await db.stockMovement.findUnique({ where: { idempotencyKey: reverseKey } }))
++            throw new ConflictException('Списание уже отменено.');
++        const mark = s.marks.find(m => m.id === unit.markId);
++        if (!mark || mark.status !== 'BLOCKED' || mark.boxId !== null)
++            throw new ConflictException('КИЗ уже изменён или находится в другом коробе.');
++        const prior = mark.stockMovementId ? await db.stockMovement.findUnique({ where: { id: mark.stockMovementId } }) : null;
++        const box = await db.box.findUnique({ where: { id: unit.targetBoxId! } });
++        if (mark.clientId !== s.request.clientId || mark.skuId !== unit.skuId || mark.sourceDocument !== 'Снят с остатка автоматическим контролем: КИЗ уже отгружен' || !prior || prior.sourceDocument !== id || prior.boxId !== unit.targetBoxId || prior.status !== 'PACKING' || prior.quantity < 1 || !box || box.clientId !== s.request.clientId || box.warehouseId !== s.request.warehouseId)
++            throw new ConflictException('Нет однозначной связи КИЗ с ошибочным списанием и упаковкой этой заявки.');
++        const blocked = s.assembly.units.filter(u => u.targetBoxId === unit.targetBoxId && u.skuId === unit.skuId && u.state === 'PACKED' && s.marks.some(m => m.id === u.markId && m.status === 'BLOCKED'));
++        if (blocked.length !== 1)
++            throw new ConflictException('Несколько заблокированных КИЗ: требуется индивидуальная сверка.');
++        const expected = s.assembly.units.filter(u => u.targetBoxId === unit.targetBoxId && u.skuId === unit.skuId && u.state === 'PACKED').length;
++        const actual = s.balances.filter(b => b.boxId === unit.targetBoxId && b.skuId === unit.skuId).reduce((n, b) => n + b.quantity, 0);
++        if (expected - actual !== 1)
++            throw new ConflictException('Расхождение не равно одной единице. Нужна сверка.');
++        if (await db.stockMovement.findFirst({ where: { boxId: move.boxId, skuId: move.skuId, createdAt: { gt: move.createdAt } } }))
++            throw new ConflictException('После списания были другие движения. Нужна сверка.');
++        if (dryRun)
++            return;
++        const dims = { clientId: move.clientId, warehouseId: s.request.warehouseId, skuId: move.skuId, boxId: move.boxId, palletId: move.palletId, status: 'PACKING' as const };
++        const balanceKey = this.balances.balanceKey(dims);
++        await db.stockBalance.upsert({ where: { balanceKey }, create: { ...dims, balanceKey, quantity: 1 }, update: { quantity: { increment: 1 } } });
++        const restored = await db.stockMovement.create({ data: { ...dims, type: 'INVENTORY_ADJUSTMENT', quantity: 1, sourceDocument: id, idempotencyKey: reverseKey, comment: `Отмена ${move.id}: ${input.reason}` } });
++        await db.productMark.update({ where: { id: mark.id }, data: { boxId: move.boxId, status: 'PACKING', stockMovementId: restored.id, sourceDocument: id } });
++        await db.fboAssemblyBox.updateMany({ where: { requestId: id, boxId: move.boxId! }, data: { confirmedAt: null, confirmedByUserId: null } });
++    }
++    async report(id: string, user: AuthUser, filter: ReportFilter = {}) {
++        return this.prisma.$transaction(async (db) => {
++            for (const value of Object.values(filter))
++                if (typeof value !== 'string' || value.length > 150)
++                    throw new BadRequestException('Некорректный фильтр отчёта.');
++            for (const value of [filter.from, filter.to])
++                if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value))
++                    throw new BadRequestException('Укажите дату в формате ГГГГ-ММ-ДД.');
++            await this.access(db, user, id);
++            const units = await db.fboAssemblyUnit.findMany({ where: { requestId: id }, orderBy: [{ pickedAt: 'asc' }, { id: 'asc' }] });
++            const users = await db.user.findMany({ where: { id: { in: [...new Set(units.map(u => u.pickedByUserId))] } }, select: { id: true, name: true } });
++            const audits = await db.auditLog.findMany({ where: { entityId: id, action: { in: ['FBO_PICK_LOCATION', 'FBO_PICK_BOX', 'FBO_PICK_UNIT'] } }, orderBy: { createdAt: 'asc' } });
++            const evidence = new Map<string, {
++                pallet: string;
++                operation: string;
++                whole: boolean;
++            }>();
++            for (const a of audits.filter(a => a.action === 'FBO_PICK_LOCATION')) {
++                const p = a.payload as {
++                    unitIds?: string[];
++                    pallet?: string;
++                    operationId?: string;
++                    whole?: boolean;
++                };
++                for (const uid of p.unitIds ?? [])
++                    evidence.set(uid, { pallet: p.pallet || 'Не зафиксирован', operation: p.operationId ?? a.id, whole: !!p.whole });
++            }
++            // FIX: old pick events are usable only with an unambiguous source, actor and transaction timestamp.
++            for (const unit of units)
++                if (!evidence.has(unit.id)) {
++                    const matches = audits.filter(a => ['FBO_PICK_BOX', 'FBO_PICK_UNIT'].includes(a.action) && a.userId === unit.pickedByUserId && a.createdAt.getTime() === unit.pickedAt.getTime() && (a.payload as {
++                        sourceBoxCode?: string;
++                    }).sourceBoxCode === unit.sourceBoxCode);
++                    if (matches.length === 1) {
++                        const a = matches[0], p = a.payload as {
++                            palletCode?: string;
++                            operationId?: string;
++                        };
++                        evidence.set(unit.id, { pallet: p.palletCode || 'Не зафиксирован', operation: p.operationId ?? a.id, whole: a.action === 'FBO_PICK_BOX' });
++                    }
++                }
++            const rows = new Map<string, {
++                box: string;
++                pallet: string;
++                worker: string;
++                at: string;
++                mode: string;
++                quantity: number;
++                state: string;
++                target: string;
++            }>();
++            for (const u of units) {
++                const ev = evidence.get(u.id);
++                const row = { box: u.sourceBoxCode, pallet: ev?.pallet ?? 'Не зафиксирован', worker: users.find(w => w.id === u.pickedByUserId)?.name ?? u.pickedByUserId, at: u.pickedAt.toISOString(), mode: (ev ? ev.whole : u.wholeBox) ? 'Целиком' : 'Поштучно', quantity: 1, state: u.state === 'PACKED' ? 'Упакован' : u.state === 'RETURNED' ? 'Возвращён' : 'Ожидает упаковки', target: u.targetBoxCode ?? '' };
++                const date = new Date(u.pickedAt.getTime() + 10800000).toISOString().slice(0, 10);
++                if (filter.worker && !row.worker.toLocaleLowerCase().includes(filter.worker.toLocaleLowerCase()) || filter.pallet && !row.pallet.toLocaleLowerCase().includes(filter.pallet.toLocaleLowerCase()) || filter.from && date < filter.from || filter.to && date > filter.to || filter.state && u.state !== filter.state)
++                    continue;
++                const key = JSON.stringify([row.box, ev?.operation ?? u.id, u.pickedByUserId, row.state, row.target]);
++                const old = rows.get(key);
++                if (old)
++                    old.quantity++;
++                else
++                    rows.set(key, row);
++            }
++            return [...rows.values()];
++        }, { isolationLevel: 'RepeatableRead', timeout: 30000 });
++    }
++    async excel(id: string, user: AuthUser, filter: ReportFilter) { const rows = await this.report(id, user, filter); const wb = XLSX.utils.book_new(); const sheet = XLSX.utils.aoa_to_sheet([['Короб', 'Паллет при отборе', 'Сотрудник', 'Дата и время МСК', 'Способ отбора', 'Количество', 'Упаковка', 'Короб упаковки'], ...rows.map(r => [r.box, r.pallet, r.worker, new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(r.at)), r.mode, r.quantity, r.state, r.target])]); sheet['!cols'] = [26, 24, 24, 23, 18, 12, 24, 26].map(wch => ({ wch })); XLSX.utils.book_append_sheet(wb, sheet, 'Отбор коробов'); return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer; }
++    async document(id: string, user: AuthUser, kind: string) { if (!['products', 'packages'].includes(kind))
++        throw new BadRequestException('Неизвестный документ.'); await this.access(this.prisma, user, id); return kind === 'products' ? this.files.getWbProductsTemplate(id, user) : this.files.getWbPackagingTemplate(id, user); }
++}
+--- a/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
++++ b/wms/apps/api/src/modules/tsd/fbo-two-stage.service.ts
+@@ -12,6 +12,7 @@
+ import { StockOperationsService } from '../stock/stock-operations.service';
+ import { closedFboItems, fboClosePickEnabled, fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision, prioritizeFboWholeBoxes } from './fbo-two-stage-policy';
+ import { FboActionDto } from './dto/fbo-action.dto';
++import type { RecoveryInput } from '../administration/fbo-problems-policy';
+ const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
+     parentRequest: { select: { id: true, number: true, fboRequestCode: true } }, childRequests: { select: { id: true, number: true, status: true, fboRequestCode: true } },
+     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
+@@ -65,6 +66,78 @@
+         }
+     }
+     constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly balances: StockBalancesService, private readonly stock: StockOperationsService, private readonly lock: InventoryLockService, private readonly files: ClientRequestMarketplaceFilesService) { }
++    // FIX: administrative recovery reuses exactly the same transactional packing invariants.
++    // The administration service authorizes, locks, checks preview freshness and records the receipt.
++    async recoverInTransaction(tx: Prisma.TransactionClient, id: string, input: RecoveryInput, user: AuthUser, key: string) {
++        await this.lock.assertStockMovementsAllowed();
++        const proxy = new Proxy(tx, { get: (o, k) => k === '$transaction' ? async (fn: (db: Prisma.TransactionClient) => unknown) => fn(tx) : o[k as keyof typeof o] }) as PrismaService;
++        const svc = new FboTwoStageService(proxy, this.scopes, this.balances, this.stock, this.lock, this.files);
++        const r = await this.load(tx, id, user, 'write'); this.requireFbo(r);
++        const assembly = await tx.fboAssembly.findUniqueOrThrow({ where: { requestId: id } });
++        if (!['PICKING','PACKING','CONTROL'].includes(assembly.phase) || !['SUBMITTED','APPROVED','IN_WORK'].includes(r.status)) throw new ConflictException('Заявка уже завершена или недоступна.');
++        let sequence = 0;
++        const act = (action: string, fields: Partial<FboActionDto> = {}) => svc.act(id, { action, operationId: `${key}:${sequence++}`, ...fields }, user);
++        const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
++        const select = (codes: string[], supplied?: string[]) => {
++            if (supplied?.some(c => !codes.includes(c))) throw new ConflictException('Выбранный короб больше не доступен для действия.');
++            return supplied?.length ? supplied : codes;
++        };
++        const packing = async () => {
++            if (!['PACKING','CONTROL'].includes(assembly.phase)) throw new ConflictException('Сначала завершите отбор.');
++            if (assembly.phase === 'CONTROL') await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
++        };
++        if (input.action === 'CLOSE_PICK') return act('STOP_PICK');
++        if (input.action === 'ADD_BOXES') {
++            await packing();
++            for (const code of select([...new Set(units.filter(u=>u.state==='PICKED'&&u.wholeBox).map(u=>u.sourceBoxCode))],input.boxCodes)) await act('PACK_BOX',{sourceBoxCode:code});
++        } else if (input.action === 'SPLIT_BOXES') {
++            await packing();
++            for(const code of select([...new Set(units.filter(u=>u.state==='PICKED'&&u.wholeBox).map(u=>u.sourceBoxCode))],input.boxCodes)) {
++                const source=units.find(u=>u.sourceBoxCode===code)!;
++                await this.unpackPickedWholeBox(tx,r,source.sourceBoxId,user,`${key}:split:${source.sourceBoxId}`);
++            }
++        } else if (input.action === 'PACK_UNITS') {
++            await packing();
++            const chosen=units.filter(u=>input.unitIds!.includes(u.id));
++            if(chosen.length!==input.unitIds!.length||chosen.some(u=>u.state!=='PICKED')) throw new ConflictException('Выбранные единицы уже изменены.');
++            const parcel=await tx.fboAssemblyBox.findUnique({where:{requestId_boxCode:{requestId:id,boxCode:input.targetBoxCode!}}});
++            if(!parcel||parcel.wholeBox) throw new ConflictException('Выберите сформированный короб поштучной упаковки.');
++            await this.requireIdleBox(tx,parcel.boxId,id);
++            await tx.fboAssemblyBox.update({where:{id:parcel.id},data:{closedAt:null,confirmedAt:null,confirmedByUserId:null}});
++            const split = new Set<string>();
++            for(const unit of chosen) {
++                if(unit.wholeBox && !split.has(unit.sourceBoxId)) {
++                    await this.unpackPickedWholeBox(tx,r,unit.sourceBoxId,user,`${key}:split:${unit.sourceBoxId}`);
++                    split.add(unit.sourceBoxId);
++                }
++                if (unit.kiz) await act('PACK_UNIT',{targetBoxCode:parcel.boxCode,barcode:unit.barcode,kiz:unit.kiz});
++                else {
++                    // FIX: preserve the selected unit identity for unmarked stock too.
++                    const holding = await tx.box.findUniqueOrThrow({where:{code:`FBO-PICK-${id}`}});
++                    await this.move(tx,r,unit.skuId,holding.id,parcel.boxId,'PACKING','PACKING',1,`${key}:unit:${unit.id}`,user);
++                    await tx.fboAssemblyUnit.update({where:{id:unit.id},data:{state:'PACKED',targetBoxId:parcel.boxId,targetBoxCode:parcel.boxCode,packedAt:new Date(),packedByUserId:user.id}});
++                }
++            }
++            await this.validatePackedBox(tx,r,parcel.boxId,await tx.fboAssemblyUnit.findMany({where:{requestId:id}}));
++            if(parcel.closedAt) await act('CLOSE_BOX',{targetBoxCode:parcel.boxCode});
++        } else if(input.action==='CONFIRM_BOXES') {
++            if(!['PACKING','CONTROL'].includes(assembly.phase)) throw new ConflictException('Сначала завершите отбор.');
++            const parcels=await tx.fboAssemblyBox.findMany({where:{requestId:id}});
++            for(const code of select(parcels.map(b=>b.boxCode),input.boxCodes)) {
++                const b=parcels.find(b=>b.boxCode===code)!;
++                if(!units.some(u=>u.targetBoxId===b.boxId&&u.state==='PACKED')) throw new ConflictException(`Пустой короб ${code}.`);
++                try{await this.validatePackedBox(tx,r,b.boxId,units);}catch(e){throw new ConflictException(`${code}: ${(e as Error).message}`);}
++                await tx.fboAssemblyBox.update({where:{id:b.id},data:{closedAt:b.closedAt??new Date(),confirmedAt:b.confirmedAt??new Date(),confirmedByUserId:b.confirmedByUserId??user.id}});
++            }
++        } else if(input.action==='FINISH') {
++            if(assembly.phase==='PACKING') await act('SORTED');
++            await act('FINISH');
++            // FIX: both documents must be constructible before committing completion.
++            const documents = new ClientRequestMarketplaceFilesService(proxy,this.scopes);
++            await documents.getWbProductsTemplate(id,user);
++            await documents.getWbPackagingTemplate(id,user);
++        }
++    }
+     async eligible(requestId: string, user: AuthUser) {
+         if (!fboTwoStageEnabled())
+             return false;
+@@ -296,6 +369,7 @@
+                     chosen = [{ skuId: line.skuId!, mark }];
+                 }
+                 const holding = whole ? source : await tx.box.upsert({ where: { code: `FBO-PICK-${id}` }, create: { code: `FBO-PICK-${id}`, clientId: r.clientId, warehouseId: r.warehouseId, status: 'fbo-picking' }, update: {} });
++                const pickedUnitIds: string[] = [];
+                 for (const pick of chosen) {
+                     const line = lines.find(l => l.skuId === pick.skuId && l.remaining > 0)!;
+                     line.remaining--;
+@@ -305,6 +379,7 @@
+                             throw new ConflictException('Неоднозначный КИЗ.');
+                     }
+                     const unitId = randomUUID();
++                    pickedUnitIds.push(unitId);
+                     const movement = await this.move(tx, r, pick.skuId, source.id, holding.id, 'AVAILABLE', 'PACKING', 1, `${key}:${unitId}`, user);
+                     if (pick.mark) {
+                         const changed = await tx.productMark.updateMany({ where: { id: pick.mark.id, boxId: source.id, status: 'AVAILABLE' }, data: { boxId: holding.id, status: 'PACKING', stockMovementId: movement.id } });
+@@ -313,6 +388,10 @@
+                     }
+                     await tx.fboAssemblyUnit.create({ data: { id: unitId, requestId: id, requestItemId: line.id, skuId: pick.skuId, barcode: line.barcode!,
+                             markId: pick.mark?.id, activeMarkId: pick.mark?.id, kiz: pick.mark?.value, sourceBoxId: source.id, sourceBoxCode: source.code, wholeBox: whole, pickedByUserId: user.id } });
++                }
++                if (process.env.WMS_FBO_PROBLEMS_ENABLED === 'true') {
++                    const location = await tx.box.findUniqueOrThrow({where:{id:source.id},include:{storagePlacement:{include:{pallet:true}},pallet:true}});
++                    await tx.auditLog.create({data:{userId:user.id,entity:'ClientRequest',entityId:id,action:'FBO_PICK_LOCATION',payload:{unitIds:pickedUnitIds,operationId:dto.operationId,whole,pallet:location.storagePlacement?.pallet.code ?? location.pallet?.code ?? null}}});
+                 }
+                 await this.releaseDisplacedRoutes(tx, source.id, source.code, [...new Set(chosen.map(p => p.skuId))]);
+             }
+--- a/wms/apps/web/src/lib/api.ts
++++ b/wms/apps/web/src/lib/api.ts
+@@ -1,3 +1,19 @@
++// FIX: administrator FBO recovery always requires a server-issued preview token.
++export type FboRecoveryInput = { action: 'CLOSE_PICK'|'ADD_BOXES'|'PACK_UNITS'|'SPLIT_BOXES'|'CONFIRM_BOXES'|'FINISH'|'REVERSE_WRITEOFF'; reason:string; physicalConfirmed:boolean; boxCodes?:string[]; unitIds?:string[]; targetBoxCode?:string; movementId?:string };
++export type FboRecoveryRequest = { id:string; number:number; title:string; status:string; warehouse?:{name:string} };
++export type FboRecoveryDetails = { request:FboRecoveryRequest; phase:string; pendingWhole:string[]; units:{id:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;state:string;wholeBox:boolean}[]; boxes:{boxCode:string;wholeBox:boolean;quantity:number;closedAt:string|null;confirmedAt:string|null;mismatches:string[]}[]; movements:{id:string;boxId:string|null;skuId:string;createdAt:string;comment:string|null}[] };
++export type FboRecoveryPreview = {token:string;summary:{phase:string;action:string;affectedBoxes:string[];units:{id:string;barcode:string;kiz:string|null;source:string;target:string|null}[];picked:number;packed:number;availableStockChange:number;packingStockChange:number;warning:string|null}};
++export type FboPickReportRow = {box:string;pallet:string;worker:string;at:string;mode:string;quantity:number;state:string;target:string};
++export type FboPickReportFilter = {worker?:string;pallet?:string;from?:string;to?:string;state?:string};
++export const fetchFboRecoveryRequests=(token:string,search:string)=>request<FboRecoveryRequest[]>(withQuery('/administration/fbo-problems',{search}),{accessToken:token});
++export const fetchFboRecoveryCapabilities=(token:string)=>request<{enabled:boolean}>('/administration/fbo-problems/capabilities',{accessToken:token});
++export const fetchFboRecoveryDetails=(token:string,id:string)=>request<FboRecoveryDetails>(`/administration/fbo-problems/${id}`,{accessToken:token});
++export const previewFboRecovery=(token:string,id:string,body:FboRecoveryInput)=>request<FboRecoveryPreview>(`/administration/fbo-problems/${id}/preview`,{accessToken:token,method:'POST',body});
++export const applyFboRecovery=(token:string,id:string,previewToken:string)=>request<{applied:boolean}>(`/administration/fbo-problems/${id}/apply`,{accessToken:token,method:'POST',body:{token:previewToken}});
++export const fetchFboPickReport=(token:string,id:string,filter:FboPickReportFilter)=>request<FboPickReportRow[]>(withQuery(`/administration/fbo-problems/${id}/report`,filter),{accessToken:token});
++export const downloadFboPickReport=(token:string,id:string,filter:FboPickReportFilter)=>requestBlob(withQuery(`/administration/fbo-problems/${id}/report.xlsx`,filter),token);
++export const downloadFboRecoveryDocument=(token:string,id:string,kind:'products'|'packages')=>requestBlob(`/administration/fbo-problems/${id}/files/${kind}`,token);
++
+ import { completePortalRun } from './wb-portal-transfer';
+ 
+ export type AuthUser = {
+--- a/wms/apps/web/src/components/administration/AdministrationFboProblems.tsx
++++ b/wms/apps/web/src/components/administration/AdministrationFboProblems.tsx
+@@ -0,0 +1,84 @@
++import { useEffect, useRef, useState } from 'react';
++import './fbo-problems.css';
++import { applyFboRecovery, downloadFboPickReport, downloadFboRecoveryDocument, fetchFboPickReport, fetchFboRecoveryDetails, fetchFboRecoveryRequests, previewFboRecovery, type AuthSession, type FboPickReportFilter, type FboPickReportRow, type FboRecoveryDetails, type FboRecoveryInput, type FboRecoveryPreview, type FboRecoveryRequest } from '../../lib/api';
++const actions: Record<FboRecoveryInput['action'], string> = {
++    CLOSE_PICK: 'Завершить отбор по факту', ADD_BOXES: 'Добавить целые короба', PACK_UNITS: 'Восстановить упаковку отобранного товара', SPLIT_BOXES: 'Разобрать целые короба', CONFIRM_BOXES: 'Подтвердить короба', FINISH: 'Завершить упаковку и сформировать файлы', REVERSE_WRITEOFF: 'Отменить ошибочное списание одной единицы',
++};
++export const canManageFboProblems = (session: AuthSession) => !session.user.isDemo && session.user.roleCodes.some(r => r === 'OWNER' || r === 'ADMIN');
++const moscow = (date: string) => new Date(date).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
++function save(blob: Blob, name: string) { const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
++// FIX: every edit invalidates the preview; apply sends only its immutable server token.
++export function AdministrationFboProblems({ session }: {
++    session: AuthSession;
++}) {
++    const [search, setSearch] = useState(''), [requests, setRequests] = useState<FboRecoveryRequest[]>([]), [details, setDetails] = useState<FboRecoveryDetails | null>(null);
++    const [input, setInput] = useState<FboRecoveryInput>({ action: 'CLOSE_PICK', reason: '', physicalConfirmed: false }), [preview, setPreview] = useState<FboRecoveryPreview | null>(null);
++    const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState(''), [mode, setMode] = useState<'repair' | 'report'>('repair');
++    const [filter, setFilter] = useState<FboPickReportFilter>({}), [rows, setRows] = useState<FboPickReportRow[] | null>(null);
++    const pending = useRef(false);
++    const token = session.accessToken;
++    const allowed = canManageFboProblems(session);
++    async function run(fn: () => Promise<void>) { if (pending.current)
++        return; pending.current = true; setBusy(true); setError(''); setMessage(''); try {
++        await fn();
++    }
++    catch (e) {
++        setError(e instanceof Error ? e.message : 'Не удалось выполнить действие');
++    }
++    finally {
++        pending.current = false;
++        setBusy(false);
++    } }
++    useEffect(() => { if (allowed)
++        void run(async () => setRequests(await fetchFboRecoveryRequests(token, ''))); }, [token, allowed]);
++    if (!allowed)
++        return null;
++    function edit(change: Partial<FboRecoveryInput>) { setInput(old => ({ ...old, ...change })); setPreview(null); }
++    const id = details?.request.id;
++    const choices = details ? (input.action === 'CONFIRM_BOXES' ? details.boxes.map(b => b.boxCode) : details.pendingWhole) : [];
++    const eligible = details?.units.filter(u => input.action === 'REVERSE_WRITEOFF' ? u.state === 'PACKED' && u.kiz : u.state === 'PICKED') ?? [];
++    const toggle = (values: string[] | undefined, value: string) => values?.includes(value) ? values.filter(v => v !== value) : [...(values ?? []), value];
++    return <section className="admin-card fbo-problems">
++  <h2>Проблемы FBO</h2>
++  <p>Выберите поставку. Исправления выполняются по физическому факту с записью причины и результата в историю.</p>
++  {error && <p role="alert" className="admin-message admin-message--error">{error}</p>}{message && <p role="status">{message}</p>}
++  <fieldset disabled={busy} style={{ border: 0, padding: 0 }}>
++   <form onSubmit={e => { e.preventDefault(); void run(async () => setRequests(await fetchFboRecoveryRequests(token, search))); }}>
++    <label>Номер или название заявки <input value={search} onChange={e => setSearch(e.target.value)}/></label> <button>Найти</button>
++   </form>
++   <label>Поставка <select value={id ?? ''} onChange={e => { const next = e.target.value; setDetails(null); setPreview(null); setRows(null); setInput({ action: 'CLOSE_PICK', reason: '', physicalConfirmed: false }); if (next)
++        void run(async () => setDetails(await fetchFboRecoveryDetails(token, next))); }}>
++    <option value="">Выберите заявку</option>{requests.map(r => <option key={r.id} value={r.id}>№{r.number} · {r.title} · {r.warehouse?.name}</option>)}
++   </select></label>
++   {details && id && <>
++    <h3>{details.request.title}</h3>
++    <p>Отобрано: {details.units.filter(u => u.state !== 'RETURNED').length} · Упаковано: {details.units.filter(u => u.state === 'PACKED').length} · Коробов: {details.boxes.length} · Подтверждено: {details.boxes.filter(b => b.confirmedAt).length}</p>
++    <button type="button" onClick={() => { setPreview(null); void run(async () => setDetails(await fetchFboRecoveryDetails(token, id))); }}>Обновить</button>
++    <nav aria-label="Действия FBO"><button type="button" onClick={() => setMode('repair')}>Исправление этапов</button> <button type="button" onClick={() => setMode('report')}>Отчёт об отборе коробов</button></nav>
++    {mode === 'report' ? <>
++     <h3>Кто, когда и с какого паллета отбирал</h3><p>Время московское. Для старых отборов без записи местоположения паллет указан как «Не зафиксирован».</p>
++     {(['worker', 'pallet', 'from', 'to'] as const).map((key, i) => <label key={key}>{['Сотрудник', 'Паллет', 'С даты', 'По дату'][i]} <input type={i > 1 ? 'date' : 'text'} value={filter[key] ?? ''} onChange={e => { setFilter(f => ({ ...f, [key]: e.target.value })); setRows(null); }}/></label>)}
++     <label>Упаковка <select value={filter.state ?? ''} onChange={e => { setFilter(f => ({ ...f, state: e.target.value })); setRows(null); }}><option value="">Все</option><option value="PICKED">Ожидает упаковки</option><option value="PACKED">Упакован</option><option value="RETURNED">Возвращён</option></select></label>
++     <button type="button" onClick={() => void run(async () => setRows(await fetchFboPickReport(token, id, filter)))}>Показать отчёт</button>
++     <button type="button" onClick={() => void run(async () => save(await downloadFboPickReport(token, id, filter), `FBO_${details.request.number}_отбор.xlsx`))}>Скачать Excel</button>
++     {rows && <><p>Всего единиц: {rows.reduce((n, r) => n + r.quantity, 0)}</p><div style={{ overflowX: 'auto' }}><table><thead><tr>{['Короб', 'Паллет при отборе', 'Сотрудник', 'Время МСК', 'Способ', 'Количество', 'Упаковка', 'Короб упаковки'].map(h => <th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r, i) => <tr key={i}><td>{r.box}</td><td>{r.pallet}</td><td>{r.worker}</td><td>{moscow(r.at)}</td><td>{r.mode}</td><td>{r.quantity}</td><td>{r.state}</td><td>{r.target}</td></tr>)}</tbody></table></div></>}
++    </> : <>
++     <details><summary>Сверка коробов ({details.boxes.filter(b => b.mismatches.length).length} с расхождениями)</summary>{details.boxes.map(b => <p key={b.boxCode}>{b.boxCode} · {b.quantity} ед. · {b.confirmedAt ? 'Подтверждён' : b.closedAt ? 'Закрыт' : 'Открыт'}{b.mismatches.length ? ` · ${b.mismatches.join('; ')}` : ''}</p>)}</details>
++     {details.phase === 'COMPLETED' ? <><p>Упаковка завершена. Доступны документы и отчёт.</p>{(['products', 'packages'] as const).map(kind => <button key={kind} type="button" onClick={() => void run(async () => save(await downloadFboRecoveryDocument(token, id, kind), `FBO_${details.request.number}_${kind}.xlsx`))}>{kind === 'products' ? 'Скачать товары WB' : 'Скачать короба WB'}</button>)}</> : <>
++      <label>Действие <select value={input.action} onChange={e => { setInput({ action: e.target.value as FboRecoveryInput['action'], reason: input.reason, physicalConfirmed: false }); setPreview(null); }}>{Object.entries(actions).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
++      {['ADD_BOXES', 'SPLIT_BOXES', 'CONFIRM_BOXES'].includes(input.action) && <><p>Выберите короба.</p><button type="button" onClick={() => edit({ boxCodes: choices })}>Выбрать все</button>{choices.map(code => <label key={code} style={{ display: 'block' }}><input type="checkbox" checked={input.boxCodes?.includes(code) ?? false} onChange={() => edit({ boxCodes: toggle(input.boxCodes, code) })}/>{code}</label>)}</>}
++      {['PACK_UNITS', 'REVERSE_WRITEOFF'].includes(input.action) && <>
++       {input.action === 'PACK_UNITS' && <label>Короб упаковки <select value={input.targetBoxCode ?? ''} onChange={e => edit({ targetBoxCode: e.target.value })}><option value="">Выберите короб</option>{details.boxes.filter(b => !b.wholeBox).map(b => <option key={b.boxCode}>{b.boxCode}</option>)}</select></label>}
++       <div style={{ maxHeight: 320, overflowY: 'auto' }}>{eligible.map(u => <label key={u.id} style={{ display: 'block' }}><input type="checkbox" checked={input.unitIds?.includes(u.id) ?? false} onChange={() => edit({ unitIds: input.action === 'REVERSE_WRITEOFF' ? [u.id] : toggle(input.unitIds, u.id) })}/>{u.barcode} · {u.sourceBoxCode} → {u.targetBoxCode ?? 'Не упакован'} · {u.kiz ?? 'Без КИЗ'}</label>)}</div>
++      </>}
++      {input.action === 'REVERSE_WRITEOFF' && <label>Ошибочное списание <select value={input.movementId ?? ''} onChange={e => edit({ movementId: e.target.value })}><option value="">Выберите движение</option>{details.movements.map(m => <option key={m.id} value={m.id}>{moscow(m.createdAt)} · {m.comment ?? m.id}</option>)}</select></label>}
++      <label style={{ display: 'block' }}>Причина <textarea value={input.reason} onChange={e => edit({ reason: e.target.value })}/></label>
++      <label style={{ display: 'block' }}><input type="checkbox" checked={input.physicalConfirmed} onChange={e => edit({ physicalConfirmed: e.target.checked })}/>Подтверждаю физический состав и выбранное действие</label>
++      <button type="button" disabled={!input.physicalConfirmed || input.reason.trim().length < 5 || (['ADD_BOXES', 'SPLIT_BOXES', 'CONFIRM_BOXES'].includes(input.action) && !input.boxCodes?.length)} onClick={() => void run(async () => setPreview(await previewFboRecovery(token, id, input)))}>Предпросмотр изменений</button>
++      {preview && <section aria-label="Предпросмотр"><h3>{actions[input.action]}</h3><p>Изменение доступного остатка: {preview.summary.availableStockChange}. Изменение остатка «В сборке»: {preview.summary.packingStockChange}.</p><p>Короба: {preview.summary.affectedBoxes.join(', ') || '—'}</p><p>Выбрано товаров: {preview.summary.units.length}</p>{preview.summary.warning && <p>{preview.summary.warning}</p>}{preview.summary.units.map(u => <p key={u.id}>{u.barcode} · {u.source} → {u.target ?? '—'} · {u.kiz ?? 'Без КИЗ'}</p>)}<button type="button" onClick={() => void run(async () => { const current = preview.token; setPreview(null); await applyFboRecovery(token, id, current); setDetails(await fetchFboRecoveryDetails(token, id)); setRows(null); setInput({ ...input, physicalConfirmed: false, boxCodes: [], unitIds: [] }); setMessage('Изменения применены и записаны в историю.'); })}>Применить изменения</button></section>}
++     </>}
++    </>}
++   </>}
++  </fieldset>
++ </section>;
++}
+--- a/wms/apps/web/src/components/administration/AdministrationPanel.tsx
++++ b/wms/apps/web/src/components/administration/AdministrationPanel.tsx
+@@ -36,6 +36,7 @@
+   fetchAdministrationAudit,
+   fetchAdministrationDocumentation,
+   fetchAdministrationOverview,
++  fetchFboRecoveryCapabilities,
+   fetchAdministrationPhantomStocks,
+   fetchAdministrationSettings,
+   fetchAdministrationWorkspaceVisibility,
+@@ -63,6 +64,7 @@
+ import { AdministrationTsdWorkloadsPanel } from './AdministrationTsdWorkloads';
+ import { AdministrationFbsErrorCorrection } from './AdministrationFbsErrorCorrection';
+ import { AdministrationTechnicalWork } from './AdministrationTechnicalWork';
++import { AdministrationFboProblems, canManageFboProblems } from './AdministrationFboProblems';
+ import { AdministrationMarketplaceStockControl, canManageMarketplaceStockControl } from './AdministrationMarketplaceStockControl';
+ 
+ type AdministrationPanelProps = {
+@@ -70,9 +72,10 @@
+   onOpenWorkspace: (id: WorkspaceId) => void;
+ };
+ 
+-type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit' | 'auto-assembly';
++type TabId = 'fbo-problems' | 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit' | 'auto-assembly';
+ 
+ const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
++  { id: 'fbo-problems', label: 'Проблемы FBO', icon: Boxes },
+   { id: 'overview', label: 'Центр управления', icon: Crown },
+   { id: 'auto-assembly', label: 'Автосборка', icon: Clock3 },
+   // ADDED: One entry point for diagnostics and verified repair actions.
+@@ -104,6 +107,7 @@
+ const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]));
+ 
+ const sectionDescriptions: Record<TabId, string> = {
++  'fbo-problems': 'Исправление этапов, сверка коробов и Excel-отчёт об отборе',
+   overview: 'Состояние системы и основные показатели',
+   'auto-assembly': 'Заявки FBS по расписанию для WB и Ozon',
+   'technical-work': 'Диагностика и обслуживание системы',
+@@ -121,11 +125,11 @@
+ };
+ 
+ // FIX: preserve each section and its access restriction in the tile navigation.
+-export function AdministrationNavigation({ session, activeTab, phantomCount, onSelect }: {
+-  session: AuthSession; activeTab: TabId | null; phantomCount: number; onSelect: (id: TabId) => void;
++export function AdministrationNavigation({ session, activeTab, phantomCount, onSelect, fboEnabled = false }: {
++  fboEnabled?: boolean; session: AuthSession; activeTab: TabId | null; phantomCount: number; onSelect: (id: TabId) => void;
+ }) {
+   return <nav className="admin-topic-grid" aria-label="Разделы администрирования">
+-    {tabs.filter((tab) => tab.id !== 'marketplace-stock-control' || canManageMarketplaceStockControl(session)).map((tab, index) => {
++    {tabs.filter(tab => tab.id !== 'fbo-problems' || (fboEnabled && canManageFboProblems(session))).filter((tab) => tab.id !== 'marketplace-stock-control' || canManageMarketplaceStockControl(session)).map((tab, index) => {
+       const Icon = tab.icon;
+       return <button type="button" key={tab.id} className={`admin-topic-tile admin-topic-tile--${index % 5}`} aria-current={activeTab === tab.id ? 'page' : undefined} onClick={() => onSelect(tab.id)}>
+         <span className="admin-topic-tile__icon"><Icon size={23} aria-hidden="true" /></span>
+@@ -139,6 +143,12 @@
+ 
+ export function AdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
+   const [activeTab, setActiveTab] = useState<TabId | null>(null);
++  const [fboEnabled,setFboEnabled]=useState(false);
++  useEffect(()=>{
++    let current=true;setFboEnabled(false);
++    if(canManageFboProblems(session))void fetchFboRecoveryCapabilities(session.accessToken).then(r=>{if(current)setFboEnabled(r.enabled);}).catch(()=>{});
++    return ()=>{current=false;};
++  },[session.accessToken]);
+   const [overview, setOverview] = useState<AdministrationOverview | null>(null);
+   const [settings, setSettings] = useState<AdministrationSetting[]>([]);
+   const [visibility, setVisibility] = useState<AdministrationWorkspaceVisibility | null>(null);
+@@ -339,7 +349,7 @@
+         </button>
+       </section>
+ 
+-      {activeTab === null ? <AdministrationNavigation session={session} activeTab={activeTab} phantomCount={phantomCount} onSelect={setActiveTab} /> : (
++      {activeTab === null ? <AdministrationNavigation fboEnabled={fboEnabled} session={session} activeTab={activeTab} phantomCount={phantomCount} onSelect={setActiveTab} /> : (
+         <div className="admin-section-navigation"><button type="button" className="admin-button admin-button--ghost" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /> Все разделы</button><h3>{tabs.find((tab) => tab.id === activeTab)?.label}</h3></div>
+       )}
+ 
+@@ -357,6 +367,8 @@
+       {error ? <div className="admin-message admin-message--error"><AlertTriangle size={18} />{error}</div> : null}
+ 
+       {activeTab === 'overview' && overview ? (
++        <>
++        {fboEnabled&&canManageFboProblems(session)&&<button type="button" className="admin-card" style={{textAlign:'left'}} onClick={()=>setActiveTab('fbo-problems')}><Boxes size={24}/><strong>Проблемы FBO</strong><span>Исправление этапов, сверка коробов и Excel-отчёт об отборе</span></button>}
+         <OverviewTab
+           overview={overview}
+           optimization={optimization}
+@@ -364,10 +376,12 @@
+           onOptimize={optimizePerformance}
+           onOpenWorkspace={onOpenWorkspace}
+         />
++        </>
+       ) : null}
+       {activeTab === 'stock-check' ? <AdministrationStockCheck session={session} /> : null}
+       {activeTab === 'marketplace-stock-control' ? <AdministrationMarketplaceStockControl session={session} /> : null}
+       {activeTab === 'technical-work' ? <AdministrationTechnicalWork session={session} /> : null}
++      {activeTab === 'fbo-problems' && fboEnabled ? <AdministrationFboProblems session={session} /> : null}
+       {activeTab === 'error-correction' ? <AdministrationFbsErrorCorrection session={session} /> : null}
+       {activeTab === 'tsd-workloads' ? <AdministrationTsdWorkloadsPanel session={session} /> : null}
+       {activeTab === 'phantom-stock' ? (
+--- a/wms/apps/web/src/components/administration/fbo-problems.css
++++ b/wms/apps/web/src/components/administration/fbo-problems.css
+@@ -0,0 +1,14 @@
++.fbo-problems fieldset { display: grid; gap: 16px; min-width: 0; }
++.fbo-problems form, .fbo-problems nav { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
++.fbo-problems label { line-height: 1.6; overflow-wrap: anywhere; }
++.fbo-problems input:not([type="checkbox"]), .fbo-problems select, .fbo-problems textarea {
++  border: 1px solid #cbd8cf; border-radius: 8px; padding: 10px; max-width: 100%; background: #fff; color: #183626;
++}
++.fbo-problems textarea { display: block; width: min(100%, 700px); min-height: 80px; }
++.fbo-problems button { border: 1px solid #cbd8cf; border-radius: 10px; padding: 10px 16px; background: #eff6f0; color: #193c2a; cursor: pointer; justify-self: start; }
++.fbo-problems button:disabled { opacity: .5; cursor: default; }
++.fbo-problems input[type="checkbox"] { margin-right: 10px; }
++.fbo-problems table { border-collapse: collapse; width: 100%; }
++.fbo-problems td, .fbo-problems th { border-bottom: 1px solid #dce7e0; padding: 10px; text-align: left; }
++.fbo-problems th { background: #f4f7f5; }
++.fbo-problems [aria-label="Предпросмотр"] { padding: 16px; border: 1px solid #d8b85d; background: #fffcf0; border-radius: 12px; overflow-wrap: anywhere; }

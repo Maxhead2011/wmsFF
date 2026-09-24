@@ -1,0 +1,7 @@
+{
+  "images": {
+    "api": "sha256:5f51990a38676c597454e21c83d56a5739c5ccbe5dfd53cfaccc067c4340f44b",
+    "web": "sha256:59ad6decbdce789d3e1d58f13330ac2e6ac51dce128a0daf14bc9349df479570"
+  },
+  "builder": "sha256:f09d2537d867a7312e1b7c5a2f92ab73b89449b5a171f4b60f746526958e917a"
+}
