@@ -373,6 +373,18 @@ public interface WmsApi {
     Call<TsdRelabelPrintJob> relabelPrintStatus(@Header("Authorization") String authorization,
         @Path("id") String id, @Path("printId") String printId);
 
+    // FIX: printing from the FBS picking step is bound to its live task.
+    @GET("api/v1/tsd/fbs/tasks/{id}/relabel/print-stations")
+    Call<List<TsdPrintStation>> fbsRelabelPrintStations(@Header("Authorization") String authorization, @Path("id") String id);
+
+    @POST("api/v1/tsd/fbs/tasks/{id}/relabel/print")
+    Call<TsdRelabelPrintJob> fbsPrintRelabelTarget(@Header("Authorization") String authorization,
+        @Path("id") String id, @Body Map<String, String> request);
+
+    @GET("api/v1/tsd/fbs/tasks/{id}/relabel/print/{printId}")
+    Call<TsdRelabelPrintJob> fbsRelabelPrintStatus(@Header("Authorization") String authorization,
+        @Path("id") String id, @Path("printId") String printId);
+
     @GET("api/v1/tsd/requests/{id}/boxless-packing")
     Call<TsdBoxlessPackingResponse> getBoxlessPacking(
         @Header("Authorization") String authorization,

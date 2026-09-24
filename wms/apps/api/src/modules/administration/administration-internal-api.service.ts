@@ -278,7 +278,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd', '/tsd/requests/:id/fbo'],
-    routeCount: 94, // FIX: online stations, two-label relabel print and its status.
+    routeCount: 97, // FIX: include the three FBS picking-stage relabel print routes.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Печатает два целевых ШК переклейки через станцию и проверяет подтверждение печати.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],
