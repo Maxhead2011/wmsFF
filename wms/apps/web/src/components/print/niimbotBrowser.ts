@@ -1,7 +1,7 @@
 import JsBarcode from 'jsbarcode';
 import QRCode from 'qrcode';
 import 'niimbot-web-bluetooth';
-import { fitStickerText, type StickerBoxes, type StickerBox } from '../../lib/stickerLayout';
+import { fitStickerText, type StickerBoxes, type StickerBox, type StickerTextStyles, type StickerTextStyle } from '../../lib/stickerLayout';
 
 declare global {
   interface Window {
@@ -50,6 +50,7 @@ export type BrowserSticker = {
   barcodeY: number;
   numberY: number;
   boxes?: StickerBoxes;
+  textStyles?: StickerTextStyles;
 };
 
 export async function printB1Stickers(stickers: BrowserSticker[], onProgress: (message: string) => void) {
@@ -87,8 +88,8 @@ async function renderStickerImage(sticker: BrowserSticker, widthMm: number, heig
 
   const boxes = sticker.boxes;
   const textSize = Math.max(18, clamp(sticker.fontSize, 1, 10) * 6);
-  drawText(context, sticker.clientName, boxes?.client ?? { x: 14, y: 12, width: widthMm * 8 - 28, height: 30 }, textSize, true);
-  if (sticker.topText.trim()) drawText(context, sticker.topText, boxes?.top ?? { x: 14, y: 37, width: widthMm * 8 - 28, height: 30 }, textSize, false);
+  drawText(context, sticker.clientName, boxes?.client ?? { x: 14, y: 12, width: widthMm * 8 - 28, height: 30 }, textSize, sticker.textStyles?.client ?? { align: 'left', bold: true });
+  if (sticker.topText.trim()) drawText(context, sticker.topText, boxes?.top ?? { x: 14, y: 37, width: widthMm * 8 - 28, height: 30 }, textSize, sticker.textStyles?.top ?? { align: 'left', bold: false });
 
   const qrBox = boxes?.qr ?? { x: sticker.qrX, y: sticker.qrY, width: sticker.qrSize ?? 102, height: sticker.qrSize ?? 102 };
   if (sticker.qrEnabled) {
@@ -113,21 +114,25 @@ async function renderStickerImage(sticker: BrowserSticker, widthMm: number, heig
     context.drawImage(barcodeCanvas, barcodeBox.x, barcodeBox.y, barcodeBox.width, barcodeBox.height);
   }
 
-  drawText(context, sticker.value, boxes?.number ?? { x: 14, y: sticker.numberY, width: widthMm * 8 - 28, height: 30 }, textSize, true);
-  if (sticker.bottomText.trim()) drawText(context, sticker.bottomText, boxes?.bottom ?? { x: 14, y: sticker.numberY + 22, width: widthMm * 8 - 28, height: 22 }, textSize, false);
+  drawText(context, sticker.value, boxes?.number ?? { x: 14, y: sticker.numberY, width: widthMm * 8 - 28, height: 30 }, textSize, sticker.textStyles?.number ?? { align: 'left', bold: true });
+  if (sticker.bottomText.trim()) drawText(context, sticker.bottomText, boxes?.bottom ?? { x: 14, y: sticker.numberY + 22, width: widthMm * 8 - 28, height: 22 }, textSize, sticker.textStyles?.bottom ?? { align: 'left', bold: false });
   return canvas.toDataURL('image/png');
 }
 
-function drawText(context: CanvasRenderingContext2D, source: string, box: StickerBox, size: number, bold: boolean) {
+function drawText(context: CanvasRenderingContext2D, source: string, box: StickerBox, size: number, style: StickerTextStyle) {
   const text = source.trim();
   if (!text) return;
-  const weight = bold ? '700' : '500';
+  const weight = style.bold ? '700' : '500';
   const fitted = fitStickerText(text, box, size, (line, fontSize) => {
     context.font = `${weight} ${fontSize}px Arial, sans-serif`;
     return context.measureText(line).width;
   });
   context.font = `${weight} ${fitted.size}px Arial, sans-serif`;
-  fitted.lines.forEach((line, index) => context.fillText(line, box.x, box.y + index * fitted.size * 1.2));
+  fitted.lines.forEach((line, index) => {
+    const width = context.measureText(line).width;
+    const x = style.align === 'center' ? box.x + (box.width - width) / 2 : style.align === 'right' ? box.x + box.width - width : box.x;
+    context.fillText(line, x, box.y + index * fitted.size * 1.2);
+  });
 }
 
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)); }

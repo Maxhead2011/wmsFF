@@ -9,5 +9,6 @@ describe('pallet-sort label', () => {
     const html = renderToStaticMarkup(<PalletLabelForm session={{ accessToken: 'test', user: { id: 'operator' } } as AuthSession} />);
     expect(html).toContain('Как образец WB');
     expect(html).toContain('Куда печатать');
+    expect(html).toContain('value="LOCAL_BROWSER"');
   });
 });

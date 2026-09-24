@@ -26,4 +26,8 @@ describe('box label printing', () => {
     // TEST: style selection is explicit for box printing.
     expect(renderToStaticMarkup(<BoxLabelForm session={session} />)).toContain('Как образец WB');
   });
+  it('also offers the installed local printer in both layout modes', () => {
+    // TEST: the operator can choose the browser print dialog without an agent station.
+    expect(renderToStaticMarkup(<BoxLabelForm session={session} />)).toContain('value="LOCAL_BROWSER"');
+  });
 });

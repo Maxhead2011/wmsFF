@@ -1,4 +1,6 @@
 export type StickerCodeKind = 'qr' | 'code128' | 'both';
+export type StickerTextStyle = { align: 'left' | 'center' | 'right'; bold: boolean };
+export type StickerTextStyles = Partial<Record<'client' | 'top' | 'number' | 'bottom', StickerTextStyle>>;
 
 export type StickerLayout = {
   width: number;
@@ -18,6 +20,7 @@ export type StickerLayout = {
   barcodeY: number;
   numberY: number;
   boxes?: StickerBoxes;
+  textStyles?: StickerTextStyles;
 };
 
 export type StickerBox = { x: number; y: number; width: number; height: number };
@@ -85,16 +88,23 @@ export function buildStickerTspl(input: StickerLayout) {
   }
   const lines = [`SIZE ${input.width} mm,${input.height} mm`, 'GAP 2 mm,0', 'CLS'];
   // TSPL BLOCK fit=1 scales text to its box. The editor also checks a readable minimum.
-  const block = (box: StickerBox, variable: string) => `BLOCK ${box.x},${box.y},${box.width},${box.height},"0",0,${input.font * 6},${input.font * 6},0,0,1,"{{${variable}}}"`;
-  lines.push(block(boxes.client, 'clientName'));
-  if (input.topText) lines.push(block(boxes.top, 'topText'));
+  const block = (key: keyof StickerTextStyles, variable: string) => {
+    const box = boxes[key];
+    const style = input.textStyles?.[key];
+    const align = style?.align === 'center' ? 2 : style?.align === 'right' ? 3 : 0;
+    const line = (offset: number) => `BLOCK ${box.x + offset},${box.y},${box.width - offset},${box.height},"0",0,${input.font * 6},${input.font * 6},0,${align},1,"{{${variable}}}"`;
+    lines.push(line(0));
+    if (style?.bold) lines.push(line(1));
+  };
+  block('client', 'clientName');
+  if (input.topText) block('top', 'topText');
   if (hasQr) lines.push(`QRCODE ${boxes.qr.x},${boxes.qr.y},${input.qrLevel},${clamp(Math.round(boxes.qr.width / 25), 1, 10)},A,0,"{{qrValue}}"`);
   if (hasBarcode) {
     const module = input.barcodeModule ?? clamp(Math.round(boxes.barcode.width / 100), 1, 4);
     lines.push(`BARCODE ${boxes.barcode.x},${boxes.barcode.y},"128",${boxes.barcode.height},${input.barcodeHumanReadable === false ? 0 : 1},0,${module},${module},"{{barcodeValue}}"`);
   }
-  lines.push(block(boxes.number, 'barcodeValue'));
-  if (input.bottomText) lines.push(block(boxes.bottom, 'bottomText'));
+  block('number', 'barcodeValue');
+  if (input.bottomText) block('bottom', 'bottomText');
   lines.push('PRINT 1');
   return lines.join('\n');
 }

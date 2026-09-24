@@ -4,6 +4,13 @@ import { buildStickerTspl, fitStickerText, moveStickerBox, type StickerLayout } 
 const base: StickerLayout = { width: 40, height: 60, font: 3, codeKind: 'qr', qrLevel: 'M', qrModule: 4, barcodeHeight: 70, topText: '', bottomText: '', qrX: 20, qrY: 82, barcodeX: 16, barcodeY: 180, numberY: 320 };
 // TEST: printer templates reflect the selected code kind and NiceLabel-style settings.
 describe('sticker layout', () => {
+  it('prints the selected field centered and bold without changing other fields', () => {
+    // TEST: text alignment and weight must reach the TSPL job for the chosen caption only.
+    const tspl = buildStickerTspl({ ...base, textStyles: { number: { align: 'center', bold: true } } });
+    expect(tspl).toContain('BLOCK 16,320');
+    expect(tspl).toMatch(/BLOCK 16,320[^\n]*,2,1,"{{barcodeValue}}"/);
+    expect(tspl).toContain('BLOCK 17,320');
+  });
   it('creates QR only with selected correction and module', () => {
     const tspl = buildStickerTspl({ ...base, qrLevel: 'H', qrModule: 5 });
     expect(tspl).toContain('QRCODE 20,82,H,5');
