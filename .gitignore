@@ -16,3 +16,4 @@ wms/**/.env
 wms/.runtime/
 wms/infra/data/
 wms/infra/backups/
+wms/scripts/**/__pycache__/
