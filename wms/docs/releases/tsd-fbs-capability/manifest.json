@@ -1,0 +1,8 @@
+{
+  "baseImage": "sha256:a1a9c63f211f27ade3fb47fc5646b107c7062bdb7e6bc3abe252f89ff631169b",
+  "controllerBeforeSha256": "7ac3f92b2590327c460036174e2a6dd25237c6c9382a1a512b4e2fd09423d877",
+  "candidateFiles": {
+    "tsd-device.controller.js": "cd1a9980ca0e8e5673589051a7d3b3fc4947090004059075113170d678b94ff0",
+    "tsd-fbs-user.decorator.js": "15463c3f08769b1222e6264f6c696bcde7019b02d36beaae51a1c20ec6a74b53"
+  }
+}

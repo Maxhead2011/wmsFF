@@ -1,14 +1,17 @@
 import { MarketplaceType } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 // TEST: verify the physical screen contract on the actual compiled release as well.
 const { MarketplaceConnectionsService } = process.env.FBS_RUNTIME_ENTRY
   ? createRequire(import.meta.url)(process.env.FBS_RUNTIME_ENTRY)
   : await import('../src/modules/marketplace-connections/marketplace-connections.service');
-const worker = { id: 'worker-1', name: 'Сборщик', deviceCode: 'TSD-1' };
+const worker = { id: 'worker-1', name: 'Сборщик', deviceCode: 'TSD-1', tsdPhysicalPickConfirmation: true };
+afterEach(() => vi.unstubAllEnvs());
 describe('WB sticker number in TSD response', () => {
   // TEST: local recovery still shows stored sticker digits when WB supplies no image.
   it('returns saved sticker digits without inventing a label or changing another marketplace', async () => {
+    vi.stubEnv('WMS_TSD_PHYSICAL_PICK_CONFIRMATION', 'true');
+    vi.stubEnv('WMS_OZON_TSD_UNIT_SCANS', 'true');
     const task = {
       id: 'product-first-response', clientId: 'client-1', requestId: 'request-1',
       connectionId: 'connection-1', orderId: '5600000001', skuId: 'sku-1',
@@ -54,5 +57,17 @@ describe('WB sticker number in TSD response', () => {
     expect(response.task.physicalPickConfirmation).toBe(true);
     expect((await service.formatFbsTsdAssembly({ ...withSticker, marketplace: MarketplaceType.OZON }, worker, '')).task.wbStickerNumber).toBeNull();
     expect((await service.formatFbsTsdAssembly(task, worker, '')).task.wbStickerNumber).toBeNull();
+    // TEST: an Ozon PDF/image failure must never be reached by physical-pick confirmation.
+    const loadSticker = vi.spyOn(service, 'loadFbsTsdOrderSticker').mockRejectedValue(new Error('Ozon label unavailable'));
+    const ready = await service.formatFbsTsdAssembly({ ...task, marketplace: MarketplaceType.OZON,
+      requiresKiz: false, itemCount: 3, scannedItemCount: 3 }, worker, '');
+    expect(ready.task.physicalPickConfirmation).toBe(true);
+    expect(ready.task.orderSticker).toBeNull();
+    expect(loadSticker).not.toHaveBeenCalled();
+    // TEST: published runtime must retain its Ozon per-unit progress while suppressing images.
+    if (process.env.FBS_RUNTIME_ENTRY) {
+      expect(ready.task.perUnitScanning).toBe(true);
+      expect(ready.task.scannedItemCount).toBe(3);
+    }
   });
 });
