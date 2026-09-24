@@ -1,3 +1,4 @@
+import { DuplicateApplyQueue, duplicateApplyQueueEnabled, completeDuplicateApply, type ApplyBody } from './duplicate-apply-queue';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -18,7 +19,12 @@ const select = { id: true, article: true, clientSku: true, internalSku: true, na
 const norm = (s: string | null) => s?.trim().toLowerCase() ?? '';
 @Injectable()
 export class DuplicateStockGroupsService {
-  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly marketplaces: MarketplaceConnectionsService) {}
+  private readonly applyQueue: DuplicateApplyQueue;
+  constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly marketplaces: MarketplaceConnectionsService) {
+    this.applyQueue = new DuplicateApplyQueue(prisma, (id, body, user, key) => this.applyNow(id, body, user, key));
+  }
+  onModuleInit() { this.applyQueue.start(); }
+  onModuleDestroy() { this.applyQueue.stop(); }
   capabilities() { return { enabled: duplicateGroupsEnabled(), publicationEnabled: duplicatePublicationEnabled(), selfServiceEnabled: selfServiceEnabled() }; }
   private authorize(id: string, user: AuthUser, write = false) {
     if (!duplicateGroupsEnabled() || user.isDemo) throw new ForbiddenException('Распределение между артикулами недоступно.');
@@ -42,7 +48,7 @@ export class DuplicateStockGroupsService {
       this.prisma.clientArticleMapping.findMany({ where: { clientId }, select: { id: true, sourceArticle: true, targetArticle: true } }),
       this.prisma.client.findUnique({ where: { id: clientId }, select: { relabelingEnabled: true } }),
     ]);
-    return { groups: this.decode(setting?.value), revision: setting?.updatedAt.toISOString() ?? null, mappings,
+    return { applyRequests: await this.applyQueue.list(clientId), groups: this.decode(setting?.value), revision: setting?.updatedAt.toISOString() ?? null, mappings,
       commonReserve: await commonDuplicateReserve(this.prisma, clientId), activeGroupIds: (await activeDuplicateGroups(this.prisma, clientId)).map(g => g.id),
       relabelingEnabled: Boolean(client?.relabelingEnabled), connections: connections.filter(c => c.marketplace === 'WILDBERRIES'), publicationEnabled: duplicatePublicationEnabled(), selfServiceEnabled: selfServiceEnabled() };
   }
@@ -126,7 +132,20 @@ export class DuplicateStockGroupsService {
     });
   }
   // FIX: settings + relabel mappings + durable queue event commit atomically under the publisher lock.
-  async apply(clientId: string, body: { group?: unknown; revision?: unknown; previewKey?: unknown }, user: AuthUser) {
+  async apply(clientId: string, body: ApplyBody, user: AuthUser) {
+    if (!duplicateApplyQueueEnabled()) return this.applyNow(clientId, body, user);
+    this.authorize(clientId, user, true);
+    if (!selfServiceEnabled() || !duplicatePublicationEnabled() || process.env.WMS_WB_URGENT_STOCK_SYNC !== 'true') throw new ForbiddenException('Применение распределения пока недоступно.');
+    if (!body || (body.revision !== null && typeof body.revision !== 'string')) throw new BadRequestException('Передайте версию настроек.');
+    const existing = await this.applyQueue.existing(clientId, user, body);
+    if (existing) return { ...await this.read(clientId, user), queued: true, applyRequest: existing };
+    const checked = await this.preview(clientId, {group: body.group}, user);
+    if (body.previewKey !== checked.previewKey) throw new ConflictException('Настройки изменились. Повторите предпросмотр.');
+    await this.validate(clientId, body.group, user, this.prisma, true);
+    const applyRequest = await this.applyQueue.enqueue(clientId, body, user);
+    return { ...await this.read(clientId, user), queued: true, applyRequest };
+  }
+  private async applyNow(clientId: string, body: ApplyBody, user: AuthUser, jobKey?: string) {
     this.authorize(clientId, user, true);
     if (!selfServiceEnabled() || !duplicatePublicationEnabled() || process.env.WMS_WB_URGENT_STOCK_SYNC !== 'true') throw new ForbiddenException('Применение распределения пока недоступно.');
     if (!body || (body.revision !== null && typeof body.revision !== 'string')) throw new BadRequestException('Передайте версию настроек.');
@@ -136,8 +155,14 @@ export class DuplicateStockGroupsService {
     return this.prisma.$transaction(async tx => {
       const key = prefix + clientId;
       const requested = validateDuplicateGroup(body.group);
+      // FIX: an accepted background request waits its turn; HTTP never waits on the publisher.
+      if (jobKey) {
+        await tx.$executeRaw`SET LOCAL lock_timeout = '15s'`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'wb.stock.publish.' + requested.connectionId}))`;
+      } else {
       const lock = await tx.$queryRaw<Array<{ acquired: boolean }>>`SELECT pg_try_advisory_xact_lock(hashtext(${'wb.stock.publish.' + requested.connectionId})) AS acquired`;
       if (!lock[0]?.acquired) throw new ConflictException('Сейчас выполняется отправка WB. Повторите применение после её завершения.');
+      }
       const { group, connections, warehouseId, missingMappings } = await this.validate(clientId, body.group, user, tx, true);
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
       const old = await tx.systemSetting.findUnique({ where: { key } });
@@ -168,6 +193,7 @@ export class DuplicateStockGroupsService {
       await tx.systemSetting.upsert({ where: { key: activeKey }, create: { key: activeKey, value: activeValue, updatedByUserId: user.id }, update: { value: activeValue, updatedByUserId: user.id } });
       await tx.$executeRaw`INSERT INTO "WbStockSyncEvent" ("clientId", "skuIds", "allSkus") VALUES (${clientId}, ${ids}::text[], false)`;
       await tx.auditLog.create({ data: { userId: user.id, action: 'duplicate.stock.groups.applied', entity: 'Client', entityId: clientId, payload: { before: old?.value ?? null, after: value, createdMappings: missingMappings, active: activeValue } } });
+      if (jobKey) await completeDuplicateApply(tx, jobKey);
       return { groups: this.decode(saved.value), revision: saved.updatedAt.toISOString(), activeGroupIds: activeValue.groupIds, queued: true, mappingsCreated: missingMappings.length };
     }, { timeout: 30000 });
   }

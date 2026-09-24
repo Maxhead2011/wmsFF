@@ -125,3 +125,5 @@ rg --files apps/api/test apps/web/src apps/web/test
 - WB allocation presentation: `WbStockSettingsCards.tsx/.css`; production-only fine-control integration is captured in `docs/deployment/wb-confirmation-20260922/production.patch`. Dedicated confirmation replaces the legacy table only when its capability is enabled.
 
 - Автосборка: подписи складов и технический автор WMS — `apps/api/src/modules/marketplace-connections/fbs-request-identity.ts`, вызов из `createFbsRequestUnlocked`; [публикация и исправление старых подписей](deployment/autosborka-labels-20260922/README.md).
+
+Очередь применения групп дублей: `marketplace-connections/duplicate-apply-queue.ts`; запросы в `SystemSetting` с префиксом `marketplace.duplicates.apply.`, аудит queued/applied/apply_failed. Флаг `WMS_DUPLICATE_APPLY_QUEUE_ENABLED` выключен по умолчанию. `DuplicateStockGroupsService` запускает обработчик; `DuplicateStockGroupsView` читает статусы через существующий GET групп. Завершение запроса, настройки и событие пересчёта WB фиксируются одной транзакцией.

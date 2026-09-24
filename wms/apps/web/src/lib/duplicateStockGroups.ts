@@ -1,3 +1,4 @@
+export type DuplicateApplyRequest = { id: string; groupId: string; name: string; status: 'WAITING' | 'APPLIED' | 'FAILED'; message: string; createdAt: string; updatedAt: string };
 export type DuplicateShare = { targetKey: string; label: string; percent: number };
 export type DuplicateGroup = {
   id: string; name: string; connectionId: string; shares: DuplicateShare[];
@@ -15,7 +16,7 @@ export function matchesRelabelArticle(card: DuplicateCard, article: string, sour
     || (source && Boolean(card.internalSku?.trim().toLowerCase().startsWith(key + '-')));
 }
 export type DuplicateMapping = { id: string; sourceArticle: string; targetArticle: string };
-export type DuplicateSettings = { groups: DuplicateGroup[]; revision: string | null; publicationEnabled: boolean; relabelingEnabled: boolean;
+export type DuplicateSettings = { applyRequests?: DuplicateApplyRequest[]; groups: DuplicateGroup[]; revision: string | null; publicationEnabled: boolean; relabelingEnabled: boolean;
   selfServiceEnabled?: boolean; activeGroupIds: string[]; commonReserve: { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
   mappings: DuplicateMapping[]; connections: Array<{ id: string; accountName: string | null; fbsExecutionWarehouseId: string | null }> };
 export type DuplicatePreview = { previewKey: string; missingMappings: Array<{ sourceArticle: string; targetArticle: string }>; generatedAt: string; totalAllocated: number; totalRelabel: number; wbPercent: number; publicationEnabled: boolean;

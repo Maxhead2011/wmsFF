@@ -51,3 +51,12 @@ it('selects articles across sizes and sends an explicit reviewed apply request',
   await applyDuplicateGroup('token','client/1',{group:group(),revision:'v1',previewKey:'reviewed'});
   expect(fetch.mock.calls[0][0]).toContain('client%2F1/apply');expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({revision:'v1',previewKey:'reviewed'});
 });
+
+// TEST: acceptance while publishing must retain WAITING, not pretend WB confirmed the stock.
+it('preserves the durable waiting request returned by apply',async()=>{
+  const applyRequest={id:'request',groupId:'g',name:'Группа',status:'WAITING',message:'Ожидает завершения отправки WB.',createdAt:'2026-09-24',updatedAt:'2026-09-24'};
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue(new Response(JSON.stringify({queued:true,groups:[],revision:null,activeGroupIds:[],applyRequest}),{status:200,headers:{'Content-Type':'application/json'}})));
+  const result=await applyDuplicateGroup('token','client',{group:group(),revision:null,previewKey:'reviewed'});
+  expect(result.applyRequest).toEqual(applyRequest);
+  expect(result.activeGroupIds).toEqual([]);
+});

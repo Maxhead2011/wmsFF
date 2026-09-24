@@ -105,6 +105,18 @@ describe('client applies duplicate shares', () => {
     expect(f.db.clientArticleMapping.upsert).toHaveBeenCalledOnce();
     expect(f.db.$executeRaw.mock.calls.some(([sql])=>sql.join('').includes('INSERT INTO "WbStockSyncEvent"'))).toBe(true);
   });
+  // TEST: the HTTP apply request must be accepted even while WB publishing is locked.
+  it('queues a reviewed request instead of rejecting publisher contention',async()=>{
+    const f=liveFixture();vi.stubEnv('WMS_DUPLICATE_APPLY_QUEUE_ENABLED','true');
+    f.db.$queryRaw.mockResolvedValue([{acquired:false}]);
+    f.db.systemSetting.findMany=vi.fn(async({where})=>[...f.stored.entries()]
+      .filter(([key,row])=>key.startsWith(where.key.startsWith)&&(!where.value||row.value.status===where.value.equals))
+      .map(([key,row])=>({key,...row})));
+    const result=await f.apply();expect(result).toMatchObject({queued:true,applyRequest:{status:'WAITING',groupId:'g'}});
+    expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    expect(f.db.clientArticleMapping.upsert).not.toHaveBeenCalled();
+    expect(f.stored.has('marketplace.duplicates.active.client')).toBe(false);
+  });
   it('updates active common percentages and per-size exceptions',async()=>{
     const f=liveFixture();f.stored.set('marketplace.duplicates.groups.client',{value:{version:1,groups:[structuredClone(f.group)]},updatedAt:new Date('2026-09-21')});
     f.stored.set('marketplace.duplicates.active.client',{value:{version:1,groupIds:['g'],connectionId:'wb',warehouseId:'warehouse'}});
