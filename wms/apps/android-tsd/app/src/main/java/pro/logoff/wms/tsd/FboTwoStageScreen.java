@@ -221,7 +221,7 @@ final class FboTwoStageScreen {
             boolean accepted=state.scanLocation(plan,value);
             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";
-            if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);render();return;
+            if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);if(accepted&&plan.localRouteEnabled){refresh();}else render();return;
         }
         if("PACKING".equals(plan.phase)&&state.target.isEmpty()){
             // FIX: mode selection is navigation only; never convert a wrong scan into the other action.
@@ -257,7 +257,7 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(line.requiresKiz)render();else send("PICKING".equals(plan.phase)?"PICK_UNIT":"PACK_UNIT",null);
     }
-    private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlan(session.authorizationHeader(),id).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
+    private void refresh(){if(busy)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;if(state.pending()==null){state.reconcile(plan);state.barcode="";}busy=false;render();});}catch(Exception e){handler.post(()->{busy=false;message="Не удалось обновить: "+e.getMessage();render();});}});}
     private void send(String action,String kiz){send(action,kiz,null);}
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;retrySending=state.pending()!=null;feedbackColor=Color.TRANSPARENT;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.

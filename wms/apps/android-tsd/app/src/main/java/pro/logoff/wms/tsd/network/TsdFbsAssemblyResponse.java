@@ -3,6 +3,7 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFbsAssemblyResponse {
+    public boolean sequentialPickingEnabled;
     public String state;
     public String message;
     public Task task;
@@ -63,6 +64,7 @@ public class TsdFbsAssemblyResponse {
     }
 
     public static class SourceBoxUsage {
+        public Integer pickedUnits;
         public String boxCode;
         public int units;
         public int positions;

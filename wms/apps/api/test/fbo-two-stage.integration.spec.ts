@@ -46,7 +46,29 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         stock = new StockOperationsService(p as never, scopes as never, balances);
         svc = new FboTwoStageService(p as never, scopes as never, balances, stock, { assertStockMovementsAllowed: async () => { } } as never, new ClientRequestMarketplaceFilesService(p as never, scopes as never));
     });
+    // TEST: selected mixed box must keep all three needed units instead of losing demand to a whole box.
+    it('allocates the current physical box first only when the deployment flag is enabled', async () => {
+        const pallet = await p.storagePallet.create({ data: { clientId: client, warehouseId: wh, code: 'LOCAL_' + client } });
+        await p.storagePalletBox.create({ data: { palletId: pallet.id, boxId: partial, boxCode: 'FFL_' + partial } });
+        const context = { palletCode: pallet.code, sourceBoxCode: 'FFL_' + partial };
+        vi.stubEnv('WMS_FBO_LOCAL_ROUTE_ENABLED', 'false');
+        const old = await svc.plan(request, user, context);
+        expect(old.route.find(b => b.boxCode === context.sourceBoxCode)?.tasks[0].quantity).toBe(2);
+        vi.stubEnv('WMS_FBO_LOCAL_ROUTE_ENABLED', 'true');
+        const local = await svc.plan(request, user, context);
+        expect(local.route[0].boxCode).toBe(context.sourceBoxCode);
+        expect(local.route[0].tasks[0].quantity).toBe(3);
+        expect(local.shortage).toBe(0);
+        await act('START');
+        const after = await act('PICK_UNIT', { ...context, barcode: '2051234567890', kiz: marks[2].value });
+        expect(after.route[0].boxCode).toBe(context.sourceBoxCode);
+        expect(after.route[0].tasks[0].quantity).toBe(2);
+        // Availability still wins over a device hint; no phantom or duplicate pick.
+        await p.stockBalance.updateMany({ where: { boxId: partial, skuId: sku }, data: { quantity: 0 } });
+        expect((await svc.plan(request, user, context)).route.some(b => b.boxCode === context.sourceBoxCode)).toBe(false);
+    });
     afterEach(async () => {
+        vi.unstubAllEnvs();
         vi.restoreAllMocks();
         await p.fbsTsdAssembly.deleteMany({ where: { clientId: client } });
         await p.auditLog.deleteMany({ where: { entityId: request } });

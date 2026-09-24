@@ -4328,6 +4328,7 @@ public class MainActivity extends Activity {
     }
 
     private void openFbsAssembly() {
+        fbsSequentialPick.clear();
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
             return;
@@ -4513,6 +4514,8 @@ public class MainActivity extends Activity {
         loadNextFbsAssembly();
     }
 
+    private final FbsSequentialPick fbsSequentialPick = new FbsSequentialPick();
+
     private void loadNextFbsAssembly() {
         if (mandatoryFbsAuditActive || !pendingFbsAuditBoxes.isEmpty()) {
             resumeMandatoryFbsAudit();
@@ -4546,6 +4549,13 @@ public class MainActivity extends Activity {
                 fbsBusy = false;
                 fbsFeedbackColor = 0;
                 fbsAssembly = loaded;
+                // FIX: repeat normal server validation, not the physical pallet/box scans.
+                String continueBox = "logoff".equals(BuildConfig.FLAVOR)
+                    ? fbsSequentialPick.continueBox(voiceSession, loaded) : null;
+                if (continueBox != null) {
+                    executeFbsAction("scan-box", "boxCode", continueBox);
+                    return;
+                }
                 statusMessage = nonEmpty(loaded.message, tr("Следуйте подсказке.", "Ko‘rsatmaga amal qiling."));
                 renderFbsAssemblyScreen();
             });
@@ -5500,6 +5510,13 @@ public class MainActivity extends Activity {
                     : tr("После ШК это окно переключится на КИЗ.", "SHKdan keyin oyna KIZga o‘tadi.")),
             scanKiz ? Color.rgb(254, 240, 138) : BOX_MOVEMENT_BLUE
         ));
+        // FIX: count confirmed units once, and show the server's current remaining box demand.
+        if (fbsAssembly != null && fbsAssembly.sequentialPickingEnabled
+            && fbsSequentialPick.box().equals(task.scannedBoxCode) && !fbsSequentialPick.box().isEmpty()) {
+            content.addView(messageView(tr("Короб: ", "Quti: ") + task.scannedBoxCode + " · " +
+                tr("Отобрано: ", "Olindi: ") + fbsSequentialPick.picked() +
+                (fbsSequentialPick.remaining() < 0 ? "" : " · " + tr("Осталось: ", "Qoldi: ") + fbsSequentialPick.remaining())));
+        }
         EditText dialogInput = input(scanKiz
             ? tr("Сканируйте КИЗ Data Matrix", "Data Matrix KIZni skanerlang")
             : tr("Сканируйте ШК товара", "Mahsulot SHKini skanerlang"));
@@ -6001,10 +6018,17 @@ public class MainActivity extends Activity {
             }
             TsdFbsAssemblyResponse updated = response.body();
             mainHandler.post(() -> {
+                // FIX: a delayed continuation must never attach to another login or task.
+                if (!actionOwnerKey.equals(fbsSessionOwnerKey(safeSession())) || fbsAssembly == null
+                    || fbsAssembly.task == null || !taskId.equals(fbsAssembly.task.id)) return;
                 online = true;
                 fbsBusy = false;
                 speakFbsScan(action,submittedState,value,response.code(),updated,actionOwnerKey,taskId);
                 fbsAssembly = updated;
+                if ("release".equals(action) || "undo-kiz".equals(action)) fbsSequentialPick.clear();
+                if ("scan-box".equals(action) || "scan-any".equals(action))
+                    fbsSequentialPick.acceptedBox(actionOwnerKey, updated);
+                fbsSequentialPick.completed(actionOwnerKey, updated);
                 boolean problemWasReportedAfterBoxScan =
                     !previousBoxCode.isEmpty() && "release".equals(action);
                 boolean switchedToAnotherTask =
@@ -6081,6 +6105,7 @@ public class MainActivity extends Activity {
     }
 
     private void reloadFbsAfterStaleTask(String message) {
+        fbsSequentialPick.clear();
         online = true;
         fbsBusy = false;
         fbsAssembly = null;
