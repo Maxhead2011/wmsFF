@@ -57,6 +57,30 @@ describe('FBS consistent live box route', () => {
     const f = fixture(true);
     expect(await f.service.formatFbsTsdAssembly(f.task, f.user, '')).toMatchObject({ task: { recommendedBoxCode: f.box.code } });
   });
+  it('keeps the scanned relabel box in the WMS and TSD response after the source barcode scan', async () => {
+    // TEST: a physically scanned box remains the route on the target-barcode step.
+    const f = fixture();
+    Object.assign(f.task, {
+      relabelRequired: true,
+      sourceSkuId: 'source-sku',
+      sourceBarcode: '2043626505243',
+      boxId: f.box.id,
+      boxCode: f.box.code,
+    });
+    f.db.storagePalletBox.findMany.mockResolvedValue([{
+      boxCode: f.box.code,
+      palletId: 'pallet-132',
+      pallet: { id: 'pallet-132', code: 'PALET_SORT_132', zoneId: null, zone: null },
+    }]);
+    expect(await f.service.formatFbsTsdAssembly(f.task, f.user, '')).toMatchObject({
+      state: 'SCAN_RELABEL_BARCODE',
+      task: {
+        scannedBoxCode: f.box.code,
+        recommendedBoxCode: f.box.code,
+        recommendedLocation: { palletCode: 'PALET_SORT_132' },
+      },
+    });
+  });
   it('passes a background-only reservation to the atomic physical claim', async () => {
     const f = fixture(true);
     f.service.claimFbsTsdBoxAtomically.mockResolvedValue({ ...f.task, boxId: f.box.id, boxCode: f.box.code });
