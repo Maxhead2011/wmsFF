@@ -202,6 +202,11 @@ public class MainActivity extends Activity {
     private TsdInventoryBox activeInventoryBox;
     private TsdInventoryDashboard inventoryDashboard;
     private TsdFbsAssemblyResponse fbsAssembly;
+    private String fbsRelabelPrintTaskId = "";
+    private String fbsRelabelPrintId = "";
+    private String fbsRelabelPrintStatus = "";
+    private boolean fbsRelabelPrintBusy;
+    private int fbsRelabelPrintPolls;
     private TsdFbsRequestsResponse fbsRequests;
     // FIX: selected marketplace is retained while refreshing and browsing the archive.
     private String fbsMarketplaceFilter = "";
@@ -4788,6 +4793,13 @@ public class MainActivity extends Activity {
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
         boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        // FIX: never carry a prior order's print acknowledgement into another FBS task.
+        if (!task.id.equals(fbsRelabelPrintTaskId)) {
+            fbsRelabelPrintTaskId = task.id;
+            fbsRelabelPrintId = "";
+            fbsRelabelPrintStatus = "";
+            fbsRelabelPrintPolls = 0;
+        }
         boolean ourFbsRoute = "logoff".equals(BuildConfig.FLAVOR);
         boolean showLateRouteHints = FbsAssemblyUi.showLateRouteHints(BuildConfig.FLAVOR, fbsAssembly.progress);
         // FIX: show the order quantity before picking and after every unit scan.
@@ -5110,7 +5122,22 @@ public class MainActivity extends Activity {
                     tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
                 Color.rgb(254, 240, 138)
             ));
+            if (FbsRelabelPrintUi.showPrintButton(BuildConfig.FLAVOR, state, task)) {
+                root.addView(messageView(tr("Новый ШК: ", "Yangi SHK: ") + FbsRelabelPrintUi.targetBarcode(task)));
+                String printText = "FAILED".equals(fbsRelabelPrintStatus)
+                    ? "Повторно напечатать 2 ШК"
+                    : fbsRelabelPrintId.isEmpty() ? "Напечатать 2 новых ШК" : "Проверить печать";
+                Button printButton = primaryMenuButton(printText, view -> requestFbsRelabelPrint());
+                printButton.setEnabled(!fbsRelabelPrintBusy && !RelabelPrintGate.canVerify(fbsRelabelPrintStatus));
+                root.addView(printButton);
+                if (!RelabelPrintGate.canVerify(fbsRelabelPrintStatus)) {
+                    root.addView(messageView("Сначала напечатайте 2 ШК и дождитесь подтверждения станции."));
+                }
+            }
             fbsScanInput = input(tr("Сканируйте новый ШК после переклейки", "Yangi SHKni skanerlang"));
+            if (FbsRelabelPrintUi.showPrintButton(BuildConfig.FLAVOR, state, task)) {
+                fbsScanInput.setEnabled(RelabelPrintGate.canVerify(fbsRelabelPrintStatus));
+            }
             root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
                 tr("Подтвердить переклейку", "Qayta yorliqlashni tasdiqlash"),
@@ -5263,7 +5290,7 @@ public class MainActivity extends Activity {
         } else if (stickerAppliedButton != null && orderStickerReady) {
             stickerAppliedButton.setFocusableInTouchMode(true);
             stickerAppliedButton.requestFocus(); AssemblyAutoFocus.request(stickerAppliedButton);
-        } else if (fbsScanInput != null) {
+        } else if (fbsScanInput != null && fbsScanInput.isEnabled()) {
             fbsScanInput.requestFocus(); AssemblyAutoFocus.request(fbsScanInput);
         }
         refreshHeaderText();
@@ -5749,8 +5776,163 @@ public class MainActivity extends Activity {
         if (dialog != null && dialog.isShowing()) dialog.dismiss();
     }
 
+    // FIX: the FBS relabel step prints two labels through the same quiet agent as the relabel menu.
+    private void requestFbsRelabelPrint() {
+        if (fbsAssembly == null || fbsAssembly.task == null || fbsRelabelPrintBusy) return;
+        TsdFbsAssemblyResponse.Task task = fbsAssembly.task;
+        if (!FbsRelabelPrintUi.showPrintButton(BuildConfig.FLAVOR, fbsAssembly.state, task)) return;
+        if (!fbsRelabelPrintId.isEmpty() && !"FAILED".equals(fbsRelabelPrintStatus)) {
+            fbsRelabelPrintPolls = 0;
+            pollFbsRelabelPrint(task.id, fbsRelabelPrintId);
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) return;
+        String taskId = task.id;
+        fbsRelabelPrintBusy = true;
+        renderFbsAssemblyScreen();
+        runBackground(() -> {
+            try {
+                Response<List<TsdPrintStation>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .fbsRelabelPrintStations(session.authorizationHeader(), taskId).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось найти печатную станцию.");
+                List<TsdPrintStation> stations = response.body();
+                mainHandler.post(() -> {
+                    fbsRelabelPrintBusy = false;
+                    if (!taskId.equals(fbsRelabelPrintTaskId) || screen != Screen.FBS_ASSEMBLY) return;
+                    if (!failure.isEmpty()) { statusMessage = failure; renderFbsAssemblyScreen(); return; }
+                    if (stations == null || stations.isEmpty()) {
+                        statusMessage = "Нет доступной станции 58 × 40 мм. Проверьте тихий агент печати.";
+                        renderFbsAssemblyScreen();
+                        return;
+                    }
+                    if (stations.size() == 1) { submitFbsRelabelPrint(stations.get(0)); return; }
+                    String[] labels = new String[stations.size()];
+                    for (int i = 0; i < stations.size(); i++) labels[i] = stations.get(i).name + " · " + stations.get(i).printerName;
+                    new AlertDialog.Builder(this).setTitle("Куда напечатать 2 ШК")
+                        .setItems(labels, (dialog, which) -> submitFbsRelabelPrint(stations.get(which)))
+                        .setNegativeButton("Отмена", null).show();
+                    renderFbsAssemblyScreen();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    fbsRelabelPrintBusy = false;
+                    statusMessage = "Нет связи со станцией печати. Повторите попытку.";
+                    if (screen == Screen.FBS_ASSEMBLY) renderFbsAssemblyScreen();
+                });
+            }
+        });
+    }
+
+    private void submitFbsRelabelPrint(TsdPrintStation station) {
+        if (fbsAssembly == null || fbsAssembly.task == null || fbsRelabelPrintBusy) return;
+        TsdSession session = safeSession();
+        if (session == null) return;
+        TsdFbsAssemblyResponse.Task task = fbsAssembly.task;
+        String taskId = task.id;
+        String barcode = FbsRelabelPrintUi.targetBarcode(task);
+        if (barcode.isEmpty()) return;
+        if ("FAILED".equals(fbsRelabelPrintStatus)) fbsRelabelPrintId = UUID.randomUUID().toString();
+        else if (fbsRelabelPrintId.isEmpty()) {
+            fbsRelabelPrintId = RelabelPrintGate.printId(taskId, nonEmpty(task.scannedBoxCode, ""),
+                task.relabeling.sourceBarcode, barcode, "", 0, session.userId);
+        }
+        String printId = fbsRelabelPrintId;
+        fbsRelabelPrintStatus = "QUEUED";
+        fbsRelabelPrintBusy = true;
+        fbsRelabelPrintPolls = 0;
+        statusMessage = "Отправляю 2 новых ШК на " + station.name + "…";
+        renderFbsAssemblyScreen();
+        runBackground(() -> {
+            try {
+                Map<String, String> body = new LinkedHashMap<>();
+                body.put("printId", printId);
+                body.put("stationId", station.id);
+                body.put("newBarcode", barcode);
+                Response<TsdRelabelPrintJob> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .fbsPrintRelabelTarget(session.authorizationHeader(), taskId, body).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось отправить ШК на печать.");
+                TsdRelabelPrintJob job = response.body();
+                mainHandler.post(() -> {
+                    fbsRelabelPrintBusy = false;
+                    if (!taskId.equals(fbsRelabelPrintTaskId) || !printId.equals(fbsRelabelPrintId)) return;
+                    if (!failure.isEmpty() || job == null) {
+                        statusMessage = failure.isEmpty() ? "Пустой ответ станции печати." : failure;
+                        renderFbsAssemblyScreen();
+                        return;
+                    }
+                    updateFbsRelabelPrint(job);
+                    if (!"PRINTED".equals(job.status) && !"FAILED".equals(job.status)) {
+                        mainHandler.postDelayed(() -> pollFbsRelabelPrint(taskId, printId), 2000L);
+                    }
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    fbsRelabelPrintBusy = false;
+                    statusMessage = "Связь прервалась. Проверьте печать; повторная пара не отправлена автоматически.";
+                    if (screen == Screen.FBS_ASSEMBLY) renderFbsAssemblyScreen();
+                });
+            }
+        });
+    }
+
+    private void pollFbsRelabelPrint(String taskId, String printId) {
+        if (fbsRelabelPrintBusy || !taskId.equals(fbsRelabelPrintTaskId) ||
+            !printId.equals(fbsRelabelPrintId) || screen != Screen.FBS_ASSEMBLY) return;
+        if (++fbsRelabelPrintPolls > 30) {
+            statusMessage = "Станция пока не подтвердила печать. Проверьте принтер и нажмите «Проверить печать».";
+            renderFbsAssemblyScreen();
+            return;
+        }
+        TsdSession session = safeSession();
+        if (session == null) return;
+        fbsRelabelPrintBusy = true;
+        runBackground(() -> {
+            try {
+                Response<TsdRelabelPrintJob> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    .fbsRelabelPrintStatus(session.authorizationHeader(), taskId, printId).execute();
+                String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось проверить печать.");
+                TsdRelabelPrintJob job = response.body();
+                mainHandler.post(() -> {
+                    fbsRelabelPrintBusy = false;
+                    if (!taskId.equals(fbsRelabelPrintTaskId) || !printId.equals(fbsRelabelPrintId)) return;
+                    if (!failure.isEmpty() || job == null) {
+                        statusMessage = failure.isEmpty() ? "Пустой ответ станции печати." : failure;
+                        renderFbsAssemblyScreen();
+                        return;
+                    }
+                    updateFbsRelabelPrint(job);
+                    if (!"PRINTED".equals(job.status) && !"FAILED".equals(job.status)) {
+                        mainHandler.postDelayed(() -> pollFbsRelabelPrint(taskId, printId), 2000L);
+                    }
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    fbsRelabelPrintBusy = false;
+                    statusMessage = "Нет связи с печатью. Нажмите «Проверить печать».";
+                    if (screen == Screen.FBS_ASSEMBLY) renderFbsAssemblyScreen();
+                });
+            }
+        });
+    }
+
+    private void updateFbsRelabelPrint(TsdRelabelPrintJob job) {
+        fbsRelabelPrintStatus = nonEmpty(job.status, "");
+        statusMessage = "PRINTED".equals(job.status)
+            ? "2 ШК напечатаны. Наклейте новый и подтвердите проверочным сканом."
+            : "FAILED".equals(job.status)
+                ? "Печать не удалась: " + nonEmpty(job.error, "Проверьте принтер.")
+                : "Задание печати в очереди. Дождитесь двух этикеток.";
+        renderFbsAssemblyScreen();
+    }
+
     private void submitFbsScan() {
         if (fbsBusy || fbsAssembly == null || fbsAssembly.task == null) return;
+        if (FbsRelabelPrintUi.showPrintButton(BuildConfig.FLAVOR, fbsAssembly.state, fbsAssembly.task) &&
+            !RelabelPrintGate.canVerify(fbsRelabelPrintStatus)) {
+            showFbsError("Сначала напечатайте 2 новых ШК и дождитесь подтверждения печати.", true);
+            return;
+        }
         String value = textValue(fbsScanInput);
         if (value.isEmpty()) {
             showFbsError(tr("Сначала отсканируйте код.", "Avval kodni skanerlang."), true);

@@ -263,6 +263,28 @@ export class TsdDeviceController {
     return this.marketplace.listFbsTsdRequests(deviceCode, user, archive);
   }
 
+  // FIX: print the target SKU directly from the current FBS relabel step.
+  @Get('fbs/tasks/:id/relabel/print-stations')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  fbsRelabelPrintStations(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.relabelPrint.fbsStations(id, user);
+  }
+
+  @Post('fbs/tasks/:id/relabel/print')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  fbsRelabelPrint(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.relabelPrint.fbsCreate(id, body, user);
+  }
+
+  @Get('fbs/tasks/:id/relabel/print/:printId')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  fbsRelabelPrintStatus(@Param('id') id: string, @Param('printId') printId: string, @CurrentUser() user: AuthUser) {
+    return this.relabelPrint.fbsStatus(id, printId, user);
+  }
+
   @Get('fbs/cargo')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')

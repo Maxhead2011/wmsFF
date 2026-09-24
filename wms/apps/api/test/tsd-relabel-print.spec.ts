@@ -23,7 +23,10 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue([{ id: 'station', name: '2409' }]),
       update: vi.fn().mockResolvedValue({ id: 'station' }) },
     sku: { findMany: vi.fn().mockResolvedValue([{ id: 'target', name: 'Костюм', article: 'Корея',
-      color: 'синий', size: 'M', brand: 'LOOK.IN' }]) },
+      color: 'синий', size: 'M', brand: 'LOOK.IN' }]),
+      findUnique: vi.fn().mockResolvedValue({ id: 'target', clientId: 'lukin', name: 'Костюм',
+        article: 'Корея', color: 'синий', size: 'M', brand: 'LOOK.IN' }) },
+    client: { findUnique: vi.fn().mockResolvedValue({ name: plan.client.name }) },
     clientRequest: { findUniqueOrThrow: vi.fn().mockResolvedValue({ number: 1291 }) },
     fbsPrintJob: { findUnique: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(job),
       create: vi.fn().mockResolvedValue(job), findFirst: vi.fn().mockResolvedValue(job),
@@ -33,8 +36,36 @@ function fixture() {
   };
   const prisma = { ...db, $transaction: vi.fn(async (run: (tx: typeof db) => Promise<unknown>) => run(db)) };
   const assembly = { getRequestPlan: vi.fn().mockResolvedValue(plan) };
-  return { service: new TsdRelabelPrintService(prisma as never, assembly as never), db, prisma, assembly, job };
+  const marketplace = { getFbsTsdRelabelPrintContext: vi.fn().mockResolvedValue({
+    taskId: 'fbs-task', requestId: 'request', clientId: 'lukin', skuId: 'target',
+    sourceBarcode: input.oldBarcode, targetBarcodes: [input.newBarcode],
+  }) };
+  return { service: new TsdRelabelPrintService(prisma as never, assembly as never, marketplace as never),
+    db, prisma, assembly, marketplace, job };
 }
+
+it('prints two target labels from the source-scanned FBS task, independent of the relabel menu', async () => {
+  // TEST: request 1316 reaches SCAN_RELABEL_BARCODE inside FBS assembly, where the old endpoint had no task.
+  const f = fixture();
+  const created = { ...f.job, assemblyId: 'fbs-task' };
+  f.db.fbsPrintJob.create.mockResolvedValue(created);
+  const result = await f.service.fbsCreate('fbs-task', {
+    printId, stationId: 'station', newBarcode: input.newBarcode,
+  }, user);
+  expect(result).toMatchObject({ status: 'QUEUED', barcode: input.newBarcode });
+  expect(f.db.fbsPrintJob.create.mock.calls[0][0].data).toMatchObject({
+    source: 'TSD_RELABEL', assemblyId: 'fbs-task', requestId: 'request', stickerCode: input.newBarcode,
+  });
+  expect(buildTsdRelabelLabel).toHaveBeenCalledWith(input.newBarcode, expect.any(Object), plan.client.name);
+});
+
+it('rejects printing a barcode outside the current FBS target card', async () => {
+  // TEST: a stale or forged button cannot print another product's label.
+  const f = fixture();
+  await expect(f.service.fbsCreate('fbs-task', { printId, stationId: 'station', newBarcode: 'wrong' }, user))
+    .rejects.toMatchObject({ status: 409 });
+  expect(f.db.fbsPrintJob.create).not.toHaveBeenCalled();
+});
 
 it('queues one idempotent relabel pair only for the matching request task and target SKU', async () => {
   // TEST: a repeated HTTP request must not queue four physical labels.

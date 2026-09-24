@@ -2,6 +2,11 @@
 export const LUKIN_FBS_BATCH_CLIENT_ID = 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9';
 export const LUKIN_FBS_BATCH_SETTING_KEY = 'tsd:fbs:lukin:batch:v1:' + LUKIN_FBS_BATCH_CLIENT_ID;
 
+// FIX: supervisors need the full queue; only ordinary pickers use the fixed window.
+export function lukinBatchApplies(roleCodes: string[] | undefined): boolean {
+  return !roleCodes?.some((role) => role === 'ADMIN' || role === 'OWNER');
+}
+
 export function selectLukinFbsBatch<T extends { requestId: string; requestNumber: number }>(
   openRequests: T[], savedIds: string[],
 ): { requestIds: string[]; visible: T[]; rotated: boolean } {

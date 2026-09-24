@@ -11,7 +11,7 @@ import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billin
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
 import { completedWorkBillingEnabled, loadWorkCharges, otherProcessingOrderKeys, preserveBilledComposition, recoverCompletedWork } from '../billing/completed-fbs-billing';
 import { collectedFbsBoxMessage } from './fbs-collected-box-message';
-import { LUKIN_FBS_BATCH_CLIENT_ID, LUKIN_FBS_BATCH_SETTING_KEY, savedLukinFbsBatchIds, selectLukinFbsBatch } from './fbs-lukin-batch';
+import { LUKIN_FBS_BATCH_CLIENT_ID, LUKIN_FBS_BATCH_SETTING_KEY, lukinBatchApplies, savedLukinFbsBatchIds, selectLukinFbsBatch } from './fbs-lukin-batch';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
 import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
@@ -5607,7 +5607,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // enter until every member has been picked. SystemSetting keeps this stable
     // across TSD devices and API restarts; other clients remain unrestricted.
     const lukinRequests = requests.filter((choice) => choice.client.id === LUKIN_FBS_BATCH_CLIENT_ID);
-    if (lukinRequests.length > 0) {
+    if (lukinRequests.length > 0 && lukinBatchApplies(user.roleCodes)) {
       const batch = await this.prisma.$transaction(async (tx) => {
         // FIX: simultaneous TSD refreshes cannot overwrite one another's batch.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${LUKIN_FBS_BATCH_SETTING_KEY}))`;
@@ -5788,7 +5788,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (FBS_REQUEST_CLOSED_STATUSES.has(selectedRequest.status)) {
         throw new BadRequestException('Эта FBS-заявка уже закрыта. Обновите список заявок на ТСД.');
       }
-      if (selectedRequest.clientId === LUKIN_FBS_BATCH_CLIENT_ID) {
+      if (selectedRequest.clientId === LUKIN_FBS_BATCH_CLIENT_ID && lukinBatchApplies(user.roleCodes)) {
         // FIX: old TSD versions cannot bypass a saved batch by asking directly
         // for a hidden request. Do not recalculate the whole queue here.
         const setting = await this.prisma.systemSetting.findUnique({ where: { key: LUKIN_FBS_BATCH_SETTING_KEY } });
@@ -14824,6 +14824,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.throwFbsTsdTaskStale(task, user);
     }
     return task;
+  }
+
+  // FIX: printing inside FBS assembly must use the worker's current, source-scanned task.
+  async getFbsTsdRelabelPrintContext(taskId: string, user: AuthUser) {
+    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    if (task.status !== 'IN_PROGRESS' || fbsTsdStage(task) !== 'SCAN_RELABEL_BARCODE' || !task.sourceBarcode) {
+      throw new ConflictException('Переклейка этого задания уже изменилась. Обновите экран сборки.');
+    }
+    return {
+      taskId: task.id, requestId: task.requestId, clientId: task.clientId, skuId: task.skuId,
+      sourceBarcode: task.sourceBarcode, targetBarcodes: jsonStringArray(task.barcodes),
+    };
   }
 
   private throwFbsTsdTaskStale(task: FbsTsdAssemblyRecord, user: AuthUser): never {

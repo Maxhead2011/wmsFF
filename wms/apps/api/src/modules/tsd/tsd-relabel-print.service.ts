@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { TsdAssemblyService } from './tsd-assembly.service';
 import { buildTsdRelabelLabel } from './tsd-relabel-label';
+import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
 
 const RELABEL_SOURCE = 'TSD_RELABEL';
 
@@ -16,16 +17,102 @@ function required(value: unknown, name: string) {
 
 @Injectable()
 export class TsdRelabelPrintService {
-  constructor(private readonly prisma: PrismaService, private readonly assembly: TsdAssemblyService) {}
+  constructor(private readonly prisma: PrismaService, private readonly assembly: TsdAssemblyService,
+    private readonly marketplace: MarketplaceConnectionsService) {}
 
   async stations(requestId: string, user: AuthUser) {
     await this.assembly.getRequestPlan(requestId, user);
+    return this.availableStations();
+  }
+
+  private availableStations() {
     // FIX: offline stations cannot receive a new print job that might run much later.
     return this.prisma.fbsPrintStation.findMany({
       where: { enabled: true, labelWidthMm: 58, labelHeightMm: 40,
         lastSeenAt: { gt: new Date(Date.now() - 45_000) } },
       select: { id: true, name: true, printerName: true }, orderBy: { name: 'asc' },
     });
+  }
+
+  // FIX: the FBS picking flow uses its own task, not the separate request relabel stage.
+  async fbsStations(taskId: string, user: AuthUser) {
+    await this.marketplace.getFbsTsdRelabelPrintContext(taskId, user);
+    return this.availableStations();
+  }
+
+  async fbsCreate(taskId: string, body: Record<string, unknown>, user: AuthUser) {
+    const printId = required(body.printId, 'идентификатор печати');
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(printId)) throw new BadRequestException('Неверный идентификатор печати.');
+    const stationId = required(body.stationId, 'станцию печати');
+    const newBarcode = required(body.newBarcode, 'новый ШК');
+    const task = await this.marketplace.getFbsTsdRelabelPrintContext(taskId, user);
+    if (!task.targetBarcodes.includes(newBarcode)) {
+      throw new ConflictException('Новый ШК не принадлежит целевому товару этого задания.');
+    }
+    const prior = await this.prisma.fbsPrintJob.findUnique({ where: { historyId: printId } });
+    if (prior) return this.ownedFbsStatus(prior, task, stationId, newBarcode, user);
+    const station = await this.prisma.fbsPrintStation.findFirst({ where: {
+      id: stationId, enabled: true, labelWidthMm: 58, labelHeightMm: 40,
+      lastSeenAt: { gt: new Date(Date.now() - 45_000) },
+    } });
+    if (!station) throw new ConflictException('Печатная станция не на связи или её формат не 58 × 40 мм.');
+    const [product, client, request] = await Promise.all([
+      this.prisma.sku.findUnique({ where: { id: task.skuId }, select: {
+        id: true, name: true, article: true, color: true, size: true, brand: true, clientId: true,
+      } }),
+      this.prisma.client.findUnique({ where: { id: task.clientId }, select: { name: true } }),
+      this.prisma.clientRequest.findUniqueOrThrow({ where: { id: task.requestId }, select: { number: true } }),
+    ]);
+    if (!product || product.clientId !== task.clientId || !client) {
+      throw new ConflictException('Целевая карточка клиента недоступна.');
+    }
+    const imageBase64 = await buildTsdRelabelLabel(newBarcode, product, client.name);
+    try {
+      const job = await this.prisma.$transaction(async tx => {
+        const created = await tx.fbsPrintJob.create({ data: {
+          stationId, historyId: printId, assemblyId: taskId, requestId: task.requestId,
+          requestNumber: request.number, orderId: `RELABEL:${request.number}`,
+          kiz: newBarcode, warehouseName: client.name, productName: product.name,
+          stickerCode: newBarcode, stickerMime: 'image/png', stickerBase64: imageBase64,
+          source: RELABEL_SOURCE, requestedById: user.id, requestedBy: user.name,
+          deviceCode: user.deviceCode ?? null,
+        } });
+        await tx.auditLog.create({ data: { userId: user.id, action: 'TSD_FBS_RELABEL_TWO_LABELS_QUEUED',
+          entity: 'FbsPrintJob', entityId: created.id,
+          payload: { taskId, requestId: task.requestId, stationId, oldBarcode: task.sourceBarcode,
+            newBarcode, copies: 2 } } });
+        return created;
+      });
+      return this.ownedFbsStatus(job, task, stationId, newBarcode, user);
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') throw error;
+      const existing = await this.prisma.fbsPrintJob.findUnique({ where: { historyId: printId } });
+      if (!existing) throw error;
+      return this.ownedFbsStatus(existing, task, stationId, newBarcode, user);
+    }
+  }
+
+  async fbsStatus(taskId: string, printId: string, user: AuthUser) {
+    const task = await this.marketplace.getFbsTsdRelabelPrintContext(taskId, user);
+    const job = await this.prisma.fbsPrintJob.findUnique({ where: { historyId: printId } });
+    if (!job || job.source !== RELABEL_SOURCE || job.assemblyId !== taskId ||
+      job.requestId !== task.requestId || job.requestedById !== user.id) {
+      throw new NotFoundException('Задание печати не найдено.');
+    }
+    return { printId, status: job.status, stationId: job.stationId, barcode: job.stickerCode,
+      error: job.errorMessage, printedAt: job.printedAt };
+  }
+
+  private ownedFbsStatus(job: { source: string; assemblyId: string; requestId: string; requestedById: string;
+    stationId: string; stickerCode: string | null; historyId: string; status: string;
+    errorMessage: string | null; printedAt: Date | null },
+    task: { taskId: string; requestId: string }, stationId: string, barcode: string, user: AuthUser) {
+    if (job.source !== RELABEL_SOURCE || job.assemblyId !== task.taskId || job.requestId !== task.requestId ||
+      job.stationId !== stationId || job.stickerCode !== barcode || job.requestedById !== user.id) {
+      throw new ConflictException('Этот идентификатор уже использован для другой печати.');
+    }
+    return { printId: job.historyId, status: job.status, stationId, barcode,
+      error: job.errorMessage, printedAt: job.printedAt };
   }
 
   async create(requestId: string, body: Record<string, unknown>, user: AuthUser) {

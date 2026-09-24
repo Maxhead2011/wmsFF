@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { ClientRequestStatus, MarketplaceType } from '@prisma/client';
-import { LUKIN_FBS_BATCH_CLIENT_ID, selectLukinFbsBatch, savedLukinFbsBatchIds } from '../src/modules/marketplace-connections/fbs-lukin-batch';
+import { LUKIN_FBS_BATCH_CLIENT_ID, lukinBatchApplies, selectLukinFbsBatch, savedLukinFbsBatchIds } from '../src/modules/marketplace-connections/fbs-lukin-batch';
 import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
 
 const requests = [8, 4, 7, 2, 6, 3, 1].map((number) => ({ requestId: `request-${number}`, requestNumber: number }));
 
 describe('Lukin FBS TSD batch', () => {
+  it('shows the full queue to administrator and owner', () => {
+    // TEST: supervisors must bypass both list filtering and direct-selection blocking.
+    expect(lukinBatchApplies(['ADMIN'])).toBe(false);
+    expect(lukinBatchApplies(['OWNER'])).toBe(false);
+    expect(lukinBatchApplies(['PICKER'])).toBe(true);
+  });
   it('keeps the five oldest requests until every one is picked', () => {
     // TEST: finishing one request cannot reveal request #6 on refresh.
     const first = selectLukinFbsBatch(requests, []);
@@ -68,6 +74,15 @@ describe('Lukin FBS TSD batch', () => {
     expect(first.requests.filter((row) => row.client.id === client.id).map((row) => row.requestNumber))
       .toEqual([5, 4, 3, 2, 1]);
     expect(first.requests.filter((row) => row.client.id === other.id)).toHaveLength(2);
+    const admin = await service.listFbsTsdRequests('TSD-ADMIN', {
+      id: 'admin-1', name: 'Администратор', roleCodes: ['ADMIN'],
+    } as never);
+    const owner = await service.listFbsTsdRequests('TSD-OWNER', {
+      id: 'owner-1', name: 'Владелец', roleCodes: ['OWNER'],
+    } as never);
+    // TEST: supervisor views all seven Lukin requests even while the picker window is fixed.
+    expect(admin.requests.filter((row) => row.client.id === client.id)).toHaveLength(7);
+    expect(owner.requests.filter((row) => row.client.id === client.id)).toHaveLength(7);
 
     links = links.filter((link) => link.requestId !== `${client.id}-1`);
     const afterOne = await service.listFbsTsdRequests('TSD-2', user);
