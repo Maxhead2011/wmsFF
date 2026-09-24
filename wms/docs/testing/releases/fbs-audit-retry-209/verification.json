@@ -1,0 +1,51 @@
+{
+  "passed": true,
+  "versionCode": 209,
+  "versionName": "0.1.209-audit-retry",
+  "ozonUiCallsVerified": true,
+  "quantityFieldsVerified": true,
+  "dexSha256": {
+    "classes.dex": "a8e40ff455f6e8b4a53f9522eba5b1c4c0ad8bfaca65c6e213116e19d21e205e"
+  },
+  "tests": {
+    "testFfullhabDebugUnitTest": {
+      "tests": 211,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testFfullhabReleaseUnitTest": {
+      "tests": 211,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffDebugUnitTest": {
+      "tests": 211,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testLogoffReleaseUnitTest": {
+      "tests": 211,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformDebugUnitTest": {
+      "tests": 211,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "testPlatformReleaseUnitTest": {
+      "tests": 211,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "apkSha256": "efff8ec57905f0e6a7d2cf6fbdf5452e18efd1040ced2f29fdc1c5a70b4606dd",
+  "publishedSourcePreserved": true,
+  "voicePreserved": true
+}

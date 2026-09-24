@@ -1,0 +1,37 @@
+{
+  "passed": true,
+  "before": {
+    "images": {
+      "api": "sha256:1d0beaf9657bfd1608e193581ca232c0d4e2a396ec39f2ca72a548e0c09f883a",
+      "web": "sha256:65e9e9ac1f797024c90f67b629757a4c64dfd5032d51c6b10716b0aed1ddf56c"
+    },
+    "metadata": {
+      "versionCode": 208,
+      "versionName": "0.1.208-sequential-picking",
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-sequential-picking-208.apk",
+      "sha256": "846f06e5509609b70e7470d29f7b98ab447bd33ca68a03baa5041c2331f33692",
+      "size": 5374359,
+      "releasedAt": "2026-09-24T14:30:02.321867+00:00",
+      "releaseNotes": "FBO picking prioritizes the current box and pallet. FBS can pick multiple barcode/KIZ pairs from one confirmed box. Install over the existing app without deleting data."
+    }
+  },
+  "webImage": "sha256:250429d95a2cdf084248b3939cf27cffe23f182140bad8d0a7c03c966ef579cb",
+  "metadata": {
+    "versionCode": 209,
+    "versionName": "0.1.209-audit-retry",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-audit-retry-209.apk",
+    "sha256": "5ae5c25b7ad1186af10eab49a737719fd7a620d169bb87baa3d9ea1435732a76",
+    "size": 5374359,
+    "releasedAt": "2026-09-24T16:12:28.427818+00:00",
+    "releaseNotes": "Recover mandatory FBS box checks after connection failures; retain the existing audit and show a retry button. Install over the existing app without deleting data."
+  },
+  "changes": [
+    "/usr/share/nginx/html/downloads/logoff-tsd-audit-retry-209.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.apk",
+    "/usr/share/nginx/html/downloads/logoff-tsd.json"
+  ],
+  "signatureMatches": true,
+  "signedContentsMatch": true,
+  "existingAssetsAndPrintAgentsPreserved": true,
+  "builderAssetsVerified": true
+}

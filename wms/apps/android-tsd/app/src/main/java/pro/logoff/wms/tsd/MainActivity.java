@@ -2365,7 +2365,56 @@ public class MainActivity extends Activity {
         }
     }
 
+    // FIX: an unavailable dashboard must not prevent opening the required box check.
+    private void openMandatoryFbsAuditRecoverably() {
+        TsdSession session = safeSession();
+        if (session == null || inventoryRequestBusy) return;
+        final String owner = fbsSessionOwnerKey(session), box = mandatoryFbsAuditBoxCode;
+        final String savedId = mandatoryFbsAuditSessionId, client = mandatoryFbsAuditClientId;
+        final String auditTask = mandatoryFbsKizAuditTaskId;
+        inventoryRequestBusy = true;
+        activeInventory = null;
+        activeInventoryBox = null;
+        statusMessage = tr("Открываю проверку короба…", "Quti tekshiruvi ochilmoqda…");
+        renderInventoryCountScreen();
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            Map<String,Object> request = new LinkedHashMap<>();
+            request.put("type", "BOX_CHECK"); request.put("clientId", client);
+            request.put("title", auditTask.isEmpty() ? "Обязательная проверка после сборки FBS · " + box : "Проверка КИЗ FBS · " + box + " · " + auditTask);
+            request.put("comment", "[FBS_MANDATORY_BOX_CHECK] " + (auditTask.isEmpty()
+                ? "Короб выбран в FBS, но нужный товар не был подтверждён."
+                : "[FBS_KIZ_STOCK_CHECK] " + auditTask + "; расхождение при отборе. Сканировать только содержимое короба. Уже отобранный товар сюда не возвращать."));
+            MandatoryFbsAuditLoader.Result loaded = MandatoryFbsAuditLoader.load(api, session.authorizationHeader(), savedId, box, request, id -> {
+                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !box.equals(mandatoryFbsAuditBoxCode)) throw new IOException("Сессия сотрудника изменилась.");
+                if (progressStore == null || !progressStore.edit().putString("mandatory_fbs_audit_session", id).commit()) throw new IOException("Не удалось сохранить номер проверки на ТСД. Повторите открытие.");
+                mainHandler.post(() -> {
+                    if (owner.equals(fbsSessionOwnerKey(safeSession())) && box.equals(mandatoryFbsAuditBoxCode)) mandatoryFbsAuditSessionId = id;
+                });
+            }, this::inventoryHttpError);
+            mainHandler.post(() -> {
+                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !box.equals(mandatoryFbsAuditBoxCode)) return;
+                inventoryRequestBusy = false; online = true;
+                activeInventory = loaded.session; activeInventoryBox = loaded.box;
+                mandatoryFbsAuditSessionId = loaded.session.id;
+                persistMandatoryFbsAuditState();
+                statusMessage = tr("Проверка открыта. Отсканируйте содержимое короба.", "Tekshiruv ochildi. Quti tarkibini skanerlang.");
+                if (!continueAfterMandatoryFbsAuditIfReady()) renderInventoryCountScreen();
+            });
+            // Optional administrator dashboard is loaded after the usable check, never before it.
+            try {
+                Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
+                if (response.isSuccessful() && response.body() != null) mainHandler.post(() -> {
+                    if (owner.equals(fbsSessionOwnerKey(safeSession())) && box.equals(mandatoryFbsAuditBoxCode) && screen == Screen.INVENTORY_COUNT) {
+                        inventoryDashboard = response.body(); renderInventoryCountScreen();
+                    }
+                });
+            } catch (IOException ignored) { /* The opened check remains usable; retry is available after any required action failure. */ }
+        });
+    }
+
     private void startMandatoryFbsAuditSession() {
+        if ("logoff".equals(BuildConfig.FLAVOR)) { openMandatoryFbsAuditRecoverably(); return; }
         TsdSession session = safeSession();
         if (session == null) return;
         activeInventory = null;
@@ -2457,6 +2506,7 @@ public class MainActivity extends Activity {
     }
 
     private void loadMandatoryFbsAuditSession() {
+        if ("logoff".equals(BuildConfig.FLAVOR)) { openMandatoryFbsAuditRecoverably(); return; }
         TsdSession session = safeSession();
         if (session == null) return;
         screen = Screen.INVENTORY_COUNT;
@@ -2786,6 +2836,13 @@ public class MainActivity extends Activity {
             ));
         }
         if (activeInventory == null) {
+            // FIX: preserve the mandatory gate but provide an actionable recovery screen.
+            if ("logoff".equals(BuildConfig.FLAVOR) && mandatoryFbsAuditActive) {
+                root.addView(messageView(nonEmpty(statusMessage, tr("Проверка не открыта. Повторите подключение.", "Tekshiruv ochilmagan. Qayta urinib ko‘ring."))));
+                View retry = secondaryButton(tr("Повторить открытие проверки", "Tekshiruvni qayta ochish"), view -> resumeMandatoryFbsAudit());
+                retry.setEnabled(!inventoryRequestBusy); root.addView(retry);
+                setScrollableContent(root); return;
+            }
             root.addView(messageView(tr("Инвентаризация не открыта.", "Inventarizatsiya ochilmagan.")));
             if (!mandatoryFbsAuditActive) {
                 root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> openInventoryMode(inventoryType)));

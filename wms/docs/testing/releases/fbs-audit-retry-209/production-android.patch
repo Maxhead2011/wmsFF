@@ -1,0 +1,170 @@
+--- a/wms/apps/android-tsd/app/build.gradle.kts
++++ b/wms/apps/android-tsd/app/build.gradle.kts
+@@ -24,8 +24,8 @@
+     productFlavors {
+         create("logoff") {
+             dimension = "brand"
+-            versionCode = 208 // FIX: explain repeat scans of packed FBO cartons.
+-            versionName = "0.1.208-sequential-picking"
++            versionCode = 209 // FIX: explain repeat scans of packed FBO cartons.
++            versionName = "0.1.209-audit-retry"
+             applicationId = "pro.logoff.wms.tsd"
+             resValue("string", "app_name", "LOGOFF WMS TSD")
+             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MainActivity.java
+@@ -2366,7 +2366,56 @@
+         }
+     }
+ 
++    // FIX: an unavailable dashboard must not prevent opening the required box check.
++    private void openMandatoryFbsAuditRecoverably() {
++        TsdSession session = safeSession();
++        if (session == null || inventoryRequestBusy) return;
++        final String owner = fbsSessionOwnerKey(session), box = mandatoryFbsAuditBoxCode;
++        final String savedId = mandatoryFbsAuditSessionId, client = mandatoryFbsAuditClientId;
++        final String auditTask = mandatoryFbsKizAuditTaskId;
++        inventoryRequestBusy = true;
++        activeInventory = null;
++        activeInventoryBox = null;
++        statusMessage = tr("Открываю проверку короба…", "Quti tekshiruvi ochilmoqda…");
++        renderInventoryCountScreen();
++        runBackground(() -> {
++            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
++            Map<String,Object> request = new LinkedHashMap<>();
++            request.put("type", "BOX_CHECK"); request.put("clientId", client);
++            request.put("title", auditTask.isEmpty() ? "Обязательная проверка после сборки FBS · " + box : "Проверка КИЗ FBS · " + box + " · " + auditTask);
++            request.put("comment", "[FBS_MANDATORY_BOX_CHECK] " + (auditTask.isEmpty()
++                ? "Короб выбран в FBS, но нужный товар не был подтверждён."
++                : "[FBS_KIZ_STOCK_CHECK] " + auditTask + "; расхождение при отборе. Сканировать только содержимое короба. Уже отобранный товар сюда не возвращать."));
++            MandatoryFbsAuditLoader.Result loaded = MandatoryFbsAuditLoader.load(api, session.authorizationHeader(), savedId, box, request, id -> {
++                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !box.equals(mandatoryFbsAuditBoxCode)) throw new IOException("Сессия сотрудника изменилась.");
++                if (progressStore == null || !progressStore.edit().putString("mandatory_fbs_audit_session", id).commit()) throw new IOException("Не удалось сохранить номер проверки на ТСД. Повторите открытие.");
++                mainHandler.post(() -> {
++                    if (owner.equals(fbsSessionOwnerKey(safeSession())) && box.equals(mandatoryFbsAuditBoxCode)) mandatoryFbsAuditSessionId = id;
++                });
++            }, this::inventoryHttpError);
++            mainHandler.post(() -> {
++                if (!owner.equals(fbsSessionOwnerKey(safeSession())) || !box.equals(mandatoryFbsAuditBoxCode)) return;
++                inventoryRequestBusy = false; online = true;
++                activeInventory = loaded.session; activeInventoryBox = loaded.box;
++                mandatoryFbsAuditSessionId = loaded.session.id;
++                persistMandatoryFbsAuditState();
++                statusMessage = tr("Проверка открыта. Отсканируйте содержимое короба.", "Tekshiruv ochildi. Quti tarkibini skanerlang.");
++                if (!continueAfterMandatoryFbsAuditIfReady()) renderInventoryCountScreen();
++            });
++            // Optional administrator dashboard is loaded after the usable check, never before it.
++            try {
++                Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
++                if (response.isSuccessful() && response.body() != null) mainHandler.post(() -> {
++                    if (owner.equals(fbsSessionOwnerKey(safeSession())) && box.equals(mandatoryFbsAuditBoxCode) && screen == Screen.INVENTORY_COUNT) {
++                        inventoryDashboard = response.body(); renderInventoryCountScreen();
++                    }
++                });
++            } catch (IOException ignored) { /* The opened check remains usable; retry is available after any required action failure. */ }
++        });
++    }
++
+     private void startMandatoryFbsAuditSession() {
++        if ("logoff".equals(BuildConfig.FLAVOR)) { openMandatoryFbsAuditRecoverably(); return; }
+         TsdSession session = safeSession();
+         if (session == null) return;
+         activeInventory = null;
+@@ -2458,6 +2507,7 @@
+     }
+ 
+     private void loadMandatoryFbsAuditSession() {
++        if ("logoff".equals(BuildConfig.FLAVOR)) { openMandatoryFbsAuditRecoverably(); return; }
+         TsdSession session = safeSession();
+         if (session == null) return;
+         screen = Screen.INVENTORY_COUNT;
+@@ -2787,6 +2837,13 @@
+             ));
+         }
+         if (activeInventory == null) {
++            // FIX: preserve the mandatory gate but provide an actionable recovery screen.
++            if ("logoff".equals(BuildConfig.FLAVOR) && mandatoryFbsAuditActive) {
++                root.addView(messageView(nonEmpty(statusMessage, tr("Проверка не открыта. Повторите подключение.", "Tekshiruv ochilmagan. Qayta urinib ko‘ring."))));
++                View retry = secondaryButton(tr("Повторить открытие проверки", "Tekshiruvni qayta ochish"), view -> resumeMandatoryFbsAudit());
++                retry.setEnabled(!inventoryRequestBusy); root.addView(retry);
++                setScrollableContent(root); return;
++            }
+             root.addView(messageView(tr("Инвентаризация не открыта.", "Inventarizatsiya ochilmagan.")));
+             if (!mandatoryFbsAuditActive) {
+                 root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> openInventoryMode(inventoryType)));
+--- a/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MandatoryFbsAuditLoader.java
++++ b/wms/apps/android-tsd/app/src/main/java/pro/logoff/wms/tsd/MandatoryFbsAuditLoader.java
+@@ -0,0 +1,30 @@
++package pro.logoff.wms.tsd;
++import java.io.IOException;
++import java.util.Map;
++import pro.logoff.wms.tsd.network.*;
++import retrofit2.Response;
++
++// FIX: persist the server session before opening its box; failed reads never create a replacement.
++final class MandatoryFbsAuditLoader {
++ interface Checkpoint { void save(String id) throws IOException; }
++ interface ErrorText { String message(Response<?> response); }
++ static final class Result {
++  final TsdInventorySession session; final TsdInventoryBox box;
++  Result(TsdInventorySession s,TsdInventoryBox b){session=s;box=b;}
++ }
++ static Result load(WmsApi api,String auth,String sessionId,String boxCode,Map<String,Object> request,Checkpoint checkpoint,ErrorText errors)throws IOException {
++  Response<TsdInventorySession> response=sessionId.isEmpty()?api.startInventory(auth,request).execute():api.getInventory(auth,sessionId,false).execute();
++  if(!response.isSuccessful()||response.body()==null)throw new IOException(errors.message(response));
++  TsdInventorySession session=response.body();
++  if(session.id==null||session.id.isEmpty())throw new IOException("Сервер не вернул номер проверки. Повторите открытие.");
++  checkpoint.save(session.id);
++  TsdInventoryBox box=null;
++  if(session.boxes!=null)for(TsdInventoryBox b:session.boxes)if(b!=null&&boxCode.equalsIgnoreCase(b.boxCode)){box=b;break;}
++  if(box==null){
++   Response<TsdInventoryBox> opened=api.openInventoryBox(auth,session.id,java.util.Collections.singletonMap("boxCode",boxCode)).execute();
++   if(!opened.isSuccessful()||opened.body()==null)throw new IOException(errors.message(opened));
++   box=opened.body();
++  }
++  return new Result(session,box);
++ }
++}
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/MandatoryFbsAuditLoaderTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/MandatoryFbsAuditLoaderTest.java
+@@ -0,0 +1,21 @@
++package pro.logoff.wms.tsd;
++import org.junit.Test;import static org.junit.Assert.*;import java.lang.reflect.Proxy;import java.io.IOException;import java.util.*;import java.util.concurrent.atomic.*;import pro.logoff.wms.tsd.network.*;import retrofit2.*;import okhttp3.ResponseBody;
++public class MandatoryFbsAuditLoaderTest {
++ interface Reply {Object run(String method)throws IOException;}
++ WmsApi api(Reply reply){return (WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(p,m,a)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(q,n,b)->{if(n.getName().equals("execute"))return reply.run(m.getName());throw new AssertionError(n.getName());}));}
++ TsdInventorySession session(){TsdInventorySession s=new TsdInventorySession();s.id="saved";return s;}
++ MandatoryFbsAuditLoader.Result load(WmsApi api,String id,MandatoryFbsAuditLoader.Checkpoint c)throws IOException{return MandatoryFbsAuditLoader.load(api,"auth",id,"BOX",new HashMap<>(),c,r->"HTTP "+r.code());}
++ // TEST: losing the box-open response must retry the saved session, not start another one.
++ @Test public void resumesSameSessionAfterOpenFailure()throws Exception{
++ AtomicReference<String> saved=new AtomicReference<>("");AtomicInteger starts=new AtomicInteger(),opens=new AtomicInteger();TsdInventorySession s=session();
++ WmsApi api=api(method->{if(method.equals("startInventory")){starts.incrementAndGet();return Response.success(s);}if(method.equals("getInventory"))return Response.success(s);if(method.equals("openInventoryBox")){assertEquals("saved",saved.get());if(opens.incrementAndGet()==1)throw new IOException("offline");TsdInventoryBox b=new TsdInventoryBox();b.id="box";b.boxCode="BOX";return Response.success(b);}throw new AssertionError(method);});
++ try{load(api,"",saved::set);fail();}catch(IOException e){assertEquals("offline",e.getMessage());}
++ assertEquals("box",load(api,saved.get(),saved::set).box.id);assertEquals(1,starts.get());assertEquals(2,opens.get());
++ }
++ // TEST: server, authorization and not-found errors never silently reset the audit identifier.
++ @Test public void readErrorsNeverStartReplacement()throws Exception{for(int status:new int[]{403,404,500,503}){AtomicReference<String> saved=new AtomicReference<>("saved");WmsApi api=api(m->{assertEquals("getInventory",m);return Response.error(status,ResponseBody.create(okhttp3.MediaType.parse("text/plain"),"failure"));});try{load(api,saved.get(),saved::set);fail();}catch(IOException e){assertEquals("HTTP "+status,e.getMessage());}assertEquals("saved",saved.get());}}
++ // TEST: a retry discovers a box already opened by a request whose response was lost.
++ @Test public void existingBoxNeedsNoSecondOpen()throws Exception{TsdInventorySession s=session();TsdInventoryBox b=new TsdInventoryBox();b.id="existing";b.boxCode="box";s.boxes.add(b);assertEquals("existing",load(api(m->{assertEquals("getInventory",m);return Response.success(s);}),"saved",id->{}).box.id);}
++ // TEST: do not open a box if its session identifier could not be checkpointed.
++ @Test public void checkpointFailureStopsNextMutation()throws Exception{try{load(api(m->{assertEquals("startInventory",m);return Response.success(session());}),"",id->{throw new IOException("disk");});fail();}catch(IOException e){assertEquals("disk",e.getMessage());}}
++}
+--- a/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/MandatoryFbsAuditScreenTest.java
++++ b/wms/apps/android-tsd/app/src/test/java/pro/logoff/wms/tsd/MandatoryFbsAuditScreenTest.java
+@@ -0,0 +1,16 @@
++package pro.logoff.wms.tsd;
++import android.view.*;import android.widget.*;import org.junit.Test;import org.junit.runner.RunWith;import org.robolectric.*;import org.robolectric.annotation.Config;import static org.junit.Assert.*;
++@RunWith(RobolectricTestRunner.class) @Config(sdk=28)
++public class MandatoryFbsAuditScreenTest {
++ static void set(MainActivity a,String n,Object v)throws Exception{var f=MainActivity.class.getDeclaredField(n);f.setAccessible(true);f.set(a,v);}
++ static TextView find(View v,String s){if(v instanceof TextView&&((TextView)v).getText().toString().contains(s))return (TextView)v;if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){TextView x=find(((ViewGroup)v).getChildAt(i),s);if(x!=null)return x;}return null;}
++ // TEST: request 1291 must never strand a picker after an audit-open network failure.
++ @Test public void failedMandatoryOpenShowsReasonAndRetryWithoutBypass()throws Exception{
++ try(var c=Robolectric.buildActivity(MainActivity.class).setup()){
++ MainActivity a=c.get();set(a,"mandatoryFbsAuditActive",true);set(a,"mandatoryFbsAuditBoxCode","BOX");set(a,"activeInventory",null);set(a,"statusMessage","Ошибка соединения");
++ var m=MainActivity.class.getDeclaredMethod("renderInventoryCountScreen");m.setAccessible(true);m.invoke(a);View root=a.findViewById(android.R.id.content);
++ if("logoff".equals(BuildConfig.FLAVOR)){assertNotNull(find(root,"Ошибка соединения"));assertNotNull(find(root,"Повторить открытие проверки"));assertTrue(find(root,"Повторить открытие проверки").isEnabled());set(a,"inventoryRequestBusy",true);m.invoke(a);assertFalse(find(a.findViewById(android.R.id.content),"Повторить открытие проверки").isEnabled());}
++ else assertNull(find(root,"Повторить открытие проверки"));
++ assertNull(find(a.findViewById(android.R.id.content),"Пропустить"));
++ }}
++}
