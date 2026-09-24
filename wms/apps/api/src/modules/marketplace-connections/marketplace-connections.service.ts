@@ -1,3 +1,4 @@
+import { findFbsRelabelRoute, RelabelRoute } from './fbs-relabel-route';
 import { approvedSizeRoutes } from './fbs-size-substitution-route';
 import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { collectFbsConnectionOrders, type FbsConnectionError } from './fbs-connection-results';
@@ -4747,7 +4748,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
 
         for (const task of repairableTasks) {
-          const stockSkuId = task.sourceSkuId ?? task.skuId;
+          let stockSkuId = task.sourceSkuId ?? task.skuId;
           const reservations = await this.fbsTsdReservationRows({
             clientId: request.clientId,
             skuId: stockSkuId,
@@ -4759,7 +4760,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             reservedByBox.set(row.boxId, (reservedByBox.get(row.boxId) ?? 0) + row.itemCount);
           });
           const itemCount = Math.max(1, task.itemCount);
-          const eligibleBoxes = (boxesBySku.get(stockSkuId) ?? [])
+          let eligibleBoxes = (boxesBySku.get(stockSkuId) ?? [])
             .map((box) => ({
               ...box,
               freeQuantity: box.quantity - (reservedByBox.get(box.id) ?? 0),
@@ -4770,6 +4771,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 left.freeQuantity - right.freeQuantity ||
                 left.code.localeCompare(right.code, 'ru-RU'),
           );
+          // FIX: stale direct-only tasks must rediscover permitted relabel stock before waiting.
+          let relabelRoute: RelabelRoute | null = null;
+          if (!eligibleBoxes.length && process.env.WMS_FBS_RELABEL_ROUTE_REPAIR_ENABLED === 'true') {
+            relabelRoute = await findFbsRelabelRoute(this.prisma, {
+              clientId: request.clientId, warehouseId: request.warehouseId,
+              skuId: task.skuId, taskId: task.id, quantity: itemCount,
+            }, skuId => this.fbsTsdReservationRows({clientId: request.clientId, skuId, excludeTaskId: task.id}));
+            if (relabelRoute) { stockSkuId = relabelRoute.sourceSkuId; eligibleBoxes = relabelRoute.boxes; }
+          }
           const selectedBox = eligibleBoxes[0] ?? null;
           const persistRepairSelection = (
             db: Prisma.TransactionClient | PrismaService,
@@ -4787,9 +4797,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               relabelConfirmedAt: null,
             },
             data: {
+              ...(candidate && relabelRoute ? {
+                sourceSkuId: relabelRoute.sourceSkuId,
+                sourceProductName: relabelRoute.sourceProductName,
+                sourceArticle: relabelRoute.sourceArticle,
+                sourceBarcodes: relabelRoute.sourceBarcodes as Prisma.InputJsonValue,
+                relabelRequired: true,
+              } : {}),
               storageBoxes: (candidate
                 ? eligibleBoxes
-                : eligibleBoxes.filter((box) => box.id !== selectedBox?.id)
+                : relabelRoute ? [] : eligibleBoxes.filter((box) => box.id !== selectedBox?.id)
               ).map((box) => ({
                 code: box.code,
                 quantity: box.freeQuantity,
