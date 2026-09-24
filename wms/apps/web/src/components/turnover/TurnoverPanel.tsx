@@ -496,7 +496,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
       {activeTile !== 'home' && activeTile !== 'kizReport' && activeTile !== 'fbsReports' && activeTile !== 'storage' ? <>
       <section className="turnover-panel turnover-panel--filters" aria-label="Фильтр товарооборота">
-        <div className="turnover-filter-grid">
+        <div className="turnover-filter-grid turnover-filter-grid--primary">
           <label>
             <span>Клиент</span>
             <select value={selectedClientId} onChange={(event) => setSelectedClientId(event.target.value)}>
@@ -554,6 +554,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             }}
           />
 
+        </div>
+        <div className="turnover-filter-grid turnover-filter-grid--secondary">
           <KnownValueInput
             label="КИЗ"
             value={kiz}
@@ -604,6 +606,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </label>
 
+        </div>
+        <div className="turnover-filter-actions">
           <button className="primary-button" type="button" onClick={() => void loadTurnover()} disabled={!selectedClientId || report.status === 'loading'}>
             <RefreshCw size={16} aria-hidden="true" />
             <span>Показать</span>

@@ -1150,3 +1150,32 @@
     justify-content: space-between;
   }
 }
+
+/* FIX: keep the product search wide and separate identification from date filters. */
+.turnover-filter-grid--primary {
+  grid-template-columns: minmax(180px, 240px) minmax(0, 1fr) minmax(180px, 240px);
+}
+.turnover-filter-grid--secondary {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) repeat(2, minmax(160px, 220px));
+}
+.turnover-filter-grid--primary > *,
+.turnover-filter-grid--secondary > * { min-width: 0; }
+.turnover-filter-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.turnover-filter-actions > button { min-height: 40px; }
+/* FIX: an article and its size must remain readable, including long unbroken article codes. */
+.turnover-filter-grid--primary > .known-value-field:nth-child(2) .known-value-options strong,
+.turnover-filter-grid--primary > .known-value-field:nth-child(2) .known-value-options small {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 900px) {
+  .turnover-filter-grid--primary { grid-template-columns: minmax(140px, 180px) minmax(0, 1fr); }
+  .turnover-filter-grid--primary > :last-child { grid-column: 1 / -1; }
+  .turnover-filter-grid--secondary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .turnover-filter-grid--primary,
+  .turnover-filter-grid--secondary { grid-template-columns: minmax(0, 1fr); }
+}
