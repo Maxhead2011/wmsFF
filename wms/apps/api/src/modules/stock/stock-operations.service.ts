@@ -3091,7 +3091,10 @@ export class StockOperationsService {
         status: { in: sourceStatuses },
         quantity: { gt: 0 },
         box: {
-          status: { notIn: ['deleted', 'archived'] },
+          // FIX: archived containers can still hold already packed SHIPPING stock.
+          status: { notIn: process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true' &&
+            sourceStatuses.length === 1 && sourceStatuses[0] === StockStatus.SHIPPING
+            ? ['deleted'] : ['deleted', 'archived'] },
           ...(this.warehouseScopedBoxWhere(warehouseId) ?? {}),
         },
       },
