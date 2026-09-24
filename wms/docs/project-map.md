@@ -40,6 +40,8 @@
 
 ## Основные связи данных
 
+Возобновление частично завершённой автосборки WB: `modules/marketplace-connections/auto-assembly-recovery.ts`, подключение в `administration/auto-assembly.service.ts` (`run`). Изолировано флагом `WMS_AUTO_ASSEMBLY_RECOVERY_ENABLED`; условия и проверки: [восстановление автосборки](testing/auto-assembly-recovery.md).
+
 Подготовка распределения WB/Ozon: `modules/marketplace-connections/marketplace-allocation.{controller,service}.ts`
 и `marketplace-allocation.ts`; web `components/fbs/StockManagementView.tsx`,
 `MarketplaceAllocationView.tsx`, `MarketplaceAllocationBindings.tsx` (каталоги и подтверждение пар).
