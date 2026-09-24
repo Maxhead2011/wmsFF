@@ -1,0 +1,14 @@
+{
+  "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.service.ts": {
+    "before": "f0d370ee691e4b4161567c7cccd734cf93bfc5286e601e9a4a1637da0d4926dc",
+    "after": "9d6b62f03c182bc89779a8860ee2c046ed656814e2d687e8893a57ce7f3b46f9"
+  },
+  "wms/apps/api/src/modules/marketplace-connections/marketplace-connections.module.ts": {
+    "before": "7a461c22946fac76e11f1210e721a795c9e2be8336a69ff2b4d27ea799c22a7e",
+    "after": "3cbff775616ebcfb65e01ffe78c4f4fe80049670307e54b30b507449595a87f4"
+  },
+  "wms/apps/api/src/common/stock/fbs-request-auto-status.ts": {
+    "before": "b59d0a339135310b56361439dfcc1dd8c244e8c61bac52fb9ece97ea077e995c",
+    "after": "19fbaa12391b46ee1caa3f72fe5e18d6d9c96142713534ab4ef51df5112bbbfc"
+  }
+}

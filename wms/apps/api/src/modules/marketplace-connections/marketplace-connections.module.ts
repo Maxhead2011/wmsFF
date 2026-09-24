@@ -1,6 +1,7 @@
 import { FbsSizeSubstitutionService } from './fbs-size-substitution.service';
 import { FbsSizeSubstitutionController } from './fbs-size-substitution.controller';
 import { Module } from '@nestjs/common';
+import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
 import { AuthModule } from '../auth/auth.module';
 import { LogisticsModule } from '../logistics/logistics.module';
 import { WmsStockAvailabilityService } from '../stock/wms-stock-availability.service';
@@ -18,7 +19,7 @@ import { FbsReshipmentController } from './fbs-reshipment.controller';
 import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
-  imports: [AuthModule, LogisticsModule],
+  imports: [AuthModule, LogisticsModule, ClientNotificationsModule],
   controllers: [FbsSizeSubstitutionController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [FbsSizeSubstitutionService,
     MarketplaceStockControlService,

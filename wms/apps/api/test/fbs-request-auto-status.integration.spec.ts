@@ -120,27 +120,36 @@ describe.skipIf(!url).sequential('FBS automatic request statuses', () => {
   // TEST: regression through the real completion entry point, not only the policy helper.
   it('sets PACKED in the same transaction as the final TSD completion', async () => {
     await db.fbsTsdAssembly.update({ where: { id: tasks[0].id }, data: { status: 'COMPLETED', completedAt: new Date() } });
+    const notifyClient = vi.fn(async () => { expect(await status()).toBe('PACKED'); return { sent: true }; });
     const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma: db, fbsOrdersCache: new Map(),
+      telegram: { notifyClient },
       loadOwnedFbsTsdAssembly: async () => tasks[1], requireFbsOrderStillCollectable: async () => {},
       reserveCompletedWildberriesStock: async () => {}, formatFbsTsdAssembly: async (task: unknown) => task });
     await svc.completeFbsTsdAssembly(tasks[1].id, { id: userId });
     expect(await status()).toBe('PACKED');
+    expect(notifyClient).toHaveBeenCalledOnce(); expect(notifyClient).toHaveBeenCalledWith(clientId, expect.stringContaining('Упаковано'), 'FBS');
   });
   it('records starting the assigned task and refreshes the cached request', async () => {
     const cache = new Map([[clientId, {}]]);
-    const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma: db, fbsOrdersCache: cache });
+    const notifyClient = vi.fn(async () => { expect(await status()).toBe('IN_WORK'); return { sent: true }; });
+    const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma: db, fbsOrdersCache: cache, telegram: { notifyClient } });
     await svc.reconcileFbsTaskRequestStatus(tasks[0]);
     expect(await status()).toBe('IN_WORK'); expect(cache.has(clientId)).toBe(false);
+    await svc.reconcileFbsTaskRequestStatus(tasks[0]);
+    expect(notifyClient).toHaveBeenCalledOnce(); expect(notifyClient).toHaveBeenCalledWith(clientId, expect.stringContaining('В работе'), 'FBS');
   });
   // TEST: the real SOS acknowledgement closes once; failed ACKs and old retries cannot overwrite manual control.
   it('closes on the last SOS print ACK without overwriting a later manual status', async () => {
     vi.stubEnv('WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED', 'true');
     await pick(); await apply('PICK'); await print(0); await print(1, false);
     const job = await db.fbsPrintJob.findFirstOrThrow({ where: { assemblyId: tasks[1].id } });
+    const notifyClient = vi.fn(async () => { expect(await status()).toBe('DONE'); return { sent: true }; });
     const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma: db, fbsOrdersCache: new Map(),
+      telegram: { notifyClient },
       localShipmentOrder: async () => ({ id: tasks[1].orderId }) });
     await svc.finishFbsPrintJob(job.id, false, 'printer offline', { id: userId });
     expect(await status()).toBe('PACKED');
+    expect(notifyClient).not.toHaveBeenCalled();
     await svc.finishFbsPrintJob(job.id, true, null, { id: userId });
     expect(await status()).toBe('DONE');
     await db.clientRequest.update({ where: { id: requestId }, data: { status: 'PACKED' } });
@@ -148,5 +157,29 @@ describe.skipIf(!url).sequential('FBS automatic request statuses', () => {
     await svc.finishFbsPrintJob(job.id, true, null, { id: userId });
     expect(await status()).toBe('PACKED');
     expect(await db.clientRequestEvent.count({ where: { requestId, title: FBS_AUTO_STATUS_TITLE, statusTo: 'DONE' } })).toBe(1);
+    expect(notifyClient).toHaveBeenCalledOnce(); expect(notifyClient).toHaveBeenCalledWith(clientId, expect.stringContaining('Сдано'), 'FBS');
+  });
+  // TEST: rollback after the helper has collected a notification must never send it.
+  it('does not send Telegram when the transaction rolls back after changing status', async () => {
+    const notifyClient = vi.fn();
+    const prisma = { $transaction: (work: (tx: unknown) => Promise<unknown>) => db.$transaction(async tx => { await work(tx); throw Error('commit failed'); }) };
+    const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma, fbsOrdersCache: new Map(), telegram: { notifyClient } });
+    await expect(svc.reconcileFbsTaskRequestStatus(tasks[0])).rejects.toThrow('commit failed');
+    expect(await status()).toBe('SUBMITTED'); expect(notifyClient).not.toHaveBeenCalled();
+  });
+  // TEST: Telegram availability must not roll back a successful warehouse operation.
+  it('keeps the committed status when Telegram throws', async () => {
+    const notifyClient = vi.fn().mockRejectedValue(Error('offline')), warn = vi.fn();
+    const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma: db, fbsOrdersCache: new Map(), telegram: { notifyClient }, logger: { warn } });
+    await svc.reconcileFbsTaskRequestStatus(tasks[0]);
+    expect(await status()).toBe('IN_WORK'); expect(warn).toHaveBeenCalledOnce();
+  });
+  // TEST: installations with automatic statuses disabled remain unchanged.
+  it('does not notify when automatic status changes are disabled', async () => {
+    vi.stubEnv('WMS_FBS_REQUEST_AUTO_STATUS_ENABLED', 'false');
+    const notifyClient = vi.fn();
+    const svc = Object.assign(Object.create(MarketplaceConnectionsService.prototype), { prisma: db, fbsOrdersCache: new Map(), telegram: { notifyClient } });
+    await svc.reconcileFbsTaskRequestStatus(tasks[0]);
+    expect(await status()).toBe('SUBMITTED'); expect(notifyClient).not.toHaveBeenCalled();
   });
 });
