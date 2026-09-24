@@ -1,6 +1,10 @@
 import { MarketplaceType } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
-import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
+import { createRequire } from 'node:module';
+// TEST: verify the physical screen contract on the actual compiled release as well.
+const { MarketplaceConnectionsService } = process.env.FBS_RUNTIME_ENTRY
+  ? createRequire(import.meta.url)(process.env.FBS_RUNTIME_ENTRY)
+  : await import('../src/modules/marketplace-connections/marketplace-connections.service');
 const worker = { id: 'worker-1', name: 'Сборщик', deviceCode: 'TSD-1' };
 describe('WB sticker number in TSD response', () => {
   // TEST: local recovery still shows stored sticker digits when WB supplies no image.
@@ -31,6 +35,8 @@ describe('WB sticker number in TSD response', () => {
       }) },
     };
     const service: any = new MarketplaceConnectionsService(db as never, {} as never);
+    // TEST: formatting an assigned/resumed TSD task must reach the status hook.
+    const reconcileStatus = vi.spyOn(service, 'reconcileFbsTaskRequestStatus');
     vi.spyOn(service, 'fbsTsdReservationRowsBySku').mockResolvedValue(new Map());
     vi.spyOn(service, 'fbsTsdCompletedToday').mockResolvedValue(0);
     vi.spyOn(service, 'fbsTsdStickerHistory').mockResolvedValue([]);
@@ -41,6 +47,7 @@ describe('WB sticker number in TSD response', () => {
 
     const withSticker = { ...task, stickerPartA: '0057894', stickerPartB: '0051', stickerBarcode: '578940051' };
     const response = await service.formatFbsTsdAssembly(withSticker, worker, '');
+    expect(reconcileStatus).toHaveBeenCalledWith(withSticker);
     expect(response.task.wbStickerNumber).toBe('0057894 0051');
     expect(response.task.orderSticker).toBeNull();
     // TEST: LOGOFF TSD must receive the physical-pick mode and hide sticker image/printing.

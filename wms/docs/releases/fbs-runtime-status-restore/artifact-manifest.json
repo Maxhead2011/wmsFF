@@ -1,0 +1,11 @@
+{
+  "baseImage": "sha256:44dd43951b7b245ae0b34f1d972211f1d3ecccbd02855e7ba2de03079ea4fb50",
+  "changedFiles": [
+    "dist/modules/marketplace-connections/marketplace-connections.service.js"
+  ],
+  "unchangedFiles": 531,
+  "beforeSha256": "c9d81b6ee352df5b3aae7156cc65a9da083ad87d171f08140de7ca28ba6b232e",
+  "afterSha256": "ff26a512810811591a7ef8b8e3d5b1fe1c75c7e865c3aa6142cbf8a58ede4ab7",
+  "runtimeTestsPassed": 23,
+  "deployed": false
+}

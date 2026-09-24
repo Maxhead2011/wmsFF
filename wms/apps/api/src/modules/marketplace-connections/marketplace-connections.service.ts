@@ -1,4 +1,6 @@
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
+import { fbsRequestAutoStatusEnabled, reconcileFbsRequestStatus, type FbsAutoStatusChange } from '../../common/stock/fbs-request-auto-status';
+import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { enqueueFbsPrintBilling, FbsPrintBillingWorker } from './fbs-print-billing-outbox';
 import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-physical-identity';
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
@@ -670,6 +672,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     private readonly stockMonitoring?: FbsStockMonitoringService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
     private readonly stockControl: MarketplaceStockControlService = new MarketplaceStockControlService(prisma, clientScopes),
+    private readonly telegram?: TelegramNotificationService,
   ) {}
 
   pruneExpiredRuntimeCaches(now = Date.now()) {
@@ -12262,6 +12265,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async sosWbClaimResponse(task: FbsTsdAssemblyRecord, resumed: boolean, requestNumberValue?: number) {
+    await this.reconcileFbsTaskRequestStatus(task);
     const requestNumber = requestNumberValue ?? (await this.prisma.clientRequest.findUnique({
       where: { id: task.requestId },
       select: { number: true },
@@ -14097,7 +14101,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       await this.inventoryLock?.assertStockMovementsAllowed();
     }
 
+    const statusChanges: FbsAutoStatusChange[] = [];
     const completed = await this.prisma.$transaction(async (tx) => {
+      // FIX: same request-first lock order as successful SOS print acknowledgement.
+      if (fbsRequestAutoStatusEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${task.requestId} FOR UPDATE`;
       const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
       if (!fresh) throw new NotFoundException('Задание FBS не найдено.');
       if (fresh.status === 'COMPLETED') return fresh;
@@ -14177,11 +14184,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           createdByUserId: user.id,
         },
       });
-      return tx.fbsTsdAssembly.update({
+      const completedTask = await tx.fbsTsdAssembly.update({
         where: { id: fresh.id },
         data: { status: 'COMPLETED', completedAt: new Date(), errorMessage: null },
       });
+      await reconcileFbsRequestStatus(tx, completedTask.requestId, { stage: 'PICK', occurredAt: completedTask.completedAt!, actorId: user.id }, statusChanges);
+      return completedTask;
     });
+    if (fbsRequestAutoStatusEnabled()) this.fbsOrdersCache.delete(completed.clientId);
+    await this.notifyFbsAutoStatusChanges(statusChanges);
     return this.formatFbsTsdAssembly(completed, user, 'Готово. Заказ собран и записан в заявку.');
   }
 
@@ -15729,7 +15740,36 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  private async reconcileFbsTaskRequestStatus(task: FbsTsdAssemblyRecord) {
+    if (!fbsRequestAutoStatusEnabled() || !task.startedAt || !task.workerUserId || task.deviceCode.startsWith('AUTO:')) return;
+    const statusChanges: FbsAutoStatusChange[] = [];
+    const changed = await this.prisma.$transaction(tx => reconcileFbsRequestStatus(tx, task.requestId, {
+      stage: task.status === 'COMPLETED' ? 'PICK' : 'START',
+      occurredAt: task.completedAt ?? task.startedAt!, actorId: task.workerUserId,
+    }, statusChanges), { timeout: 30_000 });
+    if (changed) this.fbsOrdersCache.delete(task.clientId);
+    await this.notifyFbsAutoStatusChanges(statusChanges);
+  }
+
+  private async notifyFbsAutoStatusChanges(changes: FbsAutoStatusChange[]) {
+    const labels: Partial<Record<ClientRequestStatus, string>> = { SUBMITTED: 'Подана', IN_REVIEW: 'На рассмотрении', APPROVED: 'Согласована', IN_WORK: 'В работе', PACKED: 'Упаковано', DONE: 'Сдано' };
+    for (const change of changes) {
+      try {
+        // FIX: use the existing client routing and FBS preferences, after commit only.
+        await this.telegram?.notifyClient(change.clientId, [
+          'LOGOFF WMS: изменён статус заявки FBS.',
+          `Заявка №${change.number}: ${change.title}`,
+          `Статус: ${labels[change.from] ?? change.from} → ${labels[change.to] ?? change.to}`,
+        ].join('\n'), 'FBS');
+      } catch {
+        this.logger.warn(`Telegram notification failed for FBS request ${change.number}; status remains committed.`);
+      }
+    }
+  }
+
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
+    // FIX: covers assignment, source switching and resuming after a lost response.
+    await this.reconcileFbsTaskRequestStatus(task);
     let state = fbsTsdStage(task);
     const savedKizRelabelProposal = state === 'SCAN_KIZ' ? await readPhysicalKizRelabel(this.prisma, task, user) : null;
     // FIX: old same-size proposals must not restore the incorrect "new KIZ" screen.
@@ -17448,11 +17488,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const cached = this.fbsOrdersCache.get(task.clientId)?.value.orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId);
         const order = cached ?? await this.localShipmentOrder(task);
         // FIX: acknowledge after durable shipment + billing intent, not whole-client billing.
+        const statusChanges: FbsAutoStatusChange[] = [];
         await this.prisma.$transaction(async tx => {
           await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), job.printedAt ?? undefined);
           await enqueueFbsPrintBilling(tx, task.clientId);
+          if (job.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: user.id }, statusChanges);
         }, { timeout: 30_000 });
         this.fbsOrdersCache.delete(task.clientId);
+        await this.notifyFbsAutoStatusChanges(statusChanges);
       }
     }
     return job;
@@ -17491,7 +17534,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: print.assemblyId } });
       try {
         const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
-        await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined), { timeout: 30_000 });
+        const statusChanges: FbsAutoStatusChange[] = [];
+        await this.prisma.$transaction(async tx => {
+          await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined);
+          if (print.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId }, statusChanges);
+        }, { timeout: 30_000 });
+        await this.notifyFbsAutoStatusChanges(statusChanges);
         recorded.add(task.id);
       } catch (error) {
         this.logger.warn(`Printed WB order ${task.orderId} needs stock reconciliation: ${error instanceof Error ? error.message : String(error)}`);
