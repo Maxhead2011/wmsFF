@@ -83,6 +83,7 @@ it('issues a TSD task for request 1049 when only the approved replacement is ava
   f.db.fbsTsdAssembly.findUnique=vi.fn(async()=>f.task);
   f.db.fbsTsdAssembly.updateMany=vi.fn(async({data}:any)=>{Object.assign(f.task,data);return {count:1};});
   f.db.clientRequest={findUnique:vi.fn(async()=>({id:f.task.requestId,number:1049,clientId:f.task.clientId,status:'IN_WORK'}))};
+  f.db.systemSetting={findUnique:vi.fn(async()=>null)};
   f.db.clientMarketplaceConnection={findMany:vi.fn(async()=>[{clientId:f.task.clientId}])};
   f.db.clientRequestItem.findFirst=vi.fn(async()=>({id:'item'}));
   f.db.stockBalance.findMany.mockResolvedValue([{boxId:'box',quantity:1,box:{code:'SOURCE_BOX'}}]);

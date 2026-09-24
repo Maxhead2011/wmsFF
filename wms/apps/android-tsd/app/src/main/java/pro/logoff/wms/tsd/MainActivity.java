@@ -4788,6 +4788,8 @@ public class MainActivity extends Activity {
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
         boolean relabelRequired = task.relabeling != null && task.relabeling.required;
         String state = nonEmpty(fbsAssembly.state, "SCAN_BOX");
+        boolean ourFbsRoute = "logoff".equals(BuildConfig.FLAVOR);
+        boolean showLateRouteHints = FbsAssemblyUi.showLateRouteHints(BuildConfig.FLAVOR, fbsAssembly.progress);
         // FIX: show the order quantity before picking and after every unit scan.
         if ("OZON".equalsIgnoreCase(task.marketplace) && OzonLabelSafety.usesTextInstruction(BuildConfig.FLAVOR)) {
             root.addView(feedbackView(ozonQuantityInstruction(task), Color.rgb(254, 240, 138)));
@@ -4916,7 +4918,7 @@ public class MainActivity extends Activity {
                         neededCodes,
                     pallet.neededBoxes > 0 ? Color.rgb(254, 240, 138) : Color.rgb(254, 226, 226)
                 ));
-                if (pallet.nearbyPallets != null && !pallet.nearbyPallets.isEmpty()) {
+                if (showLateRouteHints && pallet.nearbyPallets != null && !pallet.nearbyPallets.isEmpty()) {
                     StringBuilder nearby = new StringBuilder(tr(
                         "ПОСЛЕ ЭТОГО ПАЛЛЕТСОРТА ОСТАВАЙТЕСЬ В ЭТОЙ ЗОНЕ",
                         "BU PALLETSORTDAN KEYIN SHU ZONADA QOLING"
@@ -4959,20 +4961,23 @@ public class MainActivity extends Activity {
                     tr("ЗОНА: ", "ZONA: ") + zone + "\n" +
                     tr("ПАЛЛЕТА: ", "PALLET: ") + nonEmpty(task.recommendedLocation.palletCode, "-");
             }
-            root.addView(feedbackView(
+            // FIX: the blue pallet/box route appears only for the final nine units.
+            if (showLateRouteHints) root.addView(feedbackView(
                 tr("1. НАЙДИТЕ И ОТСКАНИРУЙТЕ КОРОБ\nМожно сначала пикнуть QR паллетсорта.\n",
                     "1. QUTINI TOPING VA SKANERLANG\nAvval palletsort QR kodini skanerlash mumkin.\n") +
                     boxCode + locationHint,
                 BOX_MOVEMENT_BLUE
             ));
-            if (task.storageBoxes != null && !task.storageBoxes.isEmpty()) {
+            List<TsdFbsAssemblyResponse.StorageBox> alternateBoxes = ourFbsRoute
+                ? FbsAssemblyUi.alternateStorageBoxes(task)
+                : task.storageBoxes == null ? java.util.Collections.emptyList() : task.storageBoxes;
+            if (showLateRouteHints && !alternateBoxes.isEmpty()) {
                 StringBuilder options = new StringBuilder(tr(
-                    "НЕСКОЛЬКО ВАРИАНТОВ, ГДЕ ВЗЯТЬ ТОВАР",
-                    "MAHSULOTNI OLISH UCHUN BIR NECHTA JOY"
+                    ourFbsRoute ? "ДРУГИЕ ПАЛЛЕТЫ И КОРОБА С ТОВАРОМ" : "НЕСКОЛЬКО ВАРИАНТОВ, ГДЕ ВЗЯТЬ ТОВАР",
+                    ourFbsRoute ? "MAHSULOT BOR BOSHQA PALLET VA QUTILAR" : "MAHSULOTNI OLISH UCHUN BIR NECHTA JOY"
                 ));
                 String previousPallet = null;
-                // FIX: Show every available box and pallet-sort returned by WMS.
-                for (TsdFbsAssemblyResponse.StorageBox storageBox : task.storageBoxes) {
+                for (TsdFbsAssemblyResponse.StorageBox storageBox : alternateBoxes) {
                     TsdFbsAssemblyResponse.StorageLocation location = storageBox.location;
                     String pallet = location == null
                         ? tr("БЕЗ ПАЛЛЕТСОРТА", "PALLETSORTSIZ")
@@ -4995,9 +5000,11 @@ public class MainActivity extends Activity {
                         .append(storageBox.quantity)
                         .append(tr(" шт.", " dona"));
                 }
-                root.addView(feedbackView(options.toString(), Color.rgb(224, 242, 254)));
+                // FIX: only our terminal collapses alternate picking locations.
+                if (ourFbsRoute) routeDetails.addView(feedbackView(options.toString(), Color.rgb(224, 242, 254)));
+                else root.addView(feedbackView(options.toString(), Color.rgb(224, 242, 254)));
             }
-            if (task.samePalletRemainingBoxes > 0) {
+            if (showLateRouteHints && task.samePalletRemainingBoxes > 0) {
                 String nextBoxes = task.samePalletBoxCodes == null || task.samePalletBoxCodes.isEmpty()
                     ? ""
                     : "\n" + String.join(", ", task.samePalletBoxCodes);
@@ -5008,7 +5015,7 @@ public class MainActivity extends Activity {
                     Color.rgb(254, 240, 138)
                 ));
             }
-            if (task.nextRequestSources != null && !task.nextRequestSources.isEmpty()) {
+            if (showLateRouteHints && task.nextRequestSources != null && !task.nextRequestSources.isEmpty()) {
                 StringBuilder next = new StringBuilder(tr(
                     "ДАЛЬШЕ ПО ЭТОЙ ЗАЯВКЕ",
                     "SHU ARIZA BO‘YICHA KEYINGILAR"
@@ -5037,13 +5044,13 @@ public class MainActivity extends Activity {
                 routeDetails.addView(feedbackView(next.toString(), Color.rgb(240, 249, 255)));
             }
             if (routeDetails.getChildCount() > 0) {
-                // FIX: сворачивается только длинный список остальных заказов;
-                // текущие жёлтые, зелёные и синие рабочие блоки остаются видимыми.
+                // FIX: сворачиваются дополнительные места и остальные заказы;
+                // рабочие подсказки текущего скана остаются видимыми.
                 routeDetails.setVisibility(fbsRemainingOrdersOpen ? View.VISIBLE : View.GONE);
                 Button routeToggle = secondaryButton(
                     fbsRemainingOrdersOpen
-                        ? tr("Свернуть список остальных заказов", "Qolgan buyurtmalarni yig‘ish")
-                        : tr("Показать остальные заказы", "Qolgan buyurtmalarni ko‘rsatish"),
+                        ? tr(ourFbsRoute ? "Свернуть другие места и заказы" : "Свернуть список остальных заказов", "Qolgan buyurtmalarni yig‘ish")
+                        : tr(ourFbsRoute ? "Показать другие места и заказы" : "Показать остальные заказы", "Qolgan buyurtmalarni ko‘rsatish"),
                     view -> { }
                 );
                 routeToggle.setOnClickListener(view -> {
@@ -5051,8 +5058,8 @@ public class MainActivity extends Activity {
                     fbsRemainingOrdersOpen = !fbsRemainingOrdersOpen;
                     routeDetails.setVisibility(fbsRemainingOrdersOpen ? View.VISIBLE : View.GONE);
                     routeToggle.setText(fbsRemainingOrdersOpen
-                        ? tr("Свернуть список остальных заказов", "Qolgan buyurtmalarni yig‘ish")
-                        : tr("Показать остальные заказы", "Qolgan buyurtmalarni ko‘rsatish"));
+                        ? tr(ourFbsRoute ? "Свернуть другие места и заказы" : "Свернуть список остальных заказов", "Qolgan buyurtmalarni yig‘ish")
+                        : tr(ourFbsRoute ? "Показать другие места и заказы" : "Показать остальные заказы", "Qolgan buyurtmalarni ko‘rsatish"));
                 });
                 root.addView(routeToggle);
                 root.addView(routeDetails);

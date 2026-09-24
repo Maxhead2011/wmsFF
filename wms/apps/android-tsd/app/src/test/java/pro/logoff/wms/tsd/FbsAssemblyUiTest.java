@@ -52,4 +52,34 @@ public class FbsAssemblyUiTest {
         assertFalse(FbsAssemblyUi.keepRemainingOrdersOpen("task-1", "task-1", false));
         assertTrue(FbsAssemblyUi.keepRemainingOrdersOpen("task-1", "task-1", true));
     }
+
+    @Test
+    public void routeHintsAppearOnlyForFinalNineUnitsAndAlternatesStaySeparate() {
+        // TEST: the blue route and collapsed alternatives were previously visible with any remaining count.
+        pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.Progress progress =
+            new pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.Progress();
+        progress.requestRemainingItems = 10;
+        assertFalse(FbsAssemblyUi.showLateRouteHints("logoff", progress));
+        assertTrue(FbsAssemblyUi.showLateRouteHints("ffullhab", progress));
+        assertTrue(FbsAssemblyUi.showLateRouteHints("platform", progress));
+        progress.requestRemainingItems = 9;
+        assertTrue(FbsAssemblyUi.showLateRouteHints("logoff", progress));
+        progress.requestRemainingItems = 0;
+        assertFalse(FbsAssemblyUi.showLateRouteHints("logoff", progress));
+        assertFalse(FbsAssemblyUi.showLateRouteHints("logoff", null));
+
+        pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.Task task =
+            new pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.Task();
+        task.recommendedBoxCode = "BOX-1";
+        pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.StorageBox chosen =
+            new pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.StorageBox();
+        chosen.code = "box-1";
+        chosen.quantity = 3;
+        pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.StorageBox other =
+            new pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse.StorageBox();
+        other.code = "BOX-2";
+        other.quantity = 2;
+        task.storageBoxes = java.util.Arrays.asList(chosen, other);
+        org.junit.Assert.assertEquals(java.util.Collections.singletonList(other), FbsAssemblyUi.alternateStorageBoxes(task));
+    }
 }

@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 210 // FIX: print two target barcodes before verifying relabeling.
-            versionName = "0.1.210-relabel-print"
+            versionCode = 211 // FIX: fixed Lukin queue and late FBS route hints.
+            versionName = "0.1.211-fbs-lukin-route"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

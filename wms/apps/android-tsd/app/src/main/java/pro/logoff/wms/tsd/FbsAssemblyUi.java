@@ -1,5 +1,10 @@
 package pro.logoff.wms.tsd;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
+
 final class FbsAssemblyUi {
     private FbsAssemblyUi() {
     }
@@ -38,5 +43,23 @@ final class FbsAssemblyUi {
         // ADDED: обновление того же заказа сохраняет ручной выбор; новый заказ закрывает список.
         return wasOpen && currentTaskId != null && !currentTaskId.isEmpty() &&
             currentTaskId.equals(previousTaskId);
+    }
+
+    // FIX: route hints are useful for the final search, not for every order.
+    static boolean showLateRouteHints(String flavor, TsdFbsAssemblyResponse.Progress progress) {
+        // FIX: the sold terminal flavors keep their existing always-visible route.
+        return !"logoff".equals(flavor) ||
+            progress != null && progress.requestRemainingItems > 0 && progress.requestRemainingItems < 10;
+    }
+
+    static List<TsdFbsAssemblyResponse.StorageBox> alternateStorageBoxes(TsdFbsAssemblyResponse.Task task) {
+        if (task == null || task.storageBoxes == null) return Collections.emptyList();
+        List<TsdFbsAssemblyResponse.StorageBox> result = new ArrayList<>();
+        for (TsdFbsAssemblyResponse.StorageBox box : task.storageBoxes) {
+            if (box == null || box.code == null || box.quantity <= 0) continue;
+            if (task.recommendedBoxCode != null && box.code.equalsIgnoreCase(task.recommendedBoxCode)) continue;
+            result.add(box);
+        }
+        return result;
     }
 }
