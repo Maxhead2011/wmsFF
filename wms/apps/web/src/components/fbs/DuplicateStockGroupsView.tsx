@@ -19,6 +19,22 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
       .finally(() => { if (id === generation.current) setBusy(false); });
     return () => { generation.current++; };
   }, [clientId, session.accessToken, reload]);
+  const hasWaiting = Boolean(data?.applyRequests?.some(r => r.status === 'WAITING'));
+  const groupWaiting = Boolean(group && data?.applyRequests?.some(r => r.groupId === group.id && r.status === 'WAITING'));
+  // FIX: recover durable status after navigation/restart and stop polling when work is finished.
+  useEffect(() => {
+    if (!hasWaiting) return;
+    let cancelled = false, running = false;
+    const id = generation.current;
+    const timer = window.setInterval(async () => {
+      if (running) return; running = true;
+      try { const next = await fetchDuplicateGroups(session.accessToken, clientId);
+        if (!cancelled && id === generation.current) { setData(next); if (!next.applyRequests?.some(r => r.status === 'WAITING')) setMessage(''); }
+      } catch { /* The durable request remains queued; the next poll retries. */ }
+      finally { running = false; }
+    }, 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [hasWaiting, clientId, session.accessToken]);
   async function run(action: () => Promise<void>) {
     if (busy) return; setBusy(true); setError(''); setMessage('');
     const id = generation.current;
@@ -78,7 +94,9 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
     const id = generation.current;
     const result = await applyDuplicateGroup(session.accessToken, clientId, { group, revision: data.revision, previewKey: preview.previewKey });
     if (id !== generation.current) return;
-    setData({ ...data, groups: result.groups, revision: result.revision, activeGroupIds: result.activeGroupIds });
+    setData({ ...data, groups: result.groups, revision: result.revision, activeGroupIds: result.activeGroupIds,
+      applyRequests: result.applyRequest ? [result.applyRequest, ...(data.applyRequests ?? []).filter(r => r.id !== result.applyRequest!.id)] : data.applyRequests });
+    if (result.applyRequest) { setPreview(null); setMessage(result.applyRequest.message); return; }
     setPreview(null);
     setMessage('Правило применено. Остатки поставлены в очередь пересчёта и проверки WB. Подтверждение отправки смотрите в разделе «Подтверждение WB».');
   }
@@ -88,6 +106,11 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
     <p>Выберите исходный артикул и дубль, задайте доли и проверьте расчёт. Соответствие для сборки появится в «Переклейке» при применении. Резерв вычитается один раз до распределения.</p>
     <p><strong>Настройка и предпросмотр.</strong> {data?.activeGroupIds.length ? 'Отмеченные группы участвуют в автоматической отправке WB. Остальные группы — черновики.' : 'Автоматическая отправка групп ещё не включена.'}</p>
     {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
+    {Boolean(data?.applyRequests?.length) && <section aria-label="Применение настроек WB">
+      {data!.applyRequests!.map(r => <p key={r.id} role={r.status === 'FAILED' ? 'alert' : 'status'}>
+        <strong>{r.name}: </strong>{r.message}
+      </p>)}
+    </section>}
     <button disabled={busy} onClick={() => { if (!group || window.confirm('Обновить список? Несохранённые изменения будут потеряны.')) setReload(n => n + 1); }}>Обновить список</button>
     {!data ? <p>{busy ? 'Загрузка групп…' : 'Не удалось загрузить группы.'}</p> : <>
       {!data.relabelingEnabled && <p role="alert">У клиента выключена переклейка. Включите её перед настройкой групп.</p>}
@@ -117,7 +140,7 @@ export function DuplicateStockGroupsView({ session, clientId }: { session: AuthS
         {!data.mappings.length && <p>Сначала добавьте соответствия артикулов в меню «Переклейка».</p>}
       </fieldset></details>
     </>}
-    {group && <fieldset disabled={busy}><legend>2. Доли и соответствия размеров</legend>
+    {group && <fieldset disabled={busy || groupWaiting}><legend>2. Доли и соответствия размеров</legend>
       <label>Название группы <input value={group.name} onChange={e => change({ ...group, name: e.target.value })} /></label>
       <label>Кабинет WB <select disabled={active} value={group.connectionId} onChange={e => change({ ...group, connectionId: e.target.value })}><option value="">Выберите кабинет</option>
         {data?.connections.map(c => <option key={c.id} value={c.id}>{c.accountName || c.id}{!c.fbsExecutionWarehouseId ? ' — склад не задан' : ''}</option>)}</select></label>
