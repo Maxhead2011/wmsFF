@@ -11,6 +11,7 @@ import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billin
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
 import { completedWorkBillingEnabled, loadWorkCharges, otherProcessingOrderKeys, preserveBilledComposition, recoverCompletedWork } from '../billing/completed-fbs-billing';
 import { collectedFbsBoxMessage } from './fbs-collected-box-message';
+import { LUKIN_FBS_BATCH_CLIENT_ID, LUKIN_FBS_BATCH_SETTING_KEY, savedLukinFbsBatchIds, selectLukinFbsBatch } from './fbs-lukin-batch';
 // FIX: preserve both sorting and release-158 recount/terminal-queue dependencies.
 import { assertSortingAdmin } from '../inventory/pallet-sorting-policy';
 import { loadAdminRecountContext, requireAdminRecount, runAdminRecount, type AdminRecountContext } from './tsd-admin-recount-release';
@@ -5579,7 +5580,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const requests = [...choices.values()]
+    let requests = [...choices.values()]
       .map((choice) => ({
         requestId: choice.requestId,
         requestNumber: choice.requestNumber,
@@ -5601,6 +5602,30 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       .filter((choice) => choice.totalOrders > 0 || choice.inProgressOrders > 0)
       .sort((left, right) => right.requestNumber - left.requestNumber);
     const currentHasScans = Boolean(current && (current.boxId || current.barcode || current.kiz));
+
+    // FIX: a completed request disappears from the fixed five, but a sixth cannot
+    // enter until every member has been picked. SystemSetting keeps this stable
+    // across TSD devices and API restarts; other clients remain unrestricted.
+    const lukinRequests = requests.filter((choice) => choice.client.id === LUKIN_FBS_BATCH_CLIENT_ID);
+    if (lukinRequests.length > 0) {
+      const batch = await this.prisma.$transaction(async (tx) => {
+        // FIX: simultaneous TSD refreshes cannot overwrite one another's batch.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${LUKIN_FBS_BATCH_SETTING_KEY}))`;
+        const setting = await tx.systemSetting.findUnique({ where: { key: LUKIN_FBS_BATCH_SETTING_KEY } });
+        const selection = selectLukinFbsBatch(lukinRequests, savedLukinFbsBatchIds(setting?.value));
+        if (selection.rotated && selection.requestIds.length > 0) {
+          await tx.systemSetting.upsert({
+            where: { key: LUKIN_FBS_BATCH_SETTING_KEY },
+            create: { key: LUKIN_FBS_BATCH_SETTING_KEY, value: { requestIds: selection.requestIds } },
+            update: { value: { requestIds: selection.requestIds } },
+          });
+        }
+        return selection;
+      });
+      const visible = new Set(batch.visible.map((choice) => choice.requestId));
+      if (currentHasScans && current?.clientId === LUKIN_FBS_BATCH_CLIENT_ID) visible.add(current.requestId);
+      requests = requests.filter((choice) => choice.client.id !== LUKIN_FBS_BATCH_CLIENT_ID || visible.has(choice.requestId));
+    }
 
     return {
       currentRequestId: currentHasScans ? current?.requestId ?? null : null,
@@ -5762,6 +5787,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.clientScopes.requireClientAccess(user, selectedRequest.clientId, 'write');
       if (FBS_REQUEST_CLOSED_STATUSES.has(selectedRequest.status)) {
         throw new BadRequestException('Эта FBS-заявка уже закрыта. Обновите список заявок на ТСД.');
+      }
+      if (selectedRequest.clientId === LUKIN_FBS_BATCH_CLIENT_ID) {
+        // FIX: old TSD versions cannot bypass a saved batch by asking directly
+        // for a hidden request. Do not recalculate the whole queue here.
+        const setting = await this.prisma.systemSetting.findUnique({ where: { key: LUKIN_FBS_BATCH_SETTING_KEY } });
+        const visibleIds = savedLukinFbsBatchIds(setting?.value);
+        if (visibleIds.length > 0 && !visibleIds.includes(selectedRequestId)) {
+          throw new ConflictException('Эта заявка Лукина пока не входит в текущие пять. Завершите старшие заявки и обновите список.');
+        }
       }
     }
 
