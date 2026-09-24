@@ -1,0 +1,154 @@
+--- before/modules/marketplace-connections/marketplace-connections.service.js
++++ after/modules/marketplace-connections/marketplace-connections.service.js
+@@ -17,6 +17,8 @@
+ exports.formatMarketplaceHttpError = formatMarketplaceHttpError;
+ exports.fbsOrderRefreshFingerprint = fbsOrderRefreshFingerprint;
+ const wb_order_stock_lifecycle_1 = require("../../common/stock/wb-order-stock-lifecycle");
++const fbs_request_auto_status_1 = require("../../common/stock/fbs-request-auto-status");
++const telegram_notification_service_1 = require("../client-notifications/telegram-notification.service");
+ const fbs_print_billing_outbox_1 = require("./fbs-print-billing-outbox");
+ const kiz_physical_identity_1 = require("../../common/kiz-physical-identity");
+ const fbs_stock_transfer_1 = require("./fbs-stock-transfer");
+@@ -150,6 +152,7 @@
+     stockMonitoring;
+     archivedEmptyBoxDetach;
+     stockControl;
++    telegram;
+     logger = new common_1.Logger(MarketplaceConnectionsService_1.name);
+     fbsOrdersCache = new Map();
+     fbsOrdersLoads = new Map();
+@@ -164,7 +167,7 @@
+     fbsBackgroundRefreshRunning = false;
+     fbsBackgroundRefreshStopped = false;
+     printBillingWorker;
+-    constructor(prisma, clientScopes, inventoryLock, logistics, boxCodes, stockAllocation, stockMonitoring, archivedEmptyBoxDetach, stockControl = new marketplace_stock_control_service_1.MarketplaceStockControlService(prisma, clientScopes)) {
++    constructor(prisma, clientScopes, inventoryLock, logistics, boxCodes, stockAllocation, stockMonitoring, archivedEmptyBoxDetach, stockControl = new marketplace_stock_control_service_1.MarketplaceStockControlService(prisma, clientScopes), telegram) {
+         this.prisma = prisma;
+         this.clientScopes = clientScopes;
+         this.inventoryLock = inventoryLock;
+@@ -174,6 +177,7 @@
+         this.stockMonitoring = stockMonitoring;
+         this.archivedEmptyBoxDetach = archivedEmptyBoxDetach;
+         this.stockControl = stockControl;
++        this.telegram = telegram;
+     }
+     pruneExpiredRuntimeCaches(now = Date.now()) {
+         const caches = [
+@@ -10156,6 +10160,7 @@
+         return raw.startsWith('SOS-WB:') ? raw.slice(0, 100) : `SOS-WB:${raw}`.slice(0, 100);
+     }
+     async sosWbClaimResponse(task, resumed, requestNumberValue) {
++        await this.reconcileFbsTaskRequestStatus(task);
+         const requestNumber = requestNumberValue ?? (await this.prisma.clientRequest.findUnique({
+             where: { id: task.requestId },
+             select: { number: true },
+@@ -11730,7 +11735,11 @@
+         if (task.marketplace === client_1.MarketplaceType.WILDBERRIES) {
+             await this.inventoryLock?.assertStockMovementsAllowed();
+         }
++        const statusChanges = [];
+         const completed = await this.prisma.$transaction(async (tx) => {
++            // FIX: same request-first lock order as successful SOS print acknowledgement.
++            if ((0, fbs_request_auto_status_1.fbsRequestAutoStatusEnabled)())
++                await tx.$queryRaw `SELECT id FROM "ClientRequest" WHERE id=${task.requestId} FOR UPDATE`;
+             const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
+             if (!fresh)
+                 throw new common_1.NotFoundException('Задание FBS не найдено.');
+@@ -11802,11 +11811,16 @@
+                     createdByUserId: user.id,
+                 },
+             });
+-            return tx.fbsTsdAssembly.update({
++            const completedTask = await tx.fbsTsdAssembly.update({
+                 where: { id: fresh.id },
+                 data: { status: 'COMPLETED', completedAt: new Date(), errorMessage: null },
+             });
+-        });
++            await (0, fbs_request_auto_status_1.reconcileFbsRequestStatus)(tx, completedTask.requestId, { stage: 'PICK', occurredAt: completedTask.completedAt, actorId: user.id }, statusChanges);
++            return completedTask;
++        });
++        if ((0, fbs_request_auto_status_1.fbsRequestAutoStatusEnabled)())
++            this.fbsOrdersCache.delete(completed.clientId);
++        await this.notifyFbsAutoStatusChanges(statusChanges);
+         return this.formatFbsTsdAssembly(completed, user, 'Готово. Заказ собран и записан в заявку.');
+     }
+     async reserveCompletedWildberriesStock(tx, task, requestWarehouseId) {
+@@ -13174,7 +13188,37 @@
+             progress: { completedToday, recentStickers },
+         };
+     }
++    async reconcileFbsTaskRequestStatus(task) {
++        if (!(0, fbs_request_auto_status_1.fbsRequestAutoStatusEnabled)() || !task.startedAt || !task.workerUserId || task.deviceCode.startsWith('AUTO:'))
++            return;
++        const statusChanges = [];
++        const changed = await this.prisma.$transaction(tx => (0, fbs_request_auto_status_1.reconcileFbsRequestStatus)(tx, task.requestId, {
++            stage: task.status === 'COMPLETED' ? 'PICK' : 'START',
++            occurredAt: task.completedAt ?? task.startedAt, actorId: task.workerUserId,
++        }, statusChanges), { timeout: 30_000 });
++        if (changed)
++            this.fbsOrdersCache.delete(task.clientId);
++        await this.notifyFbsAutoStatusChanges(statusChanges);
++    }
++    async notifyFbsAutoStatusChanges(changes) {
++        const labels = { SUBMITTED: 'Подана', IN_REVIEW: 'На рассмотрении', APPROVED: 'Согласована', IN_WORK: 'В работе', PACKED: 'Упаковано', DONE: 'Сдано' };
++        for (const change of changes) {
++            try {
++                // FIX: use the existing client routing and FBS preferences, after commit only.
++                await this.telegram?.notifyClient(change.clientId, [
++                    'LOGOFF WMS: изменён статус заявки FBS.',
++                    `Заявка №${change.number}: ${change.title}`,
++                    `Статус: ${labels[change.from] ?? change.from} → ${labels[change.to] ?? change.to}`,
++                ].join('\n'), 'FBS');
++            }
++            catch {
++                this.logger.warn(`Telegram notification failed for FBS request ${change.number}; status remains committed.`);
++            }
++        }
++    }
+     async formatFbsTsdAssembly(task, user, message) {
++        // FIX: covers assignment, source switching and resuming after a lost response.
++        await this.reconcileFbsTaskRequestStatus(task);
+         let state = fbsTsdStage(task);
+         const savedKizRelabelProposal = state === 'SCAN_KIZ' ? await (0, fbs_physical_kiz_relabel_1.readPhysicalKizRelabel)(this.prisma, task, user) : null;
+         // FIX: old same-size proposals must not restore the incorrect "new KIZ" screen.
+@@ -14680,11 +14724,15 @@
+                 const cached = this.fbsOrdersCache.get(task.clientId)?.value.orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId);
+                 const order = cached ?? await this.localShipmentOrder(task);
+                 // FIX: acknowledge after durable shipment + billing intent, not whole-client billing.
++                const statusChanges = [];
+                 await this.prisma.$transaction(async (tx) => {
+                     await (0, wb_order_stock_lifecycle_1.finalizeWbOrderShipment)(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), job.printedAt ?? undefined);
+                     await (0, fbs_print_billing_outbox_1.enqueueFbsPrintBilling)(tx, task.clientId);
++                    if (job.printedAt)
++                        await (0, fbs_request_auto_status_1.reconcileFbsRequestStatus)(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: user.id }, statusChanges);
+                 }, { timeout: 30_000 });
+                 this.fbsOrdersCache.delete(task.clientId);
++                await this.notifyFbsAutoStatusChanges(statusChanges);
+             }
+         }
+         return job;
+@@ -14722,7 +14770,13 @@
+             const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: print.assemblyId } });
+             try {
+                 const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
+-                await this.prisma.$transaction(tx => (0, wb_order_stock_lifecycle_1.finalizeWbOrderShipment)(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined), { timeout: 30_000 });
++                const statusChanges = [];
++                await this.prisma.$transaction(async (tx) => {
++                    await (0, wb_order_stock_lifecycle_1.finalizeWbOrderShipment)(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined);
++                    if (print.printedAt)
++                        await (0, fbs_request_auto_status_1.reconcileFbsRequestStatus)(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId }, statusChanges);
++                }, { timeout: 30_000 });
++                await this.notifyFbsAutoStatusChanges(statusChanges);
+                 recorded.add(task.id);
+             }
+             catch (error) {
+@@ -24479,7 +24533,8 @@
+         fbs_stock_allocation_service_1.FbsStockAllocationService,
+         fbs_stock_monitoring_service_1.FbsStockMonitoringService,
+         archived_empty_box_pallet_detach_service_1.ArchivedEmptyBoxPalletDetachService,
+-        marketplace_stock_control_service_1.MarketplaceStockControlService])
++        marketplace_stock_control_service_1.MarketplaceStockControlService,
++        telegram_notification_service_1.TelegramNotificationService])
+ ], MarketplaceConnectionsService);
+ function normalizedData(dto) {
+     return {
