@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 213 // FIX: allow externally printed relabel scans without station ACK.
-            versionName = "0.1.213-relabel-external-print"
+            versionCode = 214 // FIX: allow externally printed relabel scans without station ACK.
+            versionName = "0.1.214-fbs-article"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
