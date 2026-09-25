@@ -1,19 +1,26 @@
 # Опубликованная база нашей WMS
 
-Обновлено **25.09.2026 после PR302**. Интеграционная ветка `feature/wb-print-check`.
-[PR302](https://github.com/Maxhead2011/wmsFF/pull/302), merge `bb64ed21`.
+Обновлено **25.09.2026 после PR305**. Интеграционная ветка `feature/wb-print-check`.
+[PR305](https://github.com/Maxhead2011/wmsFF/pull/305), merge `c312124f`.
 Это привязка точечного выпуска, а не заявление о полном совпадении исходников с runtime.
 
 | Компонент | Фактическая версия |
 | --- | --- |
-| API image | `sha256:29d0be1408a8f2cbab5295adc31e9c57e6bc4da9457c48af8228b3b69d889bb5` |
-| Web image | `sha256:9a2c2c6711c329f2df26981172b32cbf0b9551ca19251f187c83938027894d32` |
+| API image | `sha256:17c87546c2b6ece12c9311b5e16ef5bdaeac25287a6f252c7a66eab6ef674dda` |
+| Web image | `sha256:5bdcb162e03f2539795b379bcdc6644888e07fc7dcdbfc9456ed93c254a5193d` |
 | Android LOGOFF | `213 / 0.1.213-relabel-external-print` |
 | APK SHA-256 | `2537deeaa0079d3cf121132e1d42efff32c7e5e636f1e40509e144ee8ff8a295` |
 
-Текущий [снимок](../baselines/our-wms/2026-09-25-relabel-213/README.md): все 533
-runtime-файла считаны из контейнера и совпали с кандидатом. Изменён только общий
-marketplace service; web — только три файла загрузки APK. Старый снимок сохранён.
+Текущий [снимок](../baselines/our-wms/2026-09-25-relabel-restored/README.md) сохраняет
+последний выпуск с маршрутом WMS к исходному коробу и восстановленной печатью.
+В промежуточном API `be2a182a...` снова потерялись функции PR302 и маршруты/DI
+переклейки. PR305 восстановил три файла, остальные 530 файлов API и весь web
+оставлены без изменения. APK 213 не пересобирался. Старые снимки сохранены.
+
+Проверки PR305: API 2761 passed / 94 skipped (kiz-duplicate.integration исключён
+без тестовой БД), runtime 33, baseline guard 8. Health и wiring работающего
+контейнера проверены, станция 2409 онлайн. Новая физическая печать после PR305
+пока не подтверждена. [Описание](releases/relabel-regression-after-213/README.md).
 
 PR302 восстановил потерянные вызовы контекста и очереди печати переклейки, а также
 закреплённую пятёрку Лукина. APK 213 разрешает скан нового ШК без ACK станции.
