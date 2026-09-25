@@ -1,3 +1,6 @@
+Published via PR317 on 25.09.2026 at 22:25 MSK. API healthy; flag enabled.
+Original preparation and test evidence below. Current baseline: `2026-09-25-fbs-box-scan`.
+
 # Bounded FBS box scanning — 25 September 2026
 
 An unrelated physical box triggered a full-request fallback for relabeling. For
