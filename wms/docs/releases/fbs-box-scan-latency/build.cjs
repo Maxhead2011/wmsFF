@@ -20,4 +20,3 @@ live='const fbs_box_scan_search_1 = require("./fbs-box-scan-search");\n'+live;
 fs.writeFileSync(file,live);
 fs.writeFileSync(path.dirname(file)+'/fbs-box-scan-search.js',compile(fs.readFileSync(root+'/wms/apps/api/src/modules/marketplace-connections/fbs-box-scan-search.ts','utf8')));
 console.log('Two runtime files patched; original deployed scan body preserved.');
-
