@@ -543,6 +543,8 @@ export class TurnoverService {
         where: {
           clientId: clientFilter,
           skuId: { in: skuIds },
+          // FIX: statistics use the same live-box boundary as the stock screen.
+          AND: [this.balanceVisibilityWhere(user)!],
         },
         _sum: { quantity: true },
       }),
@@ -1414,7 +1416,8 @@ export class TurnoverService {
       where: {
         clientId,
         quantity: { gt: 0 },
-        ...(balanceScopeWhere ? { AND: [balanceScopeWhere] } : {}),
+        // FIX: exports must not reintroduce archived stock hidden in the screen.
+        AND: [this.balanceVisibilityWhere(user)!, ...(balanceScopeWhere ? [balanceScopeWhere] : [])],
       },
       include: stockExportBalanceInclude,
       orderBy: [{ updatedAt: 'desc' }],
@@ -2043,7 +2046,11 @@ export class TurnoverService {
   }
 
   private balanceVisibilityWhere(user: AuthUser): Prisma.StockBalanceWhereInput | undefined {
-    return this.isExternalClient(user) ? targetClientPlacedBalanceVisibility() : undefined;
+    // FIX: archived boxes are history, not current stock, for every role.
+    return {
+      ...(this.isExternalClient(user) ? targetClientPlacedBalanceVisibility() : {}),
+      AND: [{ OR: [{ boxId: null }, { box: { status: { notIn: ['archived', 'deleted'] } } }] }],
+    };
   }
 
   private markVisibilityWhere(user: AuthUser): Prisma.ProductMarkWhereInput | undefined {
@@ -2167,11 +2174,15 @@ export class TurnoverService {
     sourceBoxCode?: string,
     warehouseScope: TurnoverWarehouseScope | null = null,
   ): Promise<SourceAllocation[]> {
-    const sourceBox = sourceBoxCode?.trim()
-      ? await tx.box.findUnique({ where: { clientId_code: { clientId, code: sourceBoxCode.trim() } } })
+    // FIX: explicit "Без короба" scopes deduction to boxId=null; empty input
+    // retains the existing automatic source selection across balances.
+    const normalizedSource = normalizeTurnoverTargetBoxCode(sourceBoxCode);
+    const boxlessSource = Boolean(sourceBoxCode?.trim()) && normalizedSource === null;
+    const sourceBox = normalizedSource
+      ? await tx.box.findUnique({ where: { clientId_code: { clientId, code: normalizedSource } } })
       : null;
 
-    if (sourceBoxCode?.trim() && !sourceBox) {
+    if (normalizedSource && !sourceBox) {
       throw new NotFoundException('Исходная ячейка или короб не найдены.');
     }
 
@@ -2184,7 +2195,7 @@ export class TurnoverService {
         clientId,
         skuId,
         quantity: { gt: 0 },
-        boxId: sourceBoxCode?.trim() ? sourceBox?.id : undefined,
+        boxId: boxlessSource ? null : normalizedSource ? sourceBox?.id : undefined,
         status: { in: [StockStatus.AVAILABLE, StockStatus.RECEIVING, StockStatus.UNMARKED, StockStatus.NEEDS_LABEL, StockStatus.NEEDS_RELABEL] },
         ...(this.balanceWarehouseWhere(warehouseScope) ?? {}),
       },

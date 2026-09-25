@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnoverPanel } from './TurnoverPanel';
-import { fetchTurnoverBoxDetails } from '../../lib/api';
+import { fetchTurnoverBoxDetails, fetchTurnoverReport, fetchTurnoverStatistics } from '../../lib/api';
 
 const hooks = vi.hoisted(() => ({ values: [] as any[], cursor: 0 }));
 vi.mock('react', async () => ({
@@ -14,7 +14,7 @@ vi.mock('react', async () => ({
   },
 }));
 vi.mock('../../lib/rememberedClient', () => ({useRememberedClientId: () => ['selected-client', vi.fn()], validRememberedClientId: () => true}));
-vi.mock('../../lib/api', async () => ({...await vi.importActual('../../lib/api'),fetchTurnoverBoxDetails:vi.fn()}));
+vi.mock('../../lib/api', async () => ({...await vi.importActual('../../lib/api'),fetchTurnoverBoxDetails:vi.fn(),fetchTurnoverReport:vi.fn(),fetchTurnoverStatistics:vi.fn()}));
 function elements(node: any): any[] {
   if (!node || typeof node !== 'object') return [];
   if (Array.isArray(node)) return node.flatMap(elements);
@@ -34,6 +34,21 @@ function render(cell: any) {
 }
 describe('turnover location lookup', () => {
   beforeEach(() => { hooks.values=[]; vi.clearAllMocks();vi.mocked(fetchTurnoverBoxDetails).mockRejectedValue(new Error('not found')); });
+  // TEST: a slow or failed statistics response cannot delay or discard ready stock rows.
+  it.each(['pending', 'failed'])('shows stock while statistics is %s', async mode => {
+    vi.mocked(fetchTurnoverReport).mockResolvedValue({ items: [], totals: {} } as any);
+    vi.mocked(fetchTurnoverStatistics).mockImplementation(() => mode === 'pending'
+      ? new Promise(() => {}) : Promise.reject(new Error('statistics timeout')));
+    hooks.cursor = 0;
+    hooks.values[0] = 'movement';
+    const tree = TurnoverPanel({ session: { accessToken: 'token', user: {
+      id: 'user', roleCodes: ['ADMIN'], permissionCodes: ['system:admin'],
+    } } as any });
+    elements(tree).find(n => n.type === 'button' && n.props.className === 'primary-button').props.onClick();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(hooks.values[2].status).toBe('ready');
+    expect(hooks.values[3].status).toBe(mode === 'pending' ? 'loading' : 'error');
+  });
   // TEST: a virtual location cannot open an unrelated physical box with the same label.
   it('does not search a physical box for a boxless balance', async () => {
     const tree=render({boxId:null,boxCode:'Без короба',status:'PACKING',quantity:5});
