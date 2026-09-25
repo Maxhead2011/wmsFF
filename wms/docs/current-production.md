@@ -1,3 +1,13 @@
+# Published PR319: direct FBS reserved box route
+
+API `sha256:e86c2e3beee1fcee76e5833a45c9c572338be740156501d01470a1a0881d75a2`. Published 25.09.2026 23:33 MSK.
+Only tsd-assembly.service.js changed; environment, web and APK215 unchanged.
+Request 1368 / order 5864079913 verified against real instruction: 1 unit, FFL_LKB0909_356, PALET_SORT_140.
+2801 API tests passed, 94 skipped; TypeScript and four candidate route tests passed.
+Baseline `2026-09-25-direct-route`; sourceParityVerified=false. Rollback `logoff-api:before-fbs-direct-route-319`.
+
+## Previous releases
+
 # Current published release PR317: bounded FBS box scans
 
 API `sha256:45d6c29e16eb49035603749f58ef0272fa3e414eea269a5ee3f0a7f9bbe4acf4`. Published 25.09.2026 22:25 MSK.
