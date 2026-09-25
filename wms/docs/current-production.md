@@ -1,4 +1,17 @@
-# Current published release PR311 / APK214
+# Current published release PR313: light public website / APK214 unchanged
+
+Web image: `sha256:41c8224ac636afde20e72e3123d640093ada1e447e3af43d1f9f74000709cde3`.
+API remains `sha256:57c41c094bf9e3e45eea8adca8e7d666b17cc2f24432b52cbb149b6e1c5f2cf6`.
+Only the external MarketingLanding component changed. All pre-existing public
+assets/downloads retained; operational JS unchanged except consistent versioned ESM URLs.
+Public page, mobile menu and login entry verified. 234 web tests, TypeScript,
+7 release guard tests passed. API container and APK unchanged.
+Web overlay: `baselines/our-wms/2026-09-25-public-site-light`; combine with the
+PR311 web baseline, never replace current web with the earlier archive alone.
+API baseline remains `2026-09-25-fbs-display`; sourceParityVerified remains false.
+Rollback image: `logoff-web:before-public-light-20260925`.
+
+## Previous published release PR311 / APK214
 
 API sha256:57c41c094bf9e3e45eea8adca8e7d666b17cc2f24432b52cbb149b6e1c5f2cf6
 Web sha256:475778f6b2d1fd9b51378d9c0db682d2f0f8345acfb69c64451cc4beedb4c18f
