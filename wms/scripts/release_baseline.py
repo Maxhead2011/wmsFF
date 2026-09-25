@@ -90,7 +90,7 @@ def check_candidate(root, target, base_image, allowed):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['verify', 'materialize', 'check-candidate'])
-    parser.add_argument('--baseline', type=Path, default=Path(__file__).parents[1] / 'baselines/our-wms/2026-09-26-turnover')
+    parser.add_argument('--baseline', type=Path, default=Path(__file__).parents[1] / 'baselines/our-wms/2026-09-26-relabel-close')
     parser.add_argument('--target', type=Path)
     parser.add_argument('--base-image')
     parser.add_argument('--allow', action='append', default=[])
