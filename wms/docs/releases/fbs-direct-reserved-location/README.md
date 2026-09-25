@@ -26,6 +26,6 @@ sha256:45d6c29e16eb49035603749f58ef0272fa3e414eea269a5ee3f0a7f9bbe4acf4.
 Materialize 2026-09-25-fbs-box-scan, run build.cjs with the target directory,
 then release_baseline.py check-candidate allowing only modules/tsd/tsd-assembly.service.js.
 The builder inserts the fallback without replacing deployed relabel/Ozon logic.
-Source parity is still false. No full source build deployment. Not published yet.
+Source parity is still false. No full source build deployment. Published PR319 on 25 September 2026 at 23:33 MSK. Post-release read-only verification with the actual instruction and live balances returns the correct box and pallet for request 1368. Browser interaction remains unverified.
 
 Proposed PR: fix/fbs-direct-reserved-location → feature/wb-print-check.
