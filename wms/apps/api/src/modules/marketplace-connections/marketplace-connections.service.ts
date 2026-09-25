@@ -1,3 +1,4 @@
+import { boundedBoxScanEnabled, boxCandidateSkuIds, sharePendingBoxScan, boxReservationSnapshot } from './fbs-box-scan-search';
 import { handleOzonPickLines } from './ozon-fbs-pick-workflow';
 import { ozonPickLinesEnabled, readOzonPickState, requireOzonLineComposition, ozonPostingProducts } from './ozon-fbs-pick-lines';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
@@ -8832,6 +8833,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
+    // FIX: identical retries share work, but retain every authorization/capability field.
+    if (!boundedBoxScanEnabled()) return this.performFbsTsdBoxScan(taskId, payload, user);
+    return sharePendingBoxScan(this, JSON.stringify([taskId, user, payload]),
+      () => this.performFbsTsdBoxScan(taskId, payload, user));
+  }
+
+  private async performFbsTsdBoxScan(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
     // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
@@ -9518,6 +9526,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         (availableBySku.get(balance.skuId) ?? 0) + balance.quantity,
       );
     });
+    // FIX: no physical stock means there is no candidate, including relabeling.
+    const bounded = boundedBoxScanEnabled();
+    if (bounded && availableBySku.size === 0) return null;
+    // FIX: bulk reservation reads are local to this search, never shared across scans.
+    const snapshot = boxReservationSnapshot(() => this.fbsTsdReservationRowsBySku({
+      clientId: currentTask.clientId, skuIds: [...availableBySku.keys()], excludeTaskId: null,
+    }));
+    const readBoxReservations = (input: { clientId: string; skuId: string; boxId: string; excludeTaskId: string | null }) =>
+      bounded ? snapshot.read(input.skuId, input.boxId, input.excludeTaskId) : this.fbsTsdReservationRows(input);
+    const freshBoxStock = async (tx: Prisma.TransactionClient, skuId: string, quantity: number, excludeTaskId: string | null) => {
+      if (!bounded) return true;
+      const [balance, rows] = await Promise.all([
+        tx.stockBalance.aggregate({ where: { clientId: currentTask.clientId, skuId, boxId: box.id, status: StockStatus.AVAILABLE }, _sum: { quantity: true } }),
+        this.fbsTsdReservationRowsBySku({ clientId: currentTask.clientId, skuIds: [skuId], excludeTaskId }, tx),
+      ]);
+      const reserved = (rows.get(skuId) ?? []).filter(row => row.boxId === box.id).reduce((sum, row) => sum + row.itemCount, 0);
+      return (balance._sum.quantity ?? 0) - reserved >= quantity;
+    };
     const queuedTasks = availableBySku.size > 0
       ? await this.prisma.fbsTsdAssembly.findMany({
       where: {
@@ -9574,7 +9600,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         reservedTask.relabelRequired && reservedTask.sourceSkuId
           ? reservedTask.sourceSkuId
           : reservedTask.skuId;
-      let reservations = await this.fbsTsdReservationRows({
+      let reservations = await readBoxReservations({
           clientId: reservedTask.clientId,
           skuId: stockSkuId,
           boxId: box.id,
@@ -9598,7 +9624,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           availableQuantity,
         });
         if (released > 0) {
-          reservations = await this.fbsTsdReservationRows({
+          snapshot.invalidate();
+          reservations = await readBoxReservations({
             clientId: reservedTask.clientId,
             skuId: stockSkuId,
             boxId: box.id,
@@ -9645,6 +9672,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ) {
             return null;
           }
+          if (!await freshBoxStock(tx, stockSkuId, Math.max(1, freshTarget.itemCount), freshTarget.id)) return null;
           await tx.fbsTsdAssembly.update({
             where: { id: freshCurrent.id },
             data: {
@@ -9692,13 +9720,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // direct box scan. Do not make the worker wait for every WB cabinet when
     // the request already has synchronized local orders. The old live fallback
     // remains only for legacy requests that have no saved order links at all.
-    const scannedBoxSkuIds = [...availableBySku.keys()];
+    const scannedBoxSkuIds = bounded
+      ? await boxCandidateSkuIds(this.prisma, currentTask.clientId, [...availableBySku.keys()])
+      : [...availableBySku.keys()];
     let syncedResponse = await this.loadFbsTsdRequestOrders(
       currentTask.clientId,
       currentTask.requestId,
       scannedBoxSkuIds,
     );
-    if (syncedResponse.orders.length === 0 && scannedBoxSkuIds.length > 0) {
+    if (!bounded && syncedResponse.orders.length === 0 && scannedBoxSkuIds.length > 0) {
       // FIX: retain the old full-request path only for uncommon relabeling,
       // where the SKU inside the box differs from the marketplace target SKU.
       syncedResponse = await this.loadFbsTsdRequestOrders(
@@ -9709,7 +9739,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     let response = syncedResponse;
     // FIX: no eligible local orders does not mean that the request lacks saved links.
     const hasSavedRequestLinks = syncedResponse.orders.length === 0 &&
-      process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED === 'true'
+      (bounded || process.env.WMS_FBS_TSD_FAST_LOCAL_ENABLED === 'true')
       ? await this.prisma.fbsOrderRequestLink.findFirst({
           where: { clientId: currentTask.clientId, requestId: currentTask.requestId,
             connectionId: currentTask.connectionId, marketplace: currentTask.marketplace },
@@ -9740,7 +9770,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           order.connectionId === currentTask.connectionId &&
           isFbsTsdAssemblyOrderEligible(order) &&
           order.request?.id === currentTask.requestId &&
-          Boolean(order.product),
+          Boolean(order.product) &&
+          (!bounded || scannedBoxSkuIds.includes(order.product!.id)),
       )
       .sort((left, right) => (left.createdAt ?? '').localeCompare(right.createdAt ?? ''));
 
@@ -9771,6 +9802,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         stockSource.relabelRequired && stockSource.sourceSkuId
           ? stockSource.sourceSkuId
           : product.id;
+      // FIX: the chosen source must physically exist in this box.
+      if (bounded && !availableBySku.has(stockSkuId)) continue;
       const [requestItem, existing] = await Promise.all([
         this.prisma.clientRequestItem.findFirst({
           where: { requestId: currentTask.requestId, skuId: product.id },
@@ -9796,7 +9829,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           },
           _sum: { quantity: true },
         }),
-        this.fbsTsdReservationRows({
+        readBoxReservations({
           clientId: currentTask.clientId,
           skuId: stockSkuId,
           boxId: box.id,
@@ -9821,7 +9854,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           availableQuantity: available._sum.quantity ?? 0,
         });
         if (released > 0) {
-          reservations = await this.fbsTsdReservationRows({
+          snapshot.invalidate();
+          reservations = await readBoxReservations({
             clientId: currentTask.clientId,
             skuId: stockSkuId,
             boxId: box.id,
@@ -9937,6 +9971,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ) {
             this.throwFbsTsdTaskStale(freshCurrent, user);
           }
+          if (!await freshBoxStock(tx, stockSkuId, Math.max(1, order.itemCount), target?.id ?? null)) return null;
           await tx.fbsTsdAssembly.update({
             where: { id: freshCurrent.id },
             data: {
