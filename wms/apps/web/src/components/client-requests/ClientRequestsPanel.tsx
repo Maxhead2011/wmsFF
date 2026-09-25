@@ -1,3 +1,4 @@
+import { OrderAge } from './OrderAge';
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { AlertTriangle, Archive, ArrowLeft, ArrowRightLeft, Boxes, CheckCircle2, ClipboardList, FileDown, FileUp, MapPinned, PackageX, RefreshCw, RotateCcw, Search, ShieldAlert, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -4549,7 +4550,7 @@ function OnlineExecutionModal({
                               {filteredNotCollectedRows.map((row) => (
                                 <tr key={row.requestItemId}>
                                   <td>
-                                    <strong>{row.name ?? 'Товар без названия'}</strong>
+                                    <strong>{row.article || 'Артикул не указан'}</strong>
                                     <span>
                                       {[row.article ? `арт. ${row.article}` : '', row.color, row.size ? `размер ${row.size}` : '', row.barcode ? `ШК ${row.barcode}` : '']
                                         .filter(Boolean)
@@ -4701,7 +4702,8 @@ function OnlineExecutionModal({
                               </td>
                               <td>
                                 <strong>№{row.orderId}</strong>
-                                <span>{row.productName}{row.article ? ` · арт. ${row.article}` : ''}</span>
+                                <OrderAge createdAt={row.orderPlacedAt} />
+                                <span>{row.article || 'Артикул не указан'}</span>
                               </td>
                               <td>
                                 <strong>{row.productBarcode ?? 'ещё не пропикан'}</strong>

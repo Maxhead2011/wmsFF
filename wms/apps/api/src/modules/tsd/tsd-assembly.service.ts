@@ -911,7 +911,7 @@ export class TsdAssemblyService {
             ? { OR: [{ lastCategory: { not: 'cancelled' } }, { syncStatus: { in: ['MANAGER_CONFIRMED_SHIPMENT', 'MANAGER_CONFIRMED_RETURN'] } }] }
             : { lastCategory: { not: 'cancelled' } }) : {}),
         },
-        select: { orderId: true, connectionId: true, lastSkuId: true, lastItemCount: true,
+        select: { orderId: true, connectionId: true, lastSkuId: true, lastItemCount: true, orderPlacedAt: true,
           marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true, syncStatus: true },
         orderBy: { createdAt: 'asc' },
       }),
@@ -1057,6 +1057,8 @@ export class TsdAssemblyService {
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
+      // FIX: marketplace placement time, never the WMS task creation time.
+      orderPlacedAt: savedLinks.find(link => link.connectionId === row.connectionId && link.orderId === row.orderId)?.orderPlacedAt?.toISOString() ?? null,
       sourceBoxCode: row.boxCode,
       productName: row.productName,
       article: row.article,
