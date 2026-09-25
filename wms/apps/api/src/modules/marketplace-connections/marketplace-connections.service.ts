@@ -1,3 +1,5 @@
+import { handleOzonPickLines } from './ozon-fbs-pick-workflow';
+import { ozonPickLinesEnabled, readOzonPickState, requireOzonLineComposition, ozonPostingProducts } from './ozon-fbs-pick-lines';
 import { wbOrderStockLifecycleEnabled, finalizeWbOrderShipment, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { fbsRequestAutoStatusEnabled, reconcileFbsRequestStatus, type FbsAutoStatusChange } from '../../common/stock/fbs-request-auto-status';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
@@ -5968,6 +5970,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             continue;
           }
           const sourceWithoutBox = stockSource.withoutBoxQuantity > 0;
+          // FIX: two different articles do not require two units of the first article to enter the queue.
+          const sourceQuantity = sourceWithoutBox && ozonPickLinesEnabled() && order.marketplace === MarketplaceType.OZON && order.itemCount > 1
+            ? ozonPostingProducts(await this.readOzonFbsPickPosting({ clientId, connectionId: order.connectionId, orderId: order.id }))[0].quantity
+            : Math.max(1, order.itemCount);
+
           if (sourceWithoutBox) {
             const stockSkuId =
               stockSource.relabelRequired && stockSource.sourceSkuId
@@ -5987,7 +5994,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             );
             if (
               stockSource.withoutBoxQuantity - reservedQuantity <
-              Math.max(1, order.itemCount)
+              sourceQuantity
             ) {
               continue;
             }
@@ -8739,6 +8746,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const scannedCode = normalizeFbsScannerCode(rawCode);
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
+    // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
+    const multiline = await handleOzonPickLines(this, task, user, 'code', payload);
+    if (multiline) return multiline;
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') {
       return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -8824,6 +8834,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async scanFbsTsdBox(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
+    // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
+    const multiline = await handleOzonPickLines(this, task, user, 'box', payload);
+    if (multiline) return multiline;
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -10115,6 +10128,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
+    // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
+    const multiline = await handleOzonPickLines(this, task, user, 'barcode', payload);
+    if (multiline) return multiline;
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.boxId && !fbsTsdUsesNoBox(task)) {
@@ -14067,6 +14083,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
+    // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
+    const multiline = await handleOzonPickLines(this, task, user, 'complete');
+    if (multiline) return multiline;
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
@@ -15755,10 +15774,28 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const labels: Partial<Record<ClientRequestStatus, string>> = { SUBMITTED: 'Подана', IN_REVIEW: 'На рассмотрении', APPROVED: 'Согласована', IN_WORK: 'В работе', PACKED: 'Упаковано', DONE: 'Сдано' };
     for (const change of changes) {
       try {
+        // FIX: identify WB supplies without changing recipients or status transitions.
+        let supplies: string[] = [];
+        try {
+          const links = await this.prisma.fbsOrderRequestLink.findMany({
+            where: {
+              requestId: change.requestId,
+              clientId: change.clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              syncStatus: { not: 'REMOVED' },
+            },
+            select: { lastSupplyId: true },
+          });
+          supplies = [...new Set(links.map(link => link.lastSupplyId?.trim())
+            .filter((id): id is string => Boolean(id)))].sort();
+        } catch {
+          // FIX: a failed supply lookup must not suppress the existing status notification.
+          this.logger.warn(`WB supply lookup failed for FBS request ${change.number}.`);
+        }
         // FIX: use the existing client routing and FBS preferences, after commit only.
         await this.telegram?.notifyClient(change.clientId, [
           'LOGOFF WMS: изменён статус заявки FBS.',
-          `Заявка №${change.number}: ${change.title}`,
+          `Заявка №${change.number}${supplies.length ? ` · ${supplies.length === 1 ? 'Поставка' : 'Поставки'} ${supplies.join(', ')}` : ''}: ${change.title}`,
           `Статус: ${labels[change.from] ?? change.from} → ${labels[change.to] ?? change.to}`,
         ].join('\n'), 'FBS');
       } catch {
@@ -15768,6 +15805,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
+    const multiline = await handleOzonPickLines(this, task, user, 'view', {}, message);
+    if (multiline) return multiline;
     // FIX: covers assignment, source switching and resuming after a lost response.
     await this.reconcileFbsTaskRequestStatus(task);
     let state = fbsTsdStage(task);
@@ -17927,7 +17966,28 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: authoritative composition is scoped to the task's seller connection.
+  private async readOzonFbsPickPosting(task: Pick<FbsTsdAssemblyRecord, 'clientId' | 'connectionId' | 'orderId'>) {
+    const connection = await this.prisma.clientMarketplaceConnection.findFirst({
+      where: { id: task.connectionId, clientId: task.clientId, marketplace: MarketplaceType.OZON, isActive: true },
+      select: { sellerId: true, apiKey: true },
+    });
+    if (!connection?.sellerId) throw new BadRequestException('Подключение Ozon не найдено.');
+    const response = await marketplaceJson('https://api-seller.ozon.ru/v3/posting/fbs/get', {
+      method: 'POST', headers: ozonHeaders(connection.sellerId, connection.apiKey),
+      body: JSON.stringify({ posting_number: task.orderId, with: { barcodes: true } }),
+    });
+    const posting = asRecord(response.result ?? response);
+    if (textValue(posting.posting_number) !== task.orderId) throw new ConflictException('Ozon вернул другой номер заказа.');
+    return posting;
+  }
+
   private async submitOzonFbsTask(task: FbsTsdAssemblyRecord) {
+    const savedLines = ozonPickLinesEnabled() ? await readOzonPickState(this.prisma, task.id) : null;
+    if (savedLines && savedLines.lines.some(line => line.picks.length !== line.quantity)) {
+      throw new BadRequestException('Не все товарные строки Ozon отсканированы.');
+    }
+
     const connection = await this.prisma.clientMarketplaceConnection.findFirst({
       where: {
         id: task.connectionId,
@@ -17961,6 +18021,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       );
       const posting = asRecord(postingResponse.result ?? postingResponse);
+      const lineState = ozonPickLinesEnabled() ? await readOzonPickState(this.prisma, task.id) : null;
+      if (lineState) requireOzonLineComposition(lineState, posting);
       const status = textValue(posting.status).toLowerCase();
       if (status !== 'awaiting_packaging') {
         if (['awaiting_deliver', 'arbitration', 'delivering', 'delivered'].includes(status)) {
@@ -17982,7 +18044,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         (sum, product) => sum + Math.max(1, Math.trunc(numberValue(product.quantity)) || 1),
         0,
       );
-      if (products.length !== 1 || totalQuantity !== Math.max(1, task.itemCount)) {
+      if (!lineState && (products.length !== 1 || totalQuantity !== Math.max(1, task.itemCount))) {
         throw new BadRequestException(
           `В заказе Ozon ${task.orderId} несколько товарных строк или единиц. Автоматическая отправка остановлена, чтобы не передать в Ozon неотпиканный товар. Разделите заказ в Ozon или обратитесь к администратору.`,
         );
@@ -24571,6 +24633,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     additions: FbsOrderSummary[],
   ) {
     return this.prisma.$transaction(async (tx) => {
+      if (ozonPickLinesEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${requestId} FOR UPDATE`;
       const requestHeader = await tx.clientRequest.findUnique({
         where: { id: requestId },
         select: { id: true, status: true },
@@ -24676,6 +24739,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         tasks.map((task) => [selectionKey(task.connectionId, task.orderId), task]),
       );
 
+      const ozonLineStates = new Map<string, NonNullable<Awaited<ReturnType<typeof readOzonPickState>>>>();
+      if (ozonPickLinesEnabled()) for (const task of tasks) if (task.marketplace === MarketplaceType.OZON) {
+        const state = await readOzonPickState(tx, task.id);
+        if (state) ozonLineStates.set(task.id, state);
+      }
       const desiredItems = new Map<string, FbsRequestDesiredItem>();
       const desiredSkuByOrder = new Map<string, string>();
       const removedOrderIds: string[] = [];
@@ -24696,6 +24764,24 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       for (const link of liveLinks) {
         const order = orderByKey.get(selectionKey(link.connectionId, link.orderId))!;
         const task = taskByKey.get(selectionKey(link.connectionId, link.orderId));
+        // FIX: never collapse durable Ozon line quantities back into the header SKU.
+        const lineState = task ? ozonLineStates.get(task.id) : null;
+        if (task && lineState) {
+          const changed = order.category === 'cancelled' || order.product?.id !== task.skuId || order.itemCount !== task.itemCount;
+          if (changed && task.status !== FBS_TSD_RETURN_REQUIRED) {
+            const issue = `Заказ Ozon ${order.id} изменился. Отобранные строки сохранены; требуется решение менеджера.`;
+            await tx.fbsTsdAssembly.update({ where: { id: task.id }, data: { status: FBS_TSD_RETURN_REQUIRED, errorMessage: issue } });
+            await tx.fbsOrderRequestLink.update({ where: { id: link.id }, data: { ...fbsOrderLinkSnapshot(order), syncStatus: FBS_REQUEST_LINK_RETURN_REQUIRED, syncIssue: issue } });
+            conflicts.push(issue);
+          } else if (!changed && task.status !== FBS_TSD_RETURN_REQUIRED) {
+            await tx.fbsOrderRequestLink.update({ where: { id: link.id }, data: { ...fbsOrderLinkSnapshot(order) } });
+          }
+          for (const line of lineState.lines) addFbsDesiredItem(desiredItems, desiredSkuByOrder, {
+            orderId: order.id, skuId: line.skuId, barcode: line.barcodes[0], name: line.name, quantity: line.quantity,
+          });
+          continue;
+        }
+
         if (
           link.syncStatus === FBS_REQUEST_LINK_MOVING &&
           order.supplyId !== link.lastSupplyId
@@ -24953,6 +25039,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
 
         for (const task of tasks) {
+          if (ozonLineStates.has(task.id)) continue;
           const liveOrder = orderByKey.get(selectionKey(task.connectionId, task.orderId));
           const desiredSkuId = desiredSkuByOrder.get(task.orderId);
           const requestItemId = desiredSkuId ? requestItemIdBySku.get(desiredSkuId) : null;

@@ -1,3 +1,4 @@
+import { ozonPickLinesEnabled, readOzonPickState } from '../marketplace-connections/ozon-fbs-pick-lines';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { requiresFbsReturnReceipt } from '../marketplace-connections/fbs-return-receipt';
@@ -1054,14 +1055,21 @@ export class TsdAssemblyService {
     );
     // FIX: historical pick allocations are not proof of current available stock.
     const currentAllocationQuantities = await this.loadCurrentFbsAllocationQuantities(requestId, requestRows, relabelCandidates);
+    // FIX: keep the online per-item counters consistent with multi-product Ozon scans.
+    const ozonLineStates = new Map<string, NonNullable<Awaited<ReturnType<typeof readOzonPickState>>>>();
+    if (ozonPickLinesEnabled()) for (const row of rows) {
+      if (!savedLinks.some(link => link.marketplace === 'OZON' && link.connectionId === row.connectionId && link.orderId === row.orderId)) continue;
+      const state = await readOzonPickState(this.prisma, row.id);
+      if (state) ozonLineStates.set(row.id, state);
+    }
     const facts = rows.map((row) => ({
       id: row.id,
       orderId: row.orderId,
       // FIX: marketplace placement time, never the WMS task creation time.
       orderPlacedAt: savedLinks.find(link => link.connectionId === row.connectionId && link.orderId === row.orderId)?.orderPlacedAt?.toISOString() ?? null,
       sourceBoxCode: row.boxCode,
-      productName: row.productName,
-      article: row.article,
+      productName: ozonLineStates.get(row.id)?.lines.map(line => line.name).join("; ") ?? row.productName,
+      article: ozonLineStates.get(row.id)?.lines.map(line => `${line.article} × ${line.quantity}`).join("; ") ?? row.article,
       productBarcode: row.barcode,
       kiz: row.kiz,
       wbMetaStatus: row.wbMetaStatus,
@@ -1126,13 +1134,21 @@ export class TsdAssemblyService {
     const pendingLinksBySku = new Map<string, typeof links>();
     links.forEach((link) => {
       if (!link.lastSkuId || handledOrderIds.has(link.orderId)) return;
-      pendingLinksBySku.set(
-        link.lastSkuId,
-        [...(pendingLinksBySku.get(link.lastSkuId) ?? []), link],
-      );
+      const task = rows.find(row => row.connectionId === link.connectionId && row.orderId === link.orderId);
+      const lines = task ? ozonLineStates.get(task.id)?.lines : null;
+      for (const skuId of lines?.map(line => line.skuId) ?? [link.lastSkuId]) {
+        pendingLinksBySku.set(skuId, [...(pendingLinksBySku.get(skuId) ?? []), link]);
+      }
     });
     const handledByRequestItem = new Map<string, number>();
     handledRows.forEach((row) => {
+      const lines = ozonLineStates.get(row.id)?.lines;
+      if (lines) {
+        for (const line of lines) handledByRequestItem.set(line.requestItemId,
+          (handledByRequestItem.get(line.requestItemId) ?? 0) + line.picks.length);
+        return;
+      }
+
       handledByRequestItem.set(
         row.requestItemId,
         (handledByRequestItem.get(row.requestItemId) ?? 0) + Math.max(1, row.itemCount),
@@ -1153,12 +1169,17 @@ export class TsdAssemblyService {
         // FIX: an old requestedQuantity is not demand after WB ended an order.
         const eligibleOrderIds = fbsTerminalQueueFilterEnabled() ? orderIds.filter(orderId => {
           const task = rowByOrderId.get(orderId);
+          const lines = task ? ozonLineStates.get(task.id)?.lines : null;
+          if (lines) return lines.some(line => line.requestItemId === row.itemId);
           if (task?.requestItemId) return task.requestItemId === row.itemId;
           return requestRows.find(candidate => candidate.skuId === row.skuId)?.itemId === row.itemId;
         }) : orderIds;
         const remainingQuantity = fbsTerminalQueueFilterEnabled()
-          ? eligibleOrderIds.reduce((sum, orderId) => sum + Math.max(1,
-              linkByOrderId.get(orderId)?.lastItemCount ?? rowByOrderId.get(orderId)?.itemCount ?? 1), 0)
+          ? eligibleOrderIds.reduce((sum, orderId) => {
+              const task = rowByOrderId.get(orderId);
+              const line = task ? ozonLineStates.get(task.id)?.lines.find(line => line.requestItemId === row.itemId) : null;
+              return sum + (line?.quantity ?? Math.max(1, linkByOrderId.get(orderId)?.lastItemCount ?? task?.itemCount ?? 1));
+            }, 0)
           : savedRemainingQuantity;
         const sourceAllocations = new Map<string, { boxCode: string; quantity: number; stockSkuId: string; palletId: null; palletCode: null }>();
         for (const candidate of relabelCandidates.filter(candidate => candidate.targetSkuId === row.skuId &&

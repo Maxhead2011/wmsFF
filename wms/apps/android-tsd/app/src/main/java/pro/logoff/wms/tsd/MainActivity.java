@@ -4911,6 +4911,12 @@ public class MainActivity extends Activity {
         }
 
         if ("SCAN_BOX".equals(state) || "PALLET_BOXES".equals(state)) {
+            // FIX: defer the source explicitly for Ozon lines; never reuse the previous article's box.
+            if ("logoff".equals(BuildConfig.FLAVOR) && task.ozonLines != null && !task.ozonLines.isEmpty()) {
+                root.addView(secondaryButton(tr("Без короба — указать источник позже", "Qutisiz — manbani keyin ko‘rsatish"),
+                    view -> executeFbsAction("scan-box", "boxCode", "БЕЗ КОРОБА")));
+            }
+
             LinearLayout routeDetails = new LinearLayout(this);
             routeDetails.setOrientation(LinearLayout.VERTICAL);
             if ("PALLET_BOXES".equals(state) && fbsAssembly.palletScan != null) {
@@ -5339,8 +5345,15 @@ public class MainActivity extends Activity {
     private String ozonQuantityInstruction(TsdFbsAssemblyResponse.Task task) {
         String quantity = tr("В ЗАКАЗЕ: ", "BUYURTMADA: ") + Math.max(1, task.itemCount) + tr(" ЕД.", " DONA");
         if (!task.perUnitScanning) return quantity;
-        return quantity + "\n" + tr("ОТСКАНИРОВАНО: ", "SKANERLANGAN: ") + task.scannedItemCount +
+        String result = quantity + "\n" + tr("ОТСКАНИРОВАНО: ", "SKANERLANGAN: ") + task.scannedItemCount +
             tr(" ИЗ ", " / ") + Math.max(1, task.itemCount);
+        // FIX: the total cannot hide a missing second article.
+        if ("logoff".equals(BuildConfig.FLAVOR) && task.ozonLines != null) {
+            for (TsdFbsAssemblyResponse.OzonLine line : task.ozonLines) {
+                result += "\n" + nonEmpty(line.article, "-") + ": " + line.scanned + " / " + line.quantity;
+            }
+        }
+        return result;
     }
 
     private boolean renderOzonOrderSticker(

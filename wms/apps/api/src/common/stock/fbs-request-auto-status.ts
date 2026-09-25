@@ -1,3 +1,4 @@
+import { ozonPickLinesEnabled, readOzonPickState } from '../../modules/marketplace-connections/ozon-fbs-pick-lines';
 import { ClientRequestStatus, Prisma } from '@prisma/client';
 
 // FIX: opt in only on our WMS; manual status changes remain available.
@@ -34,13 +35,23 @@ export async function reconcileFbsRequestStatus(tx: Prisma.TransactionClient, re
   if (!started) return;
   let target: ClientRequestStatus = 'IN_WORK';
   const byItem = new Map<string, number>();
+  const validTasks = new Set<string>();
   for (const task of tasks) if (task.status === 'COMPLETED' && task.completedAt) {
-    const item = request.items.find(i => i.id === task.requestItemId && i.skuId === task.skuId);
-    if (item) byItem.set(item.id, (byItem.get(item.id) ?? 0) + task.itemCount);
+    // FIX: a multi-product posting contributes each confirmed line to its own request item.
+    const lines = ozonPickLinesEnabled() && task.marketplace === 'OZON' ? await readOzonPickState(tx, task.id) : null;
+    if (lines) {
+      if (lines.submission !== 'COMPLETED' || lines.lines.reduce((n, line) => n + line.quantity, 0) !== task.itemCount ||
+        !lines.lines.every(line => line.picks.length === line.quantity && request.items.some(i => i.id === line.requestItemId && i.skuId === line.skuId))) continue;
+      for (const line of lines.lines) byItem.set(line.requestItemId, (byItem.get(line.requestItemId) ?? 0) + line.quantity);
+      validTasks.add(task.id);
+    } else {
+      const item = request.items.find(i => i.id === task.requestItemId && i.skuId === task.skuId);
+      if (item) { byItem.set(item.id, (byItem.get(item.id) ?? 0) + task.itemCount); validTasks.add(task.id); }
+    }
   }
   // FIX: check every order and every line, never just equal total quantities.
   const complete = request.items.length > 0 && links.every(l => l.syncStatus === 'ACTIVE') && tasks.length === links.length &&
-    tasks.every(t => t.status === 'COMPLETED' && t.completedAt && t.itemCount > 0 && request.items.some(i => i.id === t.requestItemId && i.skuId === t.skuId)) &&
+    tasks.every(t => validTasks.has(t.id) && t.itemCount > 0) &&
     request.items.every(i => i.quantity > 0 && byItem.get(i.id) === i.quantity);
   if (complete && trigger.stage !== 'START') target = 'PACKED';
   if (complete && trigger.stage !== 'START' && tasks.every(t => t.marketplace === 'WILDBERRIES')) {
