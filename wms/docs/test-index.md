@@ -7,7 +7,7 @@
 | Изменяемая область | Проверки API (`apps/api/test/`) | Android / другие проверки |
 | --- | --- | --- |
 | FBS экран, capability, контроллер | `tsd-fbs-capability.spec.ts`, `fbs-tsd-sticker-number.spec.ts` — также на реальном runtime | `FbsAssemblyUiTest`, `OzonLabelSafetyTest` |
-| Переклейка и её печать | `tsd-relabel-print.spec.ts`, `tsd-relabel-label.spec.ts`, `fbs-physical-kiz-relabel.spec.ts`, `pick-instruction-relabel-barcode.spec.ts` + предыдущая строка | `FbsRelabelPrintUiTest`, `RelabelPrintGateTest`, `FbsKizRelabelTest` |
+| Переклейка и её печать | `tsd-relabel-print.spec.ts`, `tsd-relabel-label.spec.ts`, `fbs-physical-kiz-relabel.spec.ts`, `pick-instruction-relabel-barcode.spec.ts` + предыдущая строка | `FbsRelabelExternalPrintActivityTest`, `FbsRelabelPrintUiTest`, `RelabelPrintGateTest`, `FbsKizRelabelTest` |
 | Несколько единиц и последовательная сборка | `tsd-fbs-capability.spec.ts` с runtime-путями, `fbs-online-remaining-progress.spec.ts`, `fbs-box-scan-route-consistency.spec.ts` | `FbsSequentialPickTest`, восстановление после повторного ответа |
 | Очередь заявок и роли | `fbs-lukin-batch.spec.ts`, `fbs-terminal-queue.service.spec.ts` | Owner/admin без лимита; сборщики — закреплённая пятёрка Лукина, другие клиенты без этого лимита |
 | Остатки/резерв/маршрут | `fbs-stock-allocation.spec.ts`, `fbs-stale-rescan-reservation.spec.ts`, `fbs-picked-stock-proof.spec.ts`, `fbs-stock-transfer.spec.ts` | Сверить API и таблицу заявки; включить сценарий исходный/целевой SKU |
@@ -36,7 +36,8 @@ FBS_RUNTIME_CONTROLLER=<candidate>/modules/tsd/tsd-device.controller.js
 FBS_RUNTIME_ENTRY=<candidate>/modules/marketplace-connections/marketplace-connections.service.js
 ```
 
-Запустить `tsd-fbs-capability.spec.ts` и `fbs-tsd-sticker-number.spec.ts`.
+Запустить `tsd-fbs-capability.spec.ts`, `fbs-tsd-sticker-number.spec.ts`,
+`tsd-relabel-print.spec.ts` и `fbs-lukin-batch.spec.ts`.
 Кандидату нужны совместимые зависимости; не подменять его файлы локальными
 ради успешного импорта. В PR фиксировать источник зависимостей и пропущенные проверки.
 
