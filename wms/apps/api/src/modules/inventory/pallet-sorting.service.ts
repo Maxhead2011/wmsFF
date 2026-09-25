@@ -134,7 +134,7 @@ export class PalletSortingService {
 
   async action(id: string, dto: PalletSortingActionDto, user: AuthUser) {
     assertSortingAdmin(user);
-    return this.prisma.$transaction(async tx => {
+    const operation = () => this.prisma.$transaction(async tx => {
       const state = await this.load(tx, id, user, true);
       const logId = hash(['PALLET_SORTING_COMMAND', id, dto.operationId]);
       const inputHash = hash([user.id, dto]);
@@ -156,6 +156,20 @@ export class PalletSortingService {
         payload: { inputHash, command: dto.action, version: state.version } } });
       return state;
     }, { isolationLevel: 'Serializable', timeout: 30000 });
+    // FIX: a serializable write conflict rolls back the entire scan, so replay
+    // the same idempotent command from a fresh session snapshot.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await operation();
+      } catch (caught) {
+        if (!(caught instanceof Prisma.PrismaClientKnownRequestError) || caught.code !== 'P2034') throw caught;
+        if (attempt === 3) {
+          throw new ConflictException('Сортировка одновременно меняется другой операцией. Повторите этот же скан.');
+        }
+        await new Promise(resolve => setTimeout(resolve, attempt * 50));
+      }
+    }
+    throw new Error('Pallet sorting retry loop exhausted unexpectedly.');
   }
 
   private async runAction(tx: Prisma.TransactionClient, state: PalletSortingState, dto: PalletSortingActionDto, user: AuthUser) {
