@@ -37,7 +37,7 @@ FBS_RUNTIME_ENTRY=<candidate>/modules/marketplace-connections/marketplace-connec
 ```
 
 Запустить `tsd-fbs-capability.spec.ts`, `fbs-tsd-sticker-number.spec.ts`,
-`tsd-relabel-print.spec.ts` и `fbs-lukin-batch.spec.ts`.
+`tsd-relabel-print.spec.ts`, `tsd-relabel-routes.spec.ts` и `fbs-lukin-batch.spec.ts`.
 Кандидату нужны совместимые зависимости; не подменять его файлы локальными
 ради успешного импорта. В PR фиксировать источник зависимостей и пропущенные проверки.
 
