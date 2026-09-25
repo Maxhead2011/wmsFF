@@ -5131,13 +5131,12 @@ public class MainActivity extends Activity {
                 printButton.setEnabled(!fbsRelabelPrintBusy && !RelabelPrintGate.canVerify(fbsRelabelPrintStatus));
                 root.addView(printButton);
                 if (!RelabelPrintGate.canVerify(fbsRelabelPrintStatus)) {
-                    root.addView(messageView("Сначала напечатайте 2 ШК и дождитесь подтверждения станции."));
+                    root.addView(messageView("Наклейте новый ШК и отсканируйте его. Можно использовать этикетку из WMS или NiceLabel, не дожидаясь ответа станции."));
                 }
             }
             fbsScanInput = input(tr("Сканируйте новый ШК после переклейки", "Yangi SHKni skanerlang"));
-            if (FbsRelabelPrintUi.showPrintButton(BuildConfig.FLAVOR, state, task)) {
-                fbsScanInput.setEnabled(RelabelPrintGate.canVerify(fbsRelabelPrintStatus));
-            }
+            // FIX: an externally printed target label is valid without this station's ACK.
+            // The scan endpoint still verifies the target barcode against the current task.
             root.addView(fbsScanInput);
             root.addView(primaryMenuButton(
                 tr("Подтвердить переклейку", "Qayta yorliqlashni tasdiqlash"),
@@ -5928,11 +5927,7 @@ public class MainActivity extends Activity {
 
     private void submitFbsScan() {
         if (fbsBusy || fbsAssembly == null || fbsAssembly.task == null) return;
-        if (FbsRelabelPrintUi.showPrintButton(BuildConfig.FLAVOR, fbsAssembly.state, fbsAssembly.task) &&
-            !RelabelPrintGate.canVerify(fbsRelabelPrintStatus)) {
-            showFbsError("Сначала напечатайте 2 новых ШК и дождитесь подтверждения печати.", true);
-            return;
-        }
+        // FIX: printer status is informational; do not block WMS/NiceLabel target scans.
         String value = textValue(fbsScanInput);
         if (value.isEmpty()) {
             showFbsError(tr("Сначала отсканируйте код.", "Avval kodni skanerlang."), true);

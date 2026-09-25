@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ClientRequestStatus, MarketplaceType } from '@prisma/client';
 import { LUKIN_FBS_BATCH_CLIENT_ID, lukinBatchApplies, selectLukinFbsBatch, savedLukinFbsBatchIds } from '../src/modules/marketplace-connections/fbs-lukin-batch';
-import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
+import { createRequire } from 'node:module';
+// TEST: exercise the published candidate, where the batch call was lost.
+const { MarketplaceConnectionsService } = process.env.FBS_RUNTIME_ENTRY
+  ? createRequire(import.meta.url)(process.env.FBS_RUNTIME_ENTRY)
+  : await import('../src/modules/marketplace-connections/marketplace-connections.service');
 
 const requests = [8, 4, 7, 2, 6, 3, 1].map((number) => ({ requestId: `request-${number}`, requestNumber: number }));
 

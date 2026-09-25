@@ -1,9 +1,14 @@
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { TsdRelabelPrintService } from '../src/modules/tsd/tsd-relabel-print.service';
-import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
+import { createRequire } from 'node:module';
+// TEST: source-only mocks missed the relabel methods lost from the deployed service.
+const { MarketplaceConnectionsService } = process.env.FBS_RUNTIME_ENTRY
+  ? createRequire(import.meta.url)(process.env.FBS_RUNTIME_ENTRY)
+  : await import('../src/modules/marketplace-connections/marketplace-connections.service');
 import { buildTsdRelabelLabel } from '../src/modules/tsd/tsd-relabel-label';
 
 vi.mock('../src/modules/tsd/tsd-relabel-label', () => ({ buildTsdRelabelLabel: vi.fn().mockResolvedValue('PNG') }));
+afterEach(() => vi.unstubAllEnvs());
 
 const printId = '11111111-1111-4111-8111-111111111111';
 const user = { id: 'worker', name: 'Склад', deviceCode: 'TSD-1', activeWarehouseId: 'wh' } as never;
@@ -89,7 +94,7 @@ it('refuses an old-to-new barcode pair absent from the active relabel task', asy
 });
 
 it('reports the agent acknowledgement only to the worker who queued the pair', async () => {
-  // TEST: TSD opens the verification scan only after this print job reaches PRINTED.
+  // TEST: report real printing status without exposing another worker's job.
   const f = fixture();
   f.db.fbsPrintJob.findUnique.mockReset().mockResolvedValue({ ...f.job, status: 'PRINTED', printedAt: new Date() });
   await expect(f.service.status('request', printId, user)).resolves.toMatchObject({
@@ -108,4 +113,51 @@ it('hands the unchanged quiet agent two identical relabel images without auto-re
     where: { id: 'job', status: 'QUEUED' },
   }));
   expect(f.db.fbsPrintJob.findFirst.mock.calls[0][0].where.OR[1].source).toEqual({ not: 'TSD_RELABEL' });
+});
+
+it('uses the real assembly context from station discovery through queue creation', async () => {
+  // TEST: reproduces request 1317: the source scan succeeds but the print context is missing in runtime.
+  const f = fixture();
+  const marketplace: any = new MarketplaceConnectionsService(f.prisma as never, {} as never);
+  const task = { id: 'fbs-task', requestId: 'request', clientId: 'lukin', skuId: 'target',
+    status: 'IN_PROGRESS', marketplace: 'WILDBERRIES', boxId: 'box', boxCode: input.sourceBox,
+    relabelRequired: true, sourceBarcode: input.oldBarcode, barcode: null, barcodes: [input.newBarcode] };
+  vi.spyOn(marketplace, 'loadOwnedFbsTsdAssembly').mockResolvedValue(task);
+  const service = new TsdRelabelPrintService(f.prisma as never, f.assembly as never, marketplace);
+  expect(await service.fbsStations(task.id, user)).toEqual([{ id: 'station', name: '2409' }]);
+  f.db.fbsPrintJob.create.mockResolvedValue({ ...f.job, assemblyId: task.id });
+  expect(await service.fbsCreate(task.id, input, user)).toMatchObject({ status: 'QUEUED' });
+  expect(f.db.fbsPrintJob.create).toHaveBeenCalledTimes(1);
+  expect(marketplace.loadOwnedFbsTsdAssembly).toHaveBeenCalledWith(task.id, user);
+});
+
+it('rejects a changed relabel stage before looking up a printer', async () => {
+  // TEST: restoring the method must retain the current-task/source-scan guard.
+  const f = fixture();
+  const marketplace: any = new MarketplaceConnectionsService(f.prisma as never, {} as never);
+  vi.spyOn(marketplace, 'loadOwnedFbsTsdAssembly').mockResolvedValue({ status: 'COMPLETED' });
+  const service = new TsdRelabelPrintService(f.prisma as never, f.assembly as never, marketplace);
+  await expect(service.fbsStations('task', user)).rejects.toMatchObject({ status: 409 });
+  expect(f.db.fbsPrintStation.findMany).not.toHaveBeenCalled();
+});
+
+it('does not return a relabel pair to a second concurrent agent', async () => {
+  // TEST: a failed atomic claim cannot print another physical pair.
+  const f = fixture();
+  f.db.fbsPrintJob.updateMany.mockResolvedValue({ count: 0 });
+  const marketplace: any = new MarketplaceConnectionsService(f.prisma as never, {} as never);
+  expect(await marketplace.claimFbsPrintJob('station', user)).toBeNull();
+});
+
+it('records relabel acknowledgement without treating product labels as a shipment', async () => {
+  // TEST: even a historical SOS device name cannot make relabel printing write off stock.
+  vi.stubEnv('WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED', 'true');
+  const f = fixture();
+  f.db.fbsPrintJob.findUniqueOrThrow.mockResolvedValue({ ...f.job, status: 'PRINTED', deviceCode: 'SOS-WB:2409' } as any);
+  const marketplace = new MarketplaceConnectionsService(f.prisma as never, {} as never);
+  await marketplace.finishFbsPrintJob('job', true, null, user);
+  expect(f.db.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+    data: expect.objectContaining({ action: 'TSD_RELABEL_TWO_LABELS_PRINTED' }),
+  }));
+  expect(f.prisma.$transaction).not.toHaveBeenCalled();
 });
