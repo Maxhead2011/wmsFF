@@ -54,3 +54,7 @@ Android WmsApiFactory (physical-pick-v1)
 → `ProductMark` → `Box`/`StoragePalletBox`. Показания интерфейса, плановые allocations,
 фактические сканы, печать и отгрузка — разные источники доказательств.
 Не исправлять остатки исключительно ради совпадения с сохранённой инструкцией.
+
+## FBS box scan latency (PR317)
+
+`marketplace-connections.service.ts`: `scanFbsTsdBox` / `performFbsTsdBoxScan`, `switchFbsTsdAssemblyToBox`; `fbs-box-scan-search.ts` narrows candidates, batches search reservations and shares pending scans. Flag default off; transactional revalidation remains authoritative. See [release checks](releases/fbs-box-scan-latency/README.md).
