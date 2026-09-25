@@ -1,3 +1,7 @@
+# Current release: PR309, 25.09.2026
+
+[PR309](https://github.com/Maxhead2011/wmsFF/pull/309), merge adb8d2ca. Bounded 30-second inventory confirmation. Six runtime tests; API 2761 passed / 94 skipped. All previous KIZ and printing changes retained.
+
 # Опубликованная база нашей WMS
 
 Обновлено **25.09.2026 после PR307**. Интеграционная ветка `feature/wb-print-check`.
@@ -6,14 +10,14 @@
 
 | Компонент | Фактическая версия |
 | --- | --- |
-| API image | `sha256:6081f00a31f6fa02193d18ff18cd8146976a33abd8b8bc358337d94580885ee1` |
+| API image | `sha256:edaed8c4b41b55a5cda87a4590dc0b32d5a6f2e667ed0627e22e0f3137426444` |
 | Web image | `sha256:5bdcb162e03f2539795b379bcdc6644888e07fc7dcdbfc9456ed93c254a5193d` |
 | Android LOGOFF | `213 / 0.1.213-relabel-external-print` |
 | APK SHA-256 | `2537deeaa0079d3cf121132e1d42efff32c7e5e636f1e40509e144ee8ff8a295` |
 
 PR307 меняет только три модуля КИЗов: отменённая принятая поставка допускает решение администратора при неизвестном погашении. Продажа и погашение блокируются. Проверки: 18 runtime, API 2763 passed / 92 skipped; DB-интеграция исключена. Остальные файлы после PR305 сохранены по хешам.
 
-Текущий [снимок](../baselines/our-wms/2026-09-25-cancelled-kiz/README.md) сохраняет
+Текущий [снимок](../baselines/our-wms/2026-09-25-inventory-timeout/README.md) сохраняет
 последний выпуск с маршрутом WMS к исходному коробу и восстановленной печатью.
 В промежуточном API `be2a182a...` снова потерялись функции PR302 и маршруты/DI
 переклейки. PR305 восстановил три файла, остальные 530 файлов API и весь web
