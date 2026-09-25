@@ -1,3 +1,12 @@
+# Published PR323: turnover / 26.09.2026
+
+API `sha256:1ce3f6acbfd09b562fcf48bd7a57cda6d6208c1f8f051e8baad8e5dbf413029f`.
+Web `sha256:3695f20eab55822b447412a77adf06be31bec7ee229ed65b8daa0434d48358fd`.
+Relabel/recount proof without duplicate deduction; no automatic full-history load and stale responses ignored. APK215, flags, database and other containers unchanged. API2815 passed/94 skipped, Web238, TypeScript passed; runtime delta and public hashes verified. Baseline `2026-09-26-relabel-close`; source parity remains false.
+Rollback: `logoff-api:before-turnover-relabel`, `logoff-web:before-turnover-relabel`.
+
+## Previous release
+
 # Published PR321: turnover / 26.09.2026
 
 API `sha256:16ed6b5fb0440b41b1093e6ae4748e486feffad7b9185e8c53b41cc45933a326`.
