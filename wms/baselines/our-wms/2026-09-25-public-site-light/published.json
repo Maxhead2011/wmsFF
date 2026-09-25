@@ -1,0 +1,10 @@
+{
+  "preparedImage": "sha256:41c8224ac636afde20e72e3123d640093ada1e447e3af43d1f9f74000709cde3",
+  "baseWebImage": "sha256:475778f6b2d1fd9b51378d9c0db682d2f0f8345acfb69c64451cc4beedb4c18f",
+  "apiImageUnchanged": "sha256:57c41c094bf9e3e45eea8adca8e7d666b17cc2f24432b52cbb149b6e1c5f2cf6",
+  "preservedFiles": 294,
+  "newAssets": 29,
+  "published": true,
+  "apiContainerUnchanged": "6cc47c0049e69fc9b82727801ec405dca0e04617f3b47b286fce1998f0b2d180",
+  "rollbackImage": "logoff-web:before-public-light-20260925"
+}
