@@ -1027,6 +1027,20 @@ export class TsdAssemblyService {
         .map(row => ({ itemId: row.requestItemId, orderId: row.orderId, targetSkuId: row.skuId,
           skuId: row.sourceSkuId!, boxCode: row.reservedBoxCode!, quantity: Math.max(1, row.itemCount) }))
       : [];
+    // FIX: ordinary reservations also supply a live route when the saved plan lacks it.
+    // Keep physical picks, other connections/items and existing allocations out of this fallback.
+    if (process.env.WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED === 'true') {
+      for (const task of rows) {
+        if ((task.sourceSkuId && task.sourceSkuId !== task.skuId) || !task.reservedBoxCode ||
+          task.boxCode || task.barcode || task.kiz || !['RESERVED', 'IN_PROGRESS'].includes(task.status) ||
+          !links.some(link => link.connectionId === task.connectionId && link.orderId === task.orderId)) continue;
+        const item = requestRows.find(row => row.itemId === task.requestItemId && row.skuId === task.skuId);
+        if (!item || item.allocations.some(allocation =>
+          normalizeBoxCode(allocation.boxCode) === normalizeBoxCode(task.reservedBoxCode!))) continue;
+        relabelCandidates.push({ itemId: task.requestItemId, orderId: task.orderId, targetSkuId: task.skuId,
+          skuId: task.skuId, boxCode: task.reservedBoxCode, quantity: Math.max(1, task.itemCount) });
+      }
+    }
     const allocationBoxCodes = uniqueSorted([
       ...requestRows.flatMap((row) => row.allocations.map((allocation) => allocation.boxCode)),
       ...relabelCandidates.map(row => row.boxCode),
