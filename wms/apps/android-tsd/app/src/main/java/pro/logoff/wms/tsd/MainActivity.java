@@ -4780,14 +4780,15 @@ public class MainActivity extends Activity {
         fbsRemainingOrdersTaskId = remainingOrdersTaskId;
 
         String clientName = task.client == null ? "-" : nonEmpty(task.client.name, task.client.code);
-        String productName = task.product == null ? "-" : nonEmpty(task.product.name, "-");
+        // FIX: FBS presents articles; marketplace titles stay in data, not picking labels.
+        String productName = task.product == null ? "-" : nonEmpty(task.product.article, "-");
         String article = task.product == null ? "-" : nonEmpty(task.product.article, "-");
         String color = task.product == null ? "-" : nonEmpty(task.product.color, tr("не указан", "ko‘rsatilmagan"));
         String size = task.product == null ? "-" : nonEmpty(task.product.size, tr("не указан", "ko‘rsatilmagan"));
         String marketplaceName = fbsMarketplaceName(task.marketplace);
         TsdFbsAssemblyResponse.Product sourceProduct =
             task.relabeling == null ? null : task.relabeling.sourceProduct;
-        String sourceProductName = sourceProduct == null ? productName : nonEmpty(sourceProduct.name, "-");
+        String sourceProductName = sourceProduct == null ? productName : nonEmpty(sourceProduct.article, "-");
         String sourceArticle = sourceProduct == null ? article : nonEmpty(sourceProduct.article, "-");
         String sourceColor = sourceProduct == null ? color : nonEmpty(sourceProduct.color, tr("не указан", "ko‘rsatilmagan"));
         String sourceSize = sourceProduct == null ? size : nonEmpty(sourceProduct.size, tr("не указан", "ko‘rsatilmagan"));
@@ -4816,7 +4817,6 @@ public class MainActivity extends Activity {
         }
         root.addView(feedbackView(
             tr("\u0427\u0422\u041e \u0417\u0410\u0411\u0420\u0410\u0422\u042c", "NIMA OLISH KERAK") + "\n" +
-                productName + "\n" +
                 tr("\u0410\u0420\u0422\u0418\u041a\u0423\u041b: ", "ARTIKUL: ") + article + "\n" +
                 tr("\u0426\u0412\u0415\u0422: ", "RANG: ") + color + "  \u00b7  " +
                 tr("\u0420\u0410\u0417\u041c\u0415\u0420: ", "O'LCHAM: ") + size,
@@ -4825,7 +4825,7 @@ public class MainActivity extends Activity {
         root.addView(taskRow(
             tr("Заказ ", "Buyurtma ") + marketplaceName + " №" + nonEmpty(task.orderId, "-"),
             tr("Клиент: ", "Mijoz: ") + clientName + "\n" +
-                productName + " · " + tr("арт. ", "art. ") + article + "\n" +
+                tr("арт. ", "art. ") + article + "\n" +
                 tr("Цвет: ", "Rang: ") + color + " · " + tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
             LIGHT_GRAY
         ));
@@ -5039,7 +5039,7 @@ public class MainActivity extends Activity {
                         .append(tr("Заказ ", "Buyurtma "))
                         .append(nonEmpty(source.orderId, "-"))
                         .append(" · ")
-                        .append(nonEmpty(source.productName, "-"))
+                        .append(nonEmpty(source.article, "-"))
                         .append("\n")
                         .append(tr("ПАЛЛЕТ-СОРТ: ", "PALLETSORT: "))
                         .append(nonEmpty(source.palletCode, "-"))
@@ -5097,7 +5097,6 @@ public class MainActivity extends Activity {
             ));
             root.addView(feedbackView(
                 tr("2. ВОЗЬМИТЕ ИСХОДНЫЙ ТОВАР ДЛЯ ПЕРЕКЛЕЙКИ\n", "2. QAYTA YORLIQLASH UCHUN MANBA MAHSULOTNI OLING\n") +
-                    tr("Название: ", "Nomi: ") + sourceProductName + "\n" +
                     tr("Артикул: ", "Artikul: ") + sourceArticle + "\n" +
                     tr("Цвет: ", "Rang: ") + sourceColor + "\n" +
                     tr("РАЗМЕР: ", "O‘LCHAM: ") + sourceSize,
@@ -5159,7 +5158,6 @@ public class MainActivity extends Activity {
             }
             root.addView(feedbackView(
                 tr("2. ВОЗЬМИТЕ ТОВАР И ОТСКАНИРУЙТЕ ЕГО ШК\n", "2. MAHSULOTNI OLING VA SHKNI SKANERLANG\n") +
-                    tr("Название: ", "Nomi: ") + productName + "\n" +
                     tr("Артикул: ", "Artikul: ") + article + "\n" +
                     tr("Цвет: ", "Rang: ") + color + "\n" +
                     tr("РАЗМЕР: ", "O‘LCHAM: ") + size,
@@ -5630,7 +5628,7 @@ public class MainActivity extends Activity {
                     tr("КРУПНЫЕ ЦИФРЫ: ", "KATTA RAQAMLAR: ") + largeDigits,
                     tr("Заказ WB №", "WB buyurtmasi №") + nonEmpty(item.orderId, "-") +
                         " · " + tr("заявка №", "ariza №") + requestNumber + "\n" +
-                        nonEmpty(item.productName, "-") + " · " + tr("арт. ", "art. ") + nonEmpty(item.article, "-") + "\n" +
+                        tr("арт. ", "art. ") + nonEmpty(item.article, "-") + "\n" +
                         tr("Цвет: ", "Rang: ") + nonEmpty(item.color, "—") + " · " +
                         tr("РАЗМЕР: ", "O‘LCHAM: ") + nonEmpty(item.size, "—") + "\n" +
                         tr("Короб: ", "Quti: ") + nonEmpty(item.boxCode, "-") + "\n" +
@@ -5683,7 +5681,6 @@ public class MainActivity extends Activity {
             (scanKiz
                 ? tr("ШАГ 2 ИЗ 2 · ОТСКАНИРУЙТЕ КИЗ", "2-QADAM · KIZNI SKANERLANG")
                 : tr("ШАГ 1 ИЗ 2 · ОТСКАНИРУЙТЕ ШК", "1-QADAM · SHKNI SKANERLANG")) + "\n\n" +
-                productName + "\n" +
                 tr("Артикул: ", "Artikul: ") + article + "\n" +
                 tr("Цвет: ", "Rang: ") + color + " · " + tr("Размер: ", "O‘lcham: ") + size + "\n" +
                 (scanKiz

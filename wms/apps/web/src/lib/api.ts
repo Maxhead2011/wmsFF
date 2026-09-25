@@ -2480,6 +2480,7 @@ export type TsdAssemblyPlan = {
     rows: Array<{
       id: string;
       orderId: string;
+      orderPlacedAt?: string | null;
       sourceBoxCode: string | null;
       productName: string;
       article: string | null;

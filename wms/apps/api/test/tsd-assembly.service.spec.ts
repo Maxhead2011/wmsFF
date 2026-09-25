@@ -66,13 +66,15 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
       stockBalance: { findMany: vi.fn().mockResolvedValue([{skuId:'sku-1',quantity:2,box:{code:'FFL_LKB0106_039'}}]) },
       fbsOrderRequestLink: {
         findMany: vi.fn().mockResolvedValue([
-          { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1' },
+          { orderId: '5355303495', connectionId: 'connection-1', lastSkuId: 'sku-1', orderPlacedAt: new Date('2026-07-21T09:04:00Z') },
           { orderId: '5355303496', connectionId: 'connection-1', lastSkuId: 'sku-1' },
         ]),
       },
       fbsTsdAssembly: {
         findMany: vi.fn().mockResolvedValue([
           {
+            // TEST: join marketplace timestamp by both connection and order.
+            connectionId: 'connection-1',
             id: 'task-1',
             deviceCode: 'TSD-TEST-1',
             orderId: '5355303495',
@@ -128,6 +130,7 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
       rows: [
         {
           orderId: '5355303495',
+          orderPlacedAt: '2026-07-21T09:04:00.000Z',
           sourceBoxCode: 'FFL_LKB0106_039',
           productBarcode: '2047945700181',
           size: '52',
