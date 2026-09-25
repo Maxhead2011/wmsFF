@@ -1371,11 +1371,18 @@
     "runtimeTestsPassed": 26,
     "baselineTestsPassed": 8,
     "notVerified": [
-      "Physical printer output",
       "DB-dependent kiz-duplicate.integration test",
       "Full source-to-runtime parity"
     ],
     "webAssetsUnchanged": true
   },
-  "referenceNote": "API source reference and web assets inherited unchanged from previous image; runtime freshly captured and matched byte-for-byte to tested candidate. sourceParityVerified remains false."
+  "referenceNote": "API source reference and web assets inherited unchanged from previous image; runtime freshly captured and matched byte-for-byte to tested candidate. sourceParityVerified remains false.",
+  "acceptance": {
+    "status": "user-accepted",
+    "date": "2026-09-25",
+    "devicesConfirmed": 3,
+    "evidence": "User confirmed everything works on three sequentially updated TSDs.",
+    "useAsFutureBaseline": true,
+    "scope": "Reported relabel printing/scanning and picking workflow; not exhaustive WMS certification"
+  }
 }
