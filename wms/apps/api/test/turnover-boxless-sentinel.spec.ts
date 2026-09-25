@@ -6,6 +6,34 @@ import { TurnoverActionKind } from '../src/modules/turnover/dto/turnover-action.
 import { TurnoverService } from '../src/modules/turnover/turnover.service';
 
 describe('TurnoverService boxless stock sentinel', () => {
+  // TEST: current balances exclude archived/deleted boxes for staff, without hiding history.
+  it('excludes archived boxes for administrators while retaining boxless stock and history', () => {
+    const { service } = sourceFixture();
+    expect((service as any).balanceVisibilityWhere(adminUser)).toMatchObject({ AND: [
+      { OR: [{ boxId: null }, { box: { status: { notIn: ['archived', 'deleted'] } } }] },
+    ] });
+    expect((service as any).movementVisibilityWhere(adminUser)).toBeUndefined();
+  });
+  // TEST: explicit boxless source must never resolve a Box or consume boxed stock.
+  it.each(['Без короба', '  БЕЗ КОРОБА  '])('writes off only boxless stock for %s', async source => {
+    const { service, tx } = sourceFixture();
+    await (service as any).decrementAvailable(tx, 'client-1', 'sku-1', 1, source,
+      { warehouseId: 'warehouse-1', boxlessClientIds: ['client-1'] });
+    expect(tx.box.findUnique).not.toHaveBeenCalled();
+    const where = tx.stockBalance.findMany.mock.calls[0][0].where;
+    expect(where.boxId).toBeNull();
+    expect(where.OR).toContainEqual({ warehouseId: 'warehouse-1' });
+    expect(where.status.in).not.toContain('SHIPPING');
+  });
+
+  // TEST: an actual box and an unspecified source keep their existing scopes.
+  it.each([['BOX-1', 'box-1'], ['', undefined]])('preserves source scope %s', async (source, expected) => {
+    const { service, tx } = sourceFixture();
+    tx.box.findUnique.mockResolvedValue({ id: 'box-1', warehouseId: 'warehouse-1' });
+    await (service as any).decrementAvailable(tx, 'client-1', 'sku-1', 1, source,
+      { warehouseId: 'warehouse-1', boxlessClientIds: ['client-1'] });
+    expect(tx.stockBalance.findMany.mock.calls[0][0].where.boxId).toBe(expected);
+  });
   // TEST: the UI label "Без короба" must never become a physical Box record.
   it('adds stock to the real boxless balance when the target contains the UI label', async () => {
     const boxFindUnique = vi.fn().mockResolvedValue(null);
@@ -81,6 +109,17 @@ describe('TurnoverService boxless stock sentinel', () => {
     }));
   });
 });
+
+function sourceFixture() {
+  const tx = {
+    box: { findUnique: vi.fn().mockResolvedValue(null) },
+    stockBalance: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'balance-1', quantity: 4, boxId: null }]),
+      update: vi.fn().mockResolvedValue({ quantity: 3 }), delete: vi.fn(),
+    },
+  };
+  return { tx, service: new TurnoverService({} as never, {} as never) };
+}
 
 const adminUser: AuthUser = {
   id: 'admin-1',

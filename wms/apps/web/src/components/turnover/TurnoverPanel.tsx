@@ -147,7 +147,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
 
     setBoxDetails({ status: 'idle', data: null });
     void loadTurnover();
-    void loadSuggestions('');
+    // FIX: the debounced effect below is the single source of suggestion requests.
   }, [selectedClientId]);
 
   useEffect(() => {
@@ -245,18 +245,15 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     };
     const statisticsFilter = { ...reportFilter, groupBy };
 
-    try {
-      const [nextReport, nextStatistics] = await Promise.all([
-        fetchTurnoverReport(session.accessToken, reportFilter),
-        canSeeStatistics ? fetchTurnoverStatistics(session.accessToken, statisticsFilter) : Promise.resolve(null),
-      ]);
-      setReport({ status: 'ready', data: nextReport });
-      setStatistics({ status: nextStatistics ? 'ready' : 'idle', data: nextStatistics });
-    } catch (caught) {
-      const message = errorMessage(caught);
-      setReport((current) => ({ ...current, status: 'error', error: message }));
-      setStatistics((current) => ({ ...current, status: 'error', error: message }));
-    }
+    // FIX: statistics latency/failure must not hold back the stock report.
+    await Promise.all([
+      fetchTurnoverReport(session.accessToken, reportFilter)
+        .then(data => setReport({ status: 'ready', data }))
+        .catch(caught => setReport(current => ({ ...current, status: 'error', error: errorMessage(caught) }))),
+      (canSeeStatistics ? fetchTurnoverStatistics(session.accessToken, statisticsFilter) : Promise.resolve(null))
+        .then(data => setStatistics({ status: data ? 'ready' : 'idle', data }))
+        .catch(caught => setStatistics(current => ({ ...current, status: 'error', error: errorMessage(caught) }))),
+    ]);
   }
 
   async function loadSuggestions(query: string, scope: 'client' | 'barcode' = 'client') {
