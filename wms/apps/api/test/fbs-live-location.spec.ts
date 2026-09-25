@@ -15,7 +15,48 @@ function fixture(quantity: number) {
 }
 describe('FBS current location hints',()=>{
   afterEach(()=>vi.unstubAllEnvs());
+  // TEST: request 1368 has a direct reservation missing from its instruction.
+  it.each([true,false])('shows a direct reserved box only with our feature enabled: %s',async(enabled)=>{
+    vi.stubEnv('WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED',String(enabled));
+    const {service,rows,db}=fixture(2);rows[0].allocations=[];
+    db.fbsTsdAssembly.findMany.mockResolvedValue([{
+      id:'direct',orderId:'5737342163',connectionId:'wb',requestItemId:'item',skuId:'sku',
+      sourceSkuId:null,reservedBoxCode:'FFL_LKB2107_6',status:'RESERVED',itemCount:1,
+      deviceCode:'AUTO',updatedAt:new Date(),boxCode:null,barcode:null,kiz:null,
+    }] as never);
+    const result=await service.loadFbsAssemblyFacts('request-1368',rows);
+    expect(result.notCollected.rows[0].availableBoxes).toEqual(enabled
+      ?[expect.objectContaining({boxCode:'FFL_LKB2107_6',quantity:1})]:[]);
+  });
   // TEST: request 1022 has no target-barcode stock but has a reserved relabel source.
+  it.each([
+    [0,{},0], [2,{status:'RETURN_REQUIRED'},0], [2,{connectionId:'other'},0],
+    [2,{requestItemId:'other'},0], [2,{boxCode:'picked'},0], [2,{kiz:'scanned'},0],
+    [2,{barcode:'scanned'},0], [2,{sourceSkuId:'sku'},1],
+  ])('guards direct hints: stock %s, override %j',async(quantity,override,expected)=>{
+    vi.stubEnv('WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED','true');
+    const {service,rows,db}=fixture(quantity as number);rows[0].allocations=[];
+    db.fbsTsdAssembly.findMany.mockResolvedValue([{
+      id:'direct',orderId:'5737342163',connectionId:'wb',requestItemId:'item',skuId:'sku',
+      sourceSkuId:null,reservedBoxCode:'FFL_LKB2107_6',status:'RESERVED',itemCount:1,
+      deviceCode:'AUTO',updatedAt:new Date(),boxCode:null,barcode:null,kiz:null,...override as object,
+    }] as never);
+    const result=await service.loadFbsAssemblyFacts('request-1368',rows);
+    expect(result.notCollected.rows.flatMap((row:any)=>row.availableBoxes)).toHaveLength(expected as number);
+  });
+  // TEST: the same saved allocation and reservation must not count twice.
+  it('does not duplicate an existing direct allocation',async()=>{
+    vi.stubEnv('WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED','true');
+    const {service,rows,db}=fixture(2);
+    db.fbsTsdAssembly.findMany.mockResolvedValue([{
+      id:'direct',orderId:'5737342163',connectionId:'wb',requestItemId:'item',skuId:'sku',
+      sourceSkuId:null,reservedBoxCode:'FFL_LKB2107_6',status:'RESERVED',itemCount:1,
+      deviceCode:'AUTO',updatedAt:new Date(),
+    }] as never);
+    const result=await service.loadFbsAssemblyFacts('request-1368',rows);
+    expect(result.notCollected.rows[0].availableBoxes).toHaveLength(1);
+    expect(result.notCollected.rows[0].availableBoxes[0].quantity).toBe(1);
+  });
   it.each([true,false])('uses the live relabel source only when enabled: %s',async(enabled)=>{
     vi.stubEnv('WMS_FBS_ONLINE_RELABEL_LOCATIONS_ENABLED',String(enabled));
     const {service,rows,db}=fixture(0);rows[0].allocations=[];
