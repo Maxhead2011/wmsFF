@@ -1,3 +1,11 @@
+# Current published release PR311 / APK214
+
+API sha256:57c41c094bf9e3e45eea8adca8e7d666b17cc2f24432b52cbb149b6e1c5f2cf6
+Web sha256:475778f6b2d1fd9b51378d9c0db682d2f0f8345acfb69c64451cc4beedb4c18f
+APK214 de67aee47f3f419e8e89e4a4a13974f945f988d9bd58bb51a4fd6e7261e771aa
+
+Historical release notes below. Current baseline: 2026-09-25-fbs-display.
+
 # Current release: PR309, 25.09.2026
 
 [PR309](https://github.com/Maxhead2011/wmsFF/pull/309), merge adb8d2ca. Bounded 30-second inventory confirmation. Six runtime tests; API 2761 passed / 94 skipped. All previous KIZ and printing changes retained.
@@ -17,7 +25,7 @@
 
 PR307 меняет только три модуля КИЗов: отменённая принятая поставка допускает решение администратора при неизвестном погашении. Продажа и погашение блокируются. Проверки: 18 runtime, API 2763 passed / 92 skipped; DB-интеграция исключена. Остальные файлы после PR305 сохранены по хешам.
 
-Текущий [снимок](../baselines/our-wms/2026-09-25-inventory-timeout/README.md) сохраняет
+Текущий [снимок](../baselines/our-wms/2026-09-25-fbs-display/README.md) сохраняет
 последний выпуск с маршрутом WMS к исходному коробу и восстановленной печатью.
 В промежуточном API `be2a182a...` снова потерялись функции PR302 и маршруты/DI
 переклейки. PR305 восстановил три файла, остальные 530 файлов API и весь web
