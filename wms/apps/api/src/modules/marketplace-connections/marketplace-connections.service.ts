@@ -15755,10 +15755,28 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const labels: Partial<Record<ClientRequestStatus, string>> = { SUBMITTED: 'Подана', IN_REVIEW: 'На рассмотрении', APPROVED: 'Согласована', IN_WORK: 'В работе', PACKED: 'Упаковано', DONE: 'Сдано' };
     for (const change of changes) {
       try {
+        // FIX: identify WB supplies without changing recipients or status transitions.
+        let supplies: string[] = [];
+        try {
+          const links = await this.prisma.fbsOrderRequestLink.findMany({
+            where: {
+              requestId: change.requestId,
+              clientId: change.clientId,
+              marketplace: MarketplaceType.WILDBERRIES,
+              syncStatus: { not: 'REMOVED' },
+            },
+            select: { lastSupplyId: true },
+          });
+          supplies = [...new Set(links.map(link => link.lastSupplyId?.trim())
+            .filter((id): id is string => Boolean(id)))].sort();
+        } catch {
+          // FIX: a failed supply lookup must not suppress the existing status notification.
+          this.logger.warn(`WB supply lookup failed for FBS request ${change.number}.`);
+        }
         // FIX: use the existing client routing and FBS preferences, after commit only.
         await this.telegram?.notifyClient(change.clientId, [
           'LOGOFF WMS: изменён статус заявки FBS.',
-          `Заявка №${change.number}: ${change.title}`,
+          `Заявка №${change.number}${supplies.length ? ` · ${supplies.length === 1 ? 'Поставка' : 'Поставки'} ${supplies.join(', ')}` : ''}: ${change.title}`,
           `Статус: ${labels[change.from] ?? change.from} → ${labels[change.to] ?? change.to}`,
         ].join('\n'), 'FBS');
       } catch {
