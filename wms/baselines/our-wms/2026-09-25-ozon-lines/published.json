@@ -1,0 +1,23 @@
+{
+  "published": true,
+  "at": 1790361929.5158446,
+  "apiImage": "sha256:a72064a45a06563f59e1051dbf1feddec037683685fb9f73dc061c3f3c58d00f",
+  "webImage": "sha256:a70b61112fc7c03ba29eacb86ccc249c6ec7dfb16b34fca3dd8e5c432c05d756",
+  "metadata": {
+    "versionCode": 215,
+    "versionName": "0.1.215-ozon-lines",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-ozon-215.apk",
+    "sha256": "405e13998427f8dd2b24f03d7cb89d99997a3eba9410486fe21f4a6cd11e38fd",
+    "size": 5382551,
+    "releasedAt": "2026-09-25T18:42:58.458251+00:00",
+    "releaseNotes": "Ozon: отдельный отбор и счётчик каждого артикула в многотоварном заказе."
+  },
+  "otherContainersUnchanged": true,
+  "health": true,
+  "multilineEnabled": true,
+  "migration": {
+    "migration": "20260925202000_ozon_fbs_pick_lines",
+    "verified": true,
+    "rows": 0
+  }
+}

@@ -1,6 +1,6 @@
 # Ozon FBS: picking distinct product lines
 
-Status: local candidate, not deployed. PR target: `feature/wb-print-check`.
+Published via PR315 in `feature/wb-print-check`; LOGOFF215. Migration applied and flag enabled on our WMS. Public health, image deltas, APK signature/hash and 46 runtime checks passed. Physical terminal test pending. Preparation details below describe the pre-release candidate.
 
 ## Scope
 
@@ -42,8 +42,9 @@ TypeScript rebuild over it. The candidate script patches exactly five runtime
 files against API image
 `sha256:57c41c094bf9e3e45eea8adca8e7d666b17cc2f24432b52cbb149b6e1c5f2cf6`.
 Existing packing, relabel, source-location and monitoring fields are preserved.
-Reverify the live image before any publication. APK release/version, migration,
-feature enablement and production smoke checks remain deployment work.
+Reverify the live image before any publication. APK215, migration and feature enablement are published. Production health,
+exact runtime hashes and public APK hash are verified; physical terminal testing
+remains pending.
 
 ## Limits
 
@@ -66,4 +67,5 @@ Android: 218 tests for each flavor; baseline tooling: 8 tests.
 Full API: 2,784 passed, 94 skipped, with the database-dependent
 `kiz-duplicate.integration.spec.ts` excluded. The first full run timed out in an
 unrelated PDF test; the complete rerun with 2–4 workers passed without changing
-that test. No live PostgreSQL migration or production shipping was exercised.
+that test. These tests did not exercise production shipping. The additive PostgreSQL migration
+was subsequently applied and verified during publication.
