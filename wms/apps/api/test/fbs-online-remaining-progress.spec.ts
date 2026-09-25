@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestsService } from '../src/modules/client-requests/client-requests.service';
-import { TsdAssemblyService } from '../src/modules/tsd/tsd-assembly.service';
+import { createRequire } from 'node:module';
+const { TsdAssemblyService } = process.env.OZON_LINES_RUNTIME ? createRequire(import.meta.url)(process.env.OZON_LINES_RUNTIME + '/../tsd/tsd-assembly.service.js') : await import('../src/modules/tsd/tsd-assembly.service');
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -35,6 +36,24 @@ function fixture(enabled = true, completed = 12, reset = false) {
 }
 
 describe('FBS online remaining-search progress', () => {
+  // TEST: Ozon header quantity 2 must not leave Champion pending after both lines were picked.
+  it.each([false, true])('counts Ozon per-line evidence in online view (terminal filter: %s)', async terminal => {
+    const f = fixture(true, 13);
+    vi.stubEnv('WMS_OZON_MULTILINE_PICKING', 'true');
+    vi.stubEnv('WMS_FBS_TERMINAL_QUEUE_FILTER_ENABLED', String(terminal));
+    Object.assign(f.tasks[0], { itemCount: 2, connectionId: 'wb-1' });
+    const links = await f.db.fbsOrderRequestLink.findMany();
+    Object.assign(links[0], { marketplace: 'OZON', lastItemCount: 2 });
+    f.rows.push({ ...f.rows[0], itemId: 'champion-item', skuId: 'champion', requestedQuantity: 1 });
+    const lines = [
+      { requestItemId: 'item-0', skuId: 'sku-0', quantity: 1, name: 'Freestyle', article: 'Freestyle', picks: [{}] },
+      { requestItemId: 'champion-item', skuId: 'champion', quantity: 1, name: 'Champion', article: 'Champion', picks: [{}] },
+    ];
+    (f.db as any).$queryRaw = vi.fn(async () => [{ data: { lines } }]);
+    const result = await f.detail.loadFbsAssemblyFacts('request-592', f.rows);
+    expect(result.notCollected.remainingUnits).toBe(0);
+    expect(result.rows[0].article).toBe('Freestyle × 1; Champion × 1');
+  });
   // TEST: both release flags must expose a cancelled physical return, never new picking.
   it.each([['canceled_by_client', true, 1], ['sold', true, 0], ['canceled_by_client', false, 0]])(
     'terminal %s with receipt flag %s exposes %s returns', async (status, enabled, count) => {

@@ -2554,6 +2554,7 @@ model OzonFboEvent {
 }
 
 model FbsTsdAssembly {
+  ozonPickState OzonFbsPickState?
   id                  String                @id @default(uuid())
   clientId            String
   marketplace         MarketplaceType       @default(WILDBERRIES)
@@ -3460,4 +3461,12 @@ model FboAssemblyAction {
   assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
   createdAt DateTime @default(now())
   @@index([requestId, createdAt])
+}
+
+// FIX: per-product scan evidence for multi-line Ozon postings, accessed transactionally.
+model OzonFbsPickState {
+  assemblyId String @id
+  assembly FbsTsdAssembly @relation(fields: [assemblyId], references: [id], onDelete: Cascade)
+  data       Json
+  updatedAt  DateTime @default(now()) @updatedAt
 }

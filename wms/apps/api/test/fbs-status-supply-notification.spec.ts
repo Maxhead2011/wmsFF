@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { MarketplaceConnectionsService } from '../src/modules/marketplace-connections/marketplace-connections.service';
+import { createRequire } from 'node:module';
+const { MarketplaceConnectionsService } = process.env.OZON_LINES_RUNTIME ? createRequire(import.meta.url)(process.env.OZON_LINES_RUNTIME + '/marketplace-connections.service.js') : await import('../src/modules/marketplace-connections/marketplace-connections.service');
 
 const change = {
   clientId: 'client', requestId: 'request', number: 1359, title: 'FBS',
