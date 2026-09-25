@@ -10,7 +10,7 @@ type Request = { id: string; clientId: string; items: Array<{id:string;skuId:str
 export async function readFbsPickedStockProof(tx: Prisma.TransactionClient, request: Request, warehouseId?: string): Promise<FbsPickedProof[]> {
   if (!('fbsTsdAssembly' in tx)) return [];
   const live = await tx.fbsTsdAssembly.findMany({ where: {requestId:request.id,clientId:request.clientId,status:'COMPLETED'},
-    select:{id:true,requestId:true,requestItemId:true,clientId:true,skuId:true,boxId:true,status:true,itemCount:true} });
+    select:{id:true,requestId:true,requestItemId:true,clientId:true,skuId:true,boxId:true,status:true,itemCount:true,sourceSkuId:true,relabelConfirmedAt:true,kiz:true} });
   const tasks = new Map(live.filter(t=>t.id && t.status==='COMPLETED' && t.clientId===request.clientId).map(t=>[t.id,t]));
   for (const {task} of await readFbsAttemptHistory(tx,{requestId:request.id})) {
     if(task.clientId===request.clientId && task.status==='COMPLETED') tasks.set(task.id,task);
@@ -58,6 +58,35 @@ export async function readFbsPickedStockProof(tx: Prisma.TransactionClient, requ
         if(quantity<=0) continue;
         result.push({itemId:item.id,skuId:item.skuId!,boxId:group[0].row.boxId,palletId:group[0].row.palletId,warehouseId,quantity,movementIds:rows.map(m=>m.id)});
         taskRemaining-=quantity;itemRemaining.set(item.id,(itemRemaining.get(item.id)??0)-quantity);
+      }
+      // FIX: a recount may already have removed the relabelled physical unit.
+      // Accept only an unambiguous, fully depleted conversion with its KIZ still in packing.
+      if (!rows.length && taskRemaining === 1 && (itemRemaining.get(item.id) ?? 0) > 0 &&
+          process.env.WMS_PERMANENT_STORAGE_BOXES_ENABLED === 'true' &&
+          task.sourceSkuId && task.relabelConfirmedAt && task.kiz && task.boxId) {
+        const pair = await tx.stockMovement.findMany({where:{clientId:request.clientId,warehouseId,
+          idempotencyKey:{in:[`fbs-relabel:${task.id}:source`,`fbs-relabel:${task.id}:target`]}},
+          orderBy:{createdAt:'asc'}});
+        const source=pair.find(m=>m.idempotencyKey===`fbs-relabel:${task.id}:source`);
+        const target=pair.find(m=>m.idempotencyKey===`fbs-relabel:${task.id}:target`);
+        if (!source || !target || source.skuId!==task.sourceSkuId || target.skuId!==task.skuId ||
+            source.quantity!==-1 || target.quantity!==1 || source.boxId!==task.boxId || target.boxId!==task.boxId ||
+            source.status!=='AVAILABLE' || target.status!=='AVAILABLE') continue;
+        const ledger=await tx.stockMovement.findMany({where:{clientId:request.clientId,warehouseId,skuId:task.skuId,
+          boxId:task.boxId,createdAt:{gte:target.createdAt}},orderBy:[{createdAt:'asc'},{id:'asc'}]});
+        if (ledger.length!==2 || !ledger.some(m=>m.id===target.id) || !ledger.some(m=>
+          m.quantity===-1 && m.status==='AVAILABLE' && m.type==='INVENTORY_ADJUSTMENT' && m.idempotencyKey?.startsWith('web-inventory:'))) continue;
+        const [marks,balances,owners]=await Promise.all([
+          tx.productMark.findMany({where:{clientId:request.clientId,value:task.kiz},select:{value:true,status:true,skuId:true,boxId:true}}),
+          tx.stockBalance.findMany({where:{clientId:request.clientId,warehouseId,skuId:task.skuId,boxId:task.boxId,quantity:{gt:0}}}),
+          tx.fbsTsdAssembly.findMany({where:{clientId:request.clientId,skuId:task.skuId,boxId:task.boxId,
+            status:{notIn:['CANCELLED','RESET']},relabelConfirmedAt:{gte:target.createdAt}},select:{id:true}}),
+        ]);
+        if (balances.length || owners.length!==1 || owners[0].id!==task.id || marks.length!==1 ||
+            marks[0].status!=='PACKING' || marks[0].skuId!==task.skuId || marks[0].boxId!==task.boxId) continue;
+        result.push({itemId:item.id,skuId:item.skuId!,boxId:task.boxId,palletId:target.palletId,warehouseId,
+          quantity:1,movementIds:[source.id,...ledger.map(m=>m.id)]});
+        itemRemaining.set(item.id,(itemRemaining.get(item.id)??0)-1);
       }
     }
   }

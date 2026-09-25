@@ -15,7 +15,7 @@ import {
   Warehouse,
   X,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   downloadTurnoverMovementDocumentXlsx,
   downloadTurnoverReceiptPeriodXlsx,
@@ -87,6 +87,7 @@ const actionOptions: Array<{ value: TurnoverActionKind; label: string; hint: str
 ];
 
 export function TurnoverPanel({ session }: { session: AuthSession }) {
+  const reportGeneration = useRef(0);
   const [activeTile, setActiveTile] = useState<ActiveTile>('home');
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
   const [report, setReport] = useState<LoadState<TurnoverReport | null>>({ status: 'idle', data: null });
@@ -146,7 +147,10 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     }
 
     setBoxDetails({ status: 'idle', data: null });
-    void loadTurnover();
+    // FIX: client selection must not fetch every SKU's complete movement graph.
+    reportGeneration.current += 1;
+    setReport({status:'idle',data:null});
+    setStatistics({status:'idle',data:null});
     // FIX: the debounced effect below is the single source of suggestion requests.
   }, [selectedClientId]);
 
@@ -228,6 +232,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       return;
     }
 
+    // FIX: only the latest explicit search may update either result panel.
+    const generation = ++reportGeneration.current;
     setReport((current) => ({ ...current, status: 'loading', error: undefined }));
     setStatistics((current) => ({ ...current, status: canSeeStatistics ? 'loading' : 'idle', error: undefined }));
     setActionMessage('');
@@ -248,11 +254,11 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     // FIX: statistics latency/failure must not hold back the stock report.
     await Promise.all([
       fetchTurnoverReport(session.accessToken, reportFilter)
-        .then(data => setReport({ status: 'ready', data }))
-        .catch(caught => setReport(current => ({ ...current, status: 'error', error: errorMessage(caught) }))),
+        .then(data => { if (generation === reportGeneration.current) setReport({ status: 'ready', data }); })
+        .catch(caught => { if (generation === reportGeneration.current) setReport(current => ({ ...current, status: 'error', error: errorMessage(caught) })); }),
       (canSeeStatistics ? fetchTurnoverStatistics(session.accessToken, statisticsFilter) : Promise.resolve(null))
-        .then(data => setStatistics({ status: data ? 'ready' : 'idle', data }))
-        .catch(caught => setStatistics(current => ({ ...current, status: 'error', error: errorMessage(caught) }))),
+        .then(data => { if (generation === reportGeneration.current) setStatistics({ status: data ? 'ready' : 'idle', data }); })
+        .catch(caught => { if (generation === reportGeneration.current) setStatistics(current => ({ ...current, status: 'error', error: errorMessage(caught) })); }),
     ]);
   }
 
@@ -601,7 +607,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
           </label>
 
-          <button className="primary-button" type="button" onClick={() => void loadTurnover()} disabled={!selectedClientId || report.status === 'loading'}>
+          <button className="primary-button" type="button" onClick={() => void loadTurnover()} disabled={!selectedClientId}>
             <RefreshCw size={16} aria-hidden="true" />
             <span>Показать</span>
           </button>

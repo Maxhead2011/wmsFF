@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TurnoverPanel } from './TurnoverPanel';
 import { fetchTurnoverBoxDetails, fetchTurnoverReport, fetchTurnoverStatistics } from '../../lib/api';
 
-const hooks = vi.hoisted(() => ({ values: [] as any[], cursor: 0 }));
+const hooks = vi.hoisted(() => ({ values: [] as any[], cursor: 0, effects: [] as Array<() => unknown>, ref:{current:0} }));
 vi.mock('react', async () => ({
   ...await vi.importActual<typeof import('react')>('react'),
-  useEffect: () => undefined,
+  useEffect: (fn: () => unknown) => { hooks.effects.push(fn); },
+  useRef: () => hooks.ref,
   useMemo: (fn: () => unknown) => fn(),
   useState: (initial: any) => {
     const index = hooks.cursor++;
@@ -33,7 +34,30 @@ function render(cell: any) {
   return TurnoverPanel({session:{accessToken:'token',user:{id:'user',roleCodes:[],permissionCodes:[]}} as any});
 }
 describe('turnover location lookup', () => {
-  beforeEach(() => { hooks.values=[]; vi.clearAllMocks();vi.mocked(fetchTurnoverBoxDetails).mockRejectedValue(new Error('not found')); });
+  beforeEach(() => { hooks.values=[]; hooks.effects=[];hooks.ref.current=0; vi.clearAllMocks();vi.mocked(fetchTurnoverBoxDetails).mockRejectedValue(new Error('not found')); });
+  // TEST: selecting a client must not load all movement histories before a barcode can be searched.
+  it('does not start an unfiltered report on client selection', () => {
+    render({boxId:null,boxCode:'Без короба',quantity:1});
+    hooks.effects[1]();
+    expect(fetchTurnoverReport).not.toHaveBeenCalled();
+  });
+  // TEST: a late response cannot replace the result of a newer search.
+  it('ignores an older report response and allows searching while loading', async () => {
+    hooks.values[0]='movement';
+    let oldResolve!: (value:any)=>void;
+    vi.mocked(fetchTurnoverReport).mockImplementationOnce(()=>new Promise(resolve=>{oldResolve=resolve;}))
+      .mockResolvedValueOnce({items:[],totals:{skuCount:2}} as any);
+    vi.mocked(fetchTurnoverStatistics).mockResolvedValue(null as any);
+    const make=()=>{hooks.cursor=0;return TurnoverPanel({session:{accessToken:'token',user:{id:'u',roleCodes:[],permissionCodes:[]}} as any});};
+    const button=(tree:any)=>elements(tree).find(n=>n.type==='button'&&n.props.className==='primary-button');
+    button(make()).props.onClick();
+    expect(button(make()).props.disabled).toBe(false);
+    button(make()).props.onClick();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    oldResolve({items:[],totals:{skuCount:1}});
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(hooks.values[2].data.totals.skuCount).toBe(2);
+  });
   // TEST: a slow or failed statistics response cannot delay or discard ready stock rows.
   it.each(['pending', 'failed'])('shows stock while statistics is %s', async mode => {
     vi.mocked(fetchTurnoverReport).mockResolvedValue({ items: [], totals: {} } as any);
