@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
-import { PayrollConditionDto, PayrollEmployeeDto, PayrollHandlingDto, PayrollShiftDto, PayrollStatusDto } from './payroll.dto';
+import { PayrollConditionDto, PayrollEmployeeDto, PayrollHandlingDto, PayrollShiftDto, PayrollStatusDto, PayrollHistoryEditDto } from './payroll.dto';
 import { calculateHandling, calculateWorkDay, payrollRateAt, workDate } from './payroll-calculation';
 import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { Prisma } from '@prisma/client';
@@ -136,6 +136,32 @@ export class PayrollService {
     return this.prisma.user.findMany({ where: { isDemo: Boolean(user.isDemo), ...(ids ? { warehouseScopes: { some: { warehouseId: { in: ids } } } } : {}) }, select: { id: true, name: true }, orderBy: { name: 'asc' } });
   }
 
+  // FIX: corrections of imported times require explicit lunch, rate, reason and payment review.
+  async updateHistory(employeeId: string, key: string, dto: PayrollHistoryEditDto, user: AuthUser) {
+    const employee = await this.employee(employeeId, user, true);
+    const minutes = (s: string) => {
+      if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(s)) throw new BadRequestException('Укажите время ЧЧ:ММ.');
+      const [h, m] = s.split(':').map(Number); return h * 60 + m;
+    };
+    const start = minutes(dto.startTime), end = minutes(dto.endTime);
+    const worked = end > start ? end - start : end < start ? end + 1440 - start : 0;
+    if (!dto.reason.trim() || !worked || !Number.isSafeInteger(dto.lunchMinutes) || dto.lunchMinutes < 0 || dto.lunchMinutes > worked || !Number.isSafeInteger(dto.rateKopecks) || dto.rateKopecks < 0) throw new BadRequestException('Проверьте время, обед, ставку и причину.');
+    const amountKopecks = Math.round((worked - dto.lunchMinutes) * dto.rateKopecks / 60);
+    if (!Number.isSafeInteger(amountKopecks) || amountKopecks > 2147483647) throw new BadRequestException('Сумма слишком велика.');
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM "PayrollEmployee" WHERE id = ${employeeId} FOR UPDATE`;
+      const before = await tx.payrollHistorical.findFirst({ where: { key, employeeId, warehouseId: employee.warehouseId } });
+      if (!before) throw new NotFoundException('Запись не найдена.');
+      const settlement = await tx.payrollSettlement.findUnique({ where: { key: `HISTORY:${key}` } });
+      if ((settlement?.status ?? before.status) === 'PAID') throw new BadRequestException('Запись оплачена. Сначала переведите её в статус «На проверке».');
+      const data = { ...(before.data as Prisma.JsonObject), start: start / 1440, end: end / 1440, lunch: dto.lunchMinutes / 1440, paidTime: (worked - dto.lunchMinutes) / 1440, rate: dto.rateKopecks / 100, amountKopecks };
+      const row = await tx.payrollHistorical.update({ where: { key }, data: { data, amountKopecks, status: 'REVIEW' } });
+      if (settlement) await tx.payrollSettlement.update({ where: { key: settlement.key ?? `HISTORY:${key}` }, data: { status: 'REVIEW', comment: dto.reason, updatedById: user.id } });
+      await tx.payrollAudit.create({ data: { warehouseId: employee.warehouseId, actorId: user.id, entityId: key, action: 'HISTORY_UPDATED', details: { before: { data: before.data, amountKopecks: before.amountKopecks, status: before.status }, after: { data, amountKopecks, status: 'REVIEW' }, reason: dto.reason } } });
+      return row;
+    });
+  }
+
   async addHandling(dto: PayrollHandlingDto, user: AuthUser) {
     this.scope(user, true);
     for (const id of dto.employeeIds) {
@@ -196,7 +222,7 @@ export class PayrollService {
         }
         const calculated = calculateWorkDay(day.map(s => ({ start: s.startsAt.toISOString(), end: s.endsAt!.toISOString() })), schedule('HOURLY'));
         rows.push({ key: `WORK:${employeeId}:${date}`, employeeId, date, kind: 'HOURLY', amountKopecks: calculated.amountKopecks,
-          workedMs: calculated.workedMs, lunchMs: calculated.lunchMs, status: 'UNPAID', detail: calculated });
+          workedMs: calculated.workedMs, lunchMs: calculated.lunchMs, status: 'UNPAID', detail: { ...calculated, shifts: day.map(s => ({ id: s.id, start: s.startsAt.toISOString(), end: s.endsAt!.toISOString() })) } });
       } catch (e) { issues.push(`${date}: проверьте ставки и интервалы смены`); }
     }
     if (employee.userId) {

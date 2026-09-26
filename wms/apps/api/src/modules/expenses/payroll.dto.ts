@@ -28,6 +28,14 @@ export class PayrollShiftDto {
   @IsString() @MaxLength(1000) reason!: string;
 }
 
+export class PayrollHistoryEditDto {
+  @IsString() startTime!: string;
+  @IsString() endTime!: string;
+  @IsInt() @Min(0) lunchMinutes!: number;
+  @IsInt() @Min(0) rateKopecks!: number;
+  @IsString() @MaxLength(1000) reason!: string;
+}
+
 export class PayrollHandlingDto {
   @IsString() warehouseId!: string;
   @IsISO8601() startsAt!: string;

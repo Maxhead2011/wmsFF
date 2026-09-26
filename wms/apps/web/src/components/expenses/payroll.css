@@ -12,4 +12,8 @@
 .payroll-table table { width:100%; border-collapse:collapse; }
 .payroll-table th,.payroll-table td { padding:12px; border-bottom:1px solid #e4e9f0; text-align:left; }
 .payroll-table th { background:#f4f7fb; }
+.payroll-heading { display:flex; align-items:center; gap:20px; }
+.payroll-heading h2 { margin:0; }
+.payroll-time { white-space:pre-line; min-width:100px; }
+.payroll-table td { vertical-align:top; }
 @media(max-width:650px) { .payroll-tiles { grid-template-columns:1fr; } }

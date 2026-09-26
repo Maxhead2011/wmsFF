@@ -5,7 +5,7 @@ import { payrollPdf, payrollXlsx } from './payroll-export';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import type { AuthUser } from '../auth/auth.types';
-import { PayrollConditionDto, PayrollEmployeeDto, PayrollHandlingDto, PayrollShiftDto, PayrollStatusDto } from './payroll.dto';
+import { PayrollConditionDto, PayrollEmployeeDto, PayrollHandlingDto, PayrollShiftDto, PayrollStatusDto, PayrollHistoryEditDto } from './payroll.dto';
 import { PayrollService } from './payroll.service';
 
 @Controller('expenses/workforce')
@@ -31,6 +31,10 @@ export class PayrollController {
   updateShift(@Param('id') id: string, @Param('shiftId') shiftId: string, @Body() dto: PayrollShiftDto, @CurrentUser() user: AuthUser) { return this.payroll.updateShift(id, shiftId, dto, user); }
   @Get('employees/:id/report') report(@Param('id') id: string, @Query('from') from: string, @Query('to') to: string, @CurrentUser() user: AuthUser) {
     return this.payroll.report(id, from, to, user);
+  }
+  @Put('employees/:id/history/:key') @RequirePermissions('expenses:write')
+  updateHistory(@Param('id') id: string, @Param('key') key: string, @Body() dto: PayrollHistoryEditDto, @CurrentUser() user: AuthUser) {
+    return this.payroll.updateHistory(id, key, dto, user);
   }
   @Post('handling') @RequirePermissions('expenses:write')
   handling(@Body() dto: PayrollHandlingDto, @CurrentUser() user: AuthUser) { return this.payroll.addHandling(dto, user); }
