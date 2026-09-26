@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PayrollManagement, payrollTimeCells, payrollIntervalCells } from './PayrollManagement';
+import { PayrollManagement, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary } from './PayrollManagement';
 import type { AuthSession } from '../../lib/api';
 // TEST: no new payroll form is visible before the server explicitly enables it.
 describe('payroll feature isolation', () => {
+  // TEST: payment details belong beside each employee's period total, never another employee's rows.
+  it('groups selected-period rows and distinguishes paid, unpaid and review amounts', () => {
+    const people = [{ id: 'e1', name: 'Первый', paymentMethod: 'TRANSFER', paymentPhone: '+7 900 000-00-00', paymentBank: 'Банк' },
+      { id: 'e2', name: 'Второй', paymentMethod: 'CASH', paymentPhone: 'old', paymentBank: 'old' }];
+    const rows = [{ employeeId: 'e1', amountKopecks: 10000, status: 'UNPAID' }, { employeeId: 'e1', amountKopecks: 5000, status: 'PAID' },
+      { employeeId: 'e1', amountKopecks: 2000, status: 'REVIEW' }, { employeeId: 'e2', amountKopecks: 900, status: 'UNPAID' }];
+    expect(payrollPaymentSummary(people, rows, 'e1')).toEqual([{ id: 'e1', name: 'Первый', amountKopecks: 17000, unpaidKopecks: 10000,
+      paidKopecks: 5000, reviewKopecks: 2000, payment: 'Перевод', phone: '+7 900 000-00-00', bank: 'Банк' }]);
+    expect(payrollPaymentSummary(people, rows, '__all')[1]).toMatchObject({ amountKopecks: 900, payment: 'Наличные', phone: '—', bank: '—' });
+  });
+  it('marks missing transfer details explicitly and includes zero total for a selected employee', () => {
+    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'TRANSFER' }], [], 'e')[0])
+      .toMatchObject({ amountKopecks: 0, phone: 'Не указан', bank: 'Не указан' });
+    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'UNSPECIFIED' }], [], '__all')).toEqual([]);
+  });
   // TEST: historical display preserves synthetic clock values; real overnight visits retain dates.
   it('shows imported start/end without guessing the original night shift', () => {
     expect(payrollIntervalCells({ kind: 'HISTORY', detail: { start: 17 / 24, end: 1439 / 1440 } })).toEqual(['17:00', '23:59']);

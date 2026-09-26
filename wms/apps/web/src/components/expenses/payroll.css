@@ -17,3 +17,6 @@
 .payroll-time { white-space:pre-line; min-width:100px; }
 .payroll-table td { vertical-align:top; }
 @media(max-width:650px) { .payroll-tiles { grid-template-columns:1fr; } }
+.payroll-payment-summary { margin: 16px 0; padding: 16px; border: 1px solid #dce3ef; border-radius: 12px; background: #f8faff; }
+.payroll-payment-summary h3 { margin-top: 0; }
+.payroll-payment-detail { margin-top: 6px; font-size: 0.86em; color: #5d687e; white-space: nowrap; }
