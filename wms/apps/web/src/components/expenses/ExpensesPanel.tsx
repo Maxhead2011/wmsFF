@@ -30,6 +30,7 @@ import {
   fetchExpenseMaterials,
   fetchExpensePayroll,
   fetchExpenseReport,
+  payrollRequest,
   resetExpensePayrollCounter,
   updateExpensePayrollRate,
   updateClientExpenseMaterialRule,
@@ -83,6 +84,14 @@ const expenseCategories: Array<{ value: ExpenseCategory; label: string }> = [
 const initialPeriod = currentMonthPeriod();
 
 export function ExpensesPanel({ session }: ExpensesPanelProps) {
+  const [workforceEnabled, setWorkforceEnabled] = useState(false);
+  useEffect(() => {
+    let live = true;
+    payrollRequest<{ enabled: boolean }>(session.accessToken, '/capabilities')
+      .then(result => { if (live) setWorkforceEnabled(result.enabled); })
+      .catch(() => { if (live) setWorkforceEnabled(false); });
+    return () => { live = false; };
+  }, [session.accessToken]);
   const canWrite = canUse(session, 'expenses:write');
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -182,6 +191,11 @@ export function ExpensesPanel({ session }: ExpensesPanelProps) {
   function notify(text: string) {
     setMessage(text);
     window.setTimeout(() => setMessage(null), 4500);
+  }
+
+  // FIX: enabled FOT owns its workspace; returning remounts the Expenses landing tiles.
+  if (workforceEnabled && activeTab === 'payroll') {
+    return <PayrollManagement session={session} legacy={null} onBack={() => setActiveTab('overview')} />;
   }
 
   return (
