@@ -48,3 +48,5 @@ Latest verified release: PR328, payroll navigation and audited time corrections.
 Latest verified release: PR330, payroll payment summary. Baseline `wms/baselines/our-wms/2026-09-26-payroll-payment-summary`. Web `sha256:e9dcce013f1ca121d7c05ca2a89e7a91175bda42c65c2b7e1d0bce96481065c4`; API/APK/flags unchanged. Source parity remains false.
 
 Latest verified release: PR332, payroll editor, dates and sorting. Baseline `wms/baselines/our-wms/2026-09-26-payroll-editor`. Web `sha256:693a0d1f72469302bd77233790260e31de44a9621a9411c19cdf335930342f57`; API export module updated; APK/flags unchanged. Source parity remains false.
+
+Latest verified release: PR334, payroll employee card. Baseline `wms/baselines/our-wms/2026-09-26-payroll-card`. Web `sha256:f71d461f6762387b3ef16471e0862daf0bda734e4ee76b530a86e9026007bd64`; API/APK/flags unchanged. Source parity remains false.
