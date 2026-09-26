@@ -1,0 +1,187 @@
+{
+  "checkedAt": "2026-09-26T13:10:44.033389+00:00",
+  "images": {
+    "infra-api-1": "sha256:1ce3f6acbfd09b562fcf48bd7a57cda6d6208c1f8f051e8baad8e5dbf413029f",
+    "infra-web-1": "sha256:3695f20eab55822b447412a77adf06be31bec7ee229ed65b8daa0434d48358fd"
+  },
+  "baseline": "our-wms-2026-09-26-relabel-close",
+  "comparisons": {
+    "2026-09-26-relabel-close": {
+      "api-runtime.tar.gz": {
+        "files": 537,
+        "added": [],
+        "removed": [],
+        "changed": []
+      },
+      "web-runtime.tar.gz": {
+        "files": 267,
+        "added": [],
+        "removed": [],
+        "changed": []
+      }
+    },
+    "2026-09-25-direct-route": {
+      "api-runtime.tar.gz": {
+        "files": 537,
+        "added": [],
+        "removed": [],
+        "changed": [
+          "modules/stock/fbs-picked-stock-proof.js",
+          "modules/turnover/turnover.service.js"
+        ]
+      },
+      "web-runtime.tar.gz": {
+        "files": 267,
+        "added": [
+          "assets/AdministrationPanel-BFUK1VvX-age214-site20260925-turnover326-relabel-close.js",
+          "assets/AdministrationPanel-BFUK1VvX-age214-site20260925-turnover326.js",
+          "assets/AnalyticsPanel-tAXSRXYw-age214-site20260925-turnover326-relabel-close.js",
+          "assets/AnalyticsPanel-tAXSRXYw-age214-site20260925-turnover326.js",
+          "assets/ArticleMappingPanel-B1JMi9zj-age214-site20260925-turnover326-relabel-close.js",
+          "assets/ArticleMappingPanel-B1JMi9zj-age214-site20260925-turnover326.js",
+          "assets/BillingPanel-B0ygPJD1-age214-site20260925-turnover326-relabel-close.js",
+          "assets/BillingPanel-B0ygPJD1-age214-site20260925-turnover326.js",
+          "assets/ClientRequestsPanel-DJ-ZrxOL-age214-site20260925-turnover326-relabel-close.js",
+          "assets/ClientRequestsPanel-DJ-ZrxOL-age214-site20260925-turnover326.js",
+          "assets/DbsPanel-OOJIuvoq-age214-site20260925-turnover326-relabel-close.js",
+          "assets/DbsPanel-OOJIuvoq-age214-site20260925-turnover326.js",
+          "assets/DirectoryPanel-CHFulhp7-age214-site20260925-turnover326-relabel-close.js",
+          "assets/DirectoryPanel-CHFulhp7-age214-site20260925-turnover326.js",
+          "assets/FactoryPanel-Byg7pVH7-age214-site20260925-turnover326-relabel-close.js",
+          "assets/FactoryPanel-Byg7pVH7-age214-site20260925-turnover326.js",
+          "assets/FboWorkspace-DJbx5BC--age214-site20260925-turnover326-relabel-close.js",
+          "assets/FboWorkspace-DJbx5BC--age214-site20260925-turnover326.js",
+          "assets/FbsPackedItemsPanel-DOe88O3G-age214-site20260925-turnover326-relabel-close.js",
+          "assets/FbsPackedItemsPanel-DOe88O3G-age214-site20260925-turnover326.js",
+          "assets/FbsPanel-R5-GErcZ-age214-site20260925-turnover326-relabel-close.js",
+          "assets/FbsPanel-R5-GErcZ-age214-site20260925-turnover326.js",
+          "assets/IntegrationApiPanel-BeuNKV4T-age214-site20260925-turnover326-relabel-close.js",
+          "assets/IntegrationApiPanel-BeuNKV4T-age214-site20260925-turnover326.js",
+          "assets/KizCirculationPanel-D_Wgf4yB-age214-site20260925-turnover326-relabel-close.js",
+          "assets/KizCirculationPanel-D_Wgf4yB-age214-site20260925-turnover326.js",
+          "assets/MonitoringPanel-D1DZW-Lo-age214-site20260925-turnover326-relabel-close.js",
+          "assets/MonitoringPanel-D1DZW-Lo-age214-site20260925-turnover326.js",
+          "assets/OrderAssemblyPanel-lpEuoYsd-age214-site20260925-turnover326-relabel-close.js",
+          "assets/OrderAssemblyPanel-lpEuoYsd-age214-site20260925-turnover326.js",
+          "assets/OzonFboPanel-Cf95Ldha-age214-site20260925-turnover326-relabel-close.js",
+          "assets/OzonFboPanel-Cf95Ldha-age214-site20260925-turnover326.js",
+          "assets/RelabelingPanel-CYNAN3rV-age214-site20260925-turnover326-relabel-close.js",
+          "assets/RelabelingPanel-CYNAN3rV-age214-site20260925-turnover326.js",
+          "assets/activity-BcEd57Yc-age214-site20260925-turnover326-relabel-close.js",
+          "assets/activity-BcEd57Yc-age214-site20260925-turnover326.js",
+          "assets/code-xml-8KlIZJEh-age214-site20260925-turnover326-relabel-close.js",
+          "assets/code-xml-8KlIZJEh-age214-site20260925-turnover326.js",
+          "assets/eye-off-D9rDjNox-age214-site20260925-turnover326-relabel-close.js",
+          "assets/eye-off-D9rDjNox-age214-site20260925-turnover326.js",
+          "assets/fbs-stock-transfer-BgjVbJ_G-age214-site20260925-turnover326-relabel-close.js",
+          "assets/fbs-stock-transfer-BgjVbJ_G-age214-site20260925-turnover326.js",
+          "assets/index-public-light-20260925-turnover326-relabel-close.js",
+          "assets/index-public-light-20260925-turnover326.js",
+          "assets/link-2-DbxOqxBN-age214-site20260925-turnover326-relabel-close.js",
+          "assets/link-2-DbxOqxBN-age214-site20260925-turnover326.js",
+          "assets/shopping-bag-B4DBovBG-age214-site20260925-turnover326-relabel-close.js",
+          "assets/shopping-bag-B4DBovBG-age214-site20260925-turnover326.js",
+          "assets/shopping-cart-C3czQWt8-age214-site20260925-turnover326-relabel-close.js",
+          "assets/shopping-cart-C3czQWt8-age214-site20260925-turnover326.js",
+          "assets/tablet-CIckWpRm-age214-site20260925-turnover326-relabel-close.js",
+          "assets/tablet-CIckWpRm-age214-site20260925-turnover326.js",
+          "assets/wand-sparkles-DTVvpSjI-age214-site20260925-turnover326-relabel-close.js",
+          "assets/wand-sparkles-DTVvpSjI-age214-site20260925-turnover326.js",
+          "assets/wbStockPreview-BxHOu5jz-age214-site20260925-turnover326-relabel-close.js",
+          "assets/wbStockPreview-BxHOu5jz-age214-site20260925-turnover326.js"
+        ],
+        "removed": [],
+        "changed": [
+          "index.html"
+        ]
+      }
+    },
+    "2026-09-25-fbs-box-scan": {
+      "api-runtime.tar.gz": {
+        "files": 537,
+        "added": [],
+        "removed": [],
+        "changed": [
+          "modules/stock/fbs-picked-stock-proof.js",
+          "modules/tsd/tsd-assembly.service.js",
+          "modules/turnover/turnover.service.js"
+        ]
+      },
+      "web-runtime.tar.gz": {
+        "files": 267,
+        "added": [
+          "assets/AdministrationPanel-BFUK1VvX-age214-site20260925-turnover326-relabel-close.js",
+          "assets/AdministrationPanel-BFUK1VvX-age214-site20260925-turnover326.js",
+          "assets/AnalyticsPanel-tAXSRXYw-age214-site20260925-turnover326-relabel-close.js",
+          "assets/AnalyticsPanel-tAXSRXYw-age214-site20260925-turnover326.js",
+          "assets/ArticleMappingPanel-B1JMi9zj-age214-site20260925-turnover326-relabel-close.js",
+          "assets/ArticleMappingPanel-B1JMi9zj-age214-site20260925-turnover326.js",
+          "assets/BillingPanel-B0ygPJD1-age214-site20260925-turnover326-relabel-close.js",
+          "assets/BillingPanel-B0ygPJD1-age214-site20260925-turnover326.js",
+          "assets/ClientRequestsPanel-DJ-ZrxOL-age214-site20260925-turnover326-relabel-close.js",
+          "assets/ClientRequestsPanel-DJ-ZrxOL-age214-site20260925-turnover326.js",
+          "assets/DbsPanel-OOJIuvoq-age214-site20260925-turnover326-relabel-close.js",
+          "assets/DbsPanel-OOJIuvoq-age214-site20260925-turnover326.js",
+          "assets/DirectoryPanel-CHFulhp7-age214-site20260925-turnover326-relabel-close.js",
+          "assets/DirectoryPanel-CHFulhp7-age214-site20260925-turnover326.js",
+          "assets/FactoryPanel-Byg7pVH7-age214-site20260925-turnover326-relabel-close.js",
+          "assets/FactoryPanel-Byg7pVH7-age214-site20260925-turnover326.js",
+          "assets/FboWorkspace-DJbx5BC--age214-site20260925-turnover326-relabel-close.js",
+          "assets/FboWorkspace-DJbx5BC--age214-site20260925-turnover326.js",
+          "assets/FbsPackedItemsPanel-DOe88O3G-age214-site20260925-turnover326-relabel-close.js",
+          "assets/FbsPackedItemsPanel-DOe88O3G-age214-site20260925-turnover326.js",
+          "assets/FbsPanel-R5-GErcZ-age214-site20260925-turnover326-relabel-close.js",
+          "assets/FbsPanel-R5-GErcZ-age214-site20260925-turnover326.js",
+          "assets/IntegrationApiPanel-BeuNKV4T-age214-site20260925-turnover326-relabel-close.js",
+          "assets/IntegrationApiPanel-BeuNKV4T-age214-site20260925-turnover326.js",
+          "assets/KizCirculationPanel-D_Wgf4yB-age214-site20260925-turnover326-relabel-close.js",
+          "assets/KizCirculationPanel-D_Wgf4yB-age214-site20260925-turnover326.js",
+          "assets/MonitoringPanel-D1DZW-Lo-age214-site20260925-turnover326-relabel-close.js",
+          "assets/MonitoringPanel-D1DZW-Lo-age214-site20260925-turnover326.js",
+          "assets/OrderAssemblyPanel-lpEuoYsd-age214-site20260925-turnover326-relabel-close.js",
+          "assets/OrderAssemblyPanel-lpEuoYsd-age214-site20260925-turnover326.js",
+          "assets/OzonFboPanel-Cf95Ldha-age214-site20260925-turnover326-relabel-close.js",
+          "assets/OzonFboPanel-Cf95Ldha-age214-site20260925-turnover326.js",
+          "assets/RelabelingPanel-CYNAN3rV-age214-site20260925-turnover326-relabel-close.js",
+          "assets/RelabelingPanel-CYNAN3rV-age214-site20260925-turnover326.js",
+          "assets/activity-BcEd57Yc-age214-site20260925-turnover326-relabel-close.js",
+          "assets/activity-BcEd57Yc-age214-site20260925-turnover326.js",
+          "assets/code-xml-8KlIZJEh-age214-site20260925-turnover326-relabel-close.js",
+          "assets/code-xml-8KlIZJEh-age214-site20260925-turnover326.js",
+          "assets/eye-off-D9rDjNox-age214-site20260925-turnover326-relabel-close.js",
+          "assets/eye-off-D9rDjNox-age214-site20260925-turnover326.js",
+          "assets/fbs-stock-transfer-BgjVbJ_G-age214-site20260925-turnover326-relabel-close.js",
+          "assets/fbs-stock-transfer-BgjVbJ_G-age214-site20260925-turnover326.js",
+          "assets/index-public-light-20260925-turnover326-relabel-close.js",
+          "assets/index-public-light-20260925-turnover326.js",
+          "assets/link-2-DbxOqxBN-age214-site20260925-turnover326-relabel-close.js",
+          "assets/link-2-DbxOqxBN-age214-site20260925-turnover326.js",
+          "assets/shopping-bag-B4DBovBG-age214-site20260925-turnover326-relabel-close.js",
+          "assets/shopping-bag-B4DBovBG-age214-site20260925-turnover326.js",
+          "assets/shopping-cart-C3czQWt8-age214-site20260925-turnover326-relabel-close.js",
+          "assets/shopping-cart-C3czQWt8-age214-site20260925-turnover326.js",
+          "assets/tablet-CIckWpRm-age214-site20260925-turnover326-relabel-close.js",
+          "assets/tablet-CIckWpRm-age214-site20260925-turnover326.js",
+          "assets/wand-sparkles-DTVvpSjI-age214-site20260925-turnover326-relabel-close.js",
+          "assets/wand-sparkles-DTVvpSjI-age214-site20260925-turnover326.js",
+          "assets/wbStockPreview-BxHOu5jz-age214-site20260925-turnover326-relabel-close.js",
+          "assets/wbStockPreview-BxHOu5jz-age214-site20260925-turnover326.js"
+        ],
+        "removed": [],
+        "changed": [
+          "index.html"
+        ]
+      }
+    }
+  },
+  "booleanFlagsMatch": true,
+  "androidManifestMatch": true,
+  "apkSha256": "405e13998427f8dd2b24f03d7cb89d99997a3eba9410486fe21f4a6cd11e38fd",
+  "health": {
+    "httpStatus": 200,
+    "body": "{\"status\":\"ok\",\"service\":\"logoff-wms-api\",\"time\":\"2026-09-26T13:10:48.237Z\"}"
+  },
+  "imagesStableDuringCheck": true,
+  "imagesMatch": true,
+  "verified": true
+}
