@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PayrollManagement, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary, payrollDate, payrollSortRows } from './PayrollManagement';
+import { PayrollManagement, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary, payrollDate, payrollSortRows, payrollCurrentRates } from './PayrollManagement';
 import type { AuthSession } from '../../lib/api';
 // TEST: no new payroll form is visible before the server explicitly enables it.
 describe('payroll feature isolation', () => {
+  // TEST: settings show the current condition, not one from the report period or an expired override.
+  it('selects current rates with temporary precedence and an exclusive end boundary', () => {
+    const rates = [
+      { id: 'base', kind: 'HOURLY', rateKopecks: 35000, startsAt: '2026-01-01T00:00:00Z', temporary: false },
+      { id: 'temp', kind: 'HOURLY', rateKopecks: 40000, startsAt: '2026-09-01T00:00:00Z', endsAt: '2026-10-01T00:00:00Z', temporary: true },
+      { id: 'future', kind: 'PALLET', rateKopecks: 60000, startsAt: '2026-11-01T00:00:00Z', temporary: false },
+    ];
+    expect(payrollCurrentRates(rates, Date.parse('2026-09-26T12:00:00Z')).map(r => r.id)).toEqual(['temp']);
+    expect(payrollCurrentRates(rates, Date.parse('2026-10-01T00:00:00Z')).map(r => r.id)).toEqual(['base']);
+  });
   // TEST: display dates are Russian, but chronological sorting uses ISO dates across month boundaries.
   it('formats dates and sorts all employees by date, name or bank without mutating the report', () => {
     expect(payrollDate('2026-09-05')).toBe('05.09.2026');

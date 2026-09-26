@@ -16,5 +16,6 @@ module.exports = async function verifyPayrollNavigation(page) {
   await page.getByRole('button', { name: /^Расходные материалы/ }).waitFor();
   await page.getByRole('button', { name: /^ФОТ/ }).click();
   await page.getByRole('button', { name: 'Настройки', exact: true }).click();
-  await page.getByRole('heading', { name: 'Добавить сотрудника', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Новый сотрудник', exact: true }).waitFor();
+  if (await page.locator('input[type=date]').count()) throw Error('Report dates leaked into settings');
 };

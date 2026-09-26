@@ -4,7 +4,7 @@ module.exports = async function verifyPayrollEditor(page) {
   await page.getByRole('button', {name: 'Настройки', exact:true}).click();
   const select = page.locator('.payroll-fields label').filter({hasText:/^Сотрудник/}).locator('select');
   await select.selectOption('e1');
-  await page.getByRole('button',{name:'Редактировать выбранного',exact:true}).click();
+  await page.getByRole('button',{name:'Редактировать',exact:true}).click();
   await page.getByLabel('Способ выплаты').selectOption('TRANSFER');
   await page.getByLabel('Телефон для перевода',{exact:true}).fill('+7 900 000-00-00');
   await page.getByLabel('Банк',{exact:true}).fill('Альфа');
@@ -12,6 +12,7 @@ module.exports = async function verifyPayrollEditor(page) {
   await select.selectOption('e2');
   if(await page.getByLabel('Имя',{exact:true}).inputValue()!=='Анна')throw Error('Previous employee draft leaked');
   if(await page.getByLabel('Способ выплаты').inputValue()!=='CASH')throw Error('Previous payment method leaked');
+  await page.getByRole('button',{name:'Редактировать',exact:true}).click();
   if(await page.locator('[name=rate]').inputValue()!=='')throw Error('Previous rate leaked');
   await page.getByRole('button',{name:'Сохранить сотрудника',exact:true}).click();
   await page.getByRole('status').filter({hasText:'Сотрудник сохранён'}).waitFor();
