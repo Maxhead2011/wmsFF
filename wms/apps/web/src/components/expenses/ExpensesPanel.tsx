@@ -48,6 +48,7 @@ import {
 import './expenses.css';
 import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import { PayrollManagement } from './PayrollManagement';
 
 type ExpensesPanelProps = {
   session: AuthSession;
@@ -270,6 +271,7 @@ export function ExpensesPanel({ session }: ExpensesPanelProps) {
         <ExpenseOverview report={report} materials={materials} debts={debts} />
       ) : null}
       {!loading && activeTab === 'payroll' ? (
+        <PayrollManagement session={session} legacy={
         <PayrollWorkspace
           session={session}
           report={payroll}
@@ -278,6 +280,7 @@ export function ExpensesPanel({ session }: ExpensesPanelProps) {
           notify={notify}
           setError={setError}
         />
+        } />
       ) : null}
       {!loading && activeTab === 'materials' ? (
         <MaterialsWorkspace
