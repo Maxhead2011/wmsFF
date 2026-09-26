@@ -1,0 +1,8 @@
+/* FIX: additive palette only; scoped to the public landing, never WMS screens. */
+body.logoff-site-body{background:#dce4e8}
+.logoff-site{--ls-paper:#dce4e8;--ls-line:#b6c5cd;--ls-mist:#ced9df;--ls-surface:#e8edf0}
+.logoff-site .ls-header{background:#dce4e8f5}
+.logoff-site .ls-capability{background:var(--ls-surface);border-color:var(--ls-line)}
+.logoff-site :is(.ls-capability--storage,.ls-capability--finance,.ls-updates-band,.ls-contact,.ls-preview figure){background:var(--ls-mist)}
+.logoff-site .ls-flow{background:#d5dfe5;border-color:var(--ls-line)}
+.logoff-site .ls-stage-detail{background:var(--ls-surface)}

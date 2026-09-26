@@ -8,6 +8,20 @@ const landingCss = readFileSync(new URL('./marketing-landing.css', import.meta.u
 // TEST: the public redesign must keep login/downloads and expose current workflows.
 describe('LOGOFF public website', () => {
   const render = () => renderToStaticMarkup(<MarketingLanding onLogin={() => undefined} />);
+  // TEST: darker public surfaces remain light and retain readable body text.
+  it('uses a soft slate palette with accessible text contrast', () => {
+    const luminance = (hex: string) => {
+      const rgb = hex.match(/../g)!.map(value => parseInt(value, 16) / 255)
+        .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+      return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+    };
+    for (const surface of ['dce4e8', 'e8edf0', 'ced9df']) {
+      expect(landingCss).toContain(`#${surface}`);
+      expect(luminance(surface)).toBeGreaterThan(.6);
+      expect((luminance(surface) + .05) / (luminance('425864') + .05)).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(landingCss).toContain('.logoff-site .ls-header{background:#dce4e8f5}');
+  });
   // TEST: public typography must not inherit operational dark-theme headings.
   it('isolates readable headings and body copy on light surfaces', () => {
     expect(landingCss).toContain('.logoff-site :is(h1,h2,h3){color:var(--ls-ink);text-shadow:none}');
