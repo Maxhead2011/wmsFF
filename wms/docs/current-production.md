@@ -1,3 +1,10 @@
+# Published PR332: payroll editor, dates and sorting / 26.09.2026
+
+API: `sha256:91f592f9ea0420cecefd508b0c3bf64c9ffc1385d35070fe3d601a3832896cd6`. Web: `sha256:693a0d1f72469302bd77233790260e31de44a9621a9411c19cdf335930342f57`.
+Employee card/rate isolation, explicit save messages, all-staff sorting and dd.mm.yyyy in UI/exports. Web245, API2844 passed/97 skipped; KIZ integration suite excluded because its local DB is not configured. TypeScript/build and actual candidate browser/export checks passed. Exact live API/web/APK/flags verified. Baseline `2026-09-26-payroll-editor`. Source parity remains false. Rollback web: `logoff-web:before-payroll-editor`. Single API export delta; APK unchanged. Imported 17 September handling operations / 30750 RUB with payment REVIEW; historical hourly entries preserved.
+
+## Previous release
+
 # Published PR330: payroll payment summary / 26.09.2026
 
 API unchanged: `sha256:a9684a191ca599ba7180c769fc5d33e9583af885ff794426c7d4765d9117cb7f`. Web: `sha256:e9dcce013f1ca121d7c05ca2a89e7a91175bda42c65c2b7e1d0bce96481065c4`.
