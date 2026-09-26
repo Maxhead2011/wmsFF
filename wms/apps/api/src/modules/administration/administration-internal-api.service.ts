@@ -130,10 +130,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'expenses',
     name: 'Расходы',
-    prefixes: ['/expenses'],
-    routeCount: 16,
+    prefixes: ['/expenses', '/expenses/workforce'],
+    routeCount: 31, // FIX: branch-scoped employee payroll, attendance, handling, payouts and import/export.
     description: 'Учёт расходов, категорий, статей и подтверждающих документов.',
-    logic: ['Регистрирует расходы филиала.', 'Фильтрует операции по периоду и ответственным.', 'Формирует отчётность и вложения.'],
+    logic: ['Регистрирует расходы филиала.', 'Фильтрует операции по периоду и ответственным.', 'Формирует отчётность и вложения.', 'Новый ФОТ за отдельным флагом: сотрудники, реквизиты, смены, ставки, погрузки, статусы выплат и импорт истории; администратор ограничен своим филиалом.'],
     dependencies: ['Основная БД', 'Файловое хранилище'],
   },
   {

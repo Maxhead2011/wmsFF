@@ -1,3 +1,121 @@
+// FIX: payroll records are separate from operational picking and printer state.
+model PayrollEmployee {
+  id             String   @id @default(uuid())
+  warehouseId    String
+  userId         String?  @unique
+  name           String
+  isActive       Boolean  @default(true)
+  isDemo         Boolean  @default(false)
+  picker         Boolean  @default(true)
+  loader         Boolean  @default(false)
+  paymentMethod  String   @default("CASH")
+  paymentPhone   String?
+  paymentBank    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  rates          PayrollCondition[]
+  shifts         PayrollShift[]
+  handlingShares PayrollHandlingShare[]
+  @@index([warehouseId, isDemo, isActive])
+}
+
+model PayrollCondition {
+  id           String   @id @default(uuid())
+  employeeId   String
+  kind         String
+  rateKopecks  Int
+  startsAt     DateTime
+  endsAt       DateTime?
+  temporary    Boolean @default(false)
+  reason       String
+  createdById  String
+  createdAt    DateTime @default(now())
+  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  @@index([employeeId, kind, startsAt])
+}
+
+model PayrollShift {
+  id           String   @id @default(uuid())
+  employeeId   String
+  startsAt     DateTime
+  endsAt       DateTime?
+  workDate     String
+  source       String
+  startPhoto   String?
+  endPhoto     String?
+  createdById  String
+  reason       String?
+  version      Int @default(1)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  @@index([employeeId, workDate])
+}
+
+model PayrollHandling {
+  id           String @id @default(uuid())
+  warehouseId  String
+  startsAt     DateTime
+  operation    String
+  palletCount  Decimal @db.Decimal(12, 4)
+  status       String @default("REVIEW")
+  createdById  String
+  confirmedById String?
+  confirmedAt  DateTime?
+  reason       String?
+  createdAt    DateTime @default(now())
+  shares       PayrollHandlingShare[]
+  @@index([warehouseId, startsAt])
+}
+
+model PayrollHandlingShare {
+  operationId String
+  employeeId  String
+  amountKopecks Int?
+  operation PayrollHandling @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  employee PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  @@id([operationId, employeeId])
+}
+
+model PayrollAudit {
+  id String @id @default(uuid())
+  warehouseId String
+  actorId String
+  entityId String
+  action String
+  details Json
+  createdAt DateTime @default(now())
+  @@index([warehouseId, entityId, createdAt])
+}
+
+model PayrollSettlement {
+  key String @id
+  employeeId String
+  warehouseId String
+  workDate String
+  status String
+  snapshot Json
+  comment String
+  paidAt DateTime?
+  updatedById String
+  updatedAt DateTime @updatedAt
+  @@index([employeeId, workDate])
+}
+
+model PayrollHistorical {
+  key String @id
+  employeeId String
+  warehouseId String
+  workDate String
+  amountKopecks Int
+  status String
+  data Json
+  sourceHash String
+  createdById String
+  createdAt DateTime @default(now())
+  @@index([employeeId, workDate])
+}
+
 generator client {
   provider = "prisma-client-js"
 }

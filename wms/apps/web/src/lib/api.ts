@@ -8252,6 +8252,19 @@ export async function fetchExpensePayroll(accessToken: string, filter: { dateFro
   return request<ExpensePayrollReport>(withQuery('/expenses/payroll', filter), { accessToken });
 }
 
+export function payrollRequest<T>(accessToken: string, path: string, method: 'GET' | 'POST' | 'PUT' = 'GET', body?: unknown) {
+  return request<T>(`/expenses/workforce${path}`, { accessToken, method, body });
+}
+
+export function payrollImport<T>(accessToken: string, file: File, mapping?: Record<string, string>) {
+  const body = new FormData(); body.append('file', file);
+  if (mapping) body.append('mapping', JSON.stringify(mapping));
+  return requestMultipart<T>('/expenses/workforce/import', body, accessToken);
+}
+export function payrollDownload(accessToken: string, employeeId: string, from: string, to: string, format: string) {
+  return requestBlob(withQuery(`/expenses/workforce/employees/${encodeURIComponent(employeeId)}/export`, { from, to, format }), accessToken);
+}
+
 export async function updateExpensePayrollRate(accessToken: string, userId: string, rateRub: number) {
   return request<{ userId: string; userName: string; email: string; rateRub: number; rateIsDefault: boolean }>(
     `/expenses/payroll/users/${encodeURIComponent(userId)}/rate`,
