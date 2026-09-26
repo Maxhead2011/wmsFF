@@ -41,3 +41,6 @@ Web обновлён: явный поиск товарооборота без ф
 
 
 Latest verified release: PR326, ФОТ. Baseline `wms/baselines/our-wms/2026-09-26-payroll`. API `sha256:9228a39f63d7ea929418635d9b1564cacb560a18eae8b2b00d47def3720d7a53`, web `sha256:21fab23236192311d421c4ae8bf170a32caee99c6e9aa2ce58d4f004ba3bbc15`. APK215 unchanged; WMS_PAYROLL_ATTENDANCE_ENABLED=true only on our WMS. Eight additive Payroll tables; historical import completed with August row48 excluded. Source parity remains false.
+
+
+Latest verified release: PR328, payroll navigation and audited time corrections. Baseline `wms/baselines/our-wms/2026-09-26-payroll-navigation`. API `sha256:a9684a191ca599ba7180c769fc5d33e9583af885ff794426c7d4765d9117cb7f`, web `sha256:33e9a07f126cbccc9804ea1af0e270175d1c8d1829063df629233ad5940f6097`. APK215, flags and historical payroll records unchanged. Source parity remains false.

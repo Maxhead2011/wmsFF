@@ -1,3 +1,12 @@
+# Published PR328: FOT navigation and corrections / 26.09.2026
+
+API `sha256:a9684a191ca599ba7180c769fc5d33e9583af885ff794426c7d4765d9117cb7f`.
+Web `sha256:33e9a07f126cbccc9804ea1af0e270175d1c8d1829063df629233ad5940f6097`.
+Standalone FOT submenu, back navigation, explicit manual entry, start/end columns and audited editing of historical/manual times. Paid records must be reviewed before correction. No migration or historical data changes. Verified 31 cards, 1263 rows, total 354401550 kopecks; PDF/Excel and branch isolation passed. API2844 passed/97 skipped, web242, TypeScript and browser regression checks passed. APK215 unchanged.
+Baseline `2026-09-26-payroll-navigation`; source parity remains false. Rollback: `logoff-api:before-payroll-navigation`, `logoff-web:before-payroll-navigation`.
+
+## Previous release
+
 # Published PR326: ФОТ / 26.09.2026
 
 API `sha256:9228a39f63d7ea929418635d9b1564cacb560a18eae8b2b00d47def3720d7a53`.
