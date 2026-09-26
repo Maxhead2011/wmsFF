@@ -1,3 +1,10 @@
+# Published PR334: payroll employee card / 26.09.2026
+
+API unchanged: `sha256:91f592f9ea0420cecefd508b0c3bf64c9ffc1385d35070fe3d601a3832896cd6`. Web: `sha256:f71d461f6762387b3ef16471e0862daf0bda734e4ee76b530a86e9026007bd64`.
+Independent settings selection; card opens in view mode with edit/save/cancel. Current rates and individual conditions shown independently of report dates. Web246 tests, TypeScript and actual overlay browser checks passed. Exact live API/web/APK/flags verified. Baseline `2026-09-26-payroll-card`. Source parity remains false. Rollback web: `logoff-web:before-payroll-card`. No API/database/APK changes.
+
+## Previous release
+
 # Published PR332: payroll editor, dates and sorting / 26.09.2026
 
 API: `sha256:91f592f9ea0420cecefd508b0c3bf64c9ffc1385d35070fe3d601a3832896cd6`. Web: `sha256:693a0d1f72469302bd77233790260e31de44a9621a9411c19cdf335930342f57`.
