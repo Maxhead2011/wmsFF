@@ -1,7 +1,13 @@
 /* FIX: public-site styles are isolated from all operational WMS screens. */
 @font-face{font-family:LogoffJura;src:url('/fonts/Jura-Medium.ttf') format('truetype');font-style:normal;font-weight:500;font-display:swap}
-body.logoff-site-body{height:auto;min-height:100%;overflow-y:auto!important;background:#f4f6f7}
-.logoff-site{--ls-ink:#172c37;--ls-muted:#425864;--ls-red:#bd2438;--ls-paper:#f4f6f7;--ls-line:#ced8dc;--ls-mist:#e6edef;background:var(--ls-paper);color:var(--ls-ink);font:16px/1.6 'Segoe UI',Arial,sans-serif;overflow:clip;color-scheme:light}
+body.logoff-site-body{height:auto;min-height:100%;overflow-y:auto!important;background:#dce4e8}
+.logoff-site{--ls-ink:#172c37;--ls-muted:#425864;--ls-red:#bd2438;--ls-paper:#dce4e8;--ls-line:#b6c5cd;--ls-mist:#ced9df;--ls-surface:#e8edf0;background:var(--ls-paper);color:var(--ls-ink);font:16px/1.6 'Segoe UI',Arial,sans-serif;overflow:clip;color-scheme:light}
+/* FIX: soft slate public surfaces, without changing operational themes or layout. */
+.logoff-site .ls-header{background:#dce4e8f5}
+.logoff-site .ls-capability{background:var(--ls-surface);border-color:var(--ls-line)}
+.logoff-site :is(.ls-capability--storage,.ls-capability--finance,.ls-updates-band,.ls-contact,.ls-preview figure){background:var(--ls-mist)}
+.logoff-site .ls-flow{background:#d5dfe5;border-color:var(--ls-line)}
+.logoff-site .ls-stage-detail{background:var(--ls-surface)}
 .logoff-site :is(h1,h2,h3){color:var(--ls-ink);text-shadow:none}
 .logoff-site *{box-sizing:border-box}
 .logoff-site :is(h1,h2,h3,p,figure){margin:0}
@@ -15,7 +21,7 @@ body.logoff-site-body{height:auto;min-height:100%;overflow-y:auto!important;back
 .logoff-site .ls-stage-detail p{font-size:14px}
 .logoff-site .ls-stage-detail h2{font-size:18px}
 .logoff-site .ls-stage-detail small{font-size:11px}
-.logoff-site .ls-capability{background:#fff;border-radius:18px}
+.logoff-site .ls-capability{background:var(--ls-surface);border-radius:18px}
 .logoff-site .ls-flow{border-radius:20px;overflow:hidden;box-shadow:0 18px 48px #2035400d}
 .logoff-site :is(.ls-button,.ls-login){border-radius:10px}
 .logoff-site :is(a,button):focus-visible{outline:3px solid var(--ls-red);outline-offset:5px}
