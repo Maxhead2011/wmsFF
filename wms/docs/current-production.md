@@ -1,3 +1,12 @@
+# Published PR326: ФОТ / 26.09.2026
+
+API `sha256:9228a39f63d7ea929418635d9b1564cacb560a18eae8b2b00d47def3720d7a53`.
+Web `sha256:21fab23236192311d421c4ae8bf170a32caee99c6e9aa2ce58d4f004ba3bbc15`.
+New workforce module enabled only on our WMS. Additive migration `20260926150000_payroll_attendance`. Imported 1263 historical rows into ФФ Москва, total 3,544,015.50 RUB; August row48 excluded, name aliases pending. All monthly totals reconciled. API2841 passed/97 skipped, Web240, TypeScript, browser and runtime/export/access checks passed. APK215 and other containers unchanged.
+Baseline `2026-09-26-payroll`; source parity remains false. Rollback images: `logoff-api:before-payroll-attendance`, `logoff-web:before-payroll-attendance`. Rollback retains new payroll data/tables.
+
+## Previous release
+
 # Published PR323: turnover / 26.09.2026
 
 API `sha256:1ce3f6acbfd09b562fcf48bd7a57cda6d6208c1f8f051e8baad8e5dbf413029f`.
