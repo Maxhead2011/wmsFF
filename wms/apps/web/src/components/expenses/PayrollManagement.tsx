@@ -32,6 +32,19 @@ export function payrollIntervalCells(row: Pick<Row, 'kind' | 'detail'>): [string
 }
 const blank = { name: '', warehouseId: '', userId: '', picker: true, loader: false, isActive: true, paymentMethod: 'UNSPECIFIED', paymentPhone: '', paymentBank: '' };
 
+// FIX: display payout contacts next to totals for the selected period and visible kind of work.
+export function payrollPaymentSummary(people: Array<Pick<Employee, 'id' | 'name' | 'paymentMethod' | 'paymentPhone' | 'paymentBank'>>,
+  rows: Array<Pick<Row, 'employeeId' | 'amountKopecks' | 'status'>>, selected: string) {
+  return people.filter(p => selected === '__all' ? rows.some(r => r.employeeId === p.id) : p.id === selected).map(p => {
+    const own = rows.filter(r => r.employeeId === p.id);
+    const sum = (status?: string) => own.filter(r => !status || r.status === status).reduce((total, r) => total + r.amountKopecks, 0);
+    return { id: p.id, name: p.name, amountKopecks: sum(), unpaidKopecks: sum('UNPAID'), paidKopecks: sum('PAID'), reviewKopecks: sum('REVIEW'),
+      payment: p.paymentMethod === 'CASH' ? 'Наличные' : p.paymentMethod === 'TRANSFER' ? 'Перевод' : 'Способ выплаты не указан',
+      phone: p.paymentMethod === 'TRANSFER' ? p.paymentPhone?.trim() || 'Не указан' : '—',
+      bank: p.paymentMethod === 'TRANSFER' ? p.paymentBank?.trim() || 'Не указан' : '—' };
+  });
+}
+
 // FIX: preserve the legacy workspace until the separately gated payroll module is enabled.
 export function PayrollManagement({ session, legacy, onBack }: { session: AuthSession; legacy: ReactNode; onBack?: () => void }) {
   const [enabled, setEnabled] = useState(false);
@@ -112,6 +125,7 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
   }
   if (!enabled) return <>{error && <p role="alert">{error}</p>}{legacy}</>;
   const visibleRows = report?.rows.filter(r => tab === 'handling' ? r.kind === 'PALLET' : r.kind !== 'PALLET') ?? [];
+  const paymentSummary = payrollPaymentSummary(employees, visibleRows, selected);
   return <section className="payroll-management">
     <header className="payroll-heading">{onBack && <button type="button" onClick={onBack}>← К расходам</button>}<h2>ФОТ</h2></header>
     <nav className="payroll-tiles" aria-label="Разделы ФОТ">{[['work', 'Табель и начисления'], ['handling', 'Погрузка и разгрузка'], ['settings', 'Настройки']].map(([value, label]) =>
@@ -176,7 +190,15 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
         {tab === 'handling' && <fieldset><legend>Все участники работы</legend>{employees.filter(e => e.warehouseId === employee.warehouseId && e.isActive).map(e => <label key={e.id}><input type="checkbox" name="participant" value={e.id} />{e.name}</label>)}</fieldset>}
         <button disabled={busy}>Сохранить</button>
       </form>}
-      {report && <><p>Начислено: <strong>{money(report.totals.amountKopecks)}</strong> · Оплачено: {money(report.totals.paidKopecks)}</p>
+      {report && <><section aria-label="Суммы и реквизиты за период" className="payroll-payment-summary">
+        <h3>Суммы и реквизиты · {from.split('-').reverse().join('.')} — {to.split('-').reverse().join('.')}</h3>
+        <div className="payroll-table"><table><thead><tr><th>Сотрудник</th><th>Начислено за период</th><th>Куда выплатить</th><th>Телефон для перевода</th><th>Банк</th></tr></thead>
+          <tbody>{paymentSummary.map(p => <tr key={p.id}><td><strong>{p.name}</strong></td><td><strong>{money(p.amountKopecks)}</strong>
+            <div className="payroll-payment-detail">Не оплачено: {money(p.unpaidKopecks)}<br />Оплачено: {money(p.paidKopecks)}<br />На проверке: {money(p.reviewKopecks)}</div></td>
+            <td>{p.payment}</td><td>{p.phone}</td><td>{p.bank}</td></tr>)}</tbody></table></div>
+        {!paymentSummary.length && <p>За выбранный период записей нет.</p>}
+        <p>Начислено по разделу: <strong>{money(paymentSummary.reduce((s, p) => s + p.amountKopecks, 0))}</strong>. Реквизиты — из текущей карточки сотрудника. Суммы на проверке показаны отдельно.</p>
+      </section>
         <div>{['xlsx', 'pdf'].map(format => <button key={format} disabled={busy || !employee} onClick={() => void run(async () => {
           const blob = await payrollDownload(session.accessToken, selected, from, to, format); const url = URL.createObjectURL(blob);
           const a = document.createElement('a'); a.href = url; a.download = `Табель_${from}_${to}.${format}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
