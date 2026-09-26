@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PayrollManagement, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary } from './PayrollManagement';
+import { PayrollManagement, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary, payrollDate, payrollSortRows } from './PayrollManagement';
 import type { AuthSession } from '../../lib/api';
 // TEST: no new payroll form is visible before the server explicitly enables it.
 describe('payroll feature isolation', () => {
+  // TEST: display dates are Russian, but chronological sorting uses ISO dates across month boundaries.
+  it('formats dates and sorts all employees by date, name or bank without mutating the report', () => {
+    expect(payrollDate('2026-09-05')).toBe('05.09.2026');
+    const people = [{ id: 'a', name: 'Яна', paymentMethod: 'TRANSFER', paymentBank: 'Альфа' }, { id: 'b', name: 'Анна', paymentMethod: 'TRANSFER', paymentBank: 'Сбер' }];
+    const rows = [{ key: 'a', employeeId: 'a', date: '2026-09-30' }, { key: 'b', employeeId: 'b', date: '2026-10-01' }];
+    expect(payrollSortRows(rows, people, 'name', 'asc').map(r => r.key)).toEqual(['b', 'a']);
+    expect(payrollSortRows(rows, people, 'bank', 'asc').map(r => r.key)).toEqual(['a', 'b']);
+    expect(payrollSortRows(rows, people, 'date', 'desc').map(r => r.key)).toEqual(['b', 'a']);
+    expect(rows[0].key).toBe('a');
+  });
   // TEST: payment details belong beside each employee's period total, never another employee's rows.
   it('groups selected-period rows and distinguishes paid, unpaid and review amounts', () => {
     const people = [{ id: 'e1', name: 'Первый', paymentMethod: 'TRANSFER', paymentPhone: '+7 900 000-00-00', paymentBank: 'Банк' },
@@ -17,7 +27,7 @@ describe('payroll feature isolation', () => {
   it('marks missing transfer details explicitly and includes zero total for a selected employee', () => {
     expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'TRANSFER' }], [], 'e')[0])
       .toMatchObject({ amountKopecks: 0, phone: 'Не указан', bank: 'Не указан' });
-    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'UNSPECIFIED' }], [], '__all')).toEqual([]);
+    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'UNSPECIFIED' }], [], '__all')[0]).toMatchObject({ id: 'e', amountKopecks: 0 });
   });
   // TEST: historical display preserves synthetic clock values; real overnight visits retain dates.
   it('shows imported start/end without guessing the original night shift', () => {

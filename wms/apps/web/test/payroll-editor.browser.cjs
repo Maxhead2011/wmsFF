@@ -1,0 +1,33 @@
+// TEST: exercise actual component state across employee changes, including uncontrolled rate fields.
+module.exports = async function verifyPayrollEditor(page) {
+  await page.getByRole('button', {name: /^ФОТ/}).click();
+  await page.getByRole('button', {name: 'Настройки', exact:true}).click();
+  const select = page.locator('.payroll-fields label').filter({hasText:/^Сотрудник/}).locator('select');
+  await select.selectOption('e1');
+  await page.getByRole('button',{name:'Редактировать выбранного',exact:true}).click();
+  await page.getByLabel('Способ выплаты').selectOption('TRANSFER');
+  await page.getByLabel('Телефон для перевода',{exact:true}).fill('+7 900 000-00-00');
+  await page.getByLabel('Банк',{exact:true}).fill('Альфа');
+  await page.locator('[name=rate]').fill('900');
+  await select.selectOption('e2');
+  if(await page.getByLabel('Имя',{exact:true}).inputValue()!=='Анна')throw Error('Previous employee draft leaked');
+  if(await page.getByLabel('Способ выплаты').inputValue()!=='CASH')throw Error('Previous payment method leaked');
+  if(await page.locator('[name=rate]').inputValue()!=='')throw Error('Previous rate leaked');
+  await page.getByRole('button',{name:'Сохранить сотрудника',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Сотрудник сохранён'}).waitFor();
+  const saved=await page.evaluate(()=>window.savedEmployee);
+  if(saved.url!=='/employees/e2'||saved.body.paymentMethod!=='CASH'||saved.body.paymentPhone)throw Error('Wrong employee saved');
+  await page.getByRole('button',{name:'Табель и начисления',exact:true}).click();
+  await select.selectOption('__all');
+  const rows=page.locator('table[aria-label="Записи табеля"] tbody tr');
+  await page.getByRole('cell',{name:'30.09.2026',exact:true}).waitFor();
+  if(await rows.count()!==2)throw Error('Missing employees');
+  await page.getByLabel('Сортировать по',{exact:true}).selectOption('name');
+  if(!(await rows.first().innerText()).includes('Анна'))throw Error('Name sort');
+  await page.getByLabel('Сортировать по',{exact:true}).selectOption('date');
+  await page.getByLabel('Порядок',{exact:true}).selectOption('desc');
+  if(!(await rows.first().innerText()).includes('01.10.2026'))throw Error('Chronological sort');
+  await page.getByLabel('Сортировать по',{exact:true}).selectOption('bank');
+  await page.getByLabel('Порядок',{exact:true}).selectOption('asc');
+  if(!(await rows.first().innerText()).includes('Яна'))throw Error('Bank sort');
+};

@@ -12,6 +12,11 @@ describe('payroll export', () => {
     const rows = XLSX.utils.sheet_to_json<any[]>(book.Sheets['Табель'], { header: 1 });
     expect(rows[0]).toEqual(['Дата', 'ФИО', 'Начало', 'Конец', 'Обед', 'Время Итого', 'Цена в час', 'Сумма', 'Телефон', 'Банк', 'Статус']);
     expect(rows[1][7]).toBe(2450); expect(rows[1][5]).toBe(7 / 24);
+    // TEST: all report sheets display dd.mm.yyyy, including the selected period.
+    for (const name of ['Табель', 'Начисления', 'Расчёт по ставкам']) {
+      expect(XLSX.utils.sheet_to_json<any[]>(book.Sheets[name], { header: 1 })[1][0]).toBe('26.09.2026');
+    }
+    expect(XLSX.utils.sheet_to_json<any[]>(book.Sheets['Итоги'], { header: 1 })[0][1]).toBe('26.09.2026 — 26.09.2026');
   });
   it('renders a Cyrillic PDF', async () => {
     expect((await payrollPdf(report)).subarray(0, 4).toString()).toBe('%PDF');
