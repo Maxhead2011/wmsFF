@@ -8,9 +8,13 @@ type Report = { rows: Row[]; issues: string[]; totals: { amountKopecks: number; 
 const money = (n: number) => (n / 100).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB' });
 const statuses: Record<string, string> = { UNPAID: 'Не оплачено', REVIEW: 'На проверке', PAID: 'Оплачено' };
 const kinds: Record<string, string> = { HOURLY: 'За час', PIECE: 'За единицу', PALLET: 'За паллету', HISTORY: 'История' };
-const hours = (ms = 0) => `${Math.floor(ms / 3600000)}:${String(Math.round(ms / 60000) % 60).padStart(2, '0')}`;
+const hours = (ms = 0) => { const minutes = Math.round(ms / 60000); return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`; };
+// FIX: imported timesheets show their preserved hours and lunch alongside new shifts.
+export function payrollTimeCells(row: Pick<Row, 'kind' | 'workedMs' | 'lunchMs' | 'units' | 'detail'>) {
+  return ['HOURLY', 'HISTORY'].includes(row.kind) ? [hours(row.workedMs), hours(row.lunchMs)] : [row.units ?? row.detail.palletCount, '—'];
+}
 const iso = (s: string) => `${s}:00+03:00`;
-const blank = { name: '', warehouseId: '', userId: '', picker: true, loader: false, isActive: true, paymentMethod: 'CASH', paymentPhone: '', paymentBank: '' };
+const blank = { name: '', warehouseId: '', userId: '', picker: true, loader: false, isActive: true, paymentMethod: 'UNSPECIFIED', paymentPhone: '', paymentBank: '' };
 
 // FIX: preserve the legacy workspace until the separately gated payroll module is enabled.
 export function PayrollManagement({ session, legacy }: { session: AuthSession; legacy: ReactNode }) {
@@ -100,7 +104,7 @@ export function PayrollManagement({ session, legacy }: { session: AuthSession; l
         <label>Имя<input required value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></label>
         <label>Пользователь сборки (для сдельной оплаты)<select value={draft.userId} onChange={e => setDraft({ ...draft, userId: e.target.value })}><option value="">Не привязан</option>{users.map(u => <option value={u.id} key={u.id}>{u.name}</option>)}</select></label>
         <label>Филиал<select required value={draft.warehouseId} onChange={e => setDraft({ ...draft, warehouseId: e.target.value })}><option value="">Выберите филиал</option>{branches.map(b => <option value={b.id} key={b.id}>{b.name}</option>)}</select></label>
-        <label>Способ выплаты<select value={draft.paymentMethod} onChange={e => setDraft({ ...draft, paymentMethod: e.target.value })}><option value="CASH">Наличные</option><option value="TRANSFER">Перевод</option></select></label>
+        <label>Способ выплаты<select value={draft.paymentMethod} onChange={e => setDraft({ ...draft, paymentMethod: e.target.value })}><option value="UNSPECIFIED">Не указан</option><option value="CASH">Наличные</option><option value="TRANSFER">Перевод</option></select></label>
         {draft.paymentMethod === 'TRANSFER' && <><label>Телефон для перевода<input type="tel" required value={draft.paymentPhone} onChange={e => setDraft({ ...draft, paymentPhone: e.target.value })} /></label><label>Банк<input required value={draft.paymentBank} onChange={e => setDraft({ ...draft, paymentBank: e.target.value })} /></label></>}
         </div><label><input type="checkbox" checked={draft.picker} onChange={e => setDraft({ ...draft, picker: e.target.checked })} />Сборщик</label>
         <label><input type="checkbox" checked={draft.loader} onChange={e => setDraft({ ...draft, loader: e.target.checked })} />Грузчик</label>
@@ -135,7 +139,7 @@ export function PayrollManagement({ session, legacy }: { session: AuthSession; l
         })}>Скачать {format.toUpperCase()}</button>)}</div>
         {report.issues.map((issue, i) => <p role="alert" key={i}>{issue}</p>)}
         <div className="payroll-table"><table><thead><tr><th><input aria-label="Выбрать все строки" type="checkbox" checked={visibleRows.length > 0 && visibleRows.every(r => checked.includes(r.key))} onChange={e => setChecked(e.target.checked ? visibleRows.map(r => r.key) : [])} /></th><th>Дата</th><th>Оплата</th><th>Время / единицы</th><th>Обед</th><th>Сумма</th><th>Статус</th></tr></thead>
-        <tbody>{visibleRows.map(r => <tr key={r.key}><td><input type="checkbox" checked={checked.includes(r.key)} aria-label={`Выбрать ${r.date}`} onChange={e => setChecked(e.target.checked ? [...checked, r.key] : checked.filter(k => k !== r.key))} /></td><td>{r.date}<br /><small>{employees.find(e => e.id === r.employeeId)?.name}</small></td><td>{kinds[r.kind]}</td><td>{r.kind === 'HOURLY' ? hours(r.workedMs) : r.units ?? r.detail.palletCount}</td><td>{r.kind === 'HOURLY' ? hours(r.lunchMs) : '—'}</td><td>{money(r.amountKopecks)}</td><td>{statuses[r.status]}{r.kind === 'PALLET' && r.detail.status === 'REVIEW' && <button disabled={busy} onClick={() => void run(async () => { await api(`/handling/${r.detail.id}/confirm`, 'POST'); await reloadReport(); })}>Подтвердить работу</button>}</td></tr>)}</tbody></table></div>
+        <tbody>{visibleRows.map(r => <tr key={r.key}><td><input type="checkbox" checked={checked.includes(r.key)} aria-label={`Выбрать ${r.date}`} onChange={e => setChecked(e.target.checked ? [...checked, r.key] : checked.filter(k => k !== r.key))} /></td><td>{r.date}<br /><small>{employees.find(e => e.id === r.employeeId)?.name}</small></td><td>{kinds[r.kind]}</td><td>{payrollTimeCells(r)[0]}</td><td>{payrollTimeCells(r)[1]}</td><td>{money(r.amountKopecks)}</td><td>{statuses[r.status]}{r.kind === 'PALLET' && r.detail.status === 'REVIEW' && <button disabled={busy} onClick={() => void run(async () => { await api(`/handling/${r.detail.id}/confirm`, 'POST'); await reloadReport(); })}>Подтвердить работу</button>}</td></tr>)}</tbody></table></div>
         {employee ? <form onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => { await api('/statuses', 'POST', { employeeId: selected, dateFrom: from, dateTo: to, keys: checked, status: f.get('status'), comment: f.get('comment') }); await reloadReport(); }); }}><div className="payroll-fields"><label>Статус выбранных<select name="status">{Object.entries(statuses).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label><label>Комментарий<input name="comment" /></label></div><button disabled={busy || !checked.length}>Применить к {checked.length} строкам</button></form> : <p>Для изменения статуса и личной выгрузки выберите сотрудника.</p>}
       </>}
     </>}

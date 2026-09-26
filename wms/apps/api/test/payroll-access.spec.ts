@@ -2,9 +2,16 @@ import 'reflect-metadata';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PayrollService, payrollWarehouses } from '../src/modules/expenses/payroll.service';
 import type { AuthUser } from '../src/modules/auth/auth.types';
+import { validate } from 'class-validator';
+import { PayrollEmployeeDto } from '../src/modules/expenses/payroll.dto';
 const user = { id: 'admin', roleCodes: ['ADMIN'], warehouseIds: ['moscow'], writableWarehouseIds: ['moscow'] } as AuthUser;
 // TEST: payroll branch access and payout validation cannot rely on the tablet UI.
 describe('payroll access', () => {
+  // TEST: unknown payment details can be imported without classifying them as cash.
+  it('accepts an explicitly unspecified payout method', async () => {
+    const dto = Object.assign(new PayrollEmployeeDto(), { name: 'History', warehouseId: 'moscow', picker: true, loader: false, isActive: true, paymentMethod: 'UNSPECIFIED' });
+    expect(await validate(dto)).toEqual([]);
+  });
   afterEach(() => vi.unstubAllEnvs());
   it('restricts administrators even when they have global operational permissions', () => {
     expect(payrollWarehouses({ ...user, permissionCodes: ['system:admin'] })).toEqual(['moscow']);

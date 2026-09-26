@@ -7,7 +7,8 @@ export class PayrollEmployeeDto {
   @IsBoolean() picker!: boolean;
   @IsBoolean() loader!: boolean;
   @IsBoolean() isActive!: boolean;
-  @IsIn(['CASH', 'TRANSFER']) paymentMethod!: string;
+  // FIX: incomplete historical requisites must not imply a cash payment agreement.
+  @IsIn(['CASH', 'TRANSFER', 'UNSPECIFIED']) paymentMethod!: string;
   @IsOptional() @IsString() @MaxLength(32) paymentPhone?: string;
   @IsOptional() @IsString() @MaxLength(200) paymentBank?: string;
 }
