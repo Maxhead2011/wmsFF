@@ -38,3 +38,6 @@ Web обновлён: явный поиск товарооборота без ф
 Не заменять production полной локальной сборкой до отдельной сверки расхождений.
 Проверка `release_baseline.py check-candidate` обязательна для выпусков от этого
 снимка; при новой серверной версии сначала обновить проверенную базу.
+
+
+Latest verified release: PR326, ФОТ. Baseline `wms/baselines/our-wms/2026-09-26-payroll`. API `sha256:9228a39f63d7ea929418635d9b1564cacb560a18eae8b2b00d47def3720d7a53`, web `sha256:21fab23236192311d421c4ae8bf170a32caee99c6e9aa2ce58d4f004ba3bbc15`. APK215 unchanged; WMS_PAYROLL_ATTENDANCE_ENABLED=true only on our WMS. Eight additive Payroll tables; historical import completed with August row48 excluded. Source parity remains false.
