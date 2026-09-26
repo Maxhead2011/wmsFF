@@ -14,6 +14,20 @@ export function payrollTimeCells(row: Pick<Row, 'kind' | 'workedMs' | 'lunchMs' 
   return ['HOURLY', 'HISTORY'].includes(row.kind) ? [hours(row.workedMs), hours(row.lunchMs)] : [row.units ?? row.detail.palletCount, '—'];
 }
 const iso = (s: string) => `${s}:00+03:00`;
+// FIX: format only for display; preserve ISO values for API filters and chronological sorting.
+export const payrollDate = (value: string) => value.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$3.$2.$1');
+type SortKey = 'date' | 'name' | 'bank';
+type SortDirection = 'asc' | 'desc';
+export function payrollSortRows<T extends { employeeId: string; date: string; key: string }>(rows: T[],
+  people: Array<Pick<Employee, 'id' | 'name' | 'paymentMethod' | 'paymentBank'>>, key: SortKey, direction: SortDirection) {
+  const lookup = new Map(people.map(p => [p.id, p]));
+  const value = (r: T, field: SortKey) => {
+    const p = lookup.get(r.employeeId);
+    return field === 'date' ? r.date : field === 'name' ? p?.name ?? '' : p?.paymentMethod === 'CASH' ? 'Наличные' : p?.paymentBank ?? '';
+  };
+  return [...rows].sort((a, b) => (direction === 'asc' ? 1 : -1) * value(a, key).localeCompare(value(b, key), 'ru')
+    || value(a, 'name').localeCompare(value(b, 'name'), 'ru') || a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
+}
 // FIX: historical times remain verbatim; real shifts retain overnight dates and separate visits.
 export function payrollIntervalCells(row: Pick<Row, 'kind' | 'detail'>): [string, string] {
   if (row.kind === 'HISTORY') {
@@ -27,15 +41,18 @@ export function payrollIntervalCells(row: Pick<Row, 'kind' | 'detail'>): [string
     if (previous && Date.parse(previous.end) === Date.parse(segment.start)) previous.end = segment.end;
     else intervals.push({ start: segment.start, end: segment.end });
   }
-  const time = (v: string) => new Date(v).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const time = (v: string) => new Date(v).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', year: 'numeric', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   return [intervals.map(i => time(i.start)).join('\n') || '—', intervals.map(i => time(i.end)).join('\n') || '—'];
 }
 const blank = { name: '', warehouseId: '', userId: '', picker: true, loader: false, isActive: true, paymentMethod: 'UNSPECIFIED', paymentPhone: '', paymentBank: '' };
+const employeeDraft = (employee: Employee) => ({ name: employee.name, warehouseId: employee.warehouseId, userId: employee.userId ?? '',
+  picker: employee.picker, loader: employee.loader, isActive: employee.isActive, paymentMethod: employee.paymentMethod,
+  paymentPhone: employee.paymentMethod === 'TRANSFER' ? employee.paymentPhone ?? '' : '', paymentBank: employee.paymentMethod === 'TRANSFER' ? employee.paymentBank ?? '' : '' });
 
 // FIX: display payout contacts next to totals for the selected period and visible kind of work.
 export function payrollPaymentSummary(people: Array<Pick<Employee, 'id' | 'name' | 'paymentMethod' | 'paymentPhone' | 'paymentBank'>>,
   rows: Array<Pick<Row, 'employeeId' | 'amountKopecks' | 'status'>>, selected: string) {
-  return people.filter(p => selected === '__all' ? rows.some(r => r.employeeId === p.id) : p.id === selected).map(p => {
+  return people.filter(p => selected === '__all' || p.id === selected).map(p => {
     const own = rows.filter(r => r.employeeId === p.id);
     const sum = (status?: string) => own.filter(r => !status || r.status === status).reduce((total, r) => total + r.amountKopecks, 0);
     return { id: p.id, name: p.name, amountKopecks: sum(), unpaidKopecks: sum('UNPAID'), paidKopecks: sum('PAID'), reviewKopecks: sum('REVIEW'),
@@ -53,6 +70,8 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [selected, setSelected] = useState('');
   const [tab, setTab] = useState('work');
+  const [sortKey, setSortKey] = useState<SortKey>('date');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [draft, setDraft] = useState(blank);
   const [editing, setEditing] = useState('');
   const [from, setFrom] = useState(new Date().toISOString().slice(0, 7) + '-01');
@@ -76,9 +95,9 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
   async function loadEmployees() {
     const rows = await api<Employee[]>('/employees'); setEmployees(rows);
   }
-  async function run(action: () => Promise<void>) {
+  async function run(action: () => Promise<void | string>, success = 'Сохранено') {
     setError(''); setMessage(''); setBusy(true);
-    try { await action(); setMessage('Сохранено'); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); }
+    try { const result = await action(); setMessage(result ?? success); } catch (e) { setError(e instanceof Error ? e.message : 'Ошибка'); }
     finally { setBusy(false); }
   }
   useEffect(() => {
@@ -106,7 +125,14 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
       .then(r => { if (live) setReport(r); }).catch(e => { if (live) setError(e.message); });
     api<typeof shifts>(`/employees/${encodeURIComponent(selected)}/shifts`).then(r => { if (live) setShifts(r); }).catch(e => { if (live) setError(e.message); });
     return () => { live = false; };
-  }, [selected, from, to, enabled]);
+  }, [selected, from, to, enabled, employees]);
+  // FIX: changing the selected employee atomically replaces every draft field; never merge two cards.
+  function selectEmployee(id: string) {
+    setSelected(id); setManualOpen(false); setHistoryEdit(null); setShiftEdit(''); setError(''); setMessage('');
+    const next = employees.find(p => p.id === id);
+    setEditing(next ? next.id : '');
+    setDraft(next ? employeeDraft(next) : { ...blank, warehouseId: session.user.activeWarehouseId ?? '' });
+  }
   async function reloadReport() {
     if (selected === '__all') {
       const reports = await Promise.all(employees.map(p => api<Report>(`/employees/${encodeURIComponent(p.id)}/report?from=${from}&to=${to}`)));
@@ -124,41 +150,44 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
     }
   }
   if (!enabled) return <>{error && <p role="alert">{error}</p>}{legacy}</>;
-  const visibleRows = report?.rows.filter(r => tab === 'handling' ? r.kind === 'PALLET' : r.kind !== 'PALLET') ?? [];
-  const paymentSummary = payrollPaymentSummary(employees, visibleRows, selected);
+  const visibleRows = payrollSortRows(report?.rows.filter(r => tab === 'handling' ? r.kind === 'PALLET' : r.kind !== 'PALLET') ?? [], employees, sortKey, sortDirection);
+  const paymentSummary = payrollSortRows(payrollPaymentSummary(employees, visibleRows, selected).map(p => ({ ...p, employeeId: p.id, key: p.id,
+    date: visibleRows.filter(r => r.employeeId === p.id).map(r => r.date).sort()[0] ?? '9999-12-31' })), employees, sortKey, sortDirection);
   return <section className="payroll-management">
     <header className="payroll-heading">{onBack && <button type="button" onClick={onBack}>← К расходам</button>}<h2>ФОТ</h2></header>
     <nav className="payroll-tiles" aria-label="Разделы ФОТ">{[['work', 'Табель и начисления'], ['handling', 'Погрузка и разгрузка'], ['settings', 'Настройки']].map(([value, label]) =>
       <button key={value} className={tab === value ? 'is-active' : ''} onClick={() => { setTab(value); setChecked([]); }}>{label}</button>)}</nav>
     {error && <p role="alert" className="panel-message panel-message--error">{error}</p>}{message && <p role="status">{message}</p>}
     <div className="payroll-fields">
-      <label>Сотрудник<select value={selected} onChange={e => { setSelected(e.target.value); setManualOpen(false); setHistoryEdit(null); }}><option value="">Выберите сотрудника</option><option value="__all">Все доступные сотрудники</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name}{e.isActive ? '' : ' · архив'}</option>)}</select></label>
+      <label>Сотрудник<select disabled={busy} value={selected} onChange={e => selectEmployee(e.target.value)}><option value="">Выберите сотрудника</option><option value="__all">Все доступные сотрудники</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name}{e.isActive ? '' : ' · архив'}</option>)}</select></label>
       <label>С даты<input type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
       <label>По дату<input type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+      {tab !== 'settings' && <><label>Сортировать по<select aria-label="Сортировать по" value={sortKey} onChange={e => setSortKey(e.target.value as SortKey)}><option value="date">Дате</option><option value="name">Имени</option><option value="bank">Банку</option></select></label>
+        <label>Порядок<select aria-label="Порядок" value={sortDirection} onChange={e => setSortDirection(e.target.value as SortDirection)}><option value="asc">По возрастанию</option><option value="desc">По убыванию</option></select></label></>}
     </div>
     {tab === 'settings' ? <>
       <details><summary>Перенос исторического табеля</summary><p>Старые часы, суммы и статусы сохраняются без перерасчёта по новым правилам. Сначала проверьте соответствие сотрудников.</p>
-        <input type="file" accept=".xlsx" aria-label="Исторический табель" onChange={e => { const file = e.target.files?.[0]; setImportFile(file ?? null); setPreview(null); setMapping({}); if (file) void run(async () => setPreview(await payrollImport(session.accessToken, file))); }} />
+        <input type="file" accept=".xlsx" aria-label="Исторический табель" onChange={e => { const file = e.target.files?.[0]; setImportFile(file ?? null); setPreview(null); setMapping({}); if (file) void run(async () => { setPreview(await payrollImport(session.accessToken, file)); return 'Предпросмотр импорта готов'; }); }} />
         {preview && <><p>Строк: {preview.rows.length}. Сумма: {money(preview.totalKopecks)}.</p>{preview.issues.map((s, i) => <p role="alert" key={i}>{s}</p>)}
           <div className="payroll-fields">{preview.employees.map(name => <label key={name}>{name}<select required value={mapping[name] ?? ''} onChange={e => setMapping({ ...mapping, [name]: e.target.value })}><option value="">Выберите сотрудника WMS</option>{employees.map(p => <option value={p.id} key={p.id}>{p.name}</option>)}</select></label>)}</div>
-          <button disabled={busy || !!preview.issues.length || preview.employees.some(name => !mapping[name])} onClick={() => void run(async () => { const result = await payrollImport<{ added: number; skipped: number }>(session.accessToken, importFile!, mapping); setPreview(null); setImportFile(null); await reloadReport(); setMessage(`Добавлено: ${result.added}; уже существуют: ${result.skipped}`); })}>Подтвердить перенос</button>
+          <button disabled={busy || !!preview.issues.length || preview.employees.some(name => !mapping[name])} onClick={() => void run(async () => { const result = await payrollImport<{ added: number; skipped: number }>(session.accessToken, importFile!, mapping); setPreview(null); setImportFile(null); await reloadReport(); return `Добавлено: ${result.added}; уже существуют: ${result.skipped}`; })}>Подтвердить перенос</button>
         </>}
       </details>
       <button onClick={() => { setEditing(''); setDraft({ ...blank, warehouseId: session.user.activeWarehouseId ?? '' }); }}>Новый сотрудник</button>
-      {employee && <button onClick={() => { setEditing(employee.id); setDraft({ ...employee, userId: employee.userId ?? '', paymentPhone: employee.paymentPhone ?? '', paymentBank: employee.paymentBank ?? '' }); }}>Редактировать выбранного</button>}
-      <form onSubmit={e => { e.preventDefault(); void run(async () => { await api(`/employees${editing ? '/' + encodeURIComponent(editing) : ''}`, editing ? 'PUT' : 'POST', { name: draft.name, userId: draft.userId || undefined, warehouseId: draft.warehouseId, picker: draft.picker, loader: draft.loader, isActive: draft.isActive, paymentMethod: draft.paymentMethod, paymentPhone: draft.paymentPhone, paymentBank: draft.paymentBank }); await loadEmployees(); }); }}>
+      {employee && <button disabled={busy} onClick={() => { setEditing(employee.id); setDraft(employeeDraft(employee)); setMessage(''); }}>Редактировать выбранного</button>}
+      <form onSubmit={e => { e.preventDefault(); void run(async () => { await api(`/employees${editing ? '/' + encodeURIComponent(editing) : ''}`, editing ? 'PUT' : 'POST', { name: draft.name, userId: draft.userId || undefined, warehouseId: draft.warehouseId, picker: draft.picker, loader: draft.loader, isActive: draft.isActive, paymentMethod: draft.paymentMethod, paymentPhone: draft.paymentPhone, paymentBank: draft.paymentBank }); await loadEmployees(); }, 'Сотрудник сохранён'); }}>
         <h3>{editing ? 'Карточка сотрудника' : 'Добавить сотрудника'}</h3><div className="payroll-fields">
         <label>Имя<input required value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></label>
         <label>Пользователь сборки (для сдельной оплаты)<select value={draft.userId} onChange={e => setDraft({ ...draft, userId: e.target.value })}><option value="">Не привязан</option>{users.map(u => <option value={u.id} key={u.id}>{u.name}</option>)}</select></label>
         <label>Филиал<select required value={draft.warehouseId} onChange={e => setDraft({ ...draft, warehouseId: e.target.value })}><option value="">Выберите филиал</option>{branches.map(b => <option value={b.id} key={b.id}>{b.name}</option>)}</select></label>
-        <label>Способ выплаты<select value={draft.paymentMethod} onChange={e => setDraft({ ...draft, paymentMethod: e.target.value })}><option value="UNSPECIFIED">Не указан</option><option value="CASH">Наличные</option><option value="TRANSFER">Перевод</option></select></label>
+        <label>Способ выплаты<select value={draft.paymentMethod} onChange={e => setDraft({ ...draft, paymentMethod: e.target.value, paymentPhone: '', paymentBank: '' })}><option value="UNSPECIFIED">Не указан</option><option value="CASH">Наличные</option><option value="TRANSFER">Перевод</option></select></label>
         {draft.paymentMethod === 'TRANSFER' && <><label>Телефон для перевода<input type="tel" required value={draft.paymentPhone} onChange={e => setDraft({ ...draft, paymentPhone: e.target.value })} /></label><label>Банк<input required value={draft.paymentBank} onChange={e => setDraft({ ...draft, paymentBank: e.target.value })} /></label></>}
         </div><label><input type="checkbox" checked={draft.picker} onChange={e => setDraft({ ...draft, picker: e.target.checked })} />Сборщик</label>
         <label><input type="checkbox" checked={draft.loader} onChange={e => setDraft({ ...draft, loader: e.target.checked })} />Грузчик</label>
         <label><input type="checkbox" checked={draft.isActive} onChange={e => setDraft({ ...draft, isActive: e.target.checked })} />Активен</label>
         <button disabled={busy}>Сохранить сотрудника</button>
       </form>
-      {employee && <form onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => {
+      {employee && <form key={employee.id} onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => {
         await api(`/employees/${selected}/conditions`, 'POST', { kind: f.get('kind'), rateKopecks: Math.round(Number(f.get('rate')) * 100), startsAt: iso(String(f.get('start'))), endsAt: f.get('end') ? iso(String(f.get('end'))) : undefined, temporary: f.get('temporary') === 'on', reason: f.get('reason') }); await loadEmployees(); await reloadReport();
       }); }}><h3>Ставки и индивидуальные условия · {employee.name}</h3><div className="payroll-fields">
         <label>Тип оплаты<select name="kind">{Object.entries(kinds).filter(([k]) => k !== 'HISTORY').map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
@@ -173,13 +202,13 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
       {historyEdit && <form key={historyEdit.key} onSubmit={e => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => {
         await api(`/employees/${encodeURIComponent(historyEdit.employeeId)}/history/${encodeURIComponent(historyEdit.key.slice('HISTORY:'.length))}`, 'PUT', { startTime: f.get('historyStart'), endTime: f.get('historyEnd'), lunchMinutes: Number(f.get('historyLunch')), rateKopecks: Math.round(Number(f.get('historyRate')) * 100), reason: f.get('reason') });
         setHistoryEdit(null); await reloadReport();
-      }); }}><h3>Редактировать запись за {historyEdit.date}</h3><p>Обед сохраняется по табелю. После исправления сумма пересчитается, запись получит статус «На проверке».</p><div className="payroll-fields">
+      }); }}><h3>Редактировать запись за {payrollDate(historyEdit.date)}</h3><p>Обед сохраняется по табелю. После исправления сумма пересчитается, запись получит статус «На проверке».</p><div className="payroll-fields">
         <label>Начало<input type="time" name="historyStart" required defaultValue={payrollIntervalCells(historyEdit)[0]} /></label>
         <label>Окончание<input type="time" name="historyEnd" required defaultValue={payrollIntervalCells(historyEdit)[1]} /></label>
         <label>Обед, минут<input type="number" min="0" name="historyLunch" required defaultValue={Math.round((historyEdit.lunchMs ?? 0) / 60000)} /></label>
         <label>Ставка, ₽/ч<input type="number" min="0" step="0.01" name="historyRate" required defaultValue={historyEdit.detail.rate} /></label>
         <label>Причина исправления<input name="reason" required /></label></div><button disabled={busy}>Сохранить исправление</button><button type="button" onClick={() => setHistoryEdit(null)}>Отмена</button></form>}
-      {employee && manualOpen && <form key={`${tab}:${shiftEdit}`} onSubmit={(e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => {
+      {employee && manualOpen && <form key={`${selected}:${tab}:${shiftEdit}`} onSubmit={(e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => {
         if (tab === 'work') await api(`/employees/${selected}/shifts${shiftEdit ? '/' + shiftEdit : ''}`, shiftEdit ? 'PUT' : 'POST', { startsAt: iso(String(f.get('start'))), endsAt: f.get('end') ? iso(String(f.get('end'))) : undefined, reason: f.get('reason') });
         else await api('/handling', 'POST', { warehouseId: employee.warehouseId, startsAt: iso(String(f.get('start'))), operation: f.get('operation'), palletCount: Number(f.get('pallets')) / (f.get('unit') === 'BOX' ? 16 : f.get('unit') === 'BAG' ? 5 : 1), employeeIds: f.getAll('participant'), reason: f.get('reason') });
         await reloadReport(); setManualOpen(false);
@@ -201,13 +230,13 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
       </section>
         <div>{['xlsx', 'pdf'].map(format => <button key={format} disabled={busy || !employee} onClick={() => void run(async () => {
           const blob = await payrollDownload(session.accessToken, selected, from, to, format); const url = URL.createObjectURL(blob);
-          const a = document.createElement('a'); a.href = url; a.download = `Табель_${from}_${to}.${format}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+          const a = document.createElement('a'); a.href = url; a.download = `Табель_${from}_${to}.${format}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); return 'Отчёт подготовлен';
         })}>Скачать {format.toUpperCase()}</button>)}</div>
         {report.issues.map((issue, i) => <p role="alert" key={i}>{issue}</p>)}
-        <div className="payroll-table"><table><thead><tr><th><input aria-label="Выбрать все строки" type="checkbox" checked={visibleRows.length > 0 && visibleRows.every(r => checked.includes(r.key))} onChange={e => setChecked(e.target.checked ? visibleRows.map(r => r.key) : [])} /></th><th>Дата</th><th>Сотрудник</th><th>Начало</th><th>Окончание</th><th>Обед</th><th>Время итог / единицы</th><th>Ставка</th><th>Сумма</th><th>Статус</th><th>Действия</th></tr></thead>
+        <div className="payroll-table"><table aria-label="Записи табеля"><thead><tr><th><input aria-label="Выбрать все строки" type="checkbox" checked={visibleRows.length > 0 && visibleRows.every(r => checked.includes(r.key))} onChange={e => setChecked(e.target.checked ? visibleRows.map(r => r.key) : [])} /></th><th>Дата</th><th>Сотрудник</th><th>Банк / выплата</th><th>Начало</th><th>Окончание</th><th>Обед</th><th>Время итог / единицы</th><th>Ставка</th><th>Сумма</th><th>Статус</th><th>Действия</th></tr></thead>
         <tbody>{visibleRows.map(r => <tr key={r.key}>
-          <td><input type="checkbox" checked={checked.includes(r.key)} aria-label={`Выбрать ${r.date}`} onChange={e => setChecked(e.target.checked ? [...checked, r.key] : checked.filter(k => k !== r.key))} /></td>
-          <td>{r.date}</td><td>{employees.find(e => e.id === r.employeeId)?.name}</td>
+          <td><input type="checkbox" checked={checked.includes(r.key)} aria-label={`Выбрать ${payrollDate(r.date)}`} onChange={e => setChecked(e.target.checked ? [...checked, r.key] : checked.filter(k => k !== r.key))} /></td>
+          <td>{payrollDate(r.date)}</td><td>{employees.find(e => e.id === r.employeeId)?.name}</td><td>{employees.find(e => e.id === r.employeeId)?.paymentMethod === 'CASH' ? 'Наличные' : employees.find(e => e.id === r.employeeId)?.paymentBank || 'Не указан'}</td>
           <td className="payroll-time">{payrollIntervalCells(r)[0]}</td><td className="payroll-time">{payrollIntervalCells(r)[1]}</td>
           <td>{payrollTimeCells(r)[1]}</td><td>{['HOURLY', 'HISTORY'].includes(r.kind) ? hours((r.workedMs ?? 0) - (r.lunchMs ?? 0)) : r.units ?? r.detail.palletCount}</td>
           <td>{r.kind === 'HISTORY' && r.detail.rate !== undefined ? money(r.detail.rate * 100) : r.kind === 'HOURLY' ? [...new Set((r.detail.segments ?? []).map(s => s.rateKopecks))].map(money).join(' / ') : '—'}</td>
