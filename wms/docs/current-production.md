@@ -1,3 +1,10 @@
+# Published PR330: payroll payment summary / 26.09.2026
+
+API unchanged: `sha256:a9684a191ca599ba7180c769fc5d33e9583af885ff794426c7d4765d9117cb7f`. Web: `sha256:e9dcce013f1ca121d7c05ca2a89e7a91175bda42c65c2b7e1d0bce96481065c4`.
+Employee name, period amount and payment phone/bank shown together; paid/unpaid/review distinguished. Web244 tests, TypeScript and browser fixture passed. Exact live API/web/APK/flags verified. Baseline `2026-09-26-payroll-payment-summary`. Source parity remains false. Rollback web: `logoff-web:before-payroll-payment-summary`. No API/database/APK changes.
+
+## Previous release
+
 # Published PR328: FOT navigation and corrections / 26.09.2026
 
 API `sha256:a9684a191ca599ba7180c769fc5d33e9583af885ff794426c7d4765d9117cb7f`.
