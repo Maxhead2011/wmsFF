@@ -1,0 +1,35 @@
+// TEST: settings are a read-only card until explicitly edited; report dates and selection stay separate.
+module.exports=async page=>{
+ await page.getByRole('button',{name:/^ФОТ/}).click();
+ const select=page.locator('.payroll-fields label').filter({hasText:/^Сотрудник/}).locator('select');
+ await select.selectOption('e2');
+ await page.getByRole('button',{name:'Настройки',exact:true}).click();
+ if(await page.locator('input[type=date]').count())throw Error('Timesheet dates leaked into settings');
+ await select.selectOption('e1');
+ const card=page.getByRole('form',{name:'Карточка сотрудника',exact:true});
+ if(await card.getByLabel('Имя',{exact:true}).inputValue()!=='Яна')throw Error('Card not loaded on selection');
+ if(!await card.getByLabel('Имя',{exact:true}).isDisabled())throw Error('Card editable without action');
+ await page.getByRole('region',{name:'Действующие условия оплаты'}).locator('strong').filter({hasText:'400,00'}).waitFor();
+ await page.getByRole('button',{name:'Редактировать',exact:true}).click();
+ await card.getByLabel('Банк',{exact:true}).fill('Новый банк');
+ await page.getByRole('button',{name:'Сохранить сотрудника',exact:true}).click();
+ await page.getByRole('status').filter({hasText:'Сотрудник сохранён'}).waitFor();
+ if(!await card.getByLabel('Банк',{exact:true}).isDisabled())throw Error('Card did not return to view');
+ if(await card.getByLabel('Банк',{exact:true}).inputValue()!=='Новый банк')throw Error('Save not reflected');
+ await page.getByRole('button',{name:'Редактировать',exact:true}).click();
+ await card.getByLabel('Имя',{exact:true}).fill('Unsaved');
+ await page.getByRole('button',{name:'Отмена',exact:true}).click();
+ if(await card.getByLabel('Имя',{exact:true}).inputValue()!=='Яна')throw Error('Cancel did not restore');
+ await select.selectOption('e2');
+ if(await card.getByLabel('Способ выплаты').inputValue()!=='CASH'||!await card.getByLabel('Способ выплаты').isDisabled())throw Error('Employee state leaked');
+ await page.getByRole('button',{name:'Табель и начисления',exact:true}).click();
+ if(await select.inputValue()!=='e2')throw Error('Settings overwrote report employee');
+ if(await page.locator('input[type=date]').count()!==2)throw Error('Report dates missing');
+ await page.getByRole('button',{name:'Настройки',exact:true}).click();
+ await select.selectOption('e1');
+ await page.getByRole('button',{name:'Новый сотрудник',exact:true}).click();
+ if(await card.getByLabel('Имя',{exact:true}).inputValue()!=='')throw Error('New employee inherited name');
+ if(await page.getByRole('region',{name:'Действующие условия оплаты'}).count())throw Error('New employee inherited rates');
+ await page.getByRole('button',{name:'Отмена',exact:true}).click();
+ await select.selectOption('e1');
+};
