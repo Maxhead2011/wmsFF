@@ -30,7 +30,7 @@ function render(cell: any) {
   hooks.cursor = 0;
   hooks.values[0] = 'lookup';
   hooks.values[1] = {status:'ready',data:[{id:'selected-client',name:'Выбранный клиент'}]};
-  hooks.values[2] = {status:'ready',data:{items:[{skuId:'sku',client:{id:'product-client',name:'Клиент товара'},name:'Товар',internalSku:'A',primaryBarcode:'2051754386153',barcodes:[],kiz:[],movements:[],currentQuantity:5,currentCells:[cell]}]}};
+  hooks.values[2] = {status:'ready',data:{items:[{skuId:'sku',client:{id:'product-client',name:'Клиент товара'},name:'Товар',internalSku:'A',primaryBarcode:'2051754386153',barcodes:[],kiz:[],movements:[],currentQuantity:(Array.isArray(cell) ? cell : [cell]).reduce((sum, row) => sum + (row.quantity ?? 0), 0),currentCells:Array.isArray(cell) ? cell : [cell]}]}};
   return TurnoverPanel({session:{accessToken:'token',user:{id:'user',roleCodes:[],permissionCodes:[]}} as any});
 }
 describe('turnover location lookup', () => {
@@ -87,5 +87,35 @@ describe('turnover location lookup', () => {
     const tree=render({boxId:'box',boxCode:'FFL_001',status:'AVAILABLE',quantity:5});
     await elements(tree).find(n=>n.type==='button' && text(n).startsWith('FFL_001')).props.onClick();
     expect(fetchTurnoverBoxDetails).toHaveBeenCalledWith('token','FFL_001',{clientId:'product-client'});
+  });
+});
+
+// TEST: hide zero-balance history without changing stock rows or positive packing locations.
+describe('current location balances', () => {
+  beforeEach(() => { hooks.values=[]; hooks.effects=[]; hooks.ref.current=0; vi.clearAllMocks(); });
+  it('shows only boxes 363 and 364 for the six remaining units', () => {
+    const cells = [
+      {boxId:'363',boxCode:'FFL_LKB0909_363',status:'AVAILABLE',quantity:1},
+      {boxId:'364',boxCode:'FFL_LKB0909_364',status:'AVAILABLE',quantity:5},
+      {boxId:'275',boxCode:'FFL_LKB0909_275',status:'AVAILABLE',quantity:0},
+      {boxId:'fbo',boxCode:'FBO-PICK-history',status:'PACKING',quantity:0},
+      {boxId:null,boxCode:'boxless-zero',status:'PACKING',quantity:0},
+    ];
+    const before=structuredClone(cells);
+    const locations=elements(render(cells)).find(n=>n.props?.className==='turnover-quick-tool__locations');
+    expect(elements(locations).filter(n=>n.type==='button')).toHaveLength(2);
+    expect(text(locations)).toContain('FFL_LKB0909_363');
+    expect(text(locations)).toContain('FFL_LKB0909_364');
+    expect(hooks.values[2].data.items[0].currentCells).toEqual(before);
+    expect(hooks.values[2].data.items[0].currentQuantity).toBe(6);
+  });
+  it('shows the empty message when all locations are zero', () => {
+    const locations=elements(render([{boxId:'empty',boxCode:'EMPTY',status:'AVAILABLE',quantity:0}])).find(n=>n.props?.className==='turnover-quick-tool__locations');
+    expect(elements(locations).filter(n=>n.type==='button')).toHaveLength(0);
+    expect(elements(locations).some(n=>n.props?.className==='turnover-quick-tool__empty')).toBe(true);
+  });
+  it('keeps positive packing and boxless stock visible', () => {
+    const locations=elements(render([{boxId:'fbo',boxCode:'FBO-PICK-current',status:'PACKING',quantity:2},{boxId:null,boxCode:'boxless-positive',status:'PACKING',quantity:1}])).find(n=>n.props?.className==='turnover-quick-tool__locations');
+    expect(elements(locations).filter(n=>n.type==='button')).toHaveLength(2);
   });
 });

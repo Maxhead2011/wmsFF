@@ -128,6 +128,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     const items = report.data?.items ?? [];
     return items.find((item) => item.skuId === actionForm.skuId) ?? null;
   }, [actionForm.skuId, report.data]);
+  // FIX: zero balances retain history but are not current stock locations.
+  const currentLocationCells = selectedReportItem?.currentCells.filter((cell) => cell.quantity > 0) ?? [];
   const sourceCells = (activeTile === 'actions' && actionForm.skuId ? actionReportItem?.currentCells : selectedReportItem?.currentCells) ?? [];
   const allCells = useMemo(() => uniqueValues((report.data?.items ?? []).flatMap((item) => item.currentCells.map((cell) => cell.boxCode))), [report.data]);
   const productOptions = useMemo(() => buildProductOptions(report.data?.items ?? [], suggestions.data?.products ?? []), [report.data, suggestions.data]);
@@ -653,8 +655,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
               <small>{selectedReportItem.internalSku} · на остатке {formatNumber(selectedReportItem.currentQuantity)} шт</small>
             </div>
             <div className="turnover-quick-tool__locations">
-              {selectedReportItem.currentCells.length === 0 ? <span className="turnover-quick-tool__empty">На складе нет доступного остатка.</span> : null}
-              {selectedReportItem.currentCells.map((cell) => (
+              {currentLocationCells.length === 0 ? <span className="turnover-quick-tool__empty">На складе нет доступного остатка.</span> : null}
+              {currentLocationCells.map((cell) => (
                 <button type="button" key={`${cell.boxId ?? cell.boxCode}-${cell.status}-${cell.palletSortCode ?? ''}`} disabled={!cell.boxId} onClick={() => { if (cell.boxId) void loadBoxDetails(cell.boxCode, selectedReportItem.client.id); }}>
                   <strong>{cell.boxCode}</strong>
                   <span>{storageZoneLabel(cell)} · {cell.palletSortCode ?? cell.palletCode ?? 'без палет-сорта'}</span>
