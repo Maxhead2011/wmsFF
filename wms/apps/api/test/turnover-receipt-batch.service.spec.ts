@@ -1,10 +1,33 @@
 import { MovementType } from '@prisma/client';
 import * as XLSX from 'xlsx';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { TurnoverService } from '../src/modules/turnover/turnover.service';
+afterEach(() => vi.unstubAllEnvs());
 
 describe('TurnoverService receipt batch export', () => {
+  // TEST: the SQL prefix filter and exported workbook must both include real LKBFBO receipts.
+  it.each([true, false])('includes LKBFBO receipts only with our flag enabled: %s', async enabled => {
+    vi.stubEnv('WMS_RECEIPT_FBO_BATCH_DATE_ENABLED', String(enabled));
+    const movements = ['FFL_LKB2409_250', 'FFL_LKBFBO2409_250', 'FFL_LKBFBO2509_251']
+      .map((code, i) => ({ ...receiptMovement('m'+i, code), createdAt: new Date('2026-09-25T12:00:00Z') }));
+    const prisma = { client: { findUnique: vi.fn(async () => ({id:'client-1',code:'LUKIN',name:'Лукин'})) },
+      stockMovement: { findMany: vi.fn(async () => movements) } };
+    const service = new TurnoverService(prisma as never, {requireClientAccess:vi.fn()} as never);
+    const file = await service.getReceiptPeriodXlsx({clientId:'client-1',receiptBatchDate:'2026-09-24'},adminUser);
+    const query = prisma.stockMovement.findMany.mock.calls[0] as any;
+    const predicate = query[0].where.AND[0];
+    expect(predicate.type).toBe(MovementType.RECEIPT);
+    if(enabled) expect(predicate.OR).toEqual([
+      {box:{code:{startsWith:'FFL_LKB2409',mode:'insensitive'}}},
+      {box:{code:{startsWith:'FFL_LKBFBO2409',mode:'insensitive'}}},
+    ]);
+    else expect(predicate.box.code.startsWith).toBe('FFL_LKB2409');
+    const book=XLSX.read(file.content);
+    const values=XLSX.utils.sheet_to_json<unknown[]>(book.Sheets[book.SheetNames[1]],{header:1}).flat().map(String);
+    expect(values.includes('FFL_LKBFBO2409_250')).toBe(enabled);
+    expect(values).not.toContain('FFL_LKBFBO2509_251');
+  });
   it('exports movements by the date encoded in the box number', async () => {
     const prisma = {
       client: {

@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
-import { receiptBoxCodePrefixForDate, receiptDateFromBoxCode } from '../../common/receipt-batches';
+import { receiptBoxCodePrefixesForDate, receiptDateFromBoxCode } from '../../common/receipt-batches';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService, type ClientFilter } from '../auth/client-scope.service';
 import {
@@ -1341,10 +1341,12 @@ export class TurnoverService {
     const configuredReceiptPrefix = this.boxCodes
       ? (await this.boxCodes.getPolicy()).receiptPrefix
       : 'FFL_LKB';
-    const receiptBoxPrefix = receiptBatchDate
-      ? receiptBoxCodePrefixForDate(receiptBatchDate, configuredReceiptPrefix)
+    // FIX: reporting alias is enabled only in our WMS; receipt movements remain the source of truth.
+    const includeFboReceiptPrefix = process.env.WMS_RECEIPT_FBO_BATCH_DATE_ENABLED === 'true';
+    const receiptBoxPrefixes = receiptBatchDate
+      ? receiptBoxCodePrefixesForDate(receiptBatchDate, configuredReceiptPrefix, includeFboReceiptPrefix)
       : null;
-    if (receiptBatchDate && !receiptBoxPrefix) {
+    if (receiptBatchDate && !receiptBoxPrefixes) {
       throw new BadRequestException('Дата партии приемки должна быть корректной датой в формате ГГГГ-ММ-ДД.');
     }
 
@@ -1357,8 +1359,10 @@ export class TurnoverService {
             quantity: { gt: 0 },
             type: receiptBatchDate ? MovementType.RECEIPT : { in: INCOMING_DOCUMENT_MOVEMENT_TYPES },
             ...(movementDateRange ? { createdAt: movementDateRange } : {}),
-            ...(receiptBoxPrefix
-              ? { box: { code: { startsWith: receiptBoxPrefix, mode: Prisma.QueryMode.insensitive } } }
+            ...(receiptBoxPrefixes
+              ? receiptBoxPrefixes.length === 1
+                ? { box: { code: { startsWith: receiptBoxPrefixes[0], mode: Prisma.QueryMode.insensitive } } }
+                : { OR: receiptBoxPrefixes.map(prefix => ({ box: { code: { startsWith: prefix, mode: Prisma.QueryMode.insensitive } } })) }
               : {}),
           },
           ...(movementScopeWhere ? [movementScopeWhere] : []),
@@ -1375,6 +1379,7 @@ export class TurnoverService {
               movement.box!.code,
               movement.createdAt,
               configuredReceiptPrefix,
+              includeFboReceiptPrefix,
             ) === receiptBatchDate,
         )
       : candidateMovements;

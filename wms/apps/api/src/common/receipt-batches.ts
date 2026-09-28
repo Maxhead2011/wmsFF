@@ -4,14 +4,17 @@ export function receiptDateFromBoxCode(
   boxCode: string,
   fallback: Date,
   receiptPrefix = DEFAULT_RECEIPT_BOX_PREFIX,
+  includeFboReceiptPrefix = false,
 ) {
   const escapedPrefix = receiptPrefix
     .trim()
     .toLocaleUpperCase('ru-RU')
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // FIX: opt in only from reporting; operational close/finish keeps its existing parser.
+  const fbo = includeFboReceiptPrefix && receiptPrefix.trim().toUpperCase() === DEFAULT_RECEIPT_BOX_PREFIX ? '(?:FBO)?' : '';
   const match = boxCode
     .toLocaleUpperCase('ru-RU')
-    .match(new RegExp(`^${escapedPrefix}(\\d{2})(\\d{2})(\\d{2})?(?:_|$)`));
+    .match(new RegExp(`^${escapedPrefix}${fbo}(\\d{2})(\\d{2})(\\d{2})?(?:_|$)`));
   if (!match) return moscowDateKey(fallback);
 
   const fallbackYear = Number(moscowDateKey(fallback).slice(0, 4));
@@ -54,4 +57,12 @@ function moscowDateKey(value: Date) {
     month: '2-digit',
     day: '2-digit',
   }).format(value);
+}
+
+// FIX: use the same aliases in the database prefilter and the in-memory date check.
+export function receiptBoxCodePrefixesForDate(value: string, receiptPrefix = DEFAULT_RECEIPT_BOX_PREFIX, includeFboReceiptPrefix = false) {
+  const primary = receiptBoxCodePrefixForDate(value, receiptPrefix);
+  if (!primary) return null;
+  return includeFboReceiptPrefix && receiptPrefix.trim().toUpperCase() === DEFAULT_RECEIPT_BOX_PREFIX
+    ? [primary, primary.replace(DEFAULT_RECEIPT_BOX_PREFIX, `${DEFAULT_RECEIPT_BOX_PREFIX}FBO`)] : [primary];
 }

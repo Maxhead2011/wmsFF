@@ -519,11 +519,11 @@ export class WarehouseService {
         compareOnlineReceiptBoxes(left, right, todayMoscow),
       );
     const currentBatchDate = receiptBoxes[0]
-      ? receiptDateFromBoxCode(receiptBoxes[0].boxCode, onlineReceiptActivityDate(receiptBoxes[0]), receiptPrefix)
+      ? receiptDateFromBoxCode(receiptBoxes[0].boxCode, onlineReceiptActivityDate(receiptBoxes[0]), receiptPrefix, process.env.WMS_RECEIPT_FBO_BATCH_DATE_ENABLED === 'true')
       : null;
     const resultBoxes = currentBatchDate
       ? receiptBoxes.filter(
-          (box) => receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box), receiptPrefix) === currentBatchDate,
+          (box) => receiptDateFromBoxCode(box.boxCode, onlineReceiptActivityDate(box), receiptPrefix, process.env.WMS_RECEIPT_FBO_BATCH_DATE_ENABLED === 'true') === currentBatchDate,
         )
       : [];
     const activeBoxCodes = new Set(resultBoxes.map((box) => box.boxCode));
@@ -579,7 +579,7 @@ export class WarehouseService {
     });
     const groups = new Map<string, { date: string; boxCodes: Set<string>; quantity: number; kizCount: number }>();
     for (const movement of movements) {
-      const date = receiptDateFromBoxCode(movement.box?.code ?? '', movement.createdAt, receiptPrefix);
+      const date = receiptDateFromBoxCode(movement.box?.code ?? '', movement.createdAt, receiptPrefix, process.env.WMS_RECEIPT_FBO_BATCH_DATE_ENABLED === 'true');
       const group = groups.get(date) ?? { date, boxCodes: new Set<string>(), quantity: 0, kizCount: 0 };
       if (movement.box?.code) group.boxCodes.add(movement.box.code);
       group.quantity += movement.quantity;
