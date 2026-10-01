@@ -1,3 +1,7 @@
+# Published PR445 / 01.10.2026
+
+PR445 (01.10.2026): обед с вычетом фактического времени, четыре вида груза по 500 ₽ за эквивалент палеты. API `sha256:f2f941449e6382f4d8cc25cd0c3bef8c26e5609e83ccf56bf193905649c06eec`, web `sha256:4ca568ed5edfcd36f068b2d7fcd70849d823b4cb257fdebf9200111f100f9ad3`. Baseline `2026-10-01-attendance-lunch-cargo`. APK учёта времени 0.3.0-pilot (5); APK216, флаги и проданная WMS сохранены. Схема Prisma взята из фактически работающего generated client, прежние модели и поля проверены полностью. Миграция добавочная; runtime smoke прошёл с откатом тестовых записей. Source parity=false.
+
 # Published PR442 / 30.09.2026
 
 PR442: receipt channel/membership changes atomically invalidate WB stock plans through the durable existing queue. API3010 passed/83 skipped; TypeScript and exact one-module delta verified. Web/APK216/flags/sold WMS unchanged from PR441. Source parity false. User-authorized FBO-only directions applied to FFL_LKB2409 (with ten corrected memberships) and current FFL_LKB2709; no physical stock movements, nine archived boxes preserved. Old active FBS order access retained.
