@@ -130,3 +130,7 @@ PR404: `apps/web/test/fbs-zone-colors.browser.cjs` — реальные CSS, т�
 
 - Browser regression checks four vertically sequential controls, equal width/56px height, identical background/text colour, horizontal and vertical centering for FBS/FBO and all themes. Failed against PR416 before CSS fix. Existing keyboard and callback tests retained.
 - CSS-only release; JavaScript/API/APK unchanged.
+
+
+## Attendance lunch and mixed cargo (PR445)
+API2979, PostgreSQL15, web355 plus PayrollManagement14, Android81/lint/APK signature, TypeScript passed. Exact runtime delta and existing generated Prisma models preserved. Actual deployed candidate lunch/cargo smoke rolled back its fixture. API129/web2 skipped; physical device untested. Tests: attendance-lunch.spec.ts, handling-quantities.spec.ts, attendance-device.integration.spec.ts, AttendanceTest.kt.
