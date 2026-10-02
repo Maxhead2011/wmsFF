@@ -1,0 +1,3776 @@
+generator client {
+  provider = "prisma-client-js"
+
+  output = "/app/node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/.prisma/client"
+}
+
+// FIX: outbound acknowledgement is distinct from a verified marketplace quantity.
+model WbStockPublicationCheck {
+  id               String    @id @default(uuid())
+  runId            String
+  clientId         String
+  connectionId     String
+  warehouseId      String
+  skuId            String?
+  chrtId           BigInt
+  phase            String
+  calculatedAmount Int
+  sentAmount       Int?
+  observedAmount   Int?
+  status           String    @default("PLANNED")
+  sentAt           DateTime?
+  checkedAt        DateTime?
+  error            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([connectionId, warehouseId, chrtId])
+  @@index([clientId, connectionId, createdAt])
+  @@index([runId])
+}
+
+// FIX: hourly bit masks distinguish unknown time from observed zero stock.
+model WbStockAvailabilityDay {
+  id           String   @id @default(uuid())
+  clientId     String
+  connectionId String
+  warehouseId  String
+  skuId        String
+  day          String
+  observedMask Int      @default(0)
+  positiveMask Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([connectionId, warehouseId, skuId, day])
+  @@index([clientId, connectionId, day])
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+  ARCHIVED
+}
+
+enum ClientStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum ClientKind {
+  LEGAL_ENTITY
+  INDIVIDUAL_ENTREPRENEUR
+  SELF_EMPLOYED
+  INDIVIDUAL
+}
+
+enum ClientLogisticsInvoiceMode {
+  SEPARATE
+  SAME_INVOICE
+  DISABLED
+}
+
+enum ClientStorageBillingMode {
+  MONTHLY
+  ON_SHIPMENT
+}
+
+enum ClientStockBalanceMode {
+  PALLET_SORT
+  BOXES
+}
+
+enum MarketplaceType {
+  WILDBERRIES
+  OZON
+  YANDEX_MARKET
+  SBER_MARKET
+  OTHER
+}
+
+// ADDED: отдельный жизненный цикл юридически значимых операций в ГИС МТ.
+enum KizCirculationOperation {
+  RETIRE
+  RETURN
+}
+
+enum KizCirculationItemStatus {
+  NEEDS_REVIEW
+  READY
+  ALREADY_APPLIED
+  IN_BATCH
+  SUBMITTED
+  APPLIED
+  ERROR
+  EXCLUDED
+}
+
+enum KizCirculationBatchStatus {
+  DRAFT
+  SIGNED
+  SUBMITTED
+  APPLIED
+  REJECTED
+}
+
+enum ClientRequestType {
+  INBOUND
+  OUTBOUND
+  RETURN
+  DELIVERY
+  SERVICE
+  SKU_COLLECTION
+  OTHER
+}
+
+enum SkuCollectionScanStatus {
+  PICKED
+  RECEIVED
+}
+
+enum ClientRequestStatus {
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  IN_WORK
+  PACKED
+  DONE
+  CANCELLED
+  REJECTED
+}
+
+enum ClientRequestPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum ClientRequestEventType {
+  CREATED
+  STATUS_CHANGED
+  COMMENT
+  FILE_UPLOADED
+}
+
+enum StockStatus {
+  AVAILABLE
+  IN_TRANSIT
+  RESERVED
+  RECEIVING
+  PACKING
+  SHIPPING
+  BLOCKED
+  DEFECT
+  QUARANTINE
+  UNMARKED
+  NEEDS_LABEL
+  NEEDS_RELABEL
+}
+
+enum InventorySessionType {
+  FULL
+  PARTIAL
+  BOX_CHECK
+}
+
+enum InventorySessionStatus {
+  ACTIVE
+  REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum InventoryBoxStatus {
+  COUNTING
+  MATCHED
+  MISMATCH
+  RESOLVED
+}
+
+enum InventoryLineDecision {
+  PENDING
+  APPLY_ACTUAL
+  KEEP_SYSTEM
+}
+
+enum VolumeSource {
+  MANUAL
+  CALCULATED
+  MARKETPLACE
+  NOT_REQUIRED
+}
+
+enum MovementType {
+  INITIAL_IMPORT
+  RECEIPT
+  MOVE
+  RESERVE
+  PICK
+  PACK
+  SHIP
+  RETURN
+  INVENTORY_ADJUSTMENT
+}
+
+enum WarehouseBoxCheckSeverity {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum WarehouseBoxCheckDecision {
+  PENDING
+  WRITE_OFF
+  KEEP_AS_IS
+  SET_QUANTITY
+}
+
+enum PickWaveStatus {
+  PLANNED
+  BALANCE_REVIEW
+  FROZEN
+  PICKING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+enum PickWaveBalanceReviewStatus {
+  PENDING
+  SUBMITTED
+  APPROVED
+  NOT_REQUIRED
+}
+
+enum PickWaveRequestStatus {
+  PLANNED
+  PICKED
+  FAILED
+}
+
+enum TsdOperationStatus {
+  ACCEPTED
+  NEEDS_REVIEW
+  REJECTED
+}
+
+enum TsdReviewAction {
+  APPLY_INVENTORY_ADJUSTMENT
+  REJECT
+}
+
+enum TsdReviewReason {
+  INVENTORY_MISMATCH
+  SKU_NOT_FOUND
+  BOX_NOT_FOUND
+  RECEIPT_FAILED
+  DEVICE_MISMATCH
+  VALIDATION_ERROR
+  MANUAL_REJECT
+  OTHER
+}
+
+enum TsdDeviceStatus {
+  ACTIVE
+  BLOCKED
+}
+
+enum LogisticsPricingMode {
+  TOTAL
+  PER_PALLET
+  MANUAL_REVIEW
+}
+
+enum LogisticsDeliveryStatus {
+  REQUESTED
+  QUOTED
+  PLANNED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
+enum LogisticsTripStatus {
+  PLANNED
+  LOADING
+  IN_TRANSIT
+  COMPLETED
+  CANCELLED
+}
+
+enum BillingUnit {
+  SERVICE
+  PIECE
+  BOX
+  PALLET
+  LITER
+  LITER_DAY
+  DAY
+  HOUR
+}
+
+enum BillingChargeStatus {
+  DRAFT
+  APPROVED
+  CANCELLED
+}
+
+enum BillingChargeSource {
+  MANUAL
+  STORAGE
+  LOGISTICS
+}
+
+enum BillingInvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  CANCELLED
+}
+
+enum BillingInvoiceSource {
+  MANUAL
+  REQUEST_DONE
+  LOGISTICS
+}
+
+enum BillingPriceTaxMode {
+  INCLUDED
+  ADD_6_PERCENT
+}
+
+enum BillingPaymentStatus {
+  RECORDED
+  CANCELLED
+}
+
+enum ExpenseCategory {
+  MATERIALS
+  LOGISTICS
+  PAYROLL_PICKERS
+  HANDLING_PPR
+  CONTRACT_WORK
+  RENT
+  UTILITIES
+  TAXES
+  SOFTWARE
+  EQUIPMENT
+  MARKETING
+  OTHER
+}
+
+enum ExpenseSource {
+  MANUAL
+  MATERIAL_PURCHASE
+  AUTO_MATERIAL_CONSUMPTION
+  MATERIAL_WRITE_OFF
+  LOGISTICS
+}
+
+enum ExpenseStatus {
+  ACTIVE
+  CANCELLED
+}
+
+enum ExpenseMaterialMovementType {
+  INITIAL
+  PURCHASE
+  CONSUMPTION
+  ADJUSTMENT
+  WRITE_OFF
+}
+
+enum FbsDeliveryDestination {
+  PICKUP_POINT
+  VNUKOVO_SORTING_CENTER
+}
+
+enum LabelTemplateType {
+  BOX
+  SKU
+  PALLET
+  CUSTOM
+}
+
+enum ClientNotificationSeverity {
+  INFO
+  SUCCESS
+  WARNING
+  ERROR
+}
+
+enum ClientNotificationEvent {
+  REQUEST_COMMENT
+  REQUEST_STATUS_CHANGED
+  REQUEST_FILE_UPLOADED
+  BILLING_INVOICE_STATUS_CHANGED
+  BILLING_PAYMENT_RECORDED
+  LOGISTICS_DELIVERY_STATUS_CHANGED
+  SKU_EXPIRATION
+  MANUAL
+}
+
+model User {
+  id                             String                         @id @default(uuid())
+  email                          String                         @unique
+  passwordHash                   String
+  tsdActivationCodeHash          String?
+  name                           String
+  status                         UserStatus                     @default(ACTIVE)
+  isDemo                         Boolean                        @default(false)
+  analyticsEnabled               Boolean                        @default(false)
+  activeWarehouseId              String?
+  activeWarehouse                Warehouse?                     @relation("ActiveWarehouse", fields: [activeWarehouseId], references: [id], onDelete: SetNull)
+  warehouseScopes                UserWarehouse[]
+  roles                          UserRole[]
+  clientScopes                   UserClient[]
+  printerScopes                  UserPrinterGroup[]
+  sessions                       UserSession[]
+  tsdDevices                     TsdDevice[]
+  createdClientRequests          ClientRequest[]                @relation("ClientRequestCreatedBy")
+  assignedClientRequests         ClientRequest[]                @relation("ClientRequestAssignedTo")
+  reviewedTsdOperations          TsdOperation[]                 @relation("TsdOperationReviewedBy")
+  createdBillingCharges          BillingCharge[]                @relation("BillingChargeCreatedBy")
+  approvedBillingCharges         BillingCharge[]                @relation("BillingChargeApprovedBy")
+  createdBillingInvoices         BillingInvoice[]               @relation("BillingInvoiceCreatedBy")
+  createdBillingPayments         BillingPayment[]               @relation("BillingPaymentCreatedBy")
+  updatedClientBillingServices   ClientBillingService[]         @relation("ClientBillingServiceUpdatedBy")
+  createdDeliveries              LogisticsDeliveryRequest[]     @relation("LogisticsDeliveryCreatedBy")
+  uploadedRequestFiles           ClientRequestFile[]            @relation("ClientRequestFileUploadedBy")
+  createdRequestPackages         ClientRequestPackage[]         @relation("ClientRequestPackageCreatedBy")
+  createdPickWaves               PickWave[]                     @relation("PickWaveCreatedBy")
+  assignedPickWaves              PickWave[]                     @relation("PickWaveAssignedPicker")
+  createdNotifications           ClientNotification[]           @relation("ClientNotificationCreatedBy")
+  updatedNotificationPreferences ClientNotificationPreference[] @relation("ClientNotificationPreferenceUpdatedBy")
+  authoredRequestComments        ClientRequestComment[]         @relation("ClientRequestCommentAuthor")
+  createdRequestEvents           ClientRequestEvent[]           @relation("ClientRequestEventCreatedBy")
+  createdClientContracts         ClientContract[]               @relation("ClientContractCreatedBy")
+  uploadedSignedContracts        ClientContract[]               @relation("ClientContractSignedUploadedBy")
+  uploadedContractAttachments    ClientContractAttachment[]     @relation("ClientContractAttachmentUploadedBy")
+  assignedFulfillmentClients     Client[]                       @relation("ClientFulfillmentManager")
+  referralClients                UserReferralClient[]           @relation("UserReferralAssignments")
+  updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
+  systemSettings                 SystemSetting[]
+  auditLogs                      AuditLog[]
+  createdWmsApiCredentials       WmsApiCredential[]             @relation("WmsApiCredentialCreatedBy")
+  createdExpenseEntries          ExpenseEntry[]                 @relation("ExpenseEntryCreatedBy")
+  cancelledExpenseEntries        ExpenseEntry[]                 @relation("ExpenseEntryCancelledBy")
+  updatedExpenseMaterialRules    ClientExpenseMaterialRule[]    @relation("ClientExpenseMaterialRuleUpdatedBy")
+  createdExpenseMaterialMoves    ExpenseMaterialMovement[]      @relation("ExpenseMaterialMovementCreatedBy")
+  mobileDevices                  MobileDevice[]
+  mobileSessions                 MobileSession[]
+  mobileCommands                 MobileCommand[]
+  createdAt                      DateTime                       @default(now())
+  updatedAt                      DateTime                       @updatedAt
+}
+
+model MobileDevice {
+  id             String               @id @default(uuid())
+  userId         String
+  installationId String               @unique
+  name           String?
+  platform       String               @default("ANDROID")
+  appVersion     String?
+  fcmToken       String?              @unique
+  isActive       Boolean              @default(true)
+  lastSeenAt     DateTime             @default(now())
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions       MobileSession[]
+  pushDeliveries MobilePushDelivery[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([userId, isActive])
+  @@index([lastSeenAt])
+}
+
+model MobilePushDelivery {
+  id             String       @id @default(uuid())
+  deviceId       String
+  notificationId String
+  status         String       @default("SENT")
+  error          String?
+  device         MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@unique([deviceId, notificationId])
+  @@index([notificationId])
+}
+
+model MobileSession {
+  id               String       @id @default(uuid())
+  userId           String
+  deviceId         String
+  refreshTokenHash String       @unique
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  lastUsedAt       DateTime     @default(now())
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  device           MobileDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([userId, revokedAt, expiresAt])
+  @@index([deviceId, revokedAt])
+}
+
+model MobileCommand {
+  id             String   @id @default(uuid())
+  userId         String
+  idempotencyKey String
+  action         String
+  status         String   @default("COMPLETED")
+  response       Json?
+  expiresAt      DateTime
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([userId, idempotencyKey])
+  @@index([expiresAt])
+}
+
+model SystemSetting {
+  key             String   @id
+  value           Json
+  updatedByUserId String?
+  updatedBy       User?    @relation(fields: [updatedByUserId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([updatedByUserId])
+}
+
+model Role {
+  id          String           @id @default(uuid())
+  code        String           @unique
+  name        String
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id    String           @id @default(uuid())
+  code  String           @unique
+  name  String
+  roles RolePermission[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id])
+  role   Role   @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}
+
+model UserClient {
+  userId    String
+  clientId  String
+  canRead   Boolean  @default(true)
+  canWrite  Boolean  @default(false)
+  user      User     @relation(fields: [userId], references: [id])
+  client    Client   @relation(fields: [clientId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@id([userId, clientId])
+  @@index([clientId])
+}
+
+model UserReferralClient {
+  userId          String
+  clientId        String
+  percent         Decimal   @db.Decimal(5, 2)
+  isActive        Boolean   @default(true)
+  startsAt        DateTime  @default(now())
+  expiresAt       DateTime?
+  termMonths      Int?
+  updatedByUserId String?
+  user            User      @relation("UserReferralAssignments", fields: [userId], references: [id], onDelete: Cascade)
+  client          Client    @relation(fields: [clientId], references: [id])
+  updatedBy       User?     @relation("UserReferralUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@id([userId, clientId])
+  @@index([clientId])
+  @@index([updatedByUserId])
+  @@index([isActive])
+  @@index([expiresAt])
+}
+
+model UserPrinterGroup {
+  userId    String
+  groupCode String
+  canPrint  Boolean  @default(true)
+  canManage Boolean  @default(false)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@id([userId, groupCode])
+  @@index([groupCode])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+}
+
+model Client {
+  id                           String                         @id @default(uuid())
+  ownCompanyId                 String?
+  code                         String                         @unique
+  name                         String
+  isDemo                       Boolean                        @default(false)
+  clientKind                   ClientKind                     @default(LEGAL_ENTITY)
+  legalName                    String?
+  inn                          String?
+  kpp                          String?
+  ogrn                         String?
+  legalAddress                 String?
+  actualAddress                String?
+  phone                        String?
+  email                        String?
+  telegramChatId               String?
+  bankName                     String?
+  bankBik                      String?
+  bankAccount                  String?
+  correspondentAccount         String?
+  storageAccountingEnabled     Boolean                        @default(false)
+  storagePriceRubPerLiterDay   Decimal?                       @db.Decimal(12, 4)
+  logisticsInvoiceMode         ClientLogisticsInvoiceMode     @default(SEPARATE)
+  storageBillingMode           ClientStorageBillingMode       @default(MONTHLY)
+  storesWithoutBoxes           Boolean                        @default(false)
+  stockBalanceMode             ClientStockBalanceMode         @default(PALLET_SORT)
+  onlineReceiptVisibleToClient Boolean                        @default(false)
+  fbsCalculatorEnabled         Boolean                        @default(false)
+  relabelingEnabled            Boolean                        @default(false)
+  factoryEnabled               Boolean                        @default(false)
+  factoryName                  String?
+  factoryCode                  String?                        @unique
+  fulfillmentManagerUserId     String?
+  status                       ClientStatus                   @default(ACTIVE)
+  fulfillmentManager           User?                          @relation("ClientFulfillmentManager", fields: [fulfillmentManagerUserId], references: [id])
+  ownCompany                   OwnCompany?                    @relation(fields: [ownCompanyId], references: [id], onDelete: SetNull)
+  skus                         Sku[]
+  boxes                        Box[]
+  pallets                      Pallet[]
+  storagePallets               StoragePallet[]
+  movements                    StockMovement[]
+  userScopes                   UserClient[]
+  requests                     ClientRequest[]
+  billingCharges               BillingCharge[]
+  billingInvoices              BillingInvoice[]
+  billingPayments              BillingPayment[]
+  billingServicePrices         ClientBillingService[]
+  fbsBillingSettings           ClientFbsBillingSettings?
+  deliveryRequests             LogisticsDeliveryRequest[]
+  requestFiles                 ClientRequestFile[]
+  requestPackages              ClientRequestPackage[]
+  notifications                ClientNotification[]
+  notificationPreferences      ClientNotificationPreference[]
+  marketplaceConnections       ClientMarketplaceConnection[]
+  dbsIntegrations              ClientDbsIntegration[]
+  fbsSupplyPlans               FbsSupplyPlan[]
+  fbsStockPublications         FbsStockPublication[]
+  // ADDED: Per-cabinet WB stock distribution without mixing physical client balances.
+  fbsStockAllocationPolicies   FbsStockAllocationPolicy[]
+  fbsStockIntegrationApiKeys   FbsStockIntegrationApiKey[]
+  fbsStockAllocationChanges    FbsStockAllocationChange[]
+  ozonFboPlans                 OzonFboPlan[]
+  articleMappings              ClientArticleMapping[]
+  allowedIps                   ClientAllowedIp[]
+  productMarks                 ProductMark[]
+  warehouseLinks               WarehouseClient[]
+  warehouseTransfers           InterWarehouseTransfer[]
+  referralUsers                UserReferralClient[]
+  requestComments              ClientRequestComment[]
+  requestEvents                ClientRequestEvent[]
+  contracts                    ClientContract[]
+  expenseEntries               ExpenseEntry[]
+  expenseMaterialRules         ClientExpenseMaterialRule[]
+  expenseMaterialMovements     ExpenseMaterialMovement[]
+  factoryShipments             FactoryShipment[]
+  wmsApiCredentials            WmsApiCredential[]
+  kizTrueApiConnection         KizTrueApiConnection?
+  kizCirculationItems          KizCirculationItem[]
+  kizCirculationBatches        KizCirculationBatch[]
+  createdAt                    DateTime                       @default(now())
+  updatedAt                    DateTime                       @updatedAt
+
+  @@index([fulfillmentManagerUserId])
+  @@index([ownCompanyId])
+}
+
+model UserSession {
+  id            String    @id @default(uuid())
+  userId        String
+  accessTokenId String?   @unique
+  ipAddress     String?
+  userAgent     String?
+  appName       String    @default("WMS")
+  browserName   String    @default("Unknown")
+  startedAt     DateTime  @default(now())
+  lastSeenAt    DateTime  @default(now())
+  expiresAt     DateTime?
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  @@index([userId, lastSeenAt])
+  @@index([expiresAt])
+}
+
+model ClientAllowedIp {
+  id        String   @id @default(uuid())
+  clientId  String
+  ipAddress String
+  comment   String?
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, ipAddress])
+  @@index([clientId])
+}
+
+model ClientArticleMapping {
+  id            String   @id @default(uuid())
+  clientId      String
+  sourceArticle String
+  targetArticle String
+  comment       String?
+  client        Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([clientId, sourceArticle, targetArticle])
+  @@index([clientId, targetArticle])
+  @@index([clientId, sourceArticle])
+}
+
+model ClientMarketplaceConnection {
+  id                        String                    @id @default(uuid())
+  clientId                  String
+  marketplace               MarketplaceType
+  accountName               String?
+  sellerId                  String?
+  apiKey                    String
+  isActive                  Boolean                   @default(true)
+  comment                   String?
+  fbsWarehouseId            String?
+  fbsWarehouseName          String?
+  fbsWarehouseConnectedAt   DateTime?
+  fbsExecutionWarehouseId   String?
+  fbsDropoffWarehouseId     String?
+  fbsAutoRouteNewWarehouses Boolean                   @default(false)
+  client                    Client                    @relation(fields: [clientId], references: [id])
+  fbsExecutionWarehouse     Warehouse?                @relation("FbsExecutionWarehouse", fields: [fbsExecutionWarehouseId], references: [id], onDelete: SetNull)
+  fbsDropoffWarehouse       Warehouse?                @relation("FbsDropoffWarehouse", fields: [fbsDropoffWarehouseId], references: [id], onDelete: SetNull)
+  fbsStockPublications      FbsStockPublication[]
+  fbsStockAllocationPolicy  FbsStockAllocationPolicy?
+  fbsWarehouseRoutes        FbsWarehouseRoutingRule[]
+  ozonFboPlans              OzonFboPlan[]
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+
+  @@unique([clientId, marketplace, accountName])
+  @@index([clientId])
+}
+
+model ClientDbsIntegration {
+  id                  String          @id @default(uuid())
+  clientId            String
+  marketplace         MarketplaceType
+  senderName          String
+  contactName         String?
+  phone               String
+  email               String?
+  city                String
+  address             String
+  postalCode          String?
+  deliveryProvider    String
+  deliveryServiceName String?
+  deliveryApiUrl      String?
+  deliveryAccountId   String?
+  deliveryApiKey      String
+  deliveryApiSecret   String?
+  isActive            Boolean         @default(true)
+  lastCheckedAt       DateTime?
+  lastCheckOk         Boolean?
+  lastCheckMessage    String?
+  client              Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@unique([clientId, marketplace])
+  @@index([clientId, isActive])
+  @@index([marketplace, isActive])
+}
+
+model Warehouse {
+  id                      String                        @id @default(uuid())
+  code                    String                        @unique
+  name                    String
+  city                    String                        @default("Москва")
+  address                 String?
+  ownCompanyId            String?
+  isActive                Boolean                       @default(true)
+  sortOrder               Int                           @default(100)
+  ownCompany              OwnCompany?                   @relation("WarehouseDefaultOwnCompany", fields: [ownCompanyId], references: [id], onDelete: SetNull)
+  ownedCompanies          OwnCompany[]                  @relation("WarehouseScopedOwnCompanies")
+  zones                   Zone[]
+  storagePallets          StoragePallet[]
+  boxes                   Box[]
+  requests                ClientRequest[]
+  contracts               ClientContract[]
+  activeUsers             User[]                        @relation("ActiveWarehouse")
+  userScopes              UserWarehouse[]
+  clients                 WarehouseClient[]
+  outboundTransfers       InterWarehouseTransfer[]      @relation("TransferFromWarehouse")
+  inboundTransfers        InterWarehouseTransfer[]      @relation("TransferToWarehouse")
+  stockMovements          StockMovement[]
+  stockBalances           StockBalance[]
+  billingInvoices         BillingInvoice[]
+  inventorySessions       InventorySession[]            @relation("InventorySessionWarehouse")
+  pickWaves               PickWave[]
+  inventoryRescanRequests InventoryBoxRescanRequest[]   @relation("InventoryRescanWarehouse")
+  boxIntegrityChecks      WarehouseBoxCheck[]           @relation("WarehouseBoxIntegrityChecks")
+  boxIntegrityRows        WarehouseBoxCheckRow[]        @relation("WarehouseBoxIntegrityRows")
+  shippedKizHistory       ShippedKizHistory[]           @relation("WarehouseShippedKizHistory")
+  logisticsDeliveries     LogisticsDeliveryRequest[]    @relation("WarehouseLogisticsDeliveries")
+  fbsExecutionConnections ClientMarketplaceConnection[] @relation("FbsExecutionWarehouse")
+  fbsDropoffConnections   ClientMarketplaceConnection[] @relation("FbsDropoffWarehouse")
+  fbsRouteExecutions      FbsWarehouseRoutingRule[]     @relation("FbsRouteExecutionWarehouse")
+  fbsRouteDropoffs        FbsWarehouseRoutingRule[]     @relation("FbsRouteDropoffWarehouse")
+  wmsApiCredentials       WmsApiCredential[]
+  createdAt               DateTime                      @default(now())
+  updatedAt               DateTime                      @default(now()) @updatedAt
+
+  @@index([city, isActive])
+  @@index([ownCompanyId])
+}
+
+model FbsWarehouseRoutingRule {
+  id                       String                      @id @default(uuid())
+  connectionId             String
+  marketplaceWarehouseId   String
+  marketplaceWarehouseName String?
+  officeId                 String?
+  officeName               String?
+  officeCity               String?
+  mode                     String                      @default("CENTRAL")
+  executionWarehouseId     String?
+  dropoffWarehouseId       String?
+  connection               ClientMarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  executionWarehouse       Warehouse?                  @relation("FbsRouteExecutionWarehouse", fields: [executionWarehouseId], references: [id], onDelete: SetNull)
+  dropoffWarehouse         Warehouse?                  @relation("FbsRouteDropoffWarehouse", fields: [dropoffWarehouseId], references: [id], onDelete: SetNull)
+  createdAt                DateTime                    @default(now())
+  updatedAt                DateTime                    @updatedAt
+
+  @@unique([connectionId, marketplaceWarehouseId])
+  @@index([connectionId, mode])
+  @@index([executionWarehouseId])
+  @@index([dropoffWarehouseId])
+}
+
+model UserWarehouse {
+  userId        String
+  warehouseId   String
+  canRead       Boolean   @default(true)
+  canWrite      Boolean   @default(false)
+  isResponsible Boolean   @default(false)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+
+  @@id([userId, warehouseId])
+  @@index([warehouseId])
+  @@index([warehouseId, isResponsible])
+}
+
+model WarehouseClient {
+  warehouseId           String
+  clientId              String
+  activatedByTransferId String?
+  status                String    @default("ACTIVE")
+  source                String    @default("LOCAL")
+  activatedAt           DateTime?
+  warehouse             Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  client                Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
+
+  @@id([warehouseId, clientId])
+  @@index([clientId])
+  @@index([warehouseId, status])
+}
+
+model InterWarehouseTransfer {
+  id                 String                        @id @default(uuid())
+  number             Int                           @unique @default(autoincrement())
+  clientId           String
+  fromWarehouseId    String
+  toWarehouseId      String
+  status             String                        @default("PENDING_RECEIPT")
+  transferMode       String                        @default("ITEMS")
+  items              Json
+  manifest           Json?
+  totalQuantity      Int
+  sourceBoxCodes     Json?
+  receivedBoxCodes   Json?
+  destinationBoxCode String?
+  receivedQuantity   Int                           @default(0)
+  comment            String?
+  createdByUserId    String
+  createdByName      String
+  receivedByUserId   String?
+  receivedByName     String?
+  dispatchedAt       DateTime?
+  receivedAt         DateTime?
+  client             Client                        @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  fromWarehouse      Warehouse                     @relation("TransferFromWarehouse", fields: [fromWarehouseId], references: [id], onDelete: Restrict)
+  toWarehouse        Warehouse                     @relation("TransferToWarehouse", fields: [toWarehouseId], references: [id], onDelete: Restrict)
+  issues             InterWarehouseTransferIssue[]
+  createdAt          DateTime                      @default(now())
+  updatedAt          DateTime                      @updatedAt
+
+  @@index([clientId, createdAt])
+  @@index([fromWarehouseId, createdAt])
+  @@index([toWarehouseId, createdAt])
+  @@index([toWarehouseId, status, createdAt])
+}
+
+model InterWarehouseTransferIssue {
+  id               String                 @id @default(uuid())
+  transferId       String
+  boxCode          String?
+  type             String
+  status           String                 @default("OPEN")
+  message          String
+  createdByUserId  String
+  createdByName    String
+  resolvedByUserId String?
+  resolvedByName   String?
+  resolution       String?
+  resolvedAt       DateTime?
+  transfer         InterWarehouseTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([transferId, status, createdAt])
+}
+
+model Zone {
+  id             String          @id @default(uuid())
+  warehouseId    String
+  code           String
+  name           String
+  warehouse      Warehouse       @relation(fields: [warehouseId], references: [id])
+  boxes          Box[]
+  pallets        Pallet[]
+  storagePallets StoragePallet[]
+
+  @@unique([warehouseId, code])
+}
+
+model Sku {
+  id                          String                       @id @default(uuid())
+  clientId                    String
+  internalSku                 String
+  clientSku                   String?
+  article                     String?
+  name                        String
+  brand                       String?
+  category                    String?
+  color                       String?
+  size                        String?
+  weightGrams                 Int?
+  lengthCm                    Decimal?                     @db.Decimal(10, 2)
+  widthCm                     Decimal?                     @db.Decimal(10, 2)
+  heightCm                    Decimal?                     @db.Decimal(10, 2)
+  volumeLiters                Decimal?                     @db.Decimal(12, 3)
+  volumeSource                VolumeSource                 @default(CALCULATED)
+  shelfLifeUntil              DateTime?
+  needsChestnyZnak            Boolean                      @default(false)
+  isUnmarked                  Boolean                      @default(false)
+  needsLabel                  Boolean                      @default(false)
+  needsRelabel                Boolean                      @default(false)
+  isDraft                     Boolean                      @default(false)
+  draftSource                 String?
+  marketplace                 MarketplaceType?
+  marketplaceProductId        String?
+  marketplaceOfferId          String?
+  marketplacePayload          Json?
+  marketplaceSyncedAt         DateTime?
+  client                      Client                       @relation(fields: [clientId], references: [id])
+  barcodes                    Barcode[]
+  movements                   StockMovement[]
+  balances                    StockBalance[]
+  clientRequestItems          ClientRequestItem[]
+  requestBoxSelections        ClientRequestBoxSelection[]
+  packageItems                ClientRequestPackageItem[]
+  productMarks                ProductMark[]
+  fbsStockPublications        FbsStockPublication[]
+  fbsStockAllocationOverrides FbsStockAllocationOverride[]
+  ozonFboPlanItems            OzonFboPlanItem[]
+  factoryShipmentItems        FactoryShipmentItem[]
+  createdAt                   DateTime                     @default(now())
+  updatedAt                   DateTime                     @updatedAt
+
+  @@unique([clientId, internalSku])
+  @@index([clientId, isDraft])
+  @@index([clientId, shelfLifeUntil])
+  @@index([clientId, marketplace, marketplaceProductId])
+  @@index([clientId, marketplace, marketplaceOfferId])
+}
+
+model NomenclatureItem {
+  id               String   @id @default(uuid())
+  internalSku      String   @unique
+  article          String?
+  barcode          String?  @unique
+  name             String
+  printName        String?
+  unit             String?
+  itemType         String?
+  color            String?
+  size             String?
+  needsChestnyZnak Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([name])
+  @@index([article])
+}
+
+model Barcode {
+  id        String  @id @default(uuid())
+  skuId     String
+  value     String
+  isPrimary Boolean @default(false)
+  sku       Sku     @relation(fields: [skuId], references: [id])
+
+  @@unique([skuId, value])
+}
+
+model Box {
+  id                   String                      @id @default(uuid())
+  clientId             String
+  warehouseId          String?
+  zoneId               String?
+  palletId             String?
+  code                 String                      @unique
+  status               String                      @default("active")
+  client               Client                      @relation(fields: [clientId], references: [id])
+  warehouse            Warehouse?                  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  zone                 Zone?                       @relation(fields: [zoneId], references: [id])
+  pallet               Pallet?                     @relation(fields: [palletId], references: [id])
+  movements            StockMovement[]
+  balances             StockBalance[]
+  productMarks         ProductMark[]
+  requestBoxSelections ClientRequestBoxSelection[]
+  storagePlacement     StoragePalletBox?
+
+  @@unique([clientId, code])
+  @@index([warehouseId, clientId])
+}
+
+model StoragePallet {
+  id           String             @id @default(uuid())
+  warehouseId  String
+  clientId     String
+  zoneId       String?
+  code         String
+  status       String             @default("CLOSED")
+  source       String             @default("MANUAL")
+  deviceCode   String?
+  workerUserId String?
+  workerName   String?
+  lastSyncedAt DateTime?
+  closedAt     DateTime?
+  warehouse    Warehouse          @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  client       Client             @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  zone         Zone?              @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  boxes        StoragePalletBox[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([warehouseId, code])
+  @@index([clientId])
+  @@index([warehouseId, zoneId])
+  @@index([deviceCode, status])
+}
+
+model StoragePalletBox {
+  id        String        @id @default(uuid())
+  palletId  String
+  boxId     String?       @unique
+  boxCode   String        @unique
+  source    String        @default("MANUAL")
+  scannedAt DateTime      @default(now())
+  pallet    StoragePallet @relation(fields: [palletId], references: [id], onDelete: Cascade)
+  box       Box?          @relation(fields: [boxId], references: [id], onDelete: SetNull)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@index([palletId])
+  @@index([source])
+}
+
+model Pallet {
+  id       String         @id @default(uuid())
+  clientId String
+  zoneId   String?
+  code     String
+  status   String         @default("active")
+  client   Client         @relation(fields: [clientId], references: [id])
+  zone     Zone?          @relation(fields: [zoneId], references: [id])
+  boxes    Box[]
+  balances StockBalance[]
+
+  @@unique([clientId, code])
+}
+
+model StockMovement {
+  id             String        @id @default(uuid())
+  warehouseId    String?
+  clientId       String
+  skuId          String
+  boxId          String?
+  palletId       String?
+  type           MovementType
+  status         StockStatus
+  quantity       Int
+  sourceDocument String?
+  idempotencyKey String?       @unique
+  comment        String?
+  client         Client        @relation(fields: [clientId], references: [id])
+  warehouse      Warehouse?    @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  sku            Sku           @relation(fields: [skuId], references: [id])
+  box            Box?          @relation(fields: [boxId], references: [id])
+  productMarks   ProductMark[]
+  createdAt      DateTime      @default(now())
+
+  @@index([clientId, skuId, status])
+  @@index([clientId, status, createdAt])
+  @@index([warehouseId, createdAt])
+  @@index([boxId])
+  @@index([sourceDocument, type, status])
+}
+
+model StockTransferBatch {
+  id               String    @id @default(uuid())
+  clientId         String
+  fileName         String
+  mimeType         String
+  sizeBytes        Int
+  content          Bytes
+  status           String    @default("APPLIED")
+  rowCount         Int
+  appliedRowCount  Int
+  rejectedRowCount Int
+  quantity         Int
+  rows             Json
+  uploadedByUserId String?
+  uploadedByName   String?
+  reversedByUserId String?
+  reversedByName   String?
+  reversedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([clientId, createdAt])
+  @@index([status, createdAt])
+}
+
+enum FactoryShipmentStatus {
+  DRAFT
+  PICKING
+  SHIPPED
+  RECEIVING
+  RECONCILED
+  CANCELLED
+}
+
+model FactoryShipment {
+  id               String                @id @default(uuid())
+  number           Int                   @unique @default(autoincrement())
+  clientId         String
+  title            String
+  factoryName      String                @default("Бишкек")
+  status           FactoryShipmentStatus @default(DRAFT)
+  comment          String?
+  receiptRequestId String?
+  createdByUserId  String?
+  startedAt        DateTime?
+  shippedAt        DateTime?
+  receivedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  client           Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  items            FactoryShipmentItem[]
+  scans            FactoryShipmentScan[]
+
+  @@index([clientId, status, createdAt])
+  @@index([receiptRequestId])
+}
+
+model FactoryShipmentItem {
+  id          String                @id @default(uuid())
+  shipmentId  String
+  skuId       String
+  barcode     String?
+  name        String
+  article     String?
+  size        String?
+  plannedQty  Int
+  scannedQty  Int                   @default(0)
+  receivedQty Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  shipment    FactoryShipment       @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  sku         Sku                   @relation(fields: [skuId], references: [id])
+  scans       FactoryShipmentScan[]
+
+  @@unique([shipmentId, skuId])
+  @@index([shipmentId, barcode])
+}
+
+model FactoryShipmentScan {
+  id          String              @id @default(uuid())
+  shipmentId  String
+  itemId      String
+  barcode     String
+  quantity    Int                 @default(1)
+  deviceId    String?
+  scannedById String?
+  scannedBy   String?
+  scannedAt   DateTime            @default(now())
+  shipment    FactoryShipment     @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  item        FactoryShipmentItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, scannedAt])
+  @@index([itemId, scannedAt])
+}
+
+// FIX: separate duplicate-label queue: no synthetic FBS orders or stock mutations.
+model KizDuplicatePrinter {
+  stationId   String   @id
+  warehouseId String
+  agentUserId String
+  lastSeenAt  DateTime @default(now())
+}
+
+model KizDuplicateJob {
+  id            String    @id
+  fingerprint   String
+  stationId     String
+  warehouseId   String
+  clientId      String
+  skuId         String
+  kiz           String    @db.Text
+  product       Json
+  imageBase64   String    @db.Text
+  status        String    @default("QUEUED")
+  requestedById String
+  requestedBy   String
+  deviceCode    String
+  claimedById   String?
+  claimedAt     DateTime?
+  printedAt     DateTime?
+  verifiedAt    DateTime?
+  errorMessage  String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([stationId, status, createdAt])
+  @@index([clientId, createdAt])
+  @@index([requestedById, createdAt])
+}
+
+model ProductMark {
+  id              String         @id @default(uuid())
+  clientId        String
+  skuId           String
+  boxId           String?
+  stockMovementId String?
+  value           String
+  sourceDocument  String?
+  sourceRow       Int?
+  status          StockStatus    @default(AVAILABLE)
+  client          Client         @relation(fields: [clientId], references: [id])
+  sku             Sku            @relation(fields: [skuId], references: [id])
+  box             Box?           @relation(fields: [boxId], references: [id])
+  stockMovement   StockMovement? @relation(fields: [stockMovementId], references: [id])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([clientId, value])
+  @@index([clientId, skuId, status])
+  @@index([boxId])
+}
+
+model StockBalance {
+  id          String      @id @default(uuid())
+  balanceKey  String      @unique
+  warehouseId String?
+  clientId    String
+  skuId       String
+  boxId       String?
+  palletId    String?
+  status      StockStatus
+  quantity    Int
+  warehouse   Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  sku         Sku         @relation(fields: [skuId], references: [id])
+  box         Box?        @relation(fields: [boxId], references: [id])
+  pallet      Pallet?     @relation(fields: [palletId], references: [id])
+  updatedAt   DateTime    @updatedAt
+
+  @@index([clientId, skuId, status])
+  @@index([warehouseId, clientId, skuId, status])
+  @@index([boxId])
+}
+
+model WarehouseBoxCheck {
+  id                 String                 @id @default(uuid())
+  periodFrom         DateTime
+  periodTo           DateTime
+  clientId           String?
+  warehouseId        String?
+  boxesChecked       Int
+  findingsCount      Int
+  probableUnits      Int
+  highConfidenceRows Int                    @default(0)
+  createdByUserId    String
+  createdByName      String
+  rows               WarehouseBoxCheckRow[]
+  warehouse          Warehouse?             @relation("WarehouseBoxIntegrityChecks", fields: [warehouseId], references: [id], onDelete: SetNull)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([createdAt])
+  @@index([clientId, createdAt])
+  @@index([warehouseId, createdAt])
+}
+
+model WarehouseBoxCheckRow {
+  id                String                    @id @default(uuid())
+  checkId           String
+  boxId             String?
+  boxCode           String
+  clientId          String
+  warehouseId       String?
+  clientName        String
+  skuId             String?
+  internalSku       String
+  skuName           String
+  barcode           String?
+  currentQuantity   Int
+  suspectQuantity   Int
+  relabelQuantity   Int                       @default(0)
+  fbsPickedQuantity Int                       @default(0)
+  restoredQuantity  Int                       @default(0)
+  markCount         Int                       @default(0)
+  excessMarkCount   Int                       @default(0)
+  severity          WarehouseBoxCheckSeverity
+  reasonCode        String
+  reasonLabel       String
+  evidence          Json?
+  decision          WarehouseBoxCheckDecision @default(PENDING)
+  decidedQuantity   Int?
+  beforeQuantity    Int?
+  afterQuantity     Int?
+  decisionComment   String?
+  decidedByUserId   String?
+  decidedByName     String?
+  decidedAt         DateTime?
+  check             WarehouseBoxCheck         @relation(fields: [checkId], references: [id], onDelete: Cascade)
+  warehouse         Warehouse?                @relation("WarehouseBoxIntegrityRows", fields: [warehouseId], references: [id], onDelete: SetNull)
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+
+  @@unique([checkId, boxCode, internalSku])
+  @@index([checkId, decision, severity])
+  @@index([boxCode, createdAt])
+  @@index([clientId, createdAt])
+  @@index([warehouseId, decision, createdAt])
+}
+
+model ShippedKizHistory {
+  id            String     @id @default(uuid())
+  assemblyId    String     @unique
+  clientId      String
+  warehouseId   String?
+  clientName    String
+  requestId     String
+  requestNumber Int
+  requestTitle  String
+  orderId       String?
+  supplyId      String?
+  skuId         String
+  internalSku   String
+  barcode       String?
+  article       String?
+  productName   String
+  color         String?
+  size          String?
+  kiz           String
+  sourceBoxCode String?
+  arrivalAt     DateTime?
+  shippedAt     DateTime
+  createdAt     DateTime   @default(now())
+  warehouse     Warehouse? @relation("WarehouseShippedKizHistory", fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@index([clientId, shippedAt])
+  @@index([warehouseId, shippedAt])
+  @@index([requestId])
+  @@index([orderId])
+  @@index([kiz])
+}
+
+// ADDED: токен True API хранится только в зашифрованном виде; закрытый ключ УКЭП здесь не хранится.
+model KizTrueApiConnection {
+  id                    String    @id @default(uuid())
+  clientId              String    @unique
+  inn                   String
+  kpp                   String?
+  fiasId                String?
+  productGroup          String
+  apiBaseUrl            String
+  apiTokenEncrypted     String    @db.Text
+  tokenExpiresAt        DateTime?
+  certificateSubject    String?
+  certificateThumbprint String?
+  isActive              Boolean   @default(true)
+  lastCheckedAt         DateTime?
+  lastCheckOk           Boolean?
+  lastCheckMessage      String?
+  client                Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([isActive])
+}
+
+model KizCirculationBatch {
+  id                 String                    @id @default(uuid())
+  clientId           String
+  operation          KizCirculationOperation
+  productGroup       String
+  documentType       String
+  status             KizCirculationBatchStatus @default(DRAFT)
+  payload            Json
+  payloadJson        String                    @db.Text
+  payloadHash        String
+  signatureEncrypted String?                   @db.Text
+  crptDocumentId     String?                   @unique
+  crptStatus         String?
+  crptError          String?
+  submittedAt        DateTime?
+  processedAt        DateTime?
+  createdByUserId    String
+  createdByName      String
+  client             Client                    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  items              KizCirculationItem[]
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  @@index([clientId, status, createdAt])
+}
+
+model KizCirculationItem {
+  id                      String                   @id @default(uuid())
+  clientId                String
+  marketplace             MarketplaceType
+  marketplaceConnectionId String?
+  operation               KizCirculationOperation
+  sourceEventKey          String                   @unique
+  orderId                 String?
+  requestId               String?
+  assemblyId              String?
+  skuId                   String?
+  kizRaw                  String                   @db.Text
+  cis                     String
+  productGroup            String
+  productCostKopecks      Int?
+  eventAt                 DateTime
+  status                  KizCirculationItemStatus @default(NEEDS_REVIEW)
+  remoteStatus            String?
+  remoteMessage           String?
+  metadata                Json?
+  batchId                 String?
+  client                  Client                   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  batch                   KizCirculationBatch?     @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+
+  @@index([clientId, operation, status, eventAt])
+  @@index([clientId, cis])
+  @@index([batchId])
+  @@index([orderId])
+}
+
+// ADDED: independent admin sorting sessions; no FBS request or stock reservation.
+model PalletSortingSession {
+  id              String    @id
+  warehouseId     String
+  clientId        String
+  createdByUserId String
+  state           Json
+  version         Int       @default(1)
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([warehouseId, completedAt])
+  @@index([clientId])
+}
+
+model InventorySession {
+  id                String                 @id @default(uuid())
+  type              InventorySessionType
+  status            InventorySessionStatus @default(ACTIVE)
+  clientId          String?
+  warehouseId       String?
+  title             String
+  comment           String?
+  createdByUserId   String
+  createdByName     String
+  completedByUserId String?
+  completedByName   String?
+  startedAt         DateTime               @default(now())
+  completedAt       DateTime?
+  boxes             InventoryAuditBox[]
+  warehouse         Warehouse?             @relation("InventorySessionWarehouse", fields: [warehouseId], references: [id], onDelete: SetNull)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@index([type, status])
+  @@index([clientId, createdAt])
+  @@index([warehouseId, status, createdAt])
+}
+
+model InventoryAuditBox {
+  id              String               @id @default(uuid())
+  sessionId       String
+  boxId           String
+  boxCode         String
+  clientId        String
+  clientName      String
+  status          InventoryBoxStatus   @default(COUNTING)
+  countedByUserId String?
+  countedByName   String?
+  startedAt       DateTime             @default(now())
+  completedAt     DateTime?
+  resolvedAt      DateTime?
+  resolvedByName  String?
+  comment         String?
+  session         InventorySession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  lines           InventoryAuditLine[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@unique([sessionId, boxId])
+  @@index([sessionId, status])
+  @@index([boxCode])
+}
+
+model InventoryAuditLine {
+  id               String                @id @default(uuid())
+  auditBoxId       String
+  skuId            String
+  skuName          String
+  internalSku      String
+  barcode          String?
+  expectedQuantity Int
+  countedQuantity  Int                   @default(0)
+  difference       Int                   @default(0)
+  decision         InventoryLineDecision @default(PENDING)
+  decisionComment  String?
+  decidedByUserId  String?
+  decidedByName    String?
+  decidedAt        DateTime?
+  auditBox         InventoryAuditBox     @relation(fields: [auditBoxId], references: [id], onDelete: Cascade)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@unique([auditBoxId, skuId])
+  @@index([auditBoxId, decision])
+}
+
+model InventoryBoxRescanRequest {
+  id                String     @id @default(uuid())
+  boxId             String
+  boxCode           String
+  clientId          String
+  warehouseId       String?
+  clientName        String
+  sessionId         String
+  sessionTitle      String
+  requestedByUserId String
+  requestedByName   String
+  status            String     @default("PENDING")
+  approvedByUserId  String?
+  approvedByName    String?
+  approvedAt        DateTime?
+  consumedAt        DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  warehouse         Warehouse? @relation("InventoryRescanWarehouse", fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([boxId, sessionId, status])
+  @@index([clientId, status])
+  @@index([warehouseId, status, createdAt])
+}
+
+model ClientRequest {
+  id                           String                     @id @default(uuid())
+  // FIX: a remainder request retains its direct parent for incremental FBO fulfillment.
+  parentRequestId              String?
+  fboRequestCode               String?                    @unique
+  fboRemainderSequence         Int                        @default(0)
+  parentRequest                ClientRequest?             @relation("FboRemainderRequests", fields: [parentRequestId], references: [id], onDelete: Restrict)
+  childRequests                ClientRequest[]            @relation("FboRemainderRequests")
+  number                       Int                        @unique @default(autoincrement())
+  clientId                     String
+  warehouseId                  String?
+  type                         ClientRequestType
+  status                       ClientRequestStatus        @default(SUBMITTED)
+  priority                     ClientRequestPriority      @default(NORMAL)
+  title                        String
+  comment                      String?
+  contactName                  String?
+  contactPhone                 String?
+  destinationCity              String?
+  deliveryAddress              String?
+  desiredDate                  DateTime?
+  managerComment               String?
+  createdByUserId              String?
+  assignedToUserId             String?
+  fbsEmergencyAssemblyAt       DateTime?
+  fbsEmergencyAssemblyByUserId String?
+  fbsEmergencyAssemblyByName   String?
+  client                       Client                     @relation(fields: [clientId], references: [id])
+  warehouse                    Warehouse?                 @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  createdBy                    User?                      @relation("ClientRequestCreatedBy", fields: [createdByUserId], references: [id])
+  assignedTo                   User?                      @relation("ClientRequestAssignedTo", fields: [assignedToUserId], references: [id])
+  fboAssembly                  FboAssembly?
+  items                        ClientRequestItem[]
+  files                        ClientRequestFile[]
+  notifications                ClientNotification[]
+  comments                     ClientRequestComment[]
+  events                       ClientRequestEvent[]
+  packages                     ClientRequestPackage[]
+  pickWaveRequests             PickWaveRequest[]
+  billingCharges               BillingCharge[]
+  billingInvoices              BillingInvoice[]
+  deliveryRequests             LogisticsDeliveryRequest[]
+  fbsOrderLinks                FbsOrderRequestLink[]
+  expenseEntries               ExpenseEntry[]
+  expenseMaterialMovements     ExpenseMaterialMovement[]
+  skuCollectionSources         SkuCollectionSource[]      @relation("SkuCollectionRequestSources")
+  skuCollectionScans           SkuCollectionScan[]        @relation("SkuCollectionRequestScans")
+  createdAt                    DateTime                   @default(now())
+  updatedAt                    DateTime                   @updatedAt
+
+  @@index([clientId, status, createdAt])
+  @@index([warehouseId, status, createdAt])
+  @@index([type, status])
+  @@index([createdByUserId])
+  @@index([assignedToUserId])
+  @@index([parentRequestId])
+}
+
+model SkuCollectionSource {
+  id               String              @id @default(uuid())
+  requestId        String
+  clientId         String
+  warehouseId      String
+  skuId            String
+  sourceBoxId      String
+  sourceBoxCode    String
+  plannedQuantity  Int
+  pickedQuantity   Int                 @default(0)
+  receivedQuantity Int                 @default(0)
+  request          ClientRequest       @relation("SkuCollectionRequestSources", fields: [requestId], references: [id], onDelete: Cascade)
+  scans            SkuCollectionScan[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@unique([requestId, sourceBoxId, skuId])
+  @@index([warehouseId, clientId, skuId])
+  @@index([requestId, pickedQuantity])
+}
+
+model SkuCollectionScan {
+  id               String                  @id @default(uuid())
+  requestId        String
+  sourceId         String
+  skuId            String
+  barcode          String
+  kiz              String
+  sourceBoxId      String
+  sourceBoxCode    String
+  targetBoxId      String?
+  targetBoxCode    String?
+  status           SkuCollectionScanStatus @default(PICKED)
+  pickedByUserId   String?
+  pickedByName     String?
+  pickedAt         DateTime                @default(now())
+  receivedByUserId String?
+  receivedByName   String?
+  receivedAt       DateTime?
+  request          ClientRequest           @relation("SkuCollectionRequestScans", fields: [requestId], references: [id], onDelete: Cascade)
+  source           SkuCollectionSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@unique([requestId, kiz])
+  @@index([requestId, status])
+  @@index([sourceId, status])
+}
+
+// FIX: isolated reporting cache; never drives stock, assembly or marketplace mutations.
+model OperationsStatisticsFact {
+  id                 String          @id @default(uuid())
+  clientId           String
+  marketplace        MarketplaceType
+  connectionId       String
+  orderId            String
+  orderPlacedAt      DateTime?
+  sellerWarehouseId  String?
+  supplyId           String?
+  supplyScannedAt    DateTime?
+  supplierStatus     String?
+  wbStatus           String?
+  requiresReshipment Boolean?
+  checkedAt          DateTime
+  issue              String?
+
+  @@unique([marketplace, connectionId, orderId])
+  @@index([clientId, orderPlacedAt])
+}
+
+model FbsOrderRequestLink {
+  id                  String          @id @default(uuid())
+  clientId            String
+  marketplace         MarketplaceType
+  connectionId        String
+  orderId             String
+  requestId           String
+  createdByUserId     String?
+  syncStatus          String          @default("ACTIVE")
+  syncIssue           String?
+  lastCategory        String?
+  lastSupplierStatus  String?
+  lastWbStatus        String?
+  lastSupplyId        String?
+  lastSkuId           String?
+  lastItemCount       Int?
+  lastSeenAt          DateTime?
+  // FIX: marketplace timestamps, not WMS import/assembly timestamps.
+  orderPlacedAt       DateTime?
+  handedOverAt        DateTime?
+  sellerWarehouseId   String?
+  sellerWarehouseName String?
+  request             ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  @@unique([marketplace, connectionId, orderId])
+  @@index([clientId, requestId])
+  @@index([connectionId, orderId])
+  @@index([requestId, syncStatus])
+}
+
+model ClientRequestItem {
+  id            String                      @id @default(uuid())
+  requestId     String
+  skuId         String?
+  barcode       String?
+  name          String?
+  quantity      Int
+  comment       String?
+  request       ClientRequest               @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sku           Sku?                        @relation(fields: [skuId], references: [id])
+  packageItems  ClientRequestPackageItem[]
+  boxSelections ClientRequestBoxSelection[]
+
+  @@index([requestId])
+  @@index([skuId])
+}
+
+model PickWave {
+  id                             String                      @id @default(uuid())
+  waveNumber                     String                      @unique
+  warehouseId                    String?
+  status                         PickWaveStatus              @default(PLANNED)
+  comment                        String?
+  plan                           Json?
+  planVersion                    Int                         @default(1)
+  planGeneratedAt                DateTime?
+  planFrozenAt                   DateTime?
+  balanceReviewStatus            PickWaveBalanceReviewStatus @default(NOT_REQUIRED)
+  balanceReviewSubmittedAt       DateTime?
+  balanceReviewSubmittedByUserId String?
+  createdByUserId                String?
+  assignedPickerUserId           String?
+  createdBy                      User?                       @relation("PickWaveCreatedBy", fields: [createdByUserId], references: [id])
+  assignedPicker                 User?                       @relation("PickWaveAssignedPicker", fields: [assignedPickerUserId], references: [id])
+  warehouse                      Warehouse?                  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  requests                       PickWaveRequest[]
+  balanceLines                   PickWaveBalanceLine[]
+  createdAt                      DateTime                    @default(now())
+  updatedAt                      DateTime                    @updatedAt
+
+  @@index([status, createdAt])
+  @@index([warehouseId, status, createdAt])
+  @@index([createdByUserId])
+  @@index([assignedPickerUserId])
+}
+
+model PickWaveBalanceLine {
+  id                String                      @id @default(uuid())
+  waveId            String
+  balanceId         String
+  sourceBoxId       String?
+  sourceBoxCode     String
+  skuId             String
+  internalSku       String
+  barcode           String?
+  name              String
+  color             String?
+  size              String?
+  originalQuantity  Int
+  plannedQuantity   Int
+  remainingQuantity Int
+  keepQuantity      Int?
+  isReviewed        Boolean                     @default(false)
+  comment           String?
+  wave              PickWave                    @relation(fields: [waveId], references: [id], onDelete: Cascade)
+  allocations       PickWaveBalanceAllocation[]
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+
+  @@unique([waveId, balanceId])
+  @@index([waveId, isReviewed])
+  @@index([sourceBoxCode])
+  @@index([skuId])
+}
+
+model PickWaveBalanceAllocation {
+  id                   String              @id @default(uuid())
+  lineId               String
+  requestId            String
+  quantity             Int
+  needsRelabel         Boolean             @default(false)
+  targetBarcode        String?
+  comment              String?
+  appliedRequestItemId String?
+  line                 PickWaveBalanceLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  @@index([lineId])
+  @@index([requestId])
+  @@index([appliedRequestItemId])
+}
+
+model PickWaveRequest {
+  waveId    String
+  requestId String
+  status    PickWaveRequestStatus @default(PLANNED)
+  result    Json?
+  pickedAt  DateTime?
+  wave      PickWave              @relation(fields: [waveId], references: [id], onDelete: Cascade)
+  request   ClientRequest         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@id([waveId, requestId])
+  @@index([requestId])
+  @@index([status])
+}
+
+model ClientRequestPackage {
+  id              String                     @id @default(uuid())
+  requestId       String
+  clientId        String
+  packageCode     String
+  packageType     String?
+  weightGrams     Int?
+  lengthCm        Decimal?                   @db.Decimal(10, 2)
+  widthCm         Decimal?                   @db.Decimal(10, 2)
+  heightCm        Decimal?                   @db.Decimal(10, 2)
+  comment         String?
+  metadata        Json?
+  createdByUserId String?
+  request         ClientRequest              @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  client          Client                     @relation(fields: [clientId], references: [id])
+  createdBy       User?                      @relation("ClientRequestPackageCreatedBy", fields: [createdByUserId], references: [id])
+  items           ClientRequestPackageItem[]
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime                   @updatedAt
+
+  @@unique([requestId, packageCode])
+  @@index([clientId, createdAt])
+  @@index([createdByUserId])
+}
+
+model ClientRequestPackageItem {
+  id            String               @id @default(uuid())
+  packageId     String
+  requestItemId String
+  skuId         String?
+  barcode       String?
+  quantity      Int
+  package       ClientRequestPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  requestItem   ClientRequestItem    @relation(fields: [requestItemId], references: [id], onDelete: Cascade)
+  sku           Sku?                 @relation(fields: [skuId], references: [id])
+
+  @@index([packageId])
+  @@index([requestItemId])
+  @@index([skuId])
+}
+
+model ClientRequestFile {
+  id               String        @id @default(uuid())
+  requestId        String
+  clientId         String
+  fileName         String
+  mimeType         String
+  sizeBytes        Int
+  content          Bytes
+  uploadedByUserId String?
+  request          ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  client           Client        @relation(fields: [clientId], references: [id])
+  uploadedBy       User?         @relation("ClientRequestFileUploadedBy", fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime      @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([clientId, createdAt])
+  @@index([uploadedByUserId])
+}
+
+model ClientRequestComment {
+  id           String        @id @default(uuid())
+  requestId    String
+  clientId     String
+  authorUserId String?
+  body         String
+  isInternal   Boolean       @default(false)
+  request      ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  client       Client        @relation(fields: [clientId], references: [id])
+  author       User?         @relation("ClientRequestCommentAuthor", fields: [authorUserId], references: [id])
+  createdAt    DateTime      @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([clientId, createdAt])
+  @@index([authorUserId])
+}
+
+model ClientRequestEvent {
+  id              String                 @id @default(uuid())
+  requestId       String
+  clientId        String
+  eventType       ClientRequestEventType
+  title           String
+  body            String?
+  statusFrom      ClientRequestStatus?
+  statusTo        ClientRequestStatus?
+  createdByUserId String?
+  request         ClientRequest          @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  client          Client                 @relation(fields: [clientId], references: [id])
+  createdBy       User?                  @relation("ClientRequestEventCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime               @default(now())
+
+  @@index([requestId, createdAt])
+  @@index([clientId, createdAt])
+  @@index([eventType, createdAt])
+  @@index([createdByUserId])
+}
+
+model ClientNotification {
+  id              String                     @id @default(uuid())
+  clientId        String
+  requestId       String?
+  title           String
+  body            String?
+  severity        ClientNotificationSeverity @default(INFO)
+  isRead          Boolean                    @default(false)
+  readAt          DateTime?
+  createdByUserId String?
+  client          Client                     @relation(fields: [clientId], references: [id])
+  request         ClientRequest?             @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  createdBy       User?                      @relation("ClientNotificationCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime                   @default(now())
+
+  @@index([clientId, isRead, createdAt])
+  @@index([requestId])
+  @@index([createdByUserId])
+}
+
+model ClientNotificationPreference {
+  id              String                  @id @default(uuid())
+  clientId        String
+  eventType       ClientNotificationEvent
+  isEnabled       Boolean                 @default(true)
+  updatedByUserId String?
+  client          Client                  @relation(fields: [clientId], references: [id])
+  updatedBy       User?                   @relation("ClientNotificationPreferenceUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  @@unique([clientId, eventType])
+  @@index([clientId])
+  @@index([updatedByUserId])
+}
+
+model BillingService {
+  id                      String                       @id @default(uuid())
+  code                    String                       @unique
+  name                    String
+  unit                    BillingUnit                  @default(SERVICE)
+  defaultPriceRub         Decimal?                     @db.Decimal(12, 2)
+  isActive                Boolean                      @default(true)
+  charges                 BillingCharge[]
+  clientPrices            ClientBillingService[]
+  fbsAdditionalSelections ClientFbsAdditionalService[]
+  fbsBoxFormationSettings ClientFbsBillingSettings[]   @relation("FbsBoxFormationService")
+  fbsBoxMaterialSettings  ClientFbsBillingSettings[]   @relation("FbsBoxMaterialService")
+  fbsPalletSettings       ClientFbsBillingSettings[]   @relation("FbsPalletService")
+  createdAt               DateTime                     @default(now())
+  updatedAt               DateTime                     @updatedAt
+}
+
+model ClientRequestBoxSelection {
+  id            String            @id @default(uuid())
+  requestItemId String
+  skuId         String
+  boxId         String
+  quantity      Int
+  requestItem   ClientRequestItem @relation(fields: [requestItemId], references: [id], onDelete: Cascade)
+  sku           Sku               @relation(fields: [skuId], references: [id])
+  box           Box               @relation(fields: [boxId], references: [id])
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@unique([requestItemId, boxId])
+  @@index([boxId])
+  @@index([skuId])
+}
+
+model ClientBillingService {
+  id              String              @id @default(uuid())
+  clientId        String
+  serviceId       String
+  priceRub        Decimal             @db.Decimal(12, 2)
+  taxMode         BillingPriceTaxMode @default(INCLUDED)
+  isActive        Boolean             @default(true)
+  comment         String?
+  updatedByUserId String?
+  client          Client              @relation(fields: [clientId], references: [id])
+  service         BillingService      @relation(fields: [serviceId], references: [id])
+  updatedBy       User?               @relation("ClientBillingServiceUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([clientId, serviceId])
+  @@index([clientId, isActive])
+  @@index([serviceId])
+  @@index([updatedByUserId])
+}
+
+model ClientFbsBillingSettings {
+  id                             String                       @id @default(uuid())
+  clientId                       String                       @unique
+  turnkeyEnabled                 Boolean                      @default(false)
+  turnkeyUnitPriceRub            Decimal                      @default(0) @db.Decimal(12, 2)
+  fixedPlusLogisticsEnabled      Boolean                      @default(false)
+  fixedPlusLogisticsUnitPriceRub Decimal                      @default(0) @db.Decimal(12, 2)
+  fixedPlusLogisticsDestination  String                       @default("Внуково")
+  tieredLogisticsEnabled         Boolean                      @default(false)
+  logisticsFreeItemsLimit        Int                          @default(20)
+  logisticsCubicMeterLiters      Int                          @default(1000)
+  logisticsCubicMeterPriceRub    Decimal                      @default(1500) @db.Decimal(12, 2)
+  logisticsPalletPriceRub        Decimal                      @default(2500) @db.Decimal(12, 2)
+  primaryProcessingEnabled       Boolean                      @default(false)
+  primaryWhiteUnitPriceRub       Decimal                      @default(0) @db.Decimal(12, 2)
+  primaryGrayUnitPriceRub        Decimal                      @default(0) @db.Decimal(12, 2)
+  primaryReturnUnitPriceRub      Decimal                      @default(0) @db.Decimal(12, 2)
+  defaultDeliveryDestination     FbsDeliveryDestination       @default(PICKUP_POINT)
+  pickupPointBasePriceRub        Decimal                      @default(500) @db.Decimal(12, 2)
+  vnukovoBasePriceRub            Decimal                      @default(1500) @db.Decimal(12, 2)
+  baseIncludedItems              Int                          @default(5)
+  extraBlockItems                Int                          @default(5)
+  extraBlockPriceRub             Decimal                      @default(250) @db.Decimal(12, 2)
+  boxCapacityItems               Int                          @default(14)
+  boxFormationServiceId          String?
+  boxMaterialServiceId           String?
+  palletsEnabled                 Boolean                      @default(false)
+  boxesPerPallet                 Int                          @default(16)
+  palletServiceId                String?
+  client                         Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  boxFormationService            BillingService?              @relation("FbsBoxFormationService", fields: [boxFormationServiceId], references: [id])
+  boxMaterialService             BillingService?              @relation("FbsBoxMaterialService", fields: [boxMaterialServiceId], references: [id])
+  palletService                  BillingService?              @relation("FbsPalletService", fields: [palletServiceId], references: [id])
+  additionalServices             ClientFbsAdditionalService[]
+  createdAt                      DateTime                     @default(now())
+  updatedAt                      DateTime                     @updatedAt
+
+  @@index([boxFormationServiceId])
+  @@index([boxMaterialServiceId])
+  @@index([palletServiceId])
+}
+
+model ClientFbsAdditionalService {
+  id                 String                   @id @default(uuid())
+  settingsId         String
+  serviceId          String
+  quantityMultiplier Decimal                  @default(1) @db.Decimal(10, 3)
+  matchKeywords      String?
+  settings           ClientFbsBillingSettings @relation(fields: [settingsId], references: [id], onDelete: Cascade)
+  service            BillingService           @relation(fields: [serviceId], references: [id])
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@unique([settingsId, serviceId])
+  @@index([serviceId])
+}
+
+model FbsSupplyPlan {
+  id                       String                 @id @default(uuid())
+  clientId                 String
+  marketplace              MarketplaceType        @default(WILDBERRIES)
+  connectionId             String
+  supplyId                 String
+  marketplaceWarehouseId   String?
+  marketplaceWarehouseName String?
+  deliveryDestination      FbsDeliveryDestination
+  itemsPerCargoPlace       Int                    @default(2000000000)
+  cargoPlaceCount          Int                    @default(0)
+  cargoPlaceIds            Json?
+  cargoPlaceBarcodes       Json?
+  orderIds                 Json
+  createdByUserId          String?
+  sentToWbAt               DateTime?
+  sentToWbByUserId         String?
+  sentToWbByName           String?
+  destinationOfficeId      String?
+  destinationOfficeName    String?
+  plannedDeliveryDate      DateTime?              @db.Date
+  ignoredAt                DateTime?
+  ignoredByUserId          String?
+  ignoredByName            String?
+  ignoreReason             String?
+  client                   Client                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@unique([marketplace, connectionId, supplyId])
+  @@index([clientId, createdAt])
+  @@index([connectionId, supplyId])
+}
+
+model FbsStockPublication {
+  id                  String                      @id @default(uuid())
+  clientId            String
+  connectionId        String
+  skuId               String
+  warehouseId         String
+  enabled             Boolean                     @default(false)
+  // Null means "publish the whole available FBS balance".  A value is the
+  // client-selected maximum that may be offered for this SKU on WB.
+  saleLimit           Int?
+  // For a SKU that is the target of an article relabeling rule, this is the
+  // exact quantity the administrator allows to expose on WB. The value may
+  // use both the target SKU balance and stock reassigned from source SKUs.
+  relabelManualAmount Int?
+  lastWmsAmount       Int?
+  lastWbAmount        Int?
+  lastSyncedAmount    Int?
+  lastSyncedAt        DateTime?
+  lastError           String?
+  client              Client                      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  connection          ClientMarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  sku                 Sku                         @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  @@unique([connectionId, warehouseId, skuId])
+  @@index([clientId, warehouseId, enabled])
+  @@index([skuId])
+}
+
+// ADDED: per-cabinet rules keep stock monitoring configurable without placing
+// credentials or operational settings in source code.
+model FbsStockMonitorConfig {
+  id                   String   @id @default(uuid())
+  clientId             String
+  connectionId         String   @unique
+  enabled              Boolean  @default(true)
+  allowedDelaySeconds  Int      @default(300)
+  retryIntervalSeconds Int      @default(30)
+  maxAttempts          Int      @default(10)
+  wbRule               String   @default("ORDER_AND_STOCK_DELTA")
+  wmsRule              String   @default("ORDER_RESERVATION_OR_SELLABLE_DELTA")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([clientId, enabled])
+}
+
+// ADDED: immutable product/order snapshots make every detected sale auditable
+// even when the SKU card or marketplace connection changes later.
+model FbsStockMonitorEvent {
+  id                       String                   @id @default(uuid())
+  eventKey                 String                   @unique
+  clientId                 String
+  connectionId             String
+  marketplace              MarketplaceType          @default(WILDBERRIES)
+  marketplaceWarehouseId   String?
+  marketplaceWarehouseName String?
+  executionWarehouseId     String?
+  orderId                  String
+  orderUid                 String?
+  eventType                String                   @default("SALE")
+  sourceFingerprint        String?
+  sourceIds                Json?
+  skuId                    String
+  productName              String
+  article                  String?
+  nmId                     String?
+  chrtId                   BigInt?
+  barcode                  String?
+  size                     String?
+  color                    String?
+  quantity                 Int                      @default(1)
+  saleAt                   DateTime
+  detectedAt               DateTime                 @default(now())
+  deadlineAt               DateTime
+  wbBeforeAmount           Int?
+  wbExpectedAfterAmount    Int?
+  wbAfterAmount            Int?
+  wbCurrentAmount          Int?
+  wbStatus                 String                   @default("PENDING")
+  wbAttempts               Int                      @default(0)
+  wbMessage                String?
+  wmsBeforeAmount          Int?
+  wmsExpectedAfterAmount   Int?
+  wmsAfterAmount           Int?
+  wmsCurrentAmount         Int?
+  wmsReservedAmount        Int?
+  wmsStatus                String                   @default("PENDING")
+  wmsAttempts              Int                      @default(0)
+  wmsMessage               String?
+  overallStatus            String                   @default("PENDING")
+  statusRank               Int                      @default(1)
+  nextCheckAt              DateTime?
+  lastCheckedAt            DateTime?
+  processingAt             DateTime?
+  processingBy             String?
+  histories                FbsStockMonitorHistory[]
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+
+  @@index([clientId, saleAt])
+  @@index([connectionId, marketplaceWarehouseId, skuId, saleAt])
+  @@index([overallStatus, nextCheckAt])
+  @@index([statusRank, saleAt])
+  @@index([wbStatus, nextCheckAt])
+  @@index([wmsStatus, nextCheckAt])
+  @@index([orderId])
+}
+
+model FbsStockMonitorHistory {
+  id             String               @id @default(uuid())
+  eventId        String
+  // ADDED: nullable for legacy/check rows; unique for manual repair retries.
+  idempotencyKey String?              @unique
+  system         String
+  kind           String
+  status         String
+  attempt        Int                  @default(0)
+  beforeAmount   Int?
+  expectedAmount Int?
+  currentAmount  Int?
+  reservedAmount Int?
+  message        String?
+  sourceIds      Json?
+  event          FbsStockMonitorEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  createdAt      DateTime             @default(now())
+
+  @@index([eventId, createdAt])
+  @@index([system, status, createdAt])
+}
+
+model FbsStockMonitorRun {
+  id           String    @id @default(uuid())
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  durationMs   Int?
+  ingested     Int       @default(0)
+  checked      Int       @default(0)
+  succeeded    Int       @default(0)
+  pending      Int       @default(0)
+  failed       Int       @default(0)
+  unavailable  Int       @default(0)
+  wbErrors     Int       @default(0)
+  wmsErrors    Int       @default(0)
+  errorMessage String?
+
+  @@index([startedAt])
+  @@index([completedAt])
+}
+
+model FbsStockAllocationPolicy {
+  id                 String                       @id @default(uuid())
+  clientId           String
+  connectionId       String                       @unique
+  enabled            Boolean                      @default(false)
+  primaryWarehouseId String?
+  lowStockThreshold  Int                          @default(10)
+  recommendationDays Int                          @default(30)
+  updatedSource      String                       @default("WMS")
+  changedByClientAt  DateTime?
+  lastSyncedAt       DateTime?
+  lastError          String?
+  client             Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  connection         ClientMarketplaceConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  shares             FbsStockAllocationShare[]
+  overrides          FbsStockAllocationOverride[]
+  changes            FbsStockAllocationChange[]
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
+
+  @@index([clientId, enabled])
+}
+
+model FbsStockAllocationShare {
+  id            String                   @id @default(uuid())
+  policyId      String
+  warehouseId   String
+  warehouseName String?
+  percent       Int
+  isPrimary     Boolean                  @default(false)
+  policy        FbsStockAllocationPolicy @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+
+  @@unique([policyId, warehouseId])
+  @@index([policyId, isPrimary])
+}
+
+model FbsStockAllocationOverride {
+  id                String                     @id @default(uuid())
+  clientId          String
+  policyId          String
+  skuId             String
+  requestedAmount   Int
+  updatedSource     String                     @default("WMS")
+  changedByClientAt DateTime?
+  updatedByApiKeyId String?
+  policy            FbsStockAllocationPolicy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  sku               Sku                        @relation(fields: [skuId], references: [id], onDelete: Cascade)
+  updatedByApiKey   FbsStockIntegrationApiKey? @relation(fields: [updatedByApiKeyId], references: [id], onDelete: SetNull)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  @@unique([policyId, skuId])
+  @@index([clientId, updatedSource, updatedAt])
+  @@index([updatedByApiKeyId])
+}
+
+model FbsStockIntegrationApiKey {
+  id              String                       @id @default(uuid())
+  clientId        String
+  name            String
+  keyHash         String                       @unique
+  keyPrefix       String
+  isActive        Boolean                      @default(true)
+  createdByUserId String?
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+  client          Client                       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  overrides       FbsStockAllocationOverride[]
+  changes         FbsStockAllocationChange[]
+  createdAt       DateTime                     @default(now())
+  updatedAt       DateTime                     @updatedAt
+
+  @@index([clientId, isActive])
+}
+
+model FbsStockAllocationChange {
+  id                   String                     @id @default(uuid())
+  clientId             String
+  policyId             String
+  apiKeyId             String?
+  source               String                     @default("EXTERNAL_CLIENT")
+  changeType           String
+  externalReference    String?
+  payload              Json
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  client               Client                     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  policy               FbsStockAllocationPolicy   @relation(fields: [policyId], references: [id], onDelete: Cascade)
+  apiKey               FbsStockIntegrationApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  createdAt            DateTime                   @default(now())
+
+  @@unique([apiKeyId, externalReference])
+  @@index([clientId, acknowledgedAt, createdAt])
+  @@index([policyId, createdAt])
+}
+
+model FbsCargoPlacePacking {
+  id                String           @id @default(uuid())
+  clientId          String
+  marketplace       MarketplaceType  @default(WILDBERRIES)
+  connectionId      String
+  supplyId          String
+  cargoPlaceId      String
+  cargoPlaceBarcode String?
+  capacityItems     Int              @default(2000000000)
+  status            String           @default("OPEN")
+  deviceCode        String
+  openedByUserId    String?
+  openedByName      String?
+  openedAt          DateTime         @default(now())
+  closedByUserId    String?
+  closedByName      String?
+  closedAt          DateTime?
+  assemblies        FbsTsdAssembly[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([marketplace, connectionId, supplyId, cargoPlaceId])
+  @@index([clientId, supplyId, status])
+  @@index([deviceCode, status, updatedAt])
+}
+
+model OzonFboPlan {
+  id                   String                      @id @default(uuid())
+  clientId             String
+  connectionId         String
+  title                String
+  status               String                      @default("IMPORTED")
+  sourceFileName       String
+  sourceWorkbook       Bytes?
+  supplyType           String                      @default("MULTI_CLUSTER")
+  deliveryType         String                      @default("DROPOFF")
+  dropOffWarehouseId   String?
+  dropOffWarehouseName String?
+  dropOffWarehouseType String?
+  draftId              String?
+  ozonOrderId          String?
+  ozonOrderNumber      String?
+  ozonOrderState       String?
+  slotFrom             DateTime?
+  slotTo               DateTime?
+  autoBookEnabled      Boolean                     @default(false)
+  draftInfo            Json?
+  availableTimeslots   Json?
+  cargoOperations      Json?
+  importSummary        Json?
+  lastSyncAt           DateTime?
+  lastError            String?
+  createdByUserId      String?
+  createdByName        String?
+  client               Client                      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  connection           ClientMarketplaceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  clusters             OzonFboPlanCluster[]
+  boxes                OzonFboBox[]
+  events               OzonFboEvent[]
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  ozonFboPlanItems     OzonFboPlanItem[]
+
+  @@index([clientId, status, createdAt])
+  @@index([connectionId, createdAt])
+  @@index([ozonOrderId])
+}
+
+model OzonFboPlanCluster {
+  id                   String            @id @default(uuid())
+  planId               String
+  sourceName           String
+  clusterId            String?
+  macrolocalClusterId  String?
+  clusterName          String?
+  storageWarehouseId   String?
+  storageWarehouseName String?
+  bundleId             String?
+  supplyId             String?
+  status               String            @default("IMPORTED")
+  validationMessage    String?
+  plan                 OzonFboPlan       @relation(fields: [planId], references: [id], onDelete: Cascade)
+  items                OzonFboPlanItem[]
+  boxes                OzonFboBox[]
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  @@unique([planId, sourceName])
+  @@index([planId, macrolocalClusterId])
+  @@index([supplyId])
+}
+
+model OzonFboPlanItem {
+  id                String             @id @default(uuid())
+  planId            String
+  clusterId         String
+  skuId             String?
+  offerId           String
+  ozonSku           String?
+  productName       String?
+  quantity          Int
+  assembledQuantity Int                @default(0)
+  uploadedQuantity  Int                @default(0)
+  isValid           Boolean            @default(false)
+  validationMessage String?
+  plan              OzonFboPlan        @relation(fields: [planId], references: [id], onDelete: Cascade)
+  cluster           OzonFboPlanCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  sku               Sku?               @relation(fields: [skuId], references: [id], onDelete: SetNull)
+  boxItems          OzonFboBoxItem[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([clusterId, offerId])
+  @@index([planId, offerId])
+  @@index([skuId])
+}
+
+model OzonFboBox {
+  id             String             @id @default(uuid())
+  planId         String
+  clusterId      String
+  boxCode        String             @unique
+  ozonCargoKey   String             @unique
+  ozonCargoId    String?
+  ozonBarcode    String?
+  status         String             @default("PLANNED")
+  labelFileGuid  String?
+  labelFileUrl   String?
+  closedAt       DateTime?
+  closedByUserId String?
+  closedByName   String?
+  plan           OzonFboPlan        @relation(fields: [planId], references: [id], onDelete: Cascade)
+  cluster        OzonFboPlanCluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  items          OzonFboBoxItem[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@index([planId, status])
+  @@index([clusterId, status])
+  @@index([ozonCargoId])
+}
+
+model OzonFboBoxItem {
+  id                String          @id @default(uuid())
+  boxId             String
+  planItemId        String
+  quantity          Int
+  assembledQuantity Int             @default(0)
+  box               OzonFboBox      @relation(fields: [boxId], references: [id], onDelete: Cascade)
+  planItem          OzonFboPlanItem @relation(fields: [planItemId], references: [id], onDelete: Cascade)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@unique([boxId, planItemId])
+  @@index([planItemId])
+}
+
+model OzonFboEvent {
+  id        String      @id @default(uuid())
+  planId    String
+  type      String
+  message   String
+  payload   Json?
+  userId    String?
+  userName  String?
+  plan      OzonFboPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+
+  @@index([planId, createdAt])
+}
+
+model FbsTsdAssembly {
+  id                          String                @id @default(uuid())
+  clientId                    String
+  marketplace                 MarketplaceType       @default(WILDBERRIES)
+  connectionId                String
+  orderId                     String
+  supplyId                    String?
+  requestId                   String
+  requestItemId               String
+  skuId                       String
+  sourceSkuId                 String?
+  // FIX: reservation branch is durable even before a WMS request/box exists.
+  stockWarehouseId            String?
+  productName                 String
+  article                     String?
+  sourceProductName           String?
+  sourceArticle               String?
+  barcodes                    Json
+  sourceBarcodes              Json?
+  storageBoxes                Json
+  itemCount                   Int                   @default(1)
+  // FIX: count confirmed physical Ozon units; a barcode alone proves only one.
+  scannedItemCount            Int                   @default(0)
+  requiresKiz                 Boolean               @default(false)
+  status                      String                @default("IN_PROGRESS")
+  deviceCode                  String
+  workerUserId                String?
+  workerName                  String?
+  startedAt                   DateTime?
+  reservedBoxId               String?
+  reservedBoxCode             String?
+  reservedAt                  DateTime?
+  boxId                       String?
+  boxCode                     String?
+  sourceBoxPending            Boolean               @default(false)
+  sourceBarcode               String?
+  barcode                     String?
+  relabelRequired             Boolean               @default(false)
+  relabelConfirmedAt          DateTime?
+  kiz                         String?
+  wbMetaStatus                String                @default("NOT_REQUIRED")
+  stickerPartA                String?
+  stickerPartB                String?
+  stickerBarcode              String?
+  marketplaceSubmittedAt      DateTime?
+  marketplaceLabelBase64      String?
+  marketplaceLabelContentType String?
+  marketplaceSubmitError      String?
+  cargoPackingId              String?
+  cargoPackedAt               DateTime?
+  cargoPackedByUserId         String?
+  cargoPackedByName           String?
+  errorMessage                String?
+  completedAt                 DateTime?
+  createdAt                   DateTime              @default(now())
+  updatedAt                   DateTime              @updatedAt
+  cargoPacking                FbsCargoPlacePacking? @relation(fields: [cargoPackingId], references: [id], onDelete: SetNull)
+
+  @@unique([marketplace, connectionId, orderId])
+  @@unique([clientId, kiz])
+  @@index([deviceCode, status, updatedAt])
+  @@index([requestId, status])
+  @@index([clientId, status])
+  @@index([clientId, skuId, status])
+  @@index([clientId, sourceSkuId, status])
+  @@index([clientId, reservedBoxId, status])
+  @@index([requestId, deviceCode, status, completedAt])
+  @@index([status, completedAt])
+  @@index([cargoPackingId, cargoPackedAt])
+}
+
+// FIX: immutable local shipment evidence, independent of later WB statuses.
+// FIX: durable, coalesced billing work from successful print acknowledgements.
+model FbsPrintBillingOutbox {
+  clientId      String    @id
+  revision      Int       @default(1)
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
+  leaseToken    String?
+  leaseUntil    DateTime?
+  lastError     String?
+
+  @@index([nextAttemptAt])
+}
+
+model WbOrderShipment {
+  id               String   @id @default(uuid())
+  clientId         String
+  connectionId     String
+  orderId          String
+  assemblyId       String   @unique
+  requestId        String
+  warehouseId      String
+  skuId            String
+  quantity         Int
+  kiz              String?
+  source           String
+  shippedAt        DateTime @default(now())
+  orderSnapshot    Json
+  assemblySnapshot Json     @default("{}")
+
+  @@index([clientId, connectionId, orderId])
+  @@index([clientId, warehouseId, shippedAt])
+  @@index([requestId])
+}
+
+// FIX: immutable evidence of the completed physical attempt before a repeat.
+model FbsAssemblyAttemptHistory {
+  id               String   @id
+  clientId         String
+  requestId        String
+  orderId          String
+  workerUserId     String?
+  completedAt      DateTime
+  successorId      String   @unique
+  repeatRunId      String
+  taskSnapshot     Json
+  kiz              String?
+  linkSnapshot     Json
+  archivedByUserId String
+  archivedAt       DateTime @default(now())
+
+  @@index([requestId])
+  @@index([clientId, completedAt])
+  @@index([completedAt, workerUserId])
+  @@index([repeatRunId])
+  @@index([clientId, kiz])
+}
+
+model FbsRepeatAssemblyRun {
+  id              String   @id @default(uuid())
+  fingerprint     String   @unique
+  clientId        String
+  warehouseId     String
+  requestId       String   @unique
+  createdByUserId String
+  createdAt       DateTime @default(now())
+}
+
+// FIX: durable saga before any WB mutation. Original physical attempts remain
+// immutable JSON evidence; SAME_ITEM does not duplicate their analytics rows.
+model FbsReshipmentRun {
+  id               String               @id @default(uuid())
+  fingerprint      String               @unique
+  previewToken     String
+  clientId         String
+  warehouseId      String
+  connectionId     String
+  mode             String
+  status           String               @default("PENDING")
+  phase            String               @default("PLANNED")
+  supplyName       String               @unique
+  supplyId         String?
+  requestId        String?              @unique
+  sourceRequestIds String[]             @default([])
+  snapshot         Json
+  errorMessage     String?
+  leaseToken       String?
+  leaseUntil       DateTime?
+  createdByUserId  String
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  claims           FbsReshipmentClaim[]
+
+  @@index([clientId, warehouseId, createdAt])
+  @@index([sourceRequestIds], type: Gin)
+}
+
+// FIX: overlapping selections and different modes cannot own the same cycle.
+model FbsReshipmentClaim {
+  id           String           @id @default(uuid())
+  runId        String
+  connectionId String
+  orderId      String
+  cycle        String
+  run          FbsReshipmentRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  @@unique([connectionId, orderId, cycle])
+  @@index([runId])
+}
+
+model FbsWebKizStickerPrint {
+  id          String   @id @default(uuid())
+  kiz         String   @unique
+  orderId     String
+  assemblyId  String
+  clientId    String
+  requestId   String
+  stickerCode String?
+  printedById String
+  printedBy   String
+  printedAt   DateTime @default(now())
+
+  @@unique([orderId, assemblyId])
+  @@index([clientId, printedAt])
+  @@index([requestId, printedAt])
+}
+
+enum FbsPrintJobStatus {
+  QUEUED
+  CLAIMED
+  PRINTED
+  FAILED
+  CANCELLED
+}
+
+model FbsPrintStation {
+  id            String        @id @default(uuid())
+  name          String        @unique
+  agentKey      String        @unique
+  printerName   String
+  printerModel  String
+  labelWidthMm  Int           @default(58)
+  labelHeightMm Int           @default(40)
+  enabled       Boolean       @default(true)
+  lastSeenAt    DateTime?
+  lastError     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  jobs          FbsPrintJob[]
+
+  @@index([enabled, lastSeenAt])
+}
+
+model FbsPrintJob {
+  id            String            @id @default(uuid())
+  stationId     String
+  station       FbsPrintStation   @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  historyId     String            @unique
+  assemblyId    String
+  requestId     String
+  requestNumber Int?
+  orderId       String
+  kiz           String
+  warehouseName String
+  productName   String?
+  stickerCode   String?
+  stickerMime   String            @default("image/png")
+  stickerBase64 String
+  status        FbsPrintJobStatus @default(QUEUED)
+  attempts      Int               @default(0)
+  source        String            @default("TSD_FBS_ASSEMBLY")
+  requestedById String
+  requestedBy   String
+  deviceCode    String?
+  claimedAt     DateTime?
+  printedAt     DateTime?
+  failedAt      DateTime?
+  errorMessage  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([stationId, status, createdAt])
+  @@index([requestId, createdAt])
+  @@index([orderId])
+}
+
+model BillingCharge {
+  id               String                     @id @default(uuid())
+  clientId         String
+  serviceId        String?
+  requestId        String?
+  description      String
+  unit             BillingUnit                @default(SERVICE)
+  quantity         Decimal                    @db.Decimal(12, 3)
+  unitPriceRub     Decimal                    @db.Decimal(12, 2)
+  totalRub         Decimal                    @db.Decimal(14, 2)
+  status           BillingChargeStatus        @default(DRAFT)
+  serviceDate      DateTime                   @default(now())
+  source           BillingChargeSource        @default(MANUAL)
+  sourceKey        String?                    @unique
+  metadata         Json?
+  comment          String?
+  createdByUserId  String?
+  approvedByUserId String?
+  approvedAt       DateTime?
+  client           Client                     @relation(fields: [clientId], references: [id])
+  service          BillingService?            @relation(fields: [serviceId], references: [id])
+  request          ClientRequest?             @relation(fields: [requestId], references: [id])
+  createdBy        User?                      @relation("BillingChargeCreatedBy", fields: [createdByUserId], references: [id])
+  approvedBy       User?                      @relation("BillingChargeApprovedBy", fields: [approvedByUserId], references: [id])
+  invoiceItems     BillingInvoiceItem[]
+  deliveryRequests LogisticsDeliveryRequest[]
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  @@index([clientId, status, serviceDate])
+  @@index([requestId])
+  @@index([serviceId])
+  @@index([approvedByUserId])
+  @@index([source, serviceDate])
+}
+
+model BillingInvoice {
+  id                          String               @id @default(uuid())
+  warehouseId                 String?
+  number                      String               @unique
+  clientId                    String
+  periodFrom                  DateTime
+  periodTo                    DateTime
+  dueDate                     DateTime?
+  status                      BillingInvoiceStatus @default(DRAFT)
+  source                      BillingInvoiceSource @default(MANUAL)
+  sourceKey                   String?              @unique
+  requestId                   String?
+  totalRub                    Decimal              @db.Decimal(14, 2)
+  paidRub                     Decimal              @default(0) @db.Decimal(14, 2)
+  issuedAt                    DateTime?
+  paidAt                      DateTime?
+  comment                     String?
+  paymentBankAccountId        String?
+  paymentBankName             String?
+  paymentBankBik              String?
+  paymentBankInn              String?
+  paymentBankKpp              String?
+  paymentBankAccount          String?
+  paymentCorrespondentAccount String?
+  createdByUserId             String?
+  client                      Client               @relation(fields: [clientId], references: [id])
+  warehouse                   Warehouse?           @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  request                     ClientRequest?       @relation(fields: [requestId], references: [id])
+  createdBy                   User?                @relation("BillingInvoiceCreatedBy", fields: [createdByUserId], references: [id])
+  items                       BillingInvoiceItem[]
+  payments                    BillingPayment[]
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+
+  @@index([clientId, status, periodFrom])
+  @@index([warehouseId, periodFrom])
+  @@index([periodTo])
+  @@index([requestId])
+  @@index([source, periodFrom])
+  @@index([createdByUserId])
+  @@index([paymentBankAccountId])
+}
+
+model BillingInvoiceItem {
+  id           String         @id @default(uuid())
+  invoiceId    String
+  chargeId     String?
+  description  String
+  unit         BillingUnit    @default(SERVICE)
+  quantity     Decimal        @db.Decimal(12, 3)
+  unitPriceRub Decimal        @db.Decimal(12, 2)
+  totalRub     Decimal        @db.Decimal(14, 2)
+  serviceDate  DateTime
+  invoice      BillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  charge       BillingCharge? @relation(fields: [chargeId], references: [id])
+
+  @@index([invoiceId])
+  @@index([chargeId])
+}
+
+model BillingPayment {
+  id              String               @id @default(uuid())
+  invoiceId       String?
+  clientId        String
+  amountRub       Decimal              @db.Decimal(14, 2)
+  paidAt          DateTime             @default(now())
+  method          String?
+  reference       String?
+  comment         String?
+  status          BillingPaymentStatus @default(RECORDED)
+  createdByUserId String?
+  invoice         BillingInvoice?      @relation(fields: [invoiceId], references: [id])
+  client          Client               @relation(fields: [clientId], references: [id])
+  createdBy       User?                @relation("BillingPaymentCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([invoiceId, status])
+  @@index([clientId, paidAt])
+  @@index([createdByUserId])
+}
+
+model ExpenseMaterial {
+  id                 String                      @id @default(uuid())
+  code               String                      @unique
+  name               String
+  unit               String                      @default("шт.")
+  stockQuantity      Decimal                     @default(0) @db.Decimal(14, 3)
+  averageUnitCostRub Decimal                     @default(0) @db.Decimal(14, 4)
+  minStockQuantity   Decimal                     @default(0) @db.Decimal(14, 3)
+  isActive           Boolean                     @default(true)
+  comment            String?
+  rules              ClientExpenseMaterialRule[]
+  movements          ExpenseMaterialMovement[]
+  expenseEntries     ExpenseEntry[]
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  @@index([isActive, name])
+}
+
+model ClientExpenseMaterialRule {
+  id                     String          @id @default(uuid())
+  clientId               String
+  materialId             String
+  isEnabled              Boolean         @default(true)
+  quantityPerShippedUnit Decimal         @default(1) @db.Decimal(12, 3)
+  chargeSeparately       Boolean         @default(false)
+  billingUnitPriceRub    Decimal?        @db.Decimal(12, 2)
+  comment                String?
+  updatedByUserId        String?
+  client                 Client          @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  material               ExpenseMaterial @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  updatedBy              User?           @relation("ClientExpenseMaterialRuleUpdatedBy", fields: [updatedByUserId], references: [id])
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+
+  @@unique([clientId, materialId])
+  @@index([clientId, isEnabled])
+  @@index([materialId])
+  @@index([updatedByUserId])
+}
+
+model ExpenseEntry {
+  id                String                   @id @default(uuid())
+  category          ExpenseCategory
+  source            ExpenseSource            @default(MANUAL)
+  status            ExpenseStatus            @default(ACTIVE)
+  expenseDate       DateTime                 @default(now())
+  amountRub         Decimal                  @db.Decimal(14, 2)
+  description       String
+  clientId          String?
+  requestId         String?
+  materialId        String?
+  quantity          Decimal?                 @db.Decimal(14, 3)
+  unit              String?
+  unitPriceRub      Decimal?                 @db.Decimal(14, 4)
+  workerName        String?
+  sourceKey         String?                  @unique
+  comment           String?
+  createdByUserId   String?
+  cancelledByUserId String?
+  cancelledAt       DateTime?
+  client            Client?                  @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  request           ClientRequest?           @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  material          ExpenseMaterial?         @relation(fields: [materialId], references: [id], onDelete: SetNull)
+  createdBy         User?                    @relation("ExpenseEntryCreatedBy", fields: [createdByUserId], references: [id])
+  cancelledBy       User?                    @relation("ExpenseEntryCancelledBy", fields: [cancelledByUserId], references: [id])
+  materialMovement  ExpenseMaterialMovement?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  @@index([expenseDate, category, status])
+  @@index([clientId, expenseDate])
+  @@index([requestId])
+  @@index([materialId])
+  @@index([createdByUserId])
+}
+
+model ExpenseMaterialMovement {
+  id              String                      @id @default(uuid())
+  materialId      String
+  type            ExpenseMaterialMovementType
+  quantity        Decimal                     @db.Decimal(14, 3)
+  unitCostRub     Decimal?                    @db.Decimal(14, 4)
+  clientId        String?
+  requestId       String?
+  expenseEntryId  String?                     @unique
+  sourceKey       String?                     @unique
+  comment         String?
+  createdByUserId String?
+  material        ExpenseMaterial             @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  client          Client?                     @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  request         ClientRequest?              @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  expenseEntry    ExpenseEntry?               @relation(fields: [expenseEntryId], references: [id], onDelete: SetNull)
+  createdBy       User?                       @relation("ExpenseMaterialMovementCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime                    @default(now())
+
+  @@index([materialId, createdAt])
+  @@index([clientId, createdAt])
+  @@index([requestId])
+  @@index([createdByUserId])
+}
+
+model OwnCompany {
+  id                   String                  @id @default(uuid())
+  warehouseId          String?
+  shortName            String
+  fullName             String
+  inn                  String
+  kpp                  String?
+  ogrn                 String?
+  legalAddress         String?
+  bankName             String?
+  bankBik              String?
+  bankAccount          String?
+  correspondentAccount String?
+  paymentCode          String?
+  paymentPurposeCode   String?
+  isDefault            Boolean                 @default(false)
+  isActive             Boolean                 @default(true)
+  comment              String?
+  stampFileName        String?
+  stampMimeType        String?
+  stampData            Bytes?
+  signatureFileName    String?
+  signatureMimeType    String?
+  signatureData        Bytes?
+  bankAccounts         OwnCompanyBankAccount[]
+  clients              Client[]
+  warehouse            Warehouse?              @relation("WarehouseScopedOwnCompanies", fields: [warehouseId], references: [id], onDelete: SetNull)
+  warehouses           Warehouse[]             @relation("WarehouseDefaultOwnCompany")
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  @@index([isDefault, isActive])
+  @@index([inn])
+  @@index([warehouseId, isActive])
+}
+
+model OwnCompanyBankAccount {
+  id                   String     @id @default(uuid())
+  companyId            String
+  bankName             String
+  bankBik              String
+  bankInn              String?
+  bankKpp              String?
+  bankAccount          String
+  correspondentAccount String?
+  isDefault            Boolean    @default(false)
+  comment              String?
+  company              OwnCompany @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
+
+  @@index([companyId])
+}
+
+model ClientContract {
+  id                     String                     @id @default(uuid())
+  number                 String                     @unique
+  clientId               String
+  warehouseId            String?
+  contractDate           DateTime                   @db.Date
+  fileName               String
+  contentType            String                     @default("application/pdf")
+  fileSize               Int
+  pdfData                Bytes
+  signedFileName         String?
+  signedFileSize         Int?
+  signedPdfData          Bytes?
+  signedUploadedAt       DateTime?
+  signedUploadedByUserId String?
+  wmsUrl                 String
+  wmsLogin               String
+  clientSnapshot         Json
+  executorSnapshot       Json
+  createdByUserId        String?
+  client                 Client                     @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  warehouse              Warehouse?                 @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  createdBy              User?                      @relation("ClientContractCreatedBy", fields: [createdByUserId], references: [id])
+  signedUploadedBy       User?                      @relation("ClientContractSignedUploadedBy", fields: [signedUploadedByUserId], references: [id])
+  attachments            ClientContractAttachment[]
+  archivedAt             DateTime?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+
+  @@index([clientId, contractDate])
+  @@index([warehouseId, contractDate])
+  @@index([createdByUserId])
+  @@index([signedUploadedByUserId])
+  @@index([archivedAt])
+}
+
+model ClientContractAttachment {
+  id               String         @id @default(uuid())
+  contractId       String
+  fileName         String
+  contentType      String         @default("application/pdf")
+  fileSize         Int
+  pdfData          Bytes
+  uploadedByUserId String?
+  contract         ClientContract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  uploadedBy       User?          @relation("ClientContractAttachmentUploadedBy", fields: [uploadedByUserId], references: [id])
+  createdAt        DateTime       @default(now())
+
+  @@index([contractId, createdAt])
+  @@index([uploadedByUserId])
+}
+
+model LogisticsTariffSet {
+  id               String                     @id @default(uuid())
+  name             String
+  sourceFile       String?
+  note             String?
+  activeFrom       DateTime?
+  activeTo         DateTime?
+  directions       LogisticsDirection[]
+  deliveryRequests LogisticsDeliveryRequest[]
+  createdAt        DateTime                   @default(now())
+}
+
+model LogisticsDirection {
+  id          String               @id @default(uuid())
+  tariffSetId String
+  origin      String
+  destination String
+  note        String?
+  pricingMode LogisticsPricingMode @default(MANUAL_REVIEW)
+  tariffSet   LogisticsTariffSet   @relation(fields: [tariffSetId], references: [id])
+  tiers       LogisticsRateTier[]
+
+  @@index([tariffSetId, origin, destination])
+}
+
+model LogisticsRateTier {
+  id          String               @id @default(uuid())
+  directionId String
+  label       String
+  minPallets  Int?
+  maxPallets  Int?
+  maxBoxes    Int?
+  pricingMode LogisticsPricingMode @default(MANUAL_REVIEW)
+  priceRub    Decimal              @db.Decimal(12, 2)
+  direction   LogisticsDirection   @relation(fields: [directionId], references: [id])
+
+  @@index([directionId])
+}
+
+model LogisticsCarrier {
+  id          String          @id @default(uuid())
+  name        String
+  phone       String?
+  contactName String?
+  comment     String?
+  isActive    Boolean         @default(true)
+  trips       LogisticsTrip[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([isActive, name])
+}
+
+model LogisticsTrip {
+  id            String                     @id @default(uuid())
+  code          String                     @unique
+  carrierId     String?
+  plannedDate   DateTime?
+  vehicleNumber String?
+  driverName    String?
+  driverPhone   String?
+  status        LogisticsTripStatus        @default(PLANNED)
+  comment       String?
+  carrier       LogisticsCarrier?          @relation(fields: [carrierId], references: [id])
+  deliveries    LogisticsDeliveryRequest[]
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  @@index([status, plannedDate])
+  @@index([carrierId])
+}
+
+model LogisticsDeliveryRequest {
+  id                   String                  @id @default(uuid())
+  clientId             String
+  warehouseId          String?
+  requestId            String?
+  tariffSetId          String?
+  billingChargeId      String?
+  tripId               String?
+  origin               String
+  destination          String
+  boxes                Int?
+  pallets              Int?
+  desiredShipDate      DateTime?
+  plannedShipDate      DateTime?
+  status               LogisticsDeliveryStatus @default(REQUESTED)
+  estimatedTotalRub    Decimal?                @db.Decimal(14, 2)
+  requiresManualReview Boolean                 @default(false)
+  comment              String?
+  managerComment       String?
+  createdByUserId      String?
+  client               Client                  @relation(fields: [clientId], references: [id])
+  warehouse            Warehouse?              @relation("WarehouseLogisticsDeliveries", fields: [warehouseId], references: [id], onDelete: SetNull)
+  request              ClientRequest?          @relation(fields: [requestId], references: [id])
+  tariffSet            LogisticsTariffSet?     @relation(fields: [tariffSetId], references: [id])
+  billingCharge        BillingCharge?          @relation(fields: [billingChargeId], references: [id])
+  trip                 LogisticsTrip?          @relation(fields: [tripId], references: [id])
+  createdBy            User?                   @relation("LogisticsDeliveryCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+
+  @@index([clientId, status, createdAt])
+  @@index([warehouseId, status, createdAt])
+  @@index([requestId])
+  @@index([billingChargeId])
+  @@index([tariffSetId])
+  @@index([tripId])
+}
+
+model TsdOperation {
+  id                   String             @id @default(uuid())
+  deviceId             String
+  operationKey         String             @unique
+  operationType        String
+  payload              Json
+  status               TsdOperationStatus @default(ACCEPTED)
+  serverMessage        String?
+  reviewReason         TsdReviewReason?
+  resolutionMessage    String?
+  reviewAction         TsdReviewAction?
+  reviewComment        String?
+  reviewedByUserId     String?
+  reviewedBy           User?              @relation("TsdOperationReviewedBy", fields: [reviewedByUserId], references: [id])
+  reviewedAt           DateTime?
+  screenshotData       Bytes?
+  screenshotMimeType   String?
+  screenshotCapturedAt DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([status, createdAt])
+  @@index([deviceId])
+  @@index([deviceId, createdAt])
+  @@index([operationType, createdAt])
+  @@index([reviewReason])
+  @@index([reviewedAt])
+  @@index([reviewedByUserId])
+}
+
+model TsdDevice {
+  id          String          @id @default(uuid())
+  code        String          @unique
+  name        String
+  secretHash  String
+  status      TsdDeviceStatus @default(ACTIVE)
+  userId      String
+  user        User            @relation(fields: [userId], references: [id])
+  lastLoginAt DateTime?
+  lastSeenAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([userId])
+  @@index([status])
+}
+
+model PrintJob {
+  id          String    @id @default(uuid())
+  printerCode String
+  labelType   String
+  payload     Json
+  tspl        String
+  status      String    @default("queued")
+  attempts    Int       @default(0)
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([printerCode, status, createdAt])
+}
+
+model PrintPrinter {
+  id             String    @id @default(uuid())
+  code           String    @unique
+  groupCode      String    @default("DEFAULT")
+  name           String
+  connectionType String    @default("dry_run")
+  host           String?
+  port           Int?
+  isActive       Boolean   @default(true)
+  autoProcess    Boolean   @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([groupCode, isActive, autoProcess])
+  @@index([isActive, autoProcess])
+}
+
+model LabelTemplate {
+  id          String                 @id @default(uuid())
+  code        String                 @unique
+  name        String
+  type        LabelTemplateType
+  description String?
+  widthMm     Int                    @default(80)
+  heightMm    Int                    @default(50)
+  tspl        String
+  version     Int                    @default(1)
+  isActive    Boolean                @default(true)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+  versions    LabelTemplateVersion[]
+
+  @@index([type, isActive])
+}
+
+model LabelTemplateVersion {
+  id           String            @id @default(uuid())
+  templateId   String
+  version      Int
+  code         String
+  name         String
+  type         LabelTemplateType
+  description  String?
+  widthMm      Int
+  heightMm     Int
+  tspl         String
+  isActive     Boolean
+  changeReason String?
+  createdAt    DateTime          @default(now())
+  template     LabelTemplate     @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, version])
+  @@index([templateId, createdAt])
+}
+
+// FIX: durable administrator queue; snapshots survive changes to the original picking task.
+model KizReviewCase {
+  id            String    @id @default(uuid())
+  clientId      String
+  warehouseId   String
+  taskId        String
+  requestId     String
+  kizIdentity   String
+  kiz           String    @db.Text
+  context       String
+  status        String    @default("OPEN")
+  decision      String
+  resolution    String?
+  reason        String?
+  decidedById   String?
+  decidedByName String?
+  decidedAt     DateTime?
+  usedAt        DateTime?
+  snapshot      Json
+  evidence      Json
+  attempts      Int       @default(1)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([taskId, kizIdentity])
+  @@index([warehouseId, status, createdAt])
+  @@index([clientId, warehouseId, status])
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  payload   Json?
+  user      User?    @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+// ADDED: credentials for isolated external WMS integrations. Only a SHA-256 hash is stored.
+model WmsApiCredential {
+  id              String    @id @default(uuid())
+  name            String
+  clientId        String
+  warehouseId     String
+  keyPrefix       String    @unique
+  keyHash         String    @unique
+  scopes          Json
+  allowedIps      Json?
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  createdByUserId String?
+  lastUsedAt      DateTime?
+  lastUsedIp      String?
+  client          Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy       User?     @relation("WmsApiCredentialCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([clientId, warehouseId, revokedAt])
+  @@index([expiresAt])
+  @@index([createdByUserId])
+}
+
+// FIX: immutable operational events with independent per-administrator receipts.
+model AdminNotification {
+  id          Int                        @id @default(autoincrement())
+  type        String
+  dedupeKey   String                     @unique
+  title       String
+  body        String
+  clientId    String
+  warehouseId String?
+  actorId     String
+  actorName   String
+  isDemo      Boolean                    @default(false)
+  sessionId   String?
+  auditBoxId  String?
+  requestId   String?
+  createdAt   DateTime                   @default(now())
+  receipts    AdminNotificationReceipt[]
+
+  @@index([clientId, id])
+  @@index([warehouseId, id])
+}
+
+model AdminNotificationReceipt {
+  notificationId Int
+  userId         String
+  readAt         DateTime?
+  popupShownAt   DateTime?
+  notification   AdminNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
+  @@index([userId, readAt])
+}
+
+// FIX: durable FBO ownership survives TSD disconnects and separates pick from pack.
+model FboAssembly {
+  requestId       String              @id
+  phase           String              @default("PICKING")
+  compositionHash String
+  // FIX: immutable actual picking target; original request quantities remain unchanged.
+  pickClosure     Json?
+  request         ClientRequest       @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  units           FboAssemblyUnit[]
+  actions         FboAssemblyAction[]
+  boxes           FboAssemblyBox[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+}
+
+model FboAssemblyBox {
+  id                String      @id @default(uuid())
+  requestId         String
+  boxId             String
+  activeBoxId       String?     @unique
+  boxCode           String
+  wholeBox          Boolean     @default(false)
+  closedAt          DateTime?
+  confirmedAt       DateTime?
+  confirmedByUserId String?
+  assembly          FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+
+  @@unique([requestId, boxCode])
+  @@index([boxId])
+}
+
+model FboAssemblyUnit {
+  id             String      @id @default(uuid())
+  requestId      String
+  requestItemId  String
+  skuId          String
+  barcode        String
+  markId         String?
+  activeMarkId   String?     @unique
+  kiz            String?
+  sourceBoxId    String
+  sourceBoxCode  String
+  wholeBox       Boolean     @default(false)
+  state          String      @default("PICKED")
+  targetBoxId    String?
+  targetBoxCode  String?
+  pickedByUserId String
+  packedByUserId String?
+  pickedAt       DateTime    @default(now())
+  packedAt       DateTime?
+  assembly       FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+
+  @@index([requestId, state])
+  @@index([sourceBoxId, state])
+  @@index([targetBoxId, state])
+}
+
+model FboAssemblyAction {
+  id          String      @id
+  requestId   String
+  payloadHash String
+  actorId     String
+  assembly    FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  createdAt   DateTime    @default(now())
+
+  @@index([requestId, createdAt])
+}
+
+// FIX: durable WB stock changes; partial pending index and triggers are defined in the migration.
+model WbStockSyncQueue {
+  clientId          String    @id
+  revision          BigInt    @default(1)
+  completedRevision BigInt    @default(0)
+  requestedAt       DateTime  @default(now()) @db.Timestamptz(6)
+  nextAttemptAt     DateTime  @default(now()) @db.Timestamptz(6)
+  attempts          Int       @default(0)
+  skuIds            String[]  @default([])
+  allSkus           Boolean   @default(false)
+  leaseToken        String?
+  leaseUntil        DateTime? @db.Timestamptz(6)
+  lastError         String?
+}
+
+// FIX: independent committed events avoid a shared write lock on warehouse operations.
+model WbStockSyncEvent {
+  id          BigInt    @id @default(autoincrement())
+  clientId    String
+  skuIds      String[]
+  allSkus     Boolean
+  txid        BigInt    @default(dbgenerated("txid_current()"))
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt DateTime? @db.Timestamptz(6)
+
+  @@index([clientId, txid], map: "WbStockSyncEvent_revision_idx")
+}
+
+model FbsSizeSubstitution {
+  taskId           String   @id
+  clientId         String
+  warehouseId      String
+  requestId        String   @unique
+  sourceSkuId      String
+  targetSkuId      String
+  approvedByUserId String
+  createdAt        DateTime @default(now())
+}
+
+// FIX: payroll records are separate from operational picking and printer state.
+model PayrollEmployee {
+  id             String                 @id @default(uuid())
+  warehouseId    String
+  userId         String?                @unique
+  name           String
+  isActive       Boolean                @default(true)
+  isDemo         Boolean                @default(false)
+  picker         Boolean                @default(true)
+  loader         Boolean                @default(false)
+  paymentMethod  String                 @default("CASH")
+  paymentPhone   String?
+  paymentBank    String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  rates          PayrollCondition[]
+  shifts         PayrollShift[]
+  handlingShares PayrollHandlingShare[]
+  workDays       PayrollWorkDay[]
+
+  @@index([warehouseId, isDemo, isActive])
+  payrollPrimaryId String?
+  payrollPrimary PayrollEmployee? @relation("PayrollIdentity", fields: [payrollPrimaryId], references: [id], onDelete: Restrict)
+  payrollAliases PayrollEmployee[] @relation("PayrollIdentity")
+  @@index([payrollPrimaryId])
+}
+
+model PayrollCondition {
+  id          String          @id @default(uuid())
+  employeeId  String
+  kind        String
+  rateKopecks Int
+  startsAt    DateTime
+  endsAt      DateTime?
+  temporary   Boolean         @default(false)
+  reason      String
+  createdById String
+  createdAt   DateTime        @default(now())
+  employee    PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, kind, startsAt])
+}
+
+model PayrollShift {
+  id          String          @id @default(uuid())
+  employeeId  String
+  startsAt    DateTime
+  endsAt      DateTime?
+  workDate    String
+  source      String
+  startPhoto  String?
+  endPhoto    String?
+  createdById String
+  reason      String?
+  version     Int             @default(1)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  employee    PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  cancelledAt DateTime?
+  breaks      PayrollBreak[]
+
+  @@index([employeeId, workDate])
+}
+
+model PayrollHandling {
+  id              String                 @id @default(uuid())
+  warehouseId     String
+  startsAt        DateTime
+  operation       String
+  palletCount     Decimal                @db.Decimal(12, 4)
+  status          String                 @default("REVIEW")
+  createdById     String
+  confirmedById   String?
+  confirmedAt     DateTime?
+  reason          String?
+  createdAt       DateTime               @default(now())
+  shares          PayrollHandlingShare[]
+  boxCount        Int                    @default(0)
+  bagCount        Int                    @default(0)
+  rollCount       Int                    @default(0)
+  unitRateKopecks Int?
+
+  @@index([warehouseId, startsAt])
+}
+
+model PayrollHandlingShare {
+  operationId   String
+  employeeId    String
+  amountKopecks Int?
+  operation     PayrollHandling @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  employee      PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@id([operationId, employeeId])
+}
+
+model PayrollAudit {
+  id          String   @id @default(uuid())
+  warehouseId String
+  actorId     String
+  entityId    String
+  action      String
+  details     Json
+  createdAt   DateTime @default(now())
+
+  @@index([warehouseId, entityId, createdAt])
+}
+
+model PayrollSettlement {
+  key         String    @id
+  employeeId  String
+  warehouseId String
+  workDate    String
+  status      String
+  snapshot    Json
+  comment     String
+  paidAt      DateTime?
+  updatedById String
+  updatedAt   DateTime  @updatedAt
+
+  @@index([employeeId, workDate])
+}
+
+model PayrollHistorical {
+  key           String   @id
+  employeeId    String
+  warehouseId   String
+  workDate      String
+  amountKopecks Int
+  status        String
+  data          Json
+  sourceHash    String
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([employeeId, workDate])
+}
+
+model PayrollWorkDay {
+  employeeId   String
+  workDate     String
+  lunchMinutes Int?
+  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@id([employeeId, workDate])
+}
+
+model PayrollBreak {
+  id       String       @id
+  shiftId  String
+  startsAt DateTime
+  endsAt   DateTime?
+  shift    PayrollShift @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+
+  @@index([shiftId, startsAt])
+}

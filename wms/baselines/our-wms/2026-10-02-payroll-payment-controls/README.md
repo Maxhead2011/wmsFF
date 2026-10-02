@@ -1,0 +1,1 @@
+PR459: payment filters, multi-person selection and reversible payroll identities. API four-file exact delta; web source+runtime browser proof; additive migration. Existing billing/stock updates, APKs, flags and sold WMS preserved. Source parity remains false. Rollback images: logoff-api:before-payroll-payment-controls and logoff-web:before-payroll-payment-controls.

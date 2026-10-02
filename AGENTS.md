@@ -149,3 +149,6 @@ Latest API PR451 baseline2026-10-02-fbo-recovery-retry: administrative retry aft
 Latest API PR453 baseline2026-10-02-fbo-recovery-route: omit discarded routes during recovery, bounded retry with409. Actual1568preview/apply rolled back successfully after publication; source parity false.
 
 Latest API PR457: baseline `2026-10-02-fbo-finish-catalog`; opt-in unchanged billing catalog reads during FBO FINISH. Both request1568 completion paths and exports verified with mandatory rollback. Source parity false; web/APK/sold WMS unchanged. See current-production.md.
+
+
+PR459: фильтр/сортировка статуса оплаты, выбор людей с общей суммой, обратимые связи карточек сотрудника. API `sha256:c6f92d91019ce0332537dedec816d335c23a633f5a40a40f137798fed71a0c21`, web `sha256:7ae76b5b56ea4e58d15d4b1243b3664e2f28c4db44ff15540b8ac3afa02a4f9d`. Baseline `2026-10-02-payroll-payment-controls`. Добавочная миграция PayrollEmployee; существующие начисления и выплаты не изменены. API3006/web363, PostgreSQL3, браузер source/runtime и TypeScript прошли; API132/web2 skipped, отдельная KIZ integration исключена. Серверный транзакционный тест отменил свои записи. Четыре API-модуля, прочие изменения склада/биллинга, APK/флаги/sold сохранены. Source parity=false.

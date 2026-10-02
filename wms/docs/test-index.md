@@ -138,3 +138,7 @@ PR449: `fbo-route-decision-cache.spec.ts` / `.runtime.cjs`: snapshot-local decis
 PR451: fbo-recovery-transaction-retry.spec.ts / .runtime.cjs cover external transaction ownership, unchanged ordinary retry and single outer receipt.
 
 PR453: fbo-recovery-route.runtime.cjs verifies no route within recovery, unchanged ordinary route and409after bounded retries; real1568rollback smoke passed after publication.
+
+
+## Payroll payment controls (PR459)
+API3006/web363, PostgreSQL3, source and candidate browser, TypeScript passed. Runtime rollback fixture verifies grouping, original history, stale total and duplicate payment. API132/web2 skipped; isolated KIZ suite excluded. Exact four-module API delta, prior generated Prisma metadata preserved.
