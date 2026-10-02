@@ -1,1 +1,2 @@
 *.gz binary -diff
+effective-schema.prisma -text
