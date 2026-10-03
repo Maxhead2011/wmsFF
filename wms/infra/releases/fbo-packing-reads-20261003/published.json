@@ -1,0 +1,16 @@
+{
+  "published": true,
+  "at": 1791050119.4012833,
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/471",
+  "prStateAtRelease": "OPEN",
+  "sourceCommit": "9fd5d5514ed0d71186f4158397c92efb74df0b42",
+  "previousApi": "sha256:e7aa81ff68a153426ea7fdd4efc8a994f3119f107ee8b4b2d58ce4bdefd6a67b",
+  "apiImage": "sha256:3ef0489614fef715a1ec2a3d476f3bf4edb58e03b0fd10e269a81081d8b11d32",
+  "webImage": "sha256:7fab10dcd44ce9813cd63689ea03fbc7ad4e5b461c57950ceec8e59bd8200532",
+  "healthVerified": true,
+  "otherContainersUnchanged": true,
+  "existingEnvironmentUnchanged": true,
+  "newFlag": "WMS_FBO_PACKING_READS_ENABLED=true",
+  "runtimeHash": "616879af016f4eddff01067e150872e8cd945f83dcbdc709d533e8e4ec4d8b69",
+  "rollback": "logoff-api:before-fbo-packing-reads-20261003"
+}

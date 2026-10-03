@@ -98,15 +98,19 @@ export class FboTwoStageService {
                 storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
         });
         const route = [];
-        const availability = await loadFboFbsAvailability(tx, r, Object.keys(demand));
-        const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
+        // FIX: already picked SKUs cannot consume route availability, including during parallel packing.
+        const optimizedReads = process.env.WMS_FBO_PACKING_READS_ENABLED === 'true';
+        const packingSnapshot = optimizedReads && !!assembly?.phase && assembly.phase !== 'PICKING';
+        const availabilitySkuIds = optimizedReads ? Object.keys(demand).filter(s => demand[s] > 0) : Object.keys(demand);
+        const availability = packingSnapshot ? null : await loadFboFbsAvailability(tx, r, availabilitySkuIds);
+        const busyBoxes = packingSnapshot ? new Set<string>() : await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
         // FIX: historical stock may have real marks even when the SKU flag was never filled.
         for (const l of lines)
             if (boxes.some(b => b.productMarks.some(m => m.skuId === l.skuId && m.status === 'AVAILABLE')))
                 l.requiresKiz = true;
         boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
         // FIX: request-specific remainder preference never modifies confirmed assembly units.
-        const preference = await loadFboRoutePreference(tx, r, composition(r));
+        const preference = packingSnapshot ? null : await loadFboRoutePreference(tx, r, composition(r));
         const ordered = preference ? orderFboRequestBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand,
             cacheFboBoxDecision((box: (typeof boxes)[number], remaining) => wholeBoxDecision(box.balances, remaining, box.productMarks.map(m => ({ ...m, identity: identity(m.value) })),
                 box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)))), preference) : boxes;
@@ -123,9 +127,9 @@ export class FboTwoStageService {
                 if (balance.status !== 'AVAILABLE' || balance.quantity <= 0 || (demand[balance.skuId] ?? 0) <= 0)
                     continue;
                 const l = lines.find(i => i.skuId === balance.skuId)!;
-                const quantity = Math.min(demand[l.skuId], balance.quantity, availability.free(box.id, l.skuId));
+                const quantity = Math.min(demand[l.skuId], balance.quantity, availability!.free(box.id, l.skuId));
                 if (!quantity) continue;
-                availability.take(box.id, l.skuId, quantity);
+                availability!.take(box.id, l.skuId, quantity);
                 tasks.push({ skuId: l.skuId, barcode: l.barcode, name: `${l.name} · ${l.article || ''} · ${l.size || ''}`, quantity, requiresKiz: l.requiresKiz });
                 demand[l.skuId] -= quantity;
             }
@@ -182,8 +186,10 @@ export class FboTwoStageService {
             }
             if (a.compositionHash !== composition(r))
                 throw new ConflictException('Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.');
-            const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
-            const lines = remainingFboLines(r.items, units);
+            // FIX: packing actions need only candidates for the scanned barcode; other actions retain the full ledger.
+            const progress = await this.packingProgress(tx, id, dto);
+            const units = progress.units;
+            const lines = progress.optimized ? [] : remainingFboLines(r.items, units);
             const requirePhase = (phase: string) => { if (a!.phase !== phase)
                 throw new ConflictException('Этап изменился. Обновите заявку.'); };
             if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
@@ -270,7 +276,10 @@ export class FboTwoStageService {
                 else {
                     if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
                         throw new ConflictException('Для упаковки нужен пустой короб.');
-                    if (!units.some(u => !u.wholeBox && u.state === 'PICKED'))
+                    const hasLoose = progress.optimized
+                        ? await tx.fboAssemblyUnit.count({ where: { requestId: id, state: 'PICKED', wholeBox: false } }) > 0
+                        : units.some(u => !u.wholeBox && u.state === 'PICKED');
+                    if (!hasLoose)
                         throw new ConflictException('Все отдельные единицы уже вложены.');
                     await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
                 }
@@ -373,6 +382,18 @@ export class FboTwoStageService {
             }
         }
         return this.plan(id, user);
+    }
+    // FIX: opt-in only; the authoritative runtime also preserves parallel/manual packing and closure checks.
+    private async packingProgress(tx: Prisma.TransactionClient, requestId: string, dto: FboActionDto) {
+        const optimized = process.env.WMS_FBO_PACKING_READS_ENABLED === 'true' && ['PACK_UNIT', 'OPEN_BOX', 'MANUAL_OPEN_BOX'].includes(dto.action);
+        if (!optimized) {
+            const units = await tx.fboAssemblyUnit.findMany({ where: { requestId, state: { not: 'RETURNED' } } });
+            return { units, count: units.length, optimized: false };
+        }
+        const count = await tx.fboAssemblyUnit.count({ where: { requestId, state: { not: 'RETURNED' } } });
+        const units = dto.action === 'PACK_UNIT' ? await tx.fboAssemblyUnit.findMany({ where: { requestId,
+            state: 'PICKED', OR: [{ wholeBox: true }, { barcode: dto.barcode ?? '' }] } }) : [];
+        return { units, count, optimized: true };
     }
     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
         if (!code)

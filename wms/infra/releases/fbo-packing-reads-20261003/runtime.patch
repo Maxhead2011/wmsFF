@@ -1,0 +1,88 @@
+diff --git a/modules/tsd/fbo-two-stage.service.js b/modules/tsd/fbo-two-stage.service.js
+index 58a1b5c..5b4eecc 100644
+--- a/modules/tsd/fbo-two-stage.service.js
++++ b/modules/tsd/fbo-two-stage.service.js
+@@ -259,9 +259,16 @@ let FboTwoStageService = FboTwoStageService_1 = class FboTwoStageService {
+                 storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
+         });
+         const route = [];
+-        const availability = await require("./fbo-fbs-reservations").loadFboFbsAvailability(tx, r, Object.keys(demand));
+-        const requestPreference = await require("./fbo-request-route").loadFboRoutePreference(tx, r, composition(r));
+-        const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
++        // FIX: after picking, boxes is unconditionally empty; route-only reads cannot affect the snapshot.
++        // Opt-in preserves other deployments; PICKING (including parallel packing) retains all checks.
++        const packingSnapshot = process.env.WMS_FBO_PACKING_READS_ENABLED === 'true'
++            && !!assembly?.phase && assembly.phase !== 'PICKING';
++        // FIX: route allocation only consumes positive unpicked demand; packed SKUs need no reservation scan.
++        const availabilitySkuIds = process.env.WMS_FBO_PACKING_READS_ENABLED === 'true'
++            ? Object.keys(demand).filter(skuId => demand[skuId] > 0) : Object.keys(demand);
++        const availability = packingSnapshot ? null : await require("./fbo-fbs-reservations").loadFboFbsAvailability(tx, r, availabilitySkuIds);
++        const requestPreference = packingSnapshot ? null : await require("./fbo-request-route").loadFboRoutePreference(tx, r, composition(r));
++        const busyBoxes = packingSnapshot ? new Set() : await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
+         // FIX: historical stock may have real marks even when the SKU flag was never filled.
+         for (const l of lines)
+             if (boxes.some(b => b.productMarks.some(m => m.skuId === l.skuId && m.status === 'AVAILABLE')))
+@@ -359,15 +366,19 @@ let FboTwoStageService = FboTwoStageService_1 = class FboTwoStageService {
+                 }
+                 if (a.compositionHash !== composition(r))
+                     throw new common_1.ConflictException('Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.');
+-                const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
+-                const lines = (0, fbo_two_stage_policy_1.remainingFboLines)((0, fbo_two_stage_policy_1.closedFboItems)(r.items, a.pickClosure), units);
++                // FIX: packing needs the scanned unit (or carton counts), not all previously packed units.
++                // Preserve the closure validation and request lock before any mutation.
++                const progress = await this.packingProgress(tx, id, dto);
++                const units = progress.units;
++                const closedItems = (0, fbo_two_stage_policy_1.closedFboItems)(r.items, a.pickClosure);
++                const lines = progress.optimized ? [] : (0, fbo_two_stage_policy_1.remainingFboLines)(closedItems, units);
+                 const requirePhase = (phase) => {
+                     if (a.phase !== phase)
+                         throw new common_1.ConflictException('Этап изменился. Обновите заявку.');
+                 };
+                 // FIX: only packing mutations may overlap picking; final control still requires FINISH_PICK.
+                 const requirePacking = () => {
+-                    if (a.phase === 'PICKING' && process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && units.length > 0)
++                    if (a.phase === 'PICKING' && process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && progress.count > 0)
+                         return;
+                     requirePhase('PACKING');
+                 };
+@@ -557,13 +568,17 @@ let FboTwoStageService = FboTwoStageService_1 = class FboTwoStageService {
+                             await tx.fboAssemblyBox.update({ where: { id: previousBox.id }, data: { closedAt: null, confirmedAt: null, confirmedByUserId: null, wholeBox: false } });
+                             await tx.auditLog.create({ data: { userId: user.id, action: 'FBO_PACKING_BOX_REOPENED', entity: 'ClientRequest', entityId: id,
+                                     payload: { operationId: dto.operationId, boxCode: target.code, previousClosedAt: previousBox.closedAt?.toISOString(),
+-                                        previousConfirmedAt: previousBox.confirmedAt?.toISOString(), previousWholeBox: previousBox.wholeBox, quantity: units.filter(u => u.targetBoxId === target.id && u.state === 'PACKED').length } } });
++                                        previousConfirmedAt: previousBox.confirmedAt?.toISOString(), previousWholeBox: previousBox.wholeBox,
++                                        quantity: progress.optimized ? await tx.fboAssemblyUnit.count({ where: { requestId: id, targetBoxId: target.id, state: 'PACKED' } }) : units.filter(u => u.targetBoxId === target.id && u.state === 'PACKED').length } } });
+                         }
+                     }
+                     else {
+                         if (await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
+                             throw new common_1.ConflictException('Для упаковки нужен пустой короб.');
+-                        if (dto.action !== 'MANUAL_OPEN_BOX' && !units.some(u => u.state === 'PICKED' && (!u.wholeBox || process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && !!u.markId)))
++                        const hasLoose = dto.action === 'MANUAL_OPEN_BOX' || (progress.optimized ? await tx.fboAssemblyUnit.count({ where: { requestId: id, state: 'PICKED',
++                            OR: [{ wholeBox: false }, ...(process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' ? [{ markId: { not: null } }] : [])] } }) > 0
++                            : units.some(u => u.state === 'PICKED' && (!u.wholeBox || process.env.WMS_FBO_MANUAL_PACKING_ENABLED === 'true' && !!u.markId)));
++                        if (dto.action !== 'MANUAL_OPEN_BOX' && !hasLoose)
+                             throw new common_1.ConflictException('Все отдельные единицы уже вложены.');
+                         await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
+                     }
+@@ -685,6 +700,20 @@ let FboTwoStageService = FboTwoStageService_1 = class FboTwoStageService {
+             }
+         }
+     }
++    // FIX: scoped reads only for the three actions whose logic does not use global line totals.
++    async packingProgress(tx, requestId, dto) {
++        const optimized = process.env.WMS_FBO_PACKING_READS_ENABLED === 'true'
++            && ['PACK_UNIT', 'OPEN_BOX', 'MANUAL_OPEN_BOX'].includes(dto.action);
++        if (!optimized) {
++            const units = await tx.fboAssemblyUnit.findMany({ where: { requestId, state: { not: 'RETURNED' } } });
++            return { units, count: units.length, optimized: false };
++        }
++        const count = await tx.fboAssemblyUnit.count({ where: { requestId, state: { not: 'RETURNED' } } });
++        // Include whole-picked units regardless of barcode: the existing physical-KIZ fallback uses markId.
++        const units = dto.action === 'PACK_UNIT' ? await tx.fboAssemblyUnit.findMany({ where: { requestId,
++            state: 'PICKED', OR: [{ wholeBox: true }, { barcode: dto.barcode ?? '' }] } }) : [];
++        return { units, count, optimized: true };
++    }
+     // FIX: recover a missed physical pick and pack atomically using the exact scanned mark.
+     async manualPack(tx, r, dto, user, key) {
+         if (!dto.kiz || !dto.barcode)
