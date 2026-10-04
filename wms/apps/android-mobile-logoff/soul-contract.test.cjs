@@ -3,6 +3,13 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const read=p=>fs.readFileSync(path.join(__dirname,p),'utf8');
+// TEST: a two-stage FBO response must not fall through to the legacy empty screen.
+test('online assembly renders the server FBO plan before legacy assembly',()=>{
+ const ui=read('app/src/main/java/pro/logoff/wms/mobile/ui/OnlineAssemblyFragment.java');
+ assert.ok(ui.includes('map(plan.get("fbo"))'));
+ assert.ok(ui.indexOf('renderFboAssembly(content, fbo)') < ui.indexOf('renderRegularAssembly(content, plan)'));
+ for(const field of ['plannedNeeded','picked','packed','lines','boxes','pickedUnits']) assert.ok(ui.includes(`fbo.get("${field}")`));
+});
 // TEST: unknown server settings cannot silently be converted into defaults by the UI.
 test('client settings use typed controls and verified DTO fields',()=>{
  const policy=read('app/src/main/java/pro/logoff/wms/mobile/ui/ClientSettingsPolicy.java');
