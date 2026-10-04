@@ -50,6 +50,36 @@ const invoice: any = {
   status: 'ISSUED', serviceCategory: 'STORAGE', totalRub: 100, paidRub: 25, payments: [], items: [], comment: '',
 };
 describe('billing register filters and invoice card', () => {
+  // TEST: a pending or failed invoice request must never turn our receipt tab into a blank screen.
+  it('keeps the own-WMS receipt form visible during loading and exposes retry after failure', () => {
+    hooks.values = []; hooks.cursor = 0;
+    vi.stubGlobal('window', { location: { hostname: 'wms.logoff.pro' } });
+    try {
+      const render = () => { hooks.cursor = 0; return BillingPanel({ session: { accessToken: 'token', user: { id: 'u', permissionCodes: ['billing:read', 'billing:write'] } } as any }); };
+      render();
+      elements(render()).find(n => n.type === 'button' && n.props.children === 'Приход ДС').props.onClick();
+      hooks.values[1] = { status: 'loading', data: [] };
+      let receipt = elements(render()).find(n => n.type === BillingCashReceiptPanel);
+      expect(receipt).toBeDefined();expect(receipt.props.loading).toBe(true);
+      hooks.values[1] = { status: 'error', data: [], error: 'Сервер не ответил' };
+      receipt = elements(render()).find(n => n.type === BillingCashReceiptPanel);
+      expect(receipt).toBeDefined();expect(receipt.props.loadError).toBe('Сервер не ответил');expect(receipt.props.onRetry).toBeTypeOf('function');
+    } finally { vi.unstubAllGlobals(); }
+  });
+  // TEST: the sold environment keeps its original receipt loading path.
+  it('preserves the legacy readiness gate outside our WMS', () => {
+    hooks.values = []; hooks.cursor = 0;
+    vi.stubGlobal('window', { location: { hostname: 'sold.example.invalid' } });
+    try {
+      const render = () => { hooks.cursor = 0; return BillingPanel({ session: { accessToken: 'token', user: { id: 'u', permissionCodes: ['billing:read', 'billing:write'] } } as any }); };
+      elements(render()).find(n => n.type === 'button' && n.props.children === 'Приход ДС').props.onClick();
+      hooks.values[1] = { status: 'loading', data: [] };
+      expect(elements(render()).find(n => n.type === BillingCashReceiptPanel)).toBeUndefined();
+      hooks.values[1] = { status: 'ready', data: [] };
+      const receipt = elements(render()).find(n => n.type === BillingCashReceiptPanel);
+      expect(receipt.props.loading).toBe(false); expect(receipt.props.onRetry).toBeUndefined();
+    } finally { vi.unstubAllGlobals(); }
+  });
   // TEST: status remains available on topics and survives returning to the invoice list.
   it('filters every invoice status from topics and preserves the choice in the list', () => {
     hooks.values = []; hooks.cursor = 0;

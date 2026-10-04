@@ -9,6 +9,25 @@ function elements(node:any):any[]{if(!node||typeof node!=='object')return [];if(
 const invoice:any={id:'i',number:'INV-202609-0007',clientId:'c',status:'ISSUED',totalRub:550535.37,paidRub:0,periodFrom:'2026-09-01',periodTo:'2026-09-30',payments:[]};
 const clients:any=[{id:'c',name:'Клиент'}],session:any={accessToken:'fixture',user:{id:'u'}};
 describe('incoming payment amount and history',()=>{
+  // TEST: pending/failed invoice loading must never allow a payment from stale allocations.
+  it('shows loading and retry and blocks submitting a previously balanced receipt',async()=>{
+    hooks.values=[];hooks.cursor=0;vi.clearAllMocks();
+    let state:any={};const retry=vi.fn();
+    const render=()=>{hooks.cursor=0;return BillingCashReceiptPanel({clients,session,invoices:[invoice],onPaid:vi.fn(),...state})};
+    elements(render()).find(n=>n.type==='input'&&n.props.placeholder==='0,00').props.onChange({target:{value:'450000'}});
+    elements(render()).find(n=>n.type==='input'&&n.props.type==='checkbox').props.onChange();
+    state={loading:true};let nodes=elements(render());
+    expect(nodes.find(n=>n.props?.role==='status')).toBeDefined();
+    expect(nodes.find(n=>n.type==='button'&&n.props.type==='submit').props.disabled).toBe(true);
+    await nodes.find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+    expect(createIncomingPayment).not.toHaveBeenCalled();
+    state={loadError:'Сервер не ответил',onRetry:retry};nodes=elements(render());
+    expect(nodes.find(n=>n.props?.role==='alert').props.children).toBe('Сервер не ответил');
+    nodes.find(n=>n.type==='button'&&n.props.children==='Повторить загрузку').props.onClick();
+    expect(retry).toHaveBeenCalledOnce();
+    await nodes.find(n=>n.type==='form').props.onSubmit({preventDefault(){}});
+    expect(createIncomingPayment).not.toHaveBeenCalled();
+  });
   // TEST: selecting a 550535.37 invoice must send the entered 450000, not silently replace it with the debt.
   it('preserves a partial receipt through invoice selection, deselection and submit',async()=>{
     hooks.values=[];hooks.cursor=0;vi.clearAllMocks();
