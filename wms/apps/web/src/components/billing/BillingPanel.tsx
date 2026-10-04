@@ -327,10 +327,15 @@ export function BillingPanel({ session }: BillingPanelProps) {
         setSelectedClientId(current => validRememberedClientId(current, nextClients));
         setInvoiceClientId(current => validRememberedClientId(current, nextClients));
       }),
-      // Required by unpaid-PDF and payment controls; preserve their complete dataset.
-      load(() => fetchBillingInvoices(session.accessToken), setInvoices),
       load(() => fetchBillingServices(session.accessToken), setServices),
     ];
+    // FIX: receipts need only the selected client's invoices; other tabs retain the complete dataset.
+    if (activeTab === 'cash-receipt' && !selectedClientId) {
+      setInvoices({ status: 'ready', data: [] });
+    } else {
+      pending.push(load(() => fetchBillingInvoices(session.accessToken,
+        activeTab === 'cash-receipt' ? { clientId: selectedClientId } : undefined), setInvoices));
+    }
     if (activeTab === 'overview' || activeTab === 'charges') {
       pending.push(load(() => fetchBillingCharges(session.accessToken, { clientId: selectedClientId || undefined }), setCharges));
     }
@@ -889,12 +894,16 @@ export function BillingPanel({ session }: BillingPanelProps) {
         </div>
       ) : null}
 
-      {activeTab === 'cash-receipt' && canWrite && clients.status === 'ready' && invoices.status === 'ready' ? (
+      {/* FIX: our WMS keeps the form visible during loading and offers retry after failure. */}
+      {activeTab === 'cash-receipt' && canWrite && (fastOpening || (clients.status === 'ready' && invoices.status === 'ready')) ? (
         <BillingCashReceiptPanel
-          clients={clients.data}
-          invoices={invoices.data}
+          clients={clients.status === 'ready' ? clients.data : []}
+          invoices={invoices.status === 'ready' ? invoices.data : []}
           session={session}
           onPaid={acceptIncomingPayments}
+          loading={fastOpening && (['idle', 'loading'].includes(clients.status) || ['idle', 'loading'].includes(invoices.status))}
+          loadError={fastOpening ? clients.error || invoices.error : undefined}
+          onRetry={fastOpening ? () => void loadVisibleData() : undefined}
         />
       ) : null}
 

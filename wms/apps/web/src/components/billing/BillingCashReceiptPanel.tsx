@@ -13,6 +13,9 @@ type BillingCashReceiptPanelProps = {
   invoices: BillingInvoiceSummary[];
   session: AuthSession;
   onPaid: (invoices: BillingInvoiceSummary[]) => void;
+  loading?: boolean;
+  loadError?: string;
+  onRetry?: () => void;
 };
 
 const moneyFormatter = new Intl.NumberFormat('ru-RU', {
@@ -21,7 +24,7 @@ const moneyFormatter = new Intl.NumberFormat('ru-RU', {
   maximumFractionDigits: 2,
 });
 
-export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: BillingCashReceiptPanelProps) {
+export function BillingCashReceiptPanel({ clients, invoices, session, onPaid, loading = false, loadError, onRetry }: BillingCashReceiptPanelProps) {
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [statusFilter, setStatusFilter] = useState<'all' | 'DRAFT' | 'ISSUED' | 'OVERDUE'>('all');
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'unpaid' | 'partial'>('all');
@@ -85,6 +88,7 @@ export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: 
   }
 
   function distributeAutomatically() {
+    if (loading || loadError) return;
     clearFeedback();
     if (!clientId) {
       setError('Сначала выберите клиента.');
@@ -113,6 +117,7 @@ export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: 
   }
 
   function toggleInvoice(invoice: BillingInvoiceSummary) {
+    if (loading || loadError) return;
     clearFeedback();
     // FIX: selecting an invoice allocates the entered receipt; it must never change that amount.
     const next = { ...allocations };
@@ -128,6 +133,8 @@ export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: 
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    // FIX: prevent stale allocations being submitted while client invoices are unavailable.
+    if (loading || loadError) return;
     clearFeedback();
     if (!clientId || !selectedClient) {
       setError('Выберите клиента.');
@@ -185,6 +192,10 @@ export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: 
         </div>
       </header>
 
+      {/* FIX: loading failures must be visible instead of hiding the receipt form. */}
+      {loading ? <p role="status">Загрузка клиентов и счетов…</p> : null}
+      {loadError ? <div><p className="form-error" role="alert">{loadError}</p>{onRetry ? <button className="secondary-button" type="button" onClick={onRetry}>Повторить загрузку</button> : null}</div> : null}
+
       <div className="billing-cash-receipt__fields">
         <label className="billing-cash-receipt__client">
           <span>Клиент</span>
@@ -220,7 +231,7 @@ export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: 
         </label>
       </div>
 
-      {selectedClient ? (
+      {selectedClient && !loading && !loadError ? (
         <>
           <div className="billing-cash-receipt__filters">
             <label>
@@ -299,18 +310,18 @@ export function BillingCashReceiptPanel({ clients, invoices, session, onPaid }: 
             </table>
           </div>
         </>
-      ) : (
+      ) : !loading && !loadError ? (
         <div className="billing-cash-receipt__prompt"><CircleDollarSign size={24} /><span>Выберите клиента — появятся его неоплаченные счета.</span></div>
-      )}
+      ) : null}
 
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="billing-cash-receipt__message"><CheckCircle2 size={17} />{message}</p> : null}
 
-      <button className="primary-button billing-cash-receipt__submit" disabled={isSubmitting || !selectedClient || !isBalanced} type="submit">
+      <button className="primary-button billing-cash-receipt__submit" disabled={loading || Boolean(loadError) || isSubmitting || !selectedClient || !isBalanced} type="submit">
         <ArrowDownToLine size={17} />
         <span>{isSubmitting ? 'Провожу…' : `Провести приход ${incomingRub > 0 ? money(incomingRub) : ''}`}</span>
       </button>
-      {selectedClient ? <section aria-label="История поступлений">
+      {selectedClient && !loading && !loadError ? <section aria-label="История поступлений">
         <h3>История поступлений</h3>
         <div className="billing-cash-receipt__table-wrap"><table className="billing-cash-receipt__table">
           <thead><tr><th>Дата поступления</th><th>Счёт</th><th>Сумма</th><th>Способ</th><th>Номер платежа</th><th>Статус</th></tr></thead>
