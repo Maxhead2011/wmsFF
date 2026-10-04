@@ -15,6 +15,8 @@ import { BillingSettlementsController } from './billing-settlements.controller';
 import { BillingSettlementsService } from './billing-settlements.service';
 import { BillingPeriodCloseController } from './billing-period-close.controller';
 import { BillingPeriodCloseService } from './billing-period-close.service';
+import { FboProcessingPricingService } from './fbo-processing-pricing.service';
+import { FboProcessingPricingController } from './fbo-processing-pricing.controller';
 
 @Module({
   imports: [
@@ -25,8 +27,8 @@ import { BillingPeriodCloseService } from './billing-period-close.service';
     MarketplaceConnectionsModule,
     OwnCompaniesModule,
   ],
-  controllers: [BillingController, BillingSettlementsController, BillingPeriodCloseController],
-  providers: [BillingService, BillingDocumentService, BillingPdfService, BillingPeriodService, BillingSettlementsService, BillingPeriodCloseService],
+  controllers: [BillingController, BillingSettlementsController, BillingPeriodCloseController, FboProcessingPricingController],
+  providers: [BillingService, BillingDocumentService, BillingPdfService, BillingPeriodService, BillingSettlementsService, BillingPeriodCloseService, FboProcessingPricingService],
   exports: [BillingService],
 })
 export class BillingModule {}
