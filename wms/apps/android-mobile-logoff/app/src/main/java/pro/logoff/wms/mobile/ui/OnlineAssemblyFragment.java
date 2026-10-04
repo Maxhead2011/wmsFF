@@ -146,6 +146,13 @@ public class OnlineAssemblyFragment extends Fragment {
         LinearLayout content = binding.onlineContent;
         content.removeAllViews();
 
+        // FIX: current production sends two-stage FBO separately from the legacy plan.
+        Map<String, Object> fbo = map(plan.get("fbo"));
+        if (!fbo.isEmpty()) {
+            renderFboAssembly(content, fbo);
+            return;
+        }
+
         Map<String, Object> fbs = map(plan.get("fbsAssembly"));
         long total = integer(fbs.get("totalOrders"));
         long completed = integer(fbs.get("completedOrders"));
@@ -176,6 +183,53 @@ public class OnlineAssemblyFragment extends Fragment {
         renderWmsBoxes(content, map(fbs.get("wmsBoxes")));
         renderDuplicateKiz(content, listOfMaps(fbs.get("duplicateKizScans")));
         renderAssemblyRows(content, listOfMaps(fbs.get("rows")));
+    }
+
+    private void renderFboAssembly(LinearLayout content, Map<String, Object> fbo) {
+        String phase = fallback(fbo.get("phase"), "Не указан");
+        String phaseLabel = switch (phase) {
+            case "NOT_STARTED" -> "Не начата";
+            case "PICKING" -> "Отбор";
+            case "PACKING" -> "Упаковка";
+            case "CONTROL" -> "Контроль";
+            case "COMPLETED" -> "Завершена";
+            default -> phase;
+        };
+        content.addView(heroCard(requestLabel(), "Онлайн-сборка FBO · " + phaseLabel,
+                "Отобрано " + fallback(fbo.get("picked"), "—") + " · упаковано " + fallback(fbo.get("packed"), "—")));
+        content.addView(actionButton("Обновить сейчас", R.color.logoff_blue, view -> load(true)));
+        content.addView(actionButton("Документы и выгрузки", R.color.logoff_ink_soft, view -> showDownloads()));
+        content.addView(infoCard("План и фактическая упаковка",
+                "Исходный план: " + fallback(fbo.get("plannedNeeded"), "—")
+                + "\nК упаковке: " + fallback(fbo.get("packingNeeded"), fallback(fbo.get("needed"), "—"))
+                + "\nНе отобрано при закрытии: " + fallback(fbo.get("unpicked"), "—")
+                + "\nОбновлено сервером: " + fallback(fbo.get("observedAt"), "не указано"), R.color.logoff_card, null));
+        if (Boolean.TRUE.equals(fbo.get("compositionChanged"))) {
+            content.addView(infoCard("Состав заявки изменился", "Проверьте состав в WMS перед продолжением сборки.", R.color.logoff_blue_soft, null));
+        }
+        section(content, "Товары FBO", "План · отбор · упаковка — серверные значения");
+        for (Map<String, Object> line : listOfMaps(fbo.get("lines"))) {
+            content.addView(infoCard(fallback(line.get("name"), "Товар"),
+                    "ШК: " + fallback(line.get("barcode"), "—")
+                    + "\nНужно: " + fallback(line.get("needed"), "—")
+                    + " · отобрано: " + fallback(line.get("picked"), "—")
+                    + " · упаковано: " + fallback(line.get("packed"), "—"), R.color.logoff_card, null));
+        }
+        section(content, "Короба FBO", "Фактические короба упаковки");
+        for (Map<String, Object> box : listOfMaps(fbo.get("boxes"))) {
+            content.addView(infoCard(fallback(box.get("code"), "Короб"),
+                    "Единиц: " + fallback(box.get("quantity"), "—")
+                    + " · " + (Boolean.TRUE.equals(box.get("closed")) ? "Закрыт" : "Открыт")
+                    + " · " + (Boolean.TRUE.equals(box.get("confirmed")) ? "Подтверждён" : "Не подтверждён"), R.color.logoff_card, null));
+        }
+        section(content, "Отсканированные единицы", "КИЗ, размещение и сотрудники");
+        for (Map<String, Object> unit : listOfMaps(fbo.get("pickedUnits"))) {
+            content.addView(infoCard(fallback(unit.get("barcode"), "Товар"),
+                    "КИЗ: " + fallback(unit.get("kiz"), "—")
+                    + "\nИз: " + fallback(unit.get("sourceBoxCode"), "—") + " → " + fallback(unit.get("targetBoxCode"), "—")
+                    + "\nОтобрал: " + fallback(unit.get("pickedBy"), "—") + " · упаковщик: " + fallback(unit.get("packedBy"), "—")
+                    + "\nСостояние: " + fallback(unit.get("state"), "—"), R.color.logoff_card, null));
+        }
     }
 
     private void renderRegularAssembly(LinearLayout content, Map<String, Object> plan) {

@@ -14,8 +14,8 @@ android {
         minSdk = 26
         targetSdk = 35
         // FIX: LOGOFF-only update candidate; original multi-tenant project is untouched.
-        versionCode = 26
-        versionName = "0.6.3-soul"
+        versionCode = 27
+        versionName = "0.6.4-soul"
         buildConfigField("String", "FIREBASE_APPLICATION_ID", "\"${firebaseValue("MOBILE_FIREBASE_APPLICATION_ID")}\"")
         buildConfigField("String", "FIREBASE_API_KEY", "\"${firebaseValue("MOBILE_FIREBASE_API_KEY")}\"")
         buildConfigField("String", "FIREBASE_PROJECT_ID", "\"${firebaseValue("MOBILE_FIREBASE_PROJECT_ID")}\"")
