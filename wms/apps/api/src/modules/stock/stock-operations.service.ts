@@ -34,6 +34,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { RequestBillingAutomationService } from '../billing/request-billing-automation.service';
 import { ExpenseAutomationService } from '../expenses/expense-automation.service';
 import { clientRequestPackageInclude } from '../client-requests/client-request-packages.include';
+import { createFboCompositionCharges } from '../billing/fbo-processing-pricing.charges';
 import { LogisticsService } from '../logistics/logistics.service';
 import { FulfillClientRequestDto } from './dto/fulfill-client-request.dto';
 import { readFbsPickedStockProof, subtractPickedQuantities, type FbsPickedProof } from './fbs-picked-stock-proof';
@@ -4057,7 +4058,7 @@ export class StockOperationsService {
         title?: string | null;
         items?: Array<{ skuId?: string | null; quantity: number; comment?: string | null }>;
       };
-      packages: Array<{ packageType: string | null }>;
+      packages: Array<{ packageType: string | null; items?: Array<{skuId:string|null;quantity:number;requestItem?:{sku?:{id:string}|null}}> }>;
       processedUnits: number;
       user: AuthUser;
       serviceDate: Date;
@@ -4098,8 +4099,10 @@ export class StockOperationsService {
     };
     const relabelUnits = await this.resolveRequestRelabelUnits(tx, input.request);
     const processing = await this.resolveRequestProcessingBreakdown(tx, input.request, input.processedUnits);
+    // FIX: only explicitly configured future FBO operations use the new composition.
+    const compositionApplied = await createFboCompositionCharges(tx, input);
     const rows: FulfillmentBillingRow[] = [
-      {
+      ...(compositionApplied ? [] : [{
         ...FULFILLMENT_BILLING_SERVICES.ITEM_PROCESSING,
         quantity: processing.standardUnits,
         requiresConfiguredPrice: true,
@@ -4108,7 +4111,7 @@ export class StockOperationsService {
         ...FULFILLMENT_BILLING_SERVICES.CLOTHING_PROCESSING,
         quantity: processing.clothingUnits,
         requiresConfiguredPrice: true,
-      },
+      }]),
       {
         ...FULFILLMENT_BILLING_SERVICES.RELABELING,
         quantity: relabelUnits,

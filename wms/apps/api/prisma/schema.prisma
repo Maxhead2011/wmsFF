@@ -614,6 +614,7 @@ model User {
   updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
   systemSettings                 SystemSetting[]
   auditLogs                      AuditLog[]
+  fboProcessingTariffs            ClientFboProcessingTariff[]
   createdWmsApiCredentials       WmsApiCredential[]             @relation("WmsApiCredentialCreatedBy")
   createdExpenseEntries          ExpenseEntry[]                 @relation("ExpenseEntryCreatedBy")
   cancelledExpenseEntries        ExpenseEntry[]                 @relation("ExpenseEntryCancelledBy")
@@ -832,6 +833,7 @@ model Client {
   billingPayments              BillingPayment[]
   billingServicePrices         ClientBillingService[]
   fbsBillingSettings           ClientFbsBillingSettings?
+  fboProcessingTariff          ClientFboProcessingTariff?
   deliveryRequests             LogisticsDeliveryRequest[]
   requestFiles                 ClientRequestFile[]
   requestPackages              ClientRequestPackage[]
@@ -2241,6 +2243,19 @@ model ClientBillingService {
   @@index([clientId, isActive])
   @@index([serviceId])
   @@index([updatedByUserId])
+}
+
+// FIX: new FBO compositions are separate immutable snapshots; existing client/FBS prices are never migrated.
+model ClientFboProcessingTariff {
+  id              String   @id @default(uuid())
+  clientId        String   @unique
+  operationKey    String   @unique
+  definition      Json
+  definitionHash  String
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  createdBy       User     @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
 }
 
 model ClientFbsBillingSettings {

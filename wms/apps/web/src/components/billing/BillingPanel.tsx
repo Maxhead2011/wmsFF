@@ -48,6 +48,7 @@ import { BillingPaymentForm } from './BillingPaymentForm';
 import { BillingPeriodGenerationDialog } from './BillingPeriodGenerationDialog';
 // FIX: additive workspace; existing financial actions remain on their original tabs.
 import { BillingSettlementsPanel } from './BillingSettlementsPanel';
+import { FboProcessingPricingPanel } from './FboProcessingPricingPanel';
 import { billingInvoiceStatusLabel, billingInvoiceStatusOptions } from './billingMeta';
 
 type LoadState<T> = {
@@ -74,7 +75,7 @@ const billingTabs = [
   { id: 'create', label: 'Создать счет' },
 ] as const;
 
-type BillingTab = 'home' | 'settlements' | (typeof billingTabs)[number]['id'];
+type BillingTab = 'home' | 'settlements' | 'fbo-processing' | (typeof billingTabs)[number]['id'];
 type InvoiceKindFilter = 'ALL' | 'FBS' | 'PRIMARY_PROCESSING' | 'PROCESSING' | 'PRR' | 'STORAGE' | 'OTHER';
 type InvoiceView = 'topics' | 'list';
 
@@ -310,6 +311,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
   async function loadVisibleData() {
     const generation = ++loadGeneration.current;
     setError(null);
+    // FIX: the FBO registry has its own read-only loader; do not initialize legacy service defaults.
+    if (activeTab === 'fbo-processing') return;
     async function load<T>(fetcher: () => Promise<T>, setter: Dispatch<SetStateAction<{ status: 'idle' | 'loading' | 'ready' | 'error'; data: T; error?: string }>>, accepted?: (data: T) => void) {
       setter(current => ({ ...current, status: 'loading', error: undefined }));
       try {
@@ -660,6 +663,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
         </button>
         {fastOpening ? <button role="tab" type="button" aria-selected={activeTab === 'settlements'}
           onClick={() => setActiveTab('settlements')}>Клиенты и расчёты</button> : null}
+        {fastOpening ? <button role="tab" type="button" aria-selected={activeTab === 'fbo-processing'} onClick={() => setActiveTab('fbo-processing')}>Первоначальная обработка</button> : null}
         {billingTabs.map((tab) => (
           <button
             aria-selected={activeTab === tab.id}
@@ -675,11 +679,13 @@ export function BillingPanel({ session }: BillingPanelProps) {
       </div> : null}
 
       {error ? <p className="form-error">{error}</p> : null}
+      {activeTab === 'fbo-processing' && fastOpening ? <FboProcessingPricingPanel session={session} /> : null}
       {activeTab === 'settlements' && fastOpening ? <BillingSettlementsPanel session={session} clients={clients.data} revision={registerRevision}
         onReview={(clientId, section) => { setSelectedClientId(clientId); setInvoiceClientId(clientId); setActiveTab(section); }} /> : null}
 
       {activeTab === 'home' ? (
         <section className="billing-topic-grid" aria-label="Разделы биллинга">
+          {fastOpening ? <button className="billing-topic-tile" type="button" onClick={() => setActiveTab('fbo-processing')}><span className="billing-topic-tile__content"><strong>Первоначальная обработка</strong><span>Услуги, стоимость за единицу и варианты товаров клиента</span></span></button> : null}
           {billingTopics(canWrite).map((topic) => (
             <button
               className={`billing-topic-tile billing-topic-tile--${topic.id}`}

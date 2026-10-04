@@ -94,8 +94,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'billing',
     name: 'Биллинг и счета',
-    prefixes: ['/billing', '/billing/settlements', '/billing/period-close'],
-    routeCount: 51, // FIX: include scoped period closure and signed correction previews/history/writes.
+    prefixes: ['/billing', '/billing/settlements', '/billing/period-close', '/billing/fbo-processing'],
+    routeCount: 54, // FIX: include the read-only FBO registry, product selection and explicit creation.
     description: 'Расчёт услуг, начислений, счетов, оплат и закрывающих документов.',
     logic: ['Считает услуги по тарифам и операциям WMS.', 'Формирует счета, акты и печатные документы.', 'Готовит предварительный расчёт отдельных счетов по услугам за выбранный период.', 'По отдельному флагу объединяет сохранённые расчёты сданных заявок в единый черновик на клиента и филиал; период определяется датой сдачи.', 'Предпросмотр объединения FBS принимает большой список счетов через POST JSON без изменения данных; GET сохранён для совместимости.', 'Учитывает оплаты, долги и ручные корректировки с аудитом.'],
     dependencies: ['Основная БД', 'PDF-генератор'],

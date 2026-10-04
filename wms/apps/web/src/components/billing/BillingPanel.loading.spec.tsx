@@ -31,6 +31,13 @@ it('opens invoices without charges, requests or reconciliation and requests the 
  expect(api.fetchBillingCharges).not.toHaveBeenCalled();expect(api.fetchClientRequests).not.toHaveBeenCalled();expect(api.fetchBillingReconciliation).not.toHaveBeenCalled();
  expect(vi.mocked(api.fetchBillingInvoices).mock.calls.filter(call=>call[1]!==undefined)).toHaveLength(1);
 });
+// TEST: opening the FBO registry must not invoke legacy loaders that initialize service defaults.
+it('does not reload legacy clients, services or invoices for the FBO composition form',async()=>{
+ render();await flush();vi.clearAllMocks();
+ nodes(render()).find(n=>n.type==='button'&&n.props.children==='Первоначальная обработка').props.onClick();
+ render();await flush();
+ expect(api.fetchBillingServices).not.toHaveBeenCalled();expect(api.fetchClients).not.toHaveBeenCalled();expect(api.fetchBillingInvoices).not.toHaveBeenCalled();
+});
 it('loads heavy data when its tab is selected',async()=>{
  render();await flush();const tree=render();nodes(tree).find(n=>n.type==='button'&&n.props.children==='Обзор').props.onClick();render();await flush();
  expect(api.fetchBillingCharges).toHaveBeenCalledTimes(1);expect(api.fetchBillingReconciliation).toHaveBeenCalledTimes(1);expect(api.fetchClientRequests).not.toHaveBeenCalled();
