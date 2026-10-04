@@ -2,7 +2,8 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium}=require('C:/Users/HonorPC/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const root=path.resolve(process.argv[2]);
-const server=http.createServer((req,res)=>{const pathname=new URL(req.url,'http://local').pathname;const file=path.resolve(root,'.'+pathname.replace(/\/$/,'/index.html'));if(!file.startsWith(root+path.sep)||!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(file));});
+const overlay=process.argv[3]?path.resolve(process.argv[3],'web'):null;
+const server=http.createServer((req,res)=>{const pathname=new URL(req.url,'http://local').pathname;const candidate=overlay&&(pathname==='/'?path.join(overlay,'index.html'):pathname.startsWith('/assets/')?path.join(overlay,path.basename(pathname)):null);const file=candidate&&fs.existsSync(candidate)?candidate:path.resolve(root,'.'+pathname.replace(/\/$/,'/index.html'));if(!(file.startsWith(root+path.sep)||overlay&&file.startsWith(overlay+path.sep))||!fs.existsSync(file)){res.writeHead(404).end();return;}res.setHeader('Content-Type',file.endsWith('.js')?'text/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(file));});
 const user={id:'fixture',name:'Константин',roleCodes:['OWNER'],permissionCodes:['system:admin','billing:read','billing:write'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:'w',warehouseIds:['w'],writableWarehouseIds:['w']};
 const common={protected:false,services:[],primaryFbs:null};
 const services=[{id:'process',code:'ITEM_PROCESSING',name:'Обработка товара',defaultPriceRub:'10.64'},{id:'label',code:'LABEL',name:'Маркировка',defaultPriceRub:'4.26'}];
