@@ -45,6 +45,7 @@ import { BillingPeriodSummary } from './BillingPeriodSummary';
 import { BillingReconciliationPanel } from './BillingReconciliationPanel';
 import { BillingServiceForm } from './BillingServiceForm';
 import { BillingPaymentForm } from './BillingPaymentForm';
+import { BillingInvoiceClosePaymentButton } from './BillingInvoiceClosePaymentButton';
 import { BillingPeriodGenerationDialog } from './BillingPeriodGenerationDialog';
 // FIX: additive workspace; existing financial actions remain on their original tabs.
 import { BillingSettlementsPanel } from './BillingSettlementsPanel';
@@ -1218,8 +1219,10 @@ export function BillingPanel({ session }: BillingPanelProps) {
                 <button className="secondary-button" type="button" onClick={() => void openInvoiceDocument(editingInvoice, 'act')}>Акт</button>
               </div>
               {billingInvoiceCardPermissions(editingInvoice, canWrite).canPay ? <section className="billing-invoice-card-payment" aria-label="Регистрация оплаты счёта">
-                <h4>Зарегистрировать оплату</h4>
-                <BillingPaymentForm key={`${editingInvoice.id}:${editingInvoice.paidRub}`} invoices={[editingInvoice]} session={session} onPaid={acceptMutatedInvoice} />
+                {/* FIX: our WMS confirms full payment here; partial receipts remain in cash receipts. */}
+                <h4>{fastOpening ? 'Подтвердить полную оплату' : 'Зарегистрировать оплату'}</h4>
+                {fastOpening ? <BillingInvoiceClosePaymentButton key={editingInvoice.id} invoiceId={editingInvoice.id} session={session} onPaid={acceptMutatedInvoice} /> :
+                  <BillingPaymentForm key={`${editingInvoice.id}:${editingInvoice.paidRub}`} invoices={[editingInvoice]} session={session} onPaid={acceptMutatedInvoice} />}
               </section> : null}
               {billingInvoiceCardPermissions(editingInvoice, canWrite).canEdit ? <BillingInvoiceForm
                 key={editingInvoice.id}
