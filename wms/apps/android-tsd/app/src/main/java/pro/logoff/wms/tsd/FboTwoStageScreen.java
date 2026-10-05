@@ -47,6 +47,31 @@ final class FboTwoStageScreen {
     // FIX: isolate explicit packing modes to our application; sold flavors retain their flow.
     private enum PackingMode { MENU, NEW_BOXES, WHOLE_BOXES, MANUAL }
     private PackingMode packingMode=PackingMode.MENU;
+    // FIX: our picker chooses a remaining route; packaging, quantities and the server phase stay shared.
+    private FboPickingRoute.Mode pickingMode=FboPickingRoute.Mode.MENU;
+    private boolean pickingChoices(){return !packing&&"logoff".equals(BuildConfig.FLAVOR);}
+    private List<TsdFboPlan.Route> pickingRoute(){return pickingChoices()?FboPickingRoute.select(plan,pickingMode):plan.route;}
+    private void choosePickingMode(FboPickingRoute.Mode mode){
+        if(!ready()||!state.barcode.isEmpty())return;
+        boolean hadLocation=!state.pallet.isEmpty()||!state.source.isEmpty();
+        handler.removeCallbacks(automatic);state.pallet="";state.source="";pickingMode=mode;
+        message="";feedbackColor=Color.TRANSPARENT;
+        if(hadLocation)refresh();else render();
+    }
+    private void reconcilePickingMode(){
+        if(!pickingChoices()||plan==null||state.pending()!=null)return;
+        if(pickingMode==FboPickingRoute.Mode.MENU&&!state.source.isEmpty())
+            for(TsdFboPlan.Route row:plan.route)if(row.boxCode.equals(state.source))
+                pickingMode=FboPickingRoute.whole(plan,row)?FboPickingRoute.Mode.WHOLE_BOXES:FboPickingRoute.Mode.PARTIAL;
+        if(pickingMode==FboPickingRoute.Mode.MENU)return;
+        boolean hasSource=false,hasPallet=false;
+        for(TsdFboPlan.Route row:pickingRoute()){
+            if(row.pallet.equals(state.pallet))hasPallet=true;
+            if(row.pallet.equals(state.pallet)&&row.boxCode.equals(state.source))hasSource=true;
+        }
+        if(!hasPallet)state.pallet="";
+        if(!hasSource){state.source="";state.barcode="";}
+    }
     private boolean packingChoices(){return packing&&"logoff".equals(BuildConfig.FLAVOR);}
     private void choosePackingMode(PackingMode mode){
         if(!ready()||!state.target.isEmpty()||!state.barcode.isEmpty())return;
@@ -72,9 +97,14 @@ final class FboTwoStageScreen {
         this.packing=packing;
         this.activity=activity;this.session=session;this.api=api;this.baseUrl=baseUrl;this.id=id;this.back=back;
         prefs=activity.getSharedPreferences("fbo-pending",Context.MODE_PRIVATE);pendingKey=session.userId+":"+id;
+        if(pickingChoices())try{pickingMode=FboPickingRoute.Mode.valueOf(prefs.getString(pendingKey+":picking-mode","MENU"));}catch(Exception ignored){}
         if(packingChoices())try{packingMode=PackingMode.valueOf(prefs.getString(pendingKey+":mode","MENU"));}catch(Exception ignored){}
         try{state.restoreCheckpoint(readSaved(pendingKey+":position"));}catch(Exception ignored){}
         try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);if(packingChoices())packingMode=p.getOrDefault("action","").startsWith("MANUAL_")?PackingMode.MANUAL:"PACK_BOX".equals(p.get("action"))?PackingMode.WHOLE_BOXES:PackingMode.NEW_BOXES;}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
+        if(pickingChoices()&&state.pending()!=null){String action=state.pending().get("action");
+            if("PICK_BOX".equals(action))pickingMode=FboPickingRoute.Mode.WHOLE_BOXES;
+            else if("PICK_UNIT".equals(action))pickingMode=FboPickingRoute.Mode.PARTIAL;
+        }
         if(fastConfirmation()&&state.pending()!=null)checkPending(0);else refresh();
     }
     boolean belongsTo(TsdSession current){return session.hasSameAccessToken(current);}
@@ -101,7 +131,7 @@ final class FboTwoStageScreen {
     private void text(LinearLayout root,String value){TextView v=new TsdUi.Label(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
     private void card(LinearLayout root,String value,int color){text(root,value);root.getChildAt(root.getChildCount()-1).setBackgroundColor(color);}
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
-    private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:plan.route)if(r.boxCode.equals(state.source))return r;return null;}
+    private TsdFboPlan.Route source(){if(plan!=null&&plan.route!=null)for(TsdFboPlan.Route r:pickingRoute())if(r.boxCode.equals(state.source))return r;return null;}
     // FIX: speak for locations and product barcodes during picking, never for KIZ or server responses.
     // FIX: packing can start with the first confirmed unit while collection stays open.
     private String screenPhase(){return FboScanState.screenPhase(plan,packing && "logoff".equals(BuildConfig.FLAVOR));}
@@ -152,6 +182,7 @@ final class FboTwoStageScreen {
     private boolean ready(){return state.pending()==null&&!busy&&!routeStale;}
     private void render(){
         if(closed||activity.isDestroyed())return;
+        if(pickingChoices())prefs.edit().putString(pendingKey+":picking-mode",pickingMode.name()).commit();
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
         LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);int screenColor=AssemblyScreenFeedback.background("logoff".equals(BuildConfig.FLAVOR),retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor);root.setBackgroundColor(screenColor);
         text(root,packing?"Упаковка FBO":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
@@ -174,6 +205,14 @@ final class FboTwoStageScreen {
                     button(root,"Скачать распределение по коробам для WB",ready(),()->download("packages"));
                 }else button(root,"Скачать файл WB",ready(),this::download);
             }
+            else if(pickingChoices()&&"PICKING".equals(screenPhase())&&pickingMode==FboPickingRoute.Mode.MENU&&state.pending()==null){
+                for(FboPickingRoute.Mode mode:new FboPickingRoute.Mode[]{FboPickingRoute.Mode.WHOLE_BOXES,FboPickingRoute.Mode.PARTIAL}){
+                    List<TsdFboPlan.Route> route=FboPickingRoute.select(plan,mode);
+                    String title=mode==FboPickingRoute.Mode.WHOLE_BOXES?"Сборка целых коробов":"Частичный отбор";
+                    button(root,title+" · "+route.size()+" коробов · "+FboPickingRoute.quantity(route)+" ед.",ready(),()->choosePickingMode(mode));
+                }
+                button(root,"Завершить отбор",ready()&&plan.picked==plan.needed,()->send("FINISH_PICK",null));
+            }
             // FIX: a pending request remains retryable after a restart with the same operation id.
             else if(packingChoices()&&"PACKING".equals(screenPhase())&&packingMode==PackingMode.MENU&&state.pending()==null){
                 button(root,"Собрать новые короба",ready(),()->choosePackingMode(PackingMode.NEW_BOXES));
@@ -190,6 +229,7 @@ final class FboTwoStageScreen {
                     ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":packingMode==PackingMode.MANUAL&&plan.reusablePackingEnabled?"ШК нового или закрытого короба для дополнения":"ШК короба для упаковки")
                     :plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
                 else if(!state.barcode.isEmpty())hint="КИЗ товара";
+                if(pickingChoices()&&"PICKING".equals(screenPhase())&&pickingMode==FboPickingRoute.Mode.WHOLE_BOXES&&!state.source.isEmpty())hint="Подтвердите отбор целого короба кнопкой ниже";
                 text(root,hint);input=new EditText(activity);input.setSingleLine(true);TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
                 input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
@@ -199,21 +239,27 @@ final class FboTwoStageScreen {
                     if(plan.manualPackingEnabled)button(root,"Добавить КИЗ вручную",ready(),this::manualPackingKiz);
                 }
                 if("PICKING".equals(screenPhase())){
+                    if(pickingChoices()){
+                        text(root,pickingMode==FboPickingRoute.Mode.WHOLE_BOXES?"Сборка целых коробов":"Частичный отбор");
+                        text(root,"В этом маршруте: "+pickingRoute().size()+" коробов · "+FboPickingRoute.quantity(pickingRoute())+" ед.");
+                        if(pickingRoute().isEmpty())text(root,plan.picked==plan.needed?"Весь товар отобран. Можно завершить отбор.":"Нет коробов для выбранного отбора. Проверьте второй маршрут.");
+                        button(root,"К выбору отбора",ready()&&state.barcode.isEmpty(),()->choosePickingMode(FboPickingRoute.Mode.MENU));
+                    }
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.displayLabel(t.name+" · "+t.barcode));
                         if(r.wholeBox&&"logoff".equals(BuildConfig.FLAVOR))card(root,(FboScanState.reusableBin(plan,r.boxCode)?"Отобрать весь товар, бокс остаётся на стеллаже · ":"Короб уезжает целиком · ")+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
                         if(r.recount)text(root,"Для целого короба требуется актуализация: количество и КИЗ расходятся.");
                         // FIX: picking and transferring the surplus are explicit choices, never automatic writes.
-                        button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
+                        if(!pickingChoices()||pickingMode==FboPickingRoute.Mode.PARTIAL)button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
                         if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
-                        if(r.wholeBox)button(root,FboScanState.wholePickTitle(plan,r.boxCode),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
+                        if(r.wholeBox&&(!pickingChoices()||!r.recount))button(root,FboScanState.wholePickTitle(plan,r.boxCode),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
                         if(state.pallet.isEmpty()){
-                            Map<String,Integer> pallets=new LinkedHashMap<>();for(TsdFboPlan.Route row:plan.route)if(!row.pallet.isEmpty())pallets.put(row.pallet,pallets.getOrDefault(row.pallet,0)+1);
+                            Map<String,Integer> pallets=new LinkedHashMap<>();for(TsdFboPlan.Route row:pickingRoute())if(!row.pallet.isEmpty())pallets.put(row.pallet,pallets.getOrDefault(row.pallet,0)+1);
                             for(Map.Entry<String,Integer> p:pallets.entrySet())text(root,p.getKey()+" · Нужных коробов: "+p.getValue());
                         }
-                        for(TsdFboPlan.Route row:plan.route)if(row.pallet.equals(state.pallet)){card(root,(row.pallet.isEmpty()?"Без паллета":row.pallet)+" · "+row.zone+" → "+row.boxCode,Color.rgb(254,240,138));for(TsdFboPlan.Task t:row.tasks)text(root,t.displayLabel(t.name)+": "+t.quantity+" ед.");}
+                        for(TsdFboPlan.Route row:pickingRoute())if(row.pallet.equals(state.pallet)){card(root,(row.pallet.isEmpty()?"Без паллета":row.pallet)+" · "+row.zone+" → "+row.boxCode,Color.rgb(254,240,138));for(TsdFboPlan.Task t:row.tasks)text(root,t.displayLabel(t.name)+": "+t.quantity+" ед.");}
                     }
                     if(!state.pallet.isEmpty()){text(root,"Паллет "+state.pallet);button(root,"Другой паллет",ready(),()->{state.pallet="";state.source="";state.barcode="";render();});}
                     button(root,"Завершить отбор",ready()&&plan.picked==plan.needed,()->send("FINISH_PICK",null));
@@ -257,10 +303,13 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(254,202,202);
         if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
         if("PICKING".equals(screenPhase())&&state.source.isEmpty()){
-            boolean accepted=state.scanLocation(plan,value);
+            boolean accepted=state.scanLocation(pickingRoute(),value);
             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";
             if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);if(accepted&&plan.localRouteEnabled){refresh();}else render();return;
+        }
+        if(pickingChoices()&&"PICKING".equals(screenPhase())&&pickingMode==FboPickingRoute.Mode.WHOLE_BOXES){
+            message="Подтвердите отбор целого короба кнопкой ниже.";render();return;
         }
         if("PACKING".equals(screenPhase())&&state.target.isEmpty()){
             // FIX: mode selection is navigation only; never convert a wrong scan into the other action.
@@ -296,7 +345,7 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
     }
-    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+    private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);reconcilePickingMode();if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
     // FIX: the compact receipt clears the durable request before any route recalculation.
     private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
@@ -354,7 +403,7 @@ final class FboTwoStageScreen {
             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
                 if(!prefs.edit().remove(pendingKey).commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
                 state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
-                if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);packingAccepted(payload);
+                if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);reconcilePickingMode();packingAccepted(payload);
                 // FIX: preserve confirmed state persistence before announcing closure.
                 if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
                 if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
