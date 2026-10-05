@@ -3207,6 +3207,25 @@ export class BillingService {
 
     const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const totalRub = (await invoiceBalance(this.prisma, invoice)).effectiveTotalRub;
+    // FIX: explicit full-payment confirmation records the remaining receipt under the existing financial lock.
+    const fullReceiptEnabled = process.env.WMS_BILLING_INVOICE_PAID_RECEIPT_ENABLED === 'true';
+    if (fullReceiptEnabled && dto.status === BillingInvoiceStatus.PAID) {
+      assertPositiveInvoiceTotal(totalRub);
+      if (invoice.status === BillingInvoiceStatus.CANCELLED) {
+        throw new BadRequestException('Нельзя оплатить отменённый счёт.');
+      }
+      const remainingRub = roundMoney(totalRub - paidRub);
+      if (remainingRub > 0) {
+        return this.createPaymentLocked({
+          invoiceId: invoice.id,
+          amountRub: remainingRub,
+          comment: 'Полная оплата подтверждена в карточке счёта.',
+        }, user);
+      }
+      if (invoice.status === BillingInvoiceStatus.PAID) {
+        return this.prisma.billingInvoice.findUniqueOrThrow({ where: { id: invoice.id }, include: billingInvoiceInclude });
+      }
+    }
     // FIX: correcting an issued invoice cannot manufacture receipts through a status shortcut.
     if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' && dto.status === BillingInvoiceStatus.PAID && paidRub < totalRub)
       throw new BadRequestException('Сначала зарегистрируйте фактическую оплату через приход денежных средств.');
@@ -3232,7 +3251,7 @@ export class BillingService {
         where: { id: invoiceId },
         data: {
           status: dto.status,
-          paidRub: dto.status === BillingInvoiceStatus.PAID ? totalRub : invoice.paidRub,
+          paidRub: dto.status === BillingInvoiceStatus.PAID && !fullReceiptEnabled ? totalRub : invoice.paidRub,
           issuedAt:
             dto.status === BillingInvoiceStatus.DRAFT
               ? null
