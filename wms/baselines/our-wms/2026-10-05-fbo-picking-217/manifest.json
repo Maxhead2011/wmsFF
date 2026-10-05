@@ -592,8 +592,8 @@
       }
     },
     "android-proof.json": {
-      "size": 1217,
-      "sha256": "b6bc9a364de10740f51154e75bcd7d0e7253a41ae0f8752fd026266cae82153c"
+      "size": 1179,
+      "sha256": "e7e77094dbddd28a71aba6303b214c854057766e1cf1e24f8ebacdeddbe961cb"
     },
     "apk-verification.json": {
       "size": 689,
