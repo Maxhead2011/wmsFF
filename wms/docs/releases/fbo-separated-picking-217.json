@@ -1,5 +1,5 @@
 {
-  "status": "prepared",
+  "status": "published",
   "versionCode": 217,
   "versionName": "0.1.217-fbo-picking-modes",
   "scope": "LOGOFF Android only; no API or web application changes",
@@ -69,5 +69,29 @@
     "baseImage": "sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf",
     "changedFiles": []
   },
-  "verificationDirectory": "D:\\WMSFF\\_Kof\\work\\fbo-separated-picking"
+  "verificationDirectory": "D:\\WMSFF\\_Kof\\work\\fbo-separated-picking",
+  "publication": {
+    "published": true,
+    "at": 1791216067.775352,
+    "pr": 485,
+    "mergeCommitSha": "b511b0a1e5d4bfa45089d65bb96ef28f1ae503fe",
+    "apiImage": "sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf",
+    "webImage": "sha256:cab415deba5d10f5c920f86480d85601ec9a7876789da4a7d12e3fe45de14d86",
+    "previousWeb": "sha256:7d2b02b61b91203417468dc808432711eaaa407533268b270b6108cf73a70f36",
+    "health": true,
+    "apiAndOtherContainersUnchanged": true,
+    "webAppFilesUnchanged": true,
+    "configurationUnchanged": true,
+    "metadata": {
+      "versionCode": 217,
+      "versionName": "0.1.217-fbo-picking-modes",
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-picking-217.apk",
+      "sha256": "861d9909868d187f8b4464a9e9457421a93b7def365878c0ada297277e8ebb51",
+      "size": 5386647,
+      "releasedAt": "2026-10-05T15:58:38.808281+00:00",
+      "releaseNotes": "Два маршрута отбора ФБО: сборка целых коробов и частичный отбор. Прогресс заявки и повтор отправки сохранены."
+    }
+  },
+  "baseline": "baselines/our-wms/2026-10-05-fbo-picking-217",
+  "rollbackWebImage": "sha256:7d2b02b61b91203417468dc808432711eaaa407533268b270b6108cf73a70f36"
 }

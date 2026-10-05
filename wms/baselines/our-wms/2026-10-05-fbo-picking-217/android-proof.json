@@ -1,0 +1,39 @@
+{
+  "passed": true,
+  "base216Reproduced": true,
+  "changedClasses": [
+    "pro/logoff/wms/tsd/BuildConfig.class",
+    "pro/logoff/wms/tsd/FboPickingRoute$Mode.class",
+    "pro/logoff/wms/tsd/FboPickingRoute.class",
+    "pro/logoff/wms/tsd/FboScanState.class",
+    "pro/logoff/wms/tsd/FboTwoStageScreen$1.class",
+    "pro/logoff/wms/tsd/FboTwoStageScreen.class",
+    "pro/logoff/wms/tsd/MainActivity.class"
+  ],
+  "unchangedClasses": 232,
+  "tests": {
+    "Logoff": {
+      "tests": 226,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Ffullhab": {
+      "tests": 226,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Platform": {
+      "tests": 226,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "unsignedSha256": "4463fcdbc98d255bece20b2be91ea2db4c2a4eabe5f8a27d22a44668b118cccc",
+  "dex": {
+    "classes.dex": "a88c4006b6a429ab2a173ec6fb5e87c55126fdd5abf5ab083b9ce96d4be608e2"
+  },
+  "package": "package: name='pro.logoff.wms.tsd' versionCode='217' versionName='0.1.217-fbo-picking-modes' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'"
+}

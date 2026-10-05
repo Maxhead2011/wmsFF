@@ -151,3 +151,6 @@ Latest API PR453 baseline2026-10-02-fbo-recovery-route: omit discarded routes du
 Latest API PR457: baseline `2026-10-02-fbo-finish-catalog`; opt-in unchanged billing catalog reads during FBO FINISH. Both request1568 completion paths and exports verified with mandatory rollback. Source parity false; web/APK/sold WMS unchanged. See current-production.md.
 
 Latest API PR461: baseline2026-10-03-kiz-unfinished-release, physical review of cancelled never-shipped KIZ. Source parity false; see current-production.md.
+
+
+Latest verified release PR485 / 05.10.2026: LOGOFF APK217 separates whole-box and partial FBO picking. Baseline `wms/baselines/our-wms/2026-10-05-fbo-picking-217`; API/web application/flags/sold unchanged. Android216 base reproducible; 678 tests passed; signature and public SHA verified. API source parity remains false. See current-production.md.
