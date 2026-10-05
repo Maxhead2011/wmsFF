@@ -1,3 +1,17 @@
+## Опубликовано PR485 / 05.10.2026 — ТСД217
+
+Отбор ФБО LOGOFF разделён на «Сборку целых коробов» и «Частичный отбор».
+[Сценарий и тесты](fbo-two-stage-picking.md), [запись выпуска](releases/fbo-separated-picking-217.json).
+Подпись совместима с216; 678 Android-тестов прошли. Воспроизводимость базового APK216
+проверена по всем неподписанным записям; остальные классы217 сохранены.
+Физический скан на ТСД ещё не проверен. Обновление устанавливается поверх текущего приложения.
+
+API `sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf` сохранён без перезапуска; web `sha256:cab415deba5d10f5c920f86480d85601ec9a7876789da4a7d12e3fe45de14d86` меняет только три файла downloads.
+Веб-приложение, флаги, конфигурация, БД и проданная WMS не изменены.
+Снимок `baselines/our-wms/2026-10-05-fbo-picking-217` содержит свежий API runtime,
+его неизменность проверена baseline guard. API sourceParityVerified=false;
+это не разрешение полной сборки API/web из исходников. Откат web: `sha256:7d2b02b61b91203417468dc808432711eaaa407533268b270b6108cf73a70f36`.
+
 # Published PR472 / 04.10.2026
 
 <!-- FIX: permanent client/branch closure and signed documents preserve original finances. -->
