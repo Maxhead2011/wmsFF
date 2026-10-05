@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 216 // FIX: client-specific product descriptions; preserve Ozon per-article counters.
-            versionName = "0.1.216-client-display"
+            versionCode = 217 // FIX: separate whole-box and partial FBO picking routes only for LOGOFF.
+            versionName = "0.1.217-fbo-picking-modes"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

@@ -93,7 +93,7 @@ public class FboFastConfirmationTest {
             }));
             FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",user,"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{});
             try {
-                idle(s);state(s).pallet="PALLET";state(s).source="BOX";state(s).barcode="2051234567890";send(s);
+                idle(s);FboPickingModeTest.choose(a,false);state(s).pallet="PALLET";state(s).source="BOX";state(s).barcode="2051234567890";send(s);
                 for(int i=0;i<400;i++){Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(100));Thread.sleep(10);if(accepted&&state(s).pending()==null&&reads.get()>1)break;if(!accepted&&checks.get()>=3)break;}
                 idle(s);assertEquals(1,writes.get());assertEquals(1,new HashSet<>(ids).size());
                 if(loseResponse)assertTrue(checks.get()>0);

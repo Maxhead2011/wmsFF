@@ -250,7 +250,7 @@ public class FboTwoStageScreenTest {
             TsdSession session=new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList());
             FboTwoStageScreen s=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",false,()->{});
             try {
-                waitIdle(s);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();s.scannerField().setText(line.barcode);s.submit();s.scannerField().setText("kiz");s.submit();waitIdle(s);
+                waitIdle(s);FboPickingModeTest.choose(a,false);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();s.scannerField().setText(line.barcode);s.submit();s.scannerField().setText("kiz");s.submit();waitIdle(s);
                 assertNotNull(find(a.findViewById(android.R.id.content),"Подтверждение не получено"));assertFalse(s.scannerField().isEnabled());s.close();
                 s=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",false,()->{});waitIdle(s);
                 findAction(a.findViewById(android.R.id.content),"Повторить отправку").performClick();waitIdle(s);
@@ -263,7 +263,7 @@ public class FboTwoStageScreenTest {
     @Test public void wholeBoxSuccessAndRouteConflictReconcileTheScreen() throws Exception {
         for(boolean conflict:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
             Activity a=controller.get();TsdFboPlan initial=plan("PICKING");initial.route.get(0).wholeBox=true;initial.route.get(0).wholeBoxQuantity=2;
-            TsdFboPlan next=plan("PICKING");next.route.get(0).boxCode="BOX_2";next.picked=conflict?0:1;
+            TsdFboPlan next=plan("PICKING");next.route.get(0).boxCode="BOX_2";next.route.get(0).wholeBox=true;next.picked=conflict?0:1;
             AtomicInteger reads=new AtomicInteger(),writes=new AtomicInteger();
             WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)-> {
                 final boolean write=m.getName().equals("actFbo");
@@ -275,7 +275,7 @@ public class FboTwoStageScreenTest {
             });
             FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{});
             try {
-                waitIdle(s);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();
+                waitIdle(s);FboPickingModeTest.choose(a,true);s.scannerField().setText("PL_1");s.submit();s.scannerField().setText("BOX_1");s.submit();
                 find(a.findViewById(android.R.id.content),"Короб забран целиком").performClick();
                 AlertDialog dialog=ShadowAlertDialog.getLatestAlertDialog();
                 assertEquals(0,writes.get());
@@ -469,6 +469,7 @@ public class FboTwoStageScreenTest {
         java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("busy");field.setAccessible(true);
         for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s)){
  if(packing&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(FboScanState.screenPhase(p,true)))find(a.findViewById(android.R.id.content),p.wholeBoxes.isEmpty()?"Собрать новые короба":"Отсканировать целые короба").performClick();
+ if(!packing&&"PICKING".equals(p.phase))FboPickingModeTest.choose(a,!p.route.isEmpty()&&FboPickingRoute.whole(p,p.route.get(0)));
  return s;}Thread.sleep(10);}
         fail("Plan did not load");return s;
     }
