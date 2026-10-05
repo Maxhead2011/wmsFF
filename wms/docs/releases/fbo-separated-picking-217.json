@@ -1,0 +1,73 @@
+{
+  "status": "prepared",
+  "versionCode": 217,
+  "versionName": "0.1.217-fbo-picking-modes",
+  "scope": "LOGOFF Android only; no API or web application changes",
+  "soldWmsUnchanged": true,
+  "androidBaseParityVerified": true,
+  "apiSourceParityVerified": false,
+  "previousVersion": {
+    "versionCode": 216,
+    "versionName": "0.1.216-client-display",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-display-216.apk",
+    "sha256": "dc45a92e6d024efc9f37193b07288a3987d7f3f230fe1e1aa89d12ea0ac48966",
+    "size": 5386647,
+    "releasedAt": "2026-09-28T16:26:56.952463+00:00",
+    "releaseNotes": "Настройка описания товара по клиенту для сборки и упаковки; сохранены счётчики Ozon и последовательный отбор WB."
+  },
+  "baseImages": {
+    "infra-api-1": {
+      "image": "sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf",
+      "startedAt": "2026-10-05T01:20:17.682990891Z"
+    },
+    "infra-web-1": {
+      "image": "sha256:7d2b02b61b91203417468dc808432711eaaa407533268b270b6108cf73a70f36",
+      "startedAt": "2026-10-05T01:20:17.682627658Z"
+    }
+  },
+  "androidProof": {
+    "passed": true,
+    "base216Reproduced": true,
+    "changedClasses": [
+      "pro/logoff/wms/tsd/BuildConfig.class",
+      "pro/logoff/wms/tsd/FboPickingRoute$Mode.class",
+      "pro/logoff/wms/tsd/FboPickingRoute.class",
+      "pro/logoff/wms/tsd/FboScanState.class",
+      "pro/logoff/wms/tsd/FboTwoStageScreen$1.class",
+      "pro/logoff/wms/tsd/FboTwoStageScreen.class",
+      "pro/logoff/wms/tsd/MainActivity.class"
+    ],
+    "unchangedClasses": 232,
+    "tests": {
+      "Logoff": {
+        "tests": 226,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "Ffullhab": {
+        "tests": 226,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "Platform": {
+        "tests": 226,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "unsignedSha256": "4463fcdbc98d255bece20b2be91ea2db4c2a4eabe5f8a27d22a44668b118cccc",
+    "dex": {
+      "classes.dex": "a88c4006b6a429ab2a173ec6fb5e87c55126fdd5abf5ab083b9ce96d4be608e2"
+    },
+    "package": "package: name='pro.logoff.wms.tsd' versionCode='217' versionName='0.1.217-fbo-picking-modes' platformBuildVersionName='15' platformBuildVersionCode='35' compileSdkVersion='35' compileSdkVersionCodename='15'"
+  },
+  "baselineGuard": {
+    "verified": true,
+    "baseImage": "sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf",
+    "changedFiles": []
+  },
+  "verificationDirectory": "D:\\WMSFF\\_Kof\\work\\fbo-separated-picking"
+}
