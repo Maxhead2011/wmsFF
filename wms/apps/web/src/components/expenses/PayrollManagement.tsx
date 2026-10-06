@@ -90,7 +90,8 @@ export function payrollPaymentSummary(people: Array<Pick<Employee, 'id' | 'name'
       payment: p.paymentMethod === 'CASH' ? 'Наличные' : p.paymentMethod === 'TRANSFER' ? 'Перевод' : 'Способ выплаты не указан',
       phone: p.paymentMethod === 'TRANSFER' ? p.paymentPhone?.trim() || 'Не указан' : '—',
       bank: p.paymentMethod === 'TRANSFER' ? p.paymentBank?.trim() || 'Не указан' : '—' };
-  });
+  // FIX: summarize only amounts present after period/status filters, not the whole employee directory.
+  }).filter(p => p.amountKopecks !== 0 || p.unpaidKopecks !== 0 || p.paidKopecks !== 0 || p.reviewKopecks !== 0);
 }
 
 // FIX: settings are evaluated now, independently of timesheet dates; temporary conditions override base rates.
