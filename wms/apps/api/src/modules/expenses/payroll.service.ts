@@ -7,6 +7,7 @@ import { calculateHandling, calculateWorkDay, payrollRateAt, workDate } from './
 import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
 import { Prisma } from '@prisma/client';
 import { previewPayrollWorkbook } from './payroll-import';
+import { PayrollCorrections, correctionHash, requireCorrections } from './payroll-corrections';
 
 type PayrollRow = { key: string; employeeId: string; date: string; kind: string; amountKopecks: number; status: string; comment?: string; workedMs?: number; lunchMs?: number; units?: number; detail: unknown };
 
@@ -177,6 +178,9 @@ export class PayrollService {
   }
 
   async updateShift(employeeId: string, id: string, dto: PayrollShiftDto, user: AuthUser) {
+    // FIX: old deployments retain their workflow; reversible corrections are explicitly enabled on our WMS.
+    if (process.env.WMS_PAYROLL_CORRECTIONS_ENABLED === 'true') return new PayrollCorrections(this.prisma, user, this.scope(user, true)).shift(employeeId, id, dto);
+    if (dto.employeeId && dto.employeeId !== employeeId) throw new BadRequestException('Перенос смен пока не включён.');
     const employee = await this.employee(employeeId, user, true);
     const startsAt = this.timestamp(dto.startsAt), endsAt = dto.endsAt ? this.timestamp(dto.endsAt) : null;
     if ((endsAt && endsAt <= startsAt) || !dto.reason.trim()) throw new BadRequestException('Проверьте время и причину.');
@@ -274,6 +278,7 @@ export class PayrollService {
 
   // FIX: review operations can be corrected or cancelled, never silently removed from audit history.
   async changeHandling(id: string, dto: PayrollHandlingDto | { reason: string }, user: AuthUser, cancel = false) {
+    if (!cancel && process.env.WMS_PAYROLL_CORRECTIONS_ENABLED === 'true') return new PayrollCorrections(this.prisma, user, this.scope(user, true)).handling(id, dto as PayrollHandlingDto);
     this.scope(user, true);
     if (!dto.reason.trim()) throw new BadRequestException('Укажите причину изменения.');
     return this.prisma.$transaction(async tx => {
@@ -343,7 +348,7 @@ export class PayrollService {
     const [rates, shifts, shares, settlements, history, workDays] = await Promise.all([
       this.prisma.payrollCondition.findMany({ where: { employeeId } }),
       this.prisma.payrollShift.findMany({ where: { employeeId, cancelledAt: null, workDate: { gte: from, lte: to } }, include: { breaks: true }, orderBy: { startsAt: 'asc' } }),
-      this.prisma.payrollHandlingShare.findMany({ where: { employeeId, operation: { startsAt: { gte: period.start, lt: period.end } } }, include: { operation: { include: { shares: { select: { employeeId: true } } } } } }),
+      this.prisma.payrollHandlingShare.findMany({ where: { employeeId, operation: { startsAt: { gte: period.start, lt: period.end } } }, include: { operation: { include: { shares: { orderBy: { employeeId: 'asc' } } } } } }),
       this.prisma.payrollSettlement.findMany({ where: { employeeId, workDate: { gte: from, lte: to } } }),
       this.prisma.payrollHistorical.findMany({ where: { employeeId, workDate: { gte: from, lte: to } } }),
       this.prisma.payrollWorkDay.findMany({ where: { employeeId, workDate: { gte: from, lte: to } } }),
@@ -365,7 +370,7 @@ export class PayrollService {
         if (lunches.some(b => !b.endsAt)) throw new Error('Lunch is still open');
         const calculated = calculateWorkDay(day.map(s => ({ start: s.startsAt.toISOString(), end: s.endsAt!.toISOString() })), schedule('HOURLY'), 'Europe/Moscow', workDays.find(d => d.workDate === date)?.lunchMinutes, lunches.length ? lunches.map(b => ({ start: b.startsAt.toISOString(), end: b.endsAt!.toISOString() })) : undefined);
         rows.push({ key: `WORK:${employeeId}:${date}`, employeeId, date, kind: 'HOURLY', amountKopecks: calculated.amountKopecks,
-          workedMs: calculated.workedMs, lunchMs: calculated.lunchMs, status: 'UNPAID', detail: { ...calculated, lunchOverride: workDays.find(d => d.workDate === date)?.lunchMinutes ?? null, shifts: day.map(s => ({ id: s.id, start: s.startsAt.toISOString(), end: s.endsAt!.toISOString() })) } });
+          workedMs: calculated.workedMs, lunchMs: calculated.lunchMs, status: 'UNPAID', detail: { ...calculated, lunchOverride: workDays.find(d => d.workDate === date)?.lunchMinutes ?? null, shifts: day.map(s => ({ id: s.id, start: s.startsAt.toISOString(), end: s.endsAt!.toISOString(), version: s.version })) } });
       } catch (e) { issues.push(`${date}: проверьте ставки и интервалы смены`); }
     }
     if (employee.userId) {
@@ -398,7 +403,7 @@ export class PayrollService {
       const op = share.operation;
       if (op.status === 'CANCELLED') continue;
       rows.push({ key: `HANDLING:${op.id}:${employeeId}`, employeeId, date: workDate(op.startsAt.toISOString()), kind: 'PALLET',
-        amountKopecks: share.amountKopecks ?? 0, status: op.status === 'CONFIRMED' ? 'UNPAID' : 'REVIEW', detail: { ...op, palletCount: Number(op.palletCount) } });
+        amountKopecks: share.amountKopecks ?? 0, status: op.status === 'CONFIRMED' ? 'UNPAID' : 'REVIEW', detail: { ...op, correctionToken: correctionHash(op), palletCount: Number(op.palletCount) } });
     }
     for (const old of history) {
       const data = old.data as { paidTime: number; lunch: number };
@@ -414,6 +419,36 @@ export class PayrollService {
     }
     return { employee, from, to, rows: rows.sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key)), issues,
       totals: { amountKopecks: rows.reduce((s, r) => s + r.amountKopecks, 0), paidKopecks: rows.filter(r => r.status === 'PAID').reduce((s, r) => s + r.amountKopecks, 0) } };
+  }
+
+  async undoCorrection(id: string, reason: string, user: AuthUser) {
+    return new PayrollCorrections(this.prisma, user, this.scope(user, true)).undo(id, reason);
+  }
+
+  // FIX: audit visibility follows both warehouse permissions and demo ownership, not just an audit warehouse ID.
+  async correctionHistory(from: string, to: string, cursor: string | undefined, user: AuthUser) {
+    requireCorrections();
+    const scope = this.scope(user), period = this.period(from, to);
+    const people = await this.prisma.payrollEmployee.findMany({ where: scope, select: { id: true, warehouseId: true } });
+    const ids = people.map(p => p.id), owned = new Set(ids);
+    if (!ids.length) return { entries: [], nextCursor: null };
+    const entries = await this.prisma.payrollAudit.findMany({ where: { warehouseId: { in: [...new Set(people.map(p => p.warehouseId))] }, createdAt: { gte: period.start, lt: period.end } }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) });
+    const entities = entries.map(e => e.entityId);
+    const [shifts, conditions, handling, historical, settlements] = await Promise.all([
+      this.prisma.payrollShift.findMany({ where: { id: { in: entities }, employeeId: { in: ids } }, select: { id: true } }),
+      this.prisma.payrollCondition.findMany({ where: { id: { in: entities }, employeeId: { in: ids } }, select: { id: true } }),
+      this.prisma.payrollHandling.findMany({ where: { id: { in: entities }, shares: { some: {}, every: { employeeId: { in: ids } } } }, select: { id: true } }),
+      this.prisma.payrollHistorical.findMany({ where: { key: { in: entities }, employeeId: { in: ids } }, select: { key: true } }),
+      this.prisma.payrollSettlement.findMany({ where: { key: { in: entities }, employeeId: { in: ids } }, select: { key: true } }),
+    ]);
+    const allowed = new Set([...ids, ...shifts.map(e => e.id), ...conditions.map(e => e.id), ...handling.map(e => e.id), ...historical.map(e => e.key), ...settlements.map(e => e.key)]);
+    const visible = entries.filter(e => {
+      const d = e.details as { employeeIds?: string[] };
+      return allowed.has(e.entityId) || (e.action === 'CORRECTION_UNDONE' && !!d.employeeIds?.length && d.employeeIds.every(id => owned.has(id)));
+    });
+    const undone = await this.prisma.payrollAudit.findMany({ where: { action: 'CORRECTION_UNDONE', entityId: { in: visible.map(e => e.id) } }, select: { entityId: true } });
+    const actors = await this.prisma.user.findMany({ where: { id: { in: [...new Set(visible.map(e => e.actorId))] } }, select: { id: true, name: true } });
+    return { entries: visible.map(e => ({ ...e, actorName: actors.find(a => a.id === e.actorId)?.name || e.actorId, canUndo: ['SHIFT_CORRECTED', 'HANDLING_CORRECTED'].includes(e.action) && (e.details as { schema?: number }).schema === 1 && !undone.some(u => u.entityId === e.id), undone: undone.some(u => u.entityId === e.id) })), nextCursor: entries.length === 100 ? entries[entries.length - 1].id : null };
   }
 
   async setStatus(dto: PayrollStatusDto, user: AuthUser) {

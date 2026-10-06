@@ -23,6 +23,8 @@ describe('payroll feature isolation', () => {
     const original = '2026-09-27T19:04:01.302Z';
     expect(payrollLocalTime(original)).toBe('2026-09-27T22:04:01');
     expect(payrollEditedTime(payrollLocalTime(original), original)).toBe(original);
+    // TEST: native datetime-local omits zero seconds even when the original mark has milliseconds.
+    expect(payrollEditedTime('2026-10-06T09:00', '2026-10-06T06:00:00.123Z')).toBe('2026-10-06T06:00:00.123Z');
     expect(new Date(payrollEditedTime('2026-09-28T00:10', original)).toISOString()).toBe('2026-09-27T21:10:00.000Z');
     expect(payrollLocalTime('')).toBe('');
   });

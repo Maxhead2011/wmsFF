@@ -1,9 +1,10 @@
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { AuthSession, BranchSummary, fetchBranches, payrollDownload, payrollImport, payrollRequest, payrollAttendancePhoto } from '../../lib/api';
 import './payroll.css';
+import { PayrollHistory } from './PayrollHistory';
 
 type Employee = { id: string; payrollPrimaryId?: string | null; name: string; warehouseId: string; userId?: string | null; picker: boolean; loader: boolean; isActive: boolean; paymentMethod: string; paymentPhone?: string | null; paymentBank?: string | null; rates: Array<{ id: string; kind: string; rateKopecks: number; startsAt: string; endsAt?: string; temporary: boolean }> };
-type Row = { key: string; employeeId: string; date: string; kind: string; amountKopecks: number; status: string; units?: number; workedMs?: number; lunchMs?: number; detail: { lunchOverride?: number | null; id?: string; status?: string; warehouseId?: string; startsAt?: string; operation?: string; shares?: Array<{ employeeId: string }>; palletCount?: number; boxCount?: number; bagCount?: number; rollCount?: number; unitRateKopecks?: number; start?: number; end?: number; rate?: number; shifts?: Array<{ id: string; start: string; end: string }>; segments?: Array<{ start: string; end: string; rateKopecks: number }> } };
+type Row = { key: string; employeeId: string; date: string; kind: string; amountKopecks: number; status: string; units?: number; workedMs?: number; lunchMs?: number; detail: { correctionToken?: string; lunchOverride?: number | null; id?: string; status?: string; warehouseId?: string; startsAt?: string; operation?: string; shares?: Array<{ employeeId: string }>; palletCount?: number; boxCount?: number; bagCount?: number; rollCount?: number; unitRateKopecks?: number; start?: number; end?: number; rate?: number; shifts?: Array<{ id: string; start: string; end: string; version?: number }>; segments?: Array<{ start: string; end: string; rateKopecks: number }> } };
 type Report = { rows: Row[]; issues: string[]; totals: { amountKopecks: number; paidKopecks: number } };
 const money = (n: number) => (n / 100).toLocaleString('ru-RU', { style: 'currency', currency: 'RUB' });
 const statuses: Record<string, string> = { UNPAID: 'Не оплачено', REVIEW: 'На проверке', PAID: 'Оплачено' };
@@ -16,7 +17,8 @@ export function payrollTimeCells(row: Pick<Row, 'kind' | 'workedMs' | 'lunchMs' 
 const iso = (s: string) => `${s.length === 16 ? s + ':00' : s}+03:00`;
 // FIX: preserve seconds/milliseconds when only lunch or the reason is changed.
 export const payrollLocalTime = (s: string) => s ? new Date(Date.parse(s) + 3 * 3600000).toISOString().slice(0, 19) : '';
-export const payrollEditedTime = (value: string, original: string) => value === payrollLocalTime(original) ? original : iso(value);
+// FIX: datetime-local normalizes :00 seconds away; compare displayed instants before preserving the original precision.
+export const payrollEditedTime = (value: string, original: string) => original && value && Date.parse(iso(value)) === Date.parse(iso(payrollLocalTime(original))) ? original : iso(value);
 // FIX: initial conditions use only the new employee form, never another employee's rates.
 export function payrollInitialConditions(form: FormData, loader: boolean) {
   const rows: Array<{ kind: string; rateKopecks: number; startsAt: string }> = [];
@@ -107,6 +109,8 @@ export function payrollCurrentRates(rates: Employee['rates'], now = Date.now()) 
 // FIX: preserve the legacy workspace until the separately gated payroll module is enabled.
 export function PayrollManagement({ session, legacy, onBack }: { session: AuthSession; legacy: ReactNode; onBack?: () => void }) {
   const [enabled, setEnabled] = useState(false);
+  const [correctionsEnabled, setCorrectionsEnabled] = useState(false);
+  const [shiftVersion, setShiftVersion] = useState<number | undefined>();
   const [error, setError] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [branches, setBranches] = useState<BranchSummary[]>([]);
@@ -158,9 +162,9 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
   }
   useEffect(() => {
     let live = true;
-    api<{ enabled: boolean }>('/capabilities').then(async result => {
+    api<{ enabled: boolean; correctionsEnabled?: boolean }>('/capabilities').then(async result => {
       if (!live || !result.enabled) return;
-      setEnabled(true);
+      setEnabled(true); setCorrectionsEnabled(result.correctionsEnabled === true);
       const [people, warehouses, pickingUsers] = await Promise.all([api<Employee[]>('/employees'), fetchBranches(session.accessToken), api<Array<{ id: string; name: string }>>('/picking-users')]);
       if (live) { setEmployees(people); setBranches(warehouses); setUsers(pickingUsers); setSelected('__all'); }
     }).catch(e => { if (live) setError(e.message); });
@@ -200,12 +204,12 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
     if(selected&&selected!=='__all')setShifts(await api<typeof shifts>(`/employees/${selected}/shifts`));
     setChecked([]);
   }
-  function editRow(row: Row, shift?: { id: string; start: string; end: string }) {
+  function editRow(row: Row, shift?: { id: string; start: string; end: string; version?: number }) {
     setSelected(row.employeeId); setError(''); setHistoryEdit(null); setManualOpen(false);
     if (row.status === 'PAID') { setError('Запись оплачена. Выберите её в таблице и переведите в статус «На проверке», затем нажмите «Редактировать».'); return; }
     if (row.kind === 'HISTORY') setHistoryEdit(row);
     else if (shift) {
-      setShiftEdit(shift.id); setShiftDraft({ start: payrollLocalTime(shift.start), end: payrollLocalTime(shift.end), originalStart: shift.start, originalEnd: shift.end, lunch: row.detail.lunchOverride == null ? '' : String(row.detail.lunchOverride) }); setManualOpen(true);
+      setShiftEdit(shift.id); setShiftVersion(shift.version); setShiftDraft({ start: payrollLocalTime(shift.start), end: payrollLocalTime(shift.end), originalStart: shift.start, originalEnd: shift.end, lunch: row.detail.lunchOverride == null ? '' : String(row.detail.lunchOverride) }); setManualOpen(true);
     }
   }
   if (!enabled) return <>{error && <p role="alert">{error}</p>}{legacy}</>;
@@ -230,6 +234,7 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
         <label>Порядок<select aria-label="Порядок" value={sortDirection} onChange={e => setSortDirection(e.target.value as SortDirection)}><option value="asc">По возрастанию</option><option value="desc">По убыванию</option></select></label></>}
     </div>
     {tab === 'settings' ? <>
+      {correctionsEnabled && <details><summary>История изменений</summary><PayrollHistory api={api} /></details>}
       <PayrollTablets session={session} branches={branches} employees={employees} />
       {employee && <PayrollIdentitySettings key={employee.id} employee={employee} employees={employees} busy={busy} save={(id,memberIds)=>run(async()=>{await api(`/employees/${id}/identity`,'PUT',{memberIds});await loadEmployees();},'Карточки сотрудника связаны')} />}
       <details><summary>Перенос исторического табеля</summary><p>Старые часы, суммы и статусы сохраняются без перерасчёта по новым правилам. Сначала проверьте соответствие сотрудников.</p>
@@ -287,10 +292,11 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
         <label>Ставка, ₽/ч<input type="number" min="0" step="0.01" name="historyRate" required defaultValue={historyEdit.detail.rate} /></label>
         <label>Причина исправления<input name="reason" required /></label></div><button disabled={busy}>Сохранить исправление</button><button type="button" onClick={() => setHistoryEdit(null)}>Отмена</button></form>}
       {employee && manualOpen && <form className={tab === 'work' ? 'payroll-shift-dialog' : undefined} role="dialog" aria-modal="true" aria-label="Редактирование записи" style={{ position: 'fixed', inset: '10% 5%', zIndex: 1000, background: 'white', padding: 24, overflowY: 'auto', boxShadow: '0 0 0 100vmax #0008', borderRadius: 16 }} key={`${selected}:${tab}:${shiftEdit}`} onSubmit={(e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const f = new FormData(e.currentTarget); void run(async () => {
-        if (tab === 'work') await api(`/employees/${selected}/shifts${shiftEdit ? '/' + shiftEdit : ''}`, shiftEdit ? 'PUT' : 'POST', { startsAt: payrollEditedTime(String(f.get('start')), shiftDraft.originalStart), endsAt: f.get('end') ? payrollEditedTime(String(f.get('end')), shiftDraft.originalEnd) : undefined, lunchMinutes: f.get('lunch') === '' ? null : Number(f.get('lunch')), reason: f.get('reason') });
+        if (tab === 'work') await api(`/employees/${selected}/shifts${shiftEdit ? '/' + shiftEdit : ''}`, shiftEdit ? 'PUT' : 'POST', { ...(correctionsEnabled && shiftEdit ? { employeeId: String(f.get('correctEmployee') || selected), expectedVersion: shiftVersion } : {}), startsAt: payrollEditedTime(String(f.get('start')), shiftDraft.originalStart), endsAt: f.get('end') ? payrollEditedTime(String(f.get('end')), shiftDraft.originalEnd) : undefined, lunchMinutes: f.get('lunch') === '' ? null : Number(f.get('lunch')), reason: f.get('reason') });
         else await api('/handling', 'POST', { warehouseId: employee.warehouseId, startsAt: iso(String(f.get('start'))), operation: f.get('operation'), palletCount: Number(f.get('pallets')), boxCount: Number(f.get('boxes')), bagCount: Number(f.get('bags')), rollCount: Number(f.get('rolls')), employeeIds: f.getAll('participant'), reason: f.get('reason') });
         await reloadReport(); setManualOpen(false); return 'Запись сохранена';
       }); }}><h3>{tab === 'work' ? shiftEdit ? 'Редактировать приход и уход' : 'Добавить приход и уход' : 'Добавить работу'}</h3><div className="payroll-fields">
+        {correctionsEnabled && tab === 'work' && shiftEdit && <PayrollCorrectionEmployee people={employees} employee={employee} />}
         <label>Начало, МСК<input type="datetime-local" step="1" autoFocus name="start" required defaultValue={shiftDraft.start} /></label>
         {tab === 'work' ? <label>Уход, МСК<input type="datetime-local" step="1" name="end" defaultValue={shiftDraft.end} /></label> : <><label>Работа<select name="operation"><option value="UNLOAD">Разгрузка</option><option value="LOAD">Погрузка</option></select></label><label>Палеты<input type="number" min="0" step="0.0001" name="pallets" /></label><label>Короба<input type="number" min="0" step="1" name="boxes" /></label><label>Мешки<input type="number" min="0" step="1" name="bags" /></label><label>Рулоны<input type="number" min="0" step="1" name="rolls" /></label></>}
         <label>Комментарий / основание<input name="reason" required /></label>{tab === 'work' && <label>Обед за весь день, минут<input type="number" min="0" step="1" name="lunch" defaultValue={shiftDraft.lunch} placeholder="Автоматически" /><small>Пусто — автоматически; 0 — без обеда. Вычет один на все выходы за день.</small></label>}</div>
@@ -329,7 +335,7 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
           <td>{money(r.amountKopecks)}</td><td>{statuses[r.status]}</td>
           <td>{r.kind === 'HISTORY' && <button type="button" disabled={busy} onClick={() => editRow(r)}>Редактировать</button>}
             {r.detail.shifts?.map((s, i) => <button key={s.id} type="button" disabled={busy} onClick={() => editRow(r, s)}>Редактировать{r.detail.shifts!.length > 1 ? ` ${i + 1}` : ''}</button>)}
-            {r.kind === 'PALLET' && r.detail.status === 'REVIEW' && <HandlingReview row={r} employees={employees} busy={busy} api={api} run={run} reload={reloadReport} />}
+            {r.kind === 'PALLET' && (r.detail.status === 'REVIEW' || correctionsEnabled) && <HandlingReview correctionsEnabled={correctionsEnabled} row={r} employees={employees} busy={busy || r.status === 'PAID'} api={api} run={run} reload={reloadReport} />}
           </td></tr>)}</tbody></table></div>
         <form onSubmit={e => { e.preventDefault(); const f=new FormData(e.currentTarget); const status=String(f.get('status')); void run(async()=>{
           const rows=status==='PAID'?selectedRows.filter(r=>r.status==='UNPAID'):selectedRows;
@@ -350,7 +356,13 @@ export function payrollOperationTariff(value: string): number | undefined {
   if (!Number.isSafeInteger(kopecks) || kopecks > 2147483647) throw new Error('Тариф слишком велик.');
   return kopecks;
 }
-function HandlingReview({ row, employees, busy, api, run, reload }: { row: Row; employees: Employee[]; busy: boolean;
+// FIX: reassign this shift only; keep unrelated accounts and other shifts intact.
+export function PayrollCorrectionEmployee({ people, employee }: { people: Array<Pick<Employee, 'id' | 'name' | 'warehouseId' | 'isActive'>>; employee: Pick<Employee, 'id' | 'warehouseId'> }) {
+  return <label>Сотрудник этой смены<select name="correctEmployee" aria-label="Сотрудник этой смены" defaultValue={employee.id}>
+    {people.filter(p => p.warehouseId === employee.warehouseId && (p.isActive || p.id === employee.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+  </select><small>При смене сотрудника время и фактические обеды переносятся вместе со сменой. Оплата пересчитывается по условиям выбранного сотрудника.</small></label>;
+}
+function HandlingReview({ row, employees, busy, api, run, reload, correctionsEnabled }: { row: Row; employees: Employee[]; busy: boolean; correctionsEnabled: boolean;
   api: (path: string, method: 'POST' | 'PUT', body?: unknown) => Promise<unknown>;
   run: (action: () => Promise<void>, success: string) => Promise<void>; reload: () => Promise<void> }) {
   const [tariff, setTariff] = useState('');
@@ -363,13 +375,13 @@ function HandlingReview({ row, employees, busy, api, run, reload }: { row: Row; 
     try { await action(); await reload(); setMode(''); }
     catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сохранить работу'); throw e; }
   }, success);
-  const localStart = detail.startsAt ? new Date(Date.parse(detail.startsAt) + 3 * 3600000).toISOString().slice(0, 16) : '';
+  const localStart = detail.startsAt ? payrollLocalTime(detail.startsAt) : '';
   return <div>
-    <label>Разовый тариф, ₽ за паллету<input aria-label="Разовый тариф за паллету" inputMode="decimal" disabled={busy} value={tariff} placeholder={detail.unitRateKopecks != null ? String(detail.unitRateKopecks / 100) : "По ставкам участников"} onChange={e => setTariff(e.target.value)} /></label>
+    {detail.status === 'REVIEW' && <><label>Разовый тариф, ₽ за паллету<input aria-label="Разовый тариф за паллету" inputMode="decimal" disabled={busy} value={tariff} placeholder={detail.unitRateKopecks != null ? String(detail.unitRateKopecks / 100) : "По ставкам участников"} onChange={e => setTariff(e.target.value)} /></label>
     <p>Тариф на всю работу делится поровну между {members.length} участниками. {detail.unitRateKopecks != null ? `Пусто — ${detail.unitRateKopecks / 100} ₽ за палету. 16 коробов / 5 мешков / 30 рулонов = 1 палета.` : 'Пусто — ставки участников на начало работы.'}</p>
-    <button disabled={busy} onClick={() => act(async () => { const rateKopecks = payrollOperationTariff(tariff); await api(`/handling/${detail.id}/confirm`, 'POST', rateKopecks === undefined ? {} : { rateKopecks }); }, 'Работа подтверждена')}>Подтвердить работу</button>
+    <button disabled={busy} onClick={() => act(async () => { const rateKopecks = payrollOperationTariff(tariff); await api(`/handling/${detail.id}/confirm`, 'POST', rateKopecks === undefined ? {} : { rateKopecks }); }, 'Работа подтверждена')}>Подтвердить работу</button></>}
     <button disabled={busy} onClick={() => setMode('edit')}>Редактировать</button>
-    <button disabled={busy} onClick={() => setMode('cancel')}>Отменить запись</button>
+    {detail.status === 'REVIEW' && <button disabled={busy} onClick={() => setMode('cancel')}>Отменить запись</button>}
     {error && <p role="alert">{error}</p>}
     {mode && <form key={`${detail.id}:${mode}`} onSubmit={e => {
       e.preventDefault(); const f = new FormData(e.currentTarget);
@@ -377,12 +389,12 @@ function HandlingReview({ row, employees, busy, api, run, reload }: { row: Row; 
         const reason = String(f.get('reason') ?? '').trim();
         if (!reason) throw new Error('Укажите причину.');
         if (mode === 'cancel') await api(`/handling/${detail.id}/cancel`, 'POST', { reason });
-        else await api(`/handling/${detail.id}`, 'PUT', { warehouseId: detail.warehouseId, startsAt: iso(String(f.get('start'))),
+        else await api(`/handling/${detail.id}`, 'PUT', { ...(correctionsEnabled ? { expectedState: detail.correctionToken } : {}), warehouseId: detail.warehouseId, startsAt: payrollEditedTime(String(f.get('start')), detail.startsAt || ''),
           operation: f.get('operation'), palletCount: Number(f.get('pallets')), boxCount: Number(f.get('boxes')), bagCount: Number(f.get('bags')), rollCount: Number(f.get('rolls')), employeeIds: f.getAll('member'), reason });
       }, mode === 'cancel' ? 'Запись отменена, история сохранена' : 'Работа изменена');
     }}>
       {mode === 'edit' && <>
-        <label>Начало, МСК<input name="start" type="datetime-local" defaultValue={localStart} required /></label>
+        <p>Выберите правильных участников и объёмы. После исправления работу потребуется подтвердить заново.</p><label>Начало, МСК<input name="start" type="datetime-local" step="1" defaultValue={localStart} required /></label>
         <label>Работа<select name="operation" defaultValue={detail.operation}><option value="LOAD">Погрузка</option><option value="UNLOAD">Разгрузка</option></select></label>
         <label>Палеты<input name="pallets" type="number" min="0" step="0.0001" defaultValue={detail.palletCount} /></label><label>Короба<input name="boxes" type="number" min="0" step="1" defaultValue={detail.boxCount ?? 0} /></label><label>Мешки<input name="bags" type="number" min="0" step="1" defaultValue={detail.bagCount ?? 0} /></label><label>Рулоны<input name="rolls" type="number" min="0" step="1" defaultValue={detail.rollCount ?? 0} /></label>
         <fieldset><legend>Участники</legend>{employees.filter(p => p.warehouseId === detail.warehouseId && (p.isActive || members.includes(p.id))).map(p => <label key={p.id}><input type="checkbox" name="member" value={p.id} defaultChecked={members.includes(p.id)} />{p.name}</label>)}</fieldset>
@@ -409,7 +421,7 @@ function PayrollTablets({ session, branches, employees }: { session: AuthSession
   const [code, setCode] = useState(''), [message, setMessage] = useState(''), [error, setError] = useState('');
   const [photo, setPhoto] = useState(''), [photoCaption, setPhotoCaption] = useState(''), [review, setReview] = useState<TabletEvent | null>(null), [reason, setReason] = useState(''), [corrected, setCorrected] = useState('');
   const api = <T,>(path: string, method: 'GET' | 'POST' = 'GET', body?: unknown) => payrollRequest<T>(session.accessToken, '/attendance' + path, method, body);
-  useEffect(() => { let live = true; api<{ enabled: boolean }>('/capabilities').then(r => { if (live) setEnabled(r.enabled); }).catch(() => {}); return () => { live = false; }; }, [session.accessToken]);
+  useEffect(() => { let live = true; api<{ enabled: boolean; correctionsEnabled?: boolean }>('/capabilities').then(r => { if (live) setEnabled(r.enabled); }).catch(() => {}); return () => { live = false; }; }, [session.accessToken]);
   useEffect(() => () => { if (photo) URL.revokeObjectURL(photo); }, [photo]);
   async function load() {
     const [d, e] = await Promise.all([api<Tablet[]>('/devices'), api<TabletEvent[]>(`/events?from=${from}&to=${to}${employee ? '&employeeId=' + encodeURIComponent(employee) : ''}`)]);
