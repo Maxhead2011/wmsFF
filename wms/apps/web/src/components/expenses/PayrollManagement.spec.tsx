@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PayrollManagement, payrollCargoText, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary, payrollDate, payrollSortRows, payrollCurrentRates, attendancePhotoStatus, payrollFilterEmployees, payrollOperationTariff, payrollLocalTime, payrollEditedTime, payrollInitialConditions } from './PayrollManagement';
+import { PayrollManagement, payrollCargoText, payrollTimeCells, payrollIntervalCells, payrollPaymentSummary, payrollFilterRows, payrollDate, payrollSortRows, payrollCurrentRates, attendancePhotoStatus, payrollFilterEmployees, payrollOperationTariff, payrollLocalTime, payrollEditedTime, payrollInitialConditions } from './PayrollManagement';
 import type { AuthSession } from '../../lib/api';
 // TEST: no new payroll form is visible before the server explicitly enables it.
 describe('payroll feature isolation', () => {
@@ -23,6 +23,8 @@ describe('payroll feature isolation', () => {
     const original = '2026-09-27T19:04:01.302Z';
     expect(payrollLocalTime(original)).toBe('2026-09-27T22:04:01');
     expect(payrollEditedTime(payrollLocalTime(original), original)).toBe(original);
+    // TEST: native datetime-local omits zero seconds even when the original mark has milliseconds.
+    expect(payrollEditedTime('2026-10-06T09:00', '2026-10-06T06:00:00.123Z')).toBe('2026-10-06T06:00:00.123Z');
     expect(new Date(payrollEditedTime('2026-09-28T00:10', original)).toISOString()).toBe('2026-09-27T21:10:00.000Z');
     expect(payrollLocalTime('')).toBe('');
   });
@@ -83,10 +85,31 @@ describe('payroll feature isolation', () => {
       paidKopecks: 5000, reviewKopecks: 2000, payment: 'Перевод', phone: '+7 900 000-00-00', bank: 'Банк' }]);
     expect(payrollPaymentSummary(people, rows, '__all')[1]).toMatchObject({ amountKopecks: 900, payment: 'Наличные', phone: '—', bank: '—' });
   });
-  it('marks missing transfer details explicitly and includes zero total for a selected employee', () => {
-    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'TRANSFER' }], [], 'e')[0])
-      .toMatchObject({ amountKopecks: 0, phone: 'Не указан', bank: 'Не указан' });
-    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'UNSPECIFIED' }], [], '__all')[0]).toMatchObject({ id: 'e', amountKopecks: 0 });
+  it('marks missing transfer details explicitly for an employee with accruals', () => {
+    expect(payrollPaymentSummary([{ id: 'e', name: 'Имя', paymentMethod: 'TRANSFER' }], [{ employeeId: 'e', amountKopecks: 100, status: 'UNPAID' }], 'e')[0])
+      .toMatchObject({ amountKopecks: 100, phone: 'Не указан', bank: 'Не указан' });
+  });
+  // TEST: the weekly payment summary must not list idle, zero-value or paid-only staff under UNPAID.
+  it('omits employees without amounts in the filtered period and payment status', () => {
+    const people = ['working', 'idle', 'zero', 'paid'].map(id => ({ id, name: id, paymentMethod: 'CASH' }));
+    const rows = [{ employeeId: 'working', amountKopecks: 10000, status: 'UNPAID' },
+      { employeeId: 'zero', amountKopecks: 0, status: 'UNPAID' },
+      { employeeId: 'paid', amountKopecks: 5000, status: 'PAID' }];
+    expect(payrollPaymentSummary(people, payrollFilterRows(rows, 'UNPAID'), '__all').map(p => p.id)).toEqual(['working']);
+    expect(payrollPaymentSummary(people, payrollFilterRows(rows, 'PAID'), '__all').map(p => p.id)).toEqual(['paid']);
+    expect(payrollPaymentSummary(people, [], '__all')).toEqual([]);
+    expect(payrollPaymentSummary(people, rows, 'idle')).toEqual([]);
+    expect(payrollPaymentSummary(people, rows, 'zero')).toEqual([]);
+    expect(rows).toHaveLength(3); // Zero entries remain available in the timesheet.
+  });
+  // TEST: group aliases before hiding empty summaries; retain nonzero status balances even if the total nets to zero.
+  it('keeps alias accruals and separate status balances', () => {
+    const people = [{ id: 'root', name: 'Основной', paymentMethod: 'CASH' },
+      { id: 'alias', name: 'Другое имя', paymentMethod: 'CASH', payrollPrimaryId: 'root' }];
+    const rows = [{ employeeId: 'alias', amountKopecks: 10000, status: 'UNPAID' },
+      { employeeId: 'root', amountKopecks: -10000, status: 'PAID' }];
+    expect(payrollPaymentSummary(people, rows, '__all')[0]).toMatchObject({ id: 'root', amountKopecks: 0, unpaidKopecks: 10000, paidKopecks: -10000 });
+    expect(payrollPaymentSummary(people, payrollFilterRows(rows, 'UNPAID'), 'alias')[0]).toMatchObject({ id: 'root', amountKopecks: 10000 });
   });
   // TEST: historical display preserves synthetic clock values; real overnight visits retain dates.
   it('shows imported start/end without guessing the original night shift', () => {
