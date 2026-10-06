@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -19,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextStyle
@@ -99,6 +101,7 @@ fun AttendanceScreen(app: AttendanceApp) {
     }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(20.dp)) {
         Text("LOGOFF · Учёт времени", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text("Версия ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
         Text(device?.let { "${it.warehouseName} · ${it.name}" } ?: "Подключение планшета", style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(12.dp))
         if (message.isNotBlank()) {
@@ -132,11 +135,7 @@ fun AttendanceScreen(app: AttendanceApp) {
         Spacer(Modifier.height(12.dp))
         val employee = employees.find { it.id == selected && it.active && it.warehouseId == d.warehouseId }
         val marking = screen.startsWith("clock") || screen.startsWith("break")
-        if (marking && employee == null) {
-            Text("Сотрудник больше недоступен. Обратитесь к администратору.")
-            TextButton(onClick = { screen = "list"; selected = null }) { Text("Вернуться к списку") }
-        }
-        if (marking && employee != null) {
+        AttendanceTask(marking, employee, onCancel = { screen = "list"; selected = null }, mark = { employee ->
             key(employee.id, screen) {
                 AutomaticPhotoMark(employee, screen == "clockIn", onCancel = { screen = "list" }, label = when(screen) { "breakStart" -> "Обед"; "breakEnd" -> "Вернулся"; "clockIn" -> "Начало смены"; else -> "Окончание смены" }) { photo, time, elapsed, eventId ->
                     withContext(Dispatchers.IO) {
@@ -148,7 +147,7 @@ fun AttendanceScreen(app: AttendanceApp) {
                     screen = "list"; selected = null; query = ""; refresh()
                 }
             }
-        }
+        }, content = {
         if (screen == "handling" && employee != null) {
             HandlingScreen(employee, employees.filter { it.active && it.warehouseId == d.warehouseId }, busy,
                 onCancel = { screen = "list" }) { members, quantity, boxes, bags, rolls, start, type, note, id ->
@@ -190,7 +189,8 @@ fun AttendanceScreen(app: AttendanceApp) {
                             val open = projectedOpen(person, events)
                             val pause = projectedBreak(person, events)
                             Text(pause?.let { "На обеде с ${clockText(it)}" } ?: open?.let { "На смене с ${clockText(it)}" } ?: "Смена не открыта",
-                                color = if (open != null) Color(0xFF21622B) else Color(0xFF374151), fontWeight = FontWeight.Bold)
+                                color = if (pause != null) Color(0xFF8A4B00) else if (open != null) Color(0xFF21622B) else Color(0xFF374151), fontWeight = FontWeight.Bold)
+                            if (pause != null) Text("Время обеда вычитается из оплачиваемого времени", style = MaterialTheme.typography.bodySmall)
                             if (person.id == selected) {
                                 Text("При отметке выполняется фотофиксация. Фото хранится на планшете 35 дней.", style = MaterialTheme.typography.bodySmall)
                                 Button(enabled = !marking, onClick = { screen = if (open == null) "clockIn" else "clockOut" }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)) {
@@ -206,6 +206,21 @@ fun AttendanceScreen(app: AttendanceApp) {
                 }
             }
         }
+        })
+    }
+}
+
+@Composable
+internal fun AttendanceTask(marking: Boolean, employee: Employee?, onCancel: () -> Unit,
+    mark: @Composable (Employee) -> Unit, content: @Composable () -> Unit) {
+    if (marking) {
+        if (employee == null) {
+            Text("Сотрудник больше недоступен. Обратитесь к администратору.")
+            TextButton(onClick = onCancel) { Text("Вернуться к списку") }
+        } else mark(employee)
+    } else {
+        // FIX: photo capture and the employee list are mutually exclusive, including unavailable employees.
+        content()
     }
 }
 
@@ -233,7 +248,7 @@ private fun Registration(busy: Boolean, register: (String, String) -> Unit) {
 }
 
 @Composable
-private fun HandlingScreen(creator: Employee, employees: List<Employee>, busy: Boolean, onCancel: () -> Unit,
+internal fun HandlingScreen(creator: Employee, employees: List<Employee>, busy: Boolean, onCancel: () -> Unit,
     onSave: (List<String>, String, String, String, String, Long, String, String, String) -> Unit) {
     val context = LocalContext.current
     var participants by rememberSaveable { mutableStateOf<List<String>>(listOf(creator.id)) }
@@ -261,10 +276,11 @@ private fun HandlingScreen(creator: Employee, employees: List<Employee>, busy: B
                 }, c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), true).show()
             }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
         }) { Text("Начало (МСК): ${clockText(start)} · изменить") }
-        OutlinedTextField(quantity, { quantity = it.take(10) }, enabled = !busy, label = { Text("Палеты") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(boxes, { boxes = it.take(6) }, enabled = !busy, label = { Text("Короба") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(bags, { bags = it.take(6) }, enabled = !busy, label = { Text("Мешки") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(rolls, { rolls = it.take(6) }, enabled = !busy, label = { Text("Рулоны") }, modifier = Modifier.fillMaxWidth())
+        // FIX: one labelled row per cargo type; decimal pallets and integer units use appropriate keyboards.
+        OutlinedTextField(quantity, { quantity = it.take(10) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), label = { Text("Палеты") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(boxes, { boxes = it.take(6) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), label = { Text("Короба") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(bags, { bags = it.take(6) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), label = { Text("Мешки") }, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(rolls, { rolls = it.take(6) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), label = { Text("Рулоны") }, modifier = Modifier.fillMaxWidth())
         Text("1 палета = 16 коробов = 5 мешков = 30 рулонов. Заполняйте только фактически выполненный объём без повторного учёта.")
         Text("Участники (создатель включён)")
         employees.forEach { employee ->
