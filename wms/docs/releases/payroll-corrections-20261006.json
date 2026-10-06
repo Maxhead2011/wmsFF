@@ -1,0 +1,18 @@
+{
+  "published": true,
+  "at": 1791295132.1321445,
+  "pr": 488,
+  "mergeCommitSha": "d928314245109e26f24d1c6169c35f0b0b3f962f",
+  "apiImage": "sha256:961d496898b8e5fbdf809afdcce4197795f9ed6de0fb6cf7fcbb91ac8d717c05",
+  "webImage": "sha256:3471d224cc152b9ac7bdea36469b2fa607dc56a7f53883136d6bb580ec41e374",
+  "otherContainersUnchanged": true,
+  "apkUnchanged": true,
+  "health": true,
+  "flag": "WMS_PAYROLL_CORRECTIONS_ENABLED=true",
+  "databaseMigration": false,
+  "businessRecordsChangedByRelease": false,
+  "baseline": "baselines/our-wms/2026-10-06-payroll-corrections",
+  "previousApi": "sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf",
+  "previousWeb": "sha256:cab415deba5d10f5c920f86480d85601ec9a7876789da4a7d12e3fe45de14d86",
+  "sourceParityVerified": false
+}

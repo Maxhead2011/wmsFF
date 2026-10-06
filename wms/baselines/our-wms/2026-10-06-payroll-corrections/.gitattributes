@@ -1,0 +1,2 @@
+# Preserve checksum-bearing JSON bytes across Windows checkouts.
+*.json -text

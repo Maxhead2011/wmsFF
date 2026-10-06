@@ -154,3 +154,6 @@ Latest API PR461: baseline2026-10-03-kiz-unfinished-release, physical review of 
 
 
 Latest verified release PR485 / 05.10.2026: LOGOFF APK217 separates whole-box and partial FBO picking. Baseline `wms/baselines/our-wms/2026-10-05-fbo-picking-217`; API/web application/flags/sold unchanged. Android216 base reproducible; 678 tests passed; signature and public SHA verified. API source parity remains false. See current-production.md.
+
+
+Latest verified release PR488 / 06.10.2026: payroll filtered summaries, employee/time/cargo corrections and guarded audit undo. Baseline `wms/baselines/our-wms/2026-10-06-payroll-corrections`. WMS_PAYROLL_CORRECTIONS_ENABLED=true only on our WMS. Five API modules changed, schema/APK/sold unchanged; sourceParityVerified=false. See current-production.md.
