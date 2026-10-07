@@ -1,3 +1,4 @@
+import { pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -200,9 +201,10 @@ export class FbsRepeatAssemblyService {
       return { task, link, candidateSkuIds };
     });
     const skuIds = [...new Set(selected.flatMap(row => row.candidateSkuIds))];
+    const pendingBoxes=await pendingReceiptBoxIds(db,[dto.clientId],warehouseId);
     const [balances, reservations] = await Promise.all([
       db.stockBalance.findMany({ where: { clientId: dto.clientId, warehouseId, skuId: { in: skuIds },
-        status: 'AVAILABLE', quantity: { gt: 0 }, boxId: { not: null },
+        status: 'AVAILABLE', quantity: { gt: 0 }, boxId: { not: null, notIn:pendingBoxes },
         box: { clientId: dto.clientId, warehouseId, status: { notIn: ['deleted', 'archived', 'shipped'] } } },
         include: { box: true }, orderBy: { id: 'asc' } }),
       this.connections.repeatAssemblyStockReservations(dto.clientId, skuIds, db),

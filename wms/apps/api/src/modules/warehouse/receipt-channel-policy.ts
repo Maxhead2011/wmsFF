@@ -7,9 +7,9 @@ export const receiptChannelsEnabled = () => process.env.WMS_RECEIPT_CHANNELS_ENA
 const prefix = (clientId: string) => `receipt.channels.v1:${clientId}:`;
 export const receiptOrderKey = (t: { marketplace?: string; connectionId: string; orderId: string }) => `${t.marketplace || 'WILDBERRIES'}:${t.connectionId}:${t.orderId}`;
 export type ReceiptRule = { id: string; clientId: string; warehouseId: string; sourceDocument: string;
-  fbs: boolean; fbo: boolean; protectedOrders: string[]; changedAt: string; revision: number };
+  fbs: boolean; fbo: boolean; protectedOrders: string[]; changedAt: string; revision: number; stockAvailable?: boolean };
 type Receipt = { id: string; clientId: string; warehouseId: string; sourceDocument: string; date: string;
-  boxes: Array<{ id: string; code: string; status: string }>; received: number; current: boolean; lastActivity: string };
+  boxes: Array<{ id: string; code: string; status: string; receiptDocument?: string }>; received: number; current: boolean; lastActivity: string };
 export const receiptSeries = (code:string,at:Date) => `SERIES:${at.getUTCFullYear()}:${code.replace(/_[0-9]+$/, '')}`;
 const idFor = (client: string, warehouse: string, document: string) => createHash('sha256').update(JSON.stringify([client,warehouse,document])).digest('hex').slice(0,32);
 
@@ -35,7 +35,7 @@ export async function receiptDocuments(db: Db, clientId: string, warehouseId: st
     const series=assignments.get(box.id)?.series||receiptSeries(box.code,evidence.at);
     const id=idFor(clientId,warehouseId,series);
     const group=groups.get(id)||{id,clientId,warehouseId,sourceDocument:series,date:evidence.at.toISOString(),boxes:[],received:0,current:false,lastActivity:evidence.at.toISOString()};
-    group.boxes.push(box);if(evidence.at.toISOString()>group.lastActivity)group.lastActivity=evidence.at.toISOString();
+    group.boxes.push({...box,receiptDocument:evidence.document});if(evidence.at.toISOString()>group.lastActivity)group.lastActivity=evidence.at.toISOString();
     group.current ||= evidence.at>=new Date(Date.now()-86400000);
     if(evidence.at.toISOString()<group.date)group.date=evidence.at.toISOString();groups.set(id,group);}
   for(const m of movements){if(!m.boxId)continue;const document=m.sourceDocument||`BOX:${m.boxId}`;
@@ -61,11 +61,15 @@ export async function receiptRules(db: Db, clientId: string, warehouseId?: strin
   }
   const assignments=await receiptAssignments(db,clientId,warehouseId);
   for(const [box,assignment] of assignments){result.delete(box);const rule=policies.find(p=>p.sourceDocument===assignment.series&&p.warehouseId===assignment.warehouseId);if(rule)result.set(box,rule);}
+  // FIX: approval is independent of channel permissions and cannot be bypassed by protected orders.
+  for(const entry of await receiptApprovalEntries(db,clientId,warehouseId))if(!entry.approval.available){
+    for(const box of entry.doc.boxes){const saved=result.get(box.id);result.set(box.id,{id:entry.doc.id,clientId,warehouseId:entry.doc.warehouseId,sourceDocument:entry.doc.sourceDocument,fbs:true,fbo:true,protectedOrders:[],changedAt:'',revision:0,...saved,stockAvailable:false});}
+  }
   return result;
 }
 
 export function receiptAllows(rule: ReceiptRule | undefined, channel:'fbs'|'fbo', task?: {marketplace?:string;connectionId:string;orderId:string}) {
-  return !rule || rule[channel] || (channel==='fbs'&&!!task&&rule.protectedOrders.includes(receiptOrderKey(task)));
+  return rule?.stockAvailable!==false && (!rule || rule[channel] || (channel==='fbs'&&!!task&&rule.protectedOrders.includes(receiptOrderKey(task))));
 }
 export async function receiptBlockedBoxes(db: Db, clientId: string, channel:'fbs'|'fbo', taskId?: string, identity?:{marketplace?:string;connectionId:string;orderId:string}) {
   if(!receiptChannelsEnabled())return [] as string[];
@@ -76,7 +80,7 @@ export async function receiptBlockedBoxes(db: Db, clientId: string, channel:'fbs
 // reserve the ordinary stock which is still allowed for new FBS orders.
 export async function receiptPublicationPolicy(db:Db,clientId:string,warehouseId?:string|null,override?:Map<string,ReceiptRule>){
   const rules=override||await receiptRules(db,clientId,warehouseId);
-  const blocked=[...rules].filter(([,r])=>!r.fbs).map(([id])=>id);
+  const blocked=[...rules].filter(([,r])=>!r.fbs||r.stockAvailable===false).map(([id])=>id);
   const credit=new Map<string,number>();if(!blocked.length)return {blocked,credit};
   const requests=await db.clientRequest.findMany({where:{clientId,...(warehouseId?{warehouseId}:{}),status:{notIn:['DONE','CANCELLED','REJECTED']}},select:{id:true}});
   const tasks=await db.fbsTsdAssembly.findMany({where:{clientId,marketplace:'WILDBERRIES',requestId:{in:requests.map(r=>r.id)},status:{in:['WAITING_STOCK','RESERVED','IN_PROGRESS','RESCAN_REQUIRED']},
@@ -96,6 +100,7 @@ export async function receiptPublicationPolicy(db:Db,clientId:string,warehouseId
 export async function assertReceiptFbsBox(db: Db, task: {id?:string;clientId:string;boxId?:string|null;marketplace?:string;connectionId:string;orderId:string}, boxId=task.boxId) {
   if(!receiptChannelsEnabled()||!boxId)return;
   const rule=(await receiptRules(db,task.clientId)).get(boxId);
+  if(rule?.stockAvailable===false)throw new ConflictException('Приёмка на согласовании. Сначала подтвердите доступ в остатках.');
   if(!receiptAllows(rule,'fbs',task))throw new ConflictException('Приёмка предназначена только для ФБО. Этот новый заказ ФБС нельзя отобрать из её коробов.');
 }
 
@@ -201,6 +206,7 @@ export async function assignReceiptBox(db:Db,clientId:string,warehouseId:string,
 export async function assertReceiptTransfer(db:Db,clientId:string,from:string,to:string){
   if(!receiptChannelsEnabled())return;
   const rules=await receiptRules(db,clientId),a=rules.get(from),b=rules.get(to);
+  if(a?.stockAvailable===false||b?.stockAvailable===false)throw new ConflictException('Приёмка на согласовании. Перенос товара возможен после подтверждения доступа в остатках.');
   if((a?.fbs??true)!==(b?.fbs??true)||(a?.fbo??true)!==(b?.fbo??true)||JSON.stringify(a?.protectedOrders||[])!==JSON.stringify(b?.protectedOrders||[]))
     throw new ConflictException('У коробов разные направления приёмки ФБС/ФБО. Сначала отнесите короб назначения к той же приёмке.');
 }
@@ -225,4 +231,69 @@ export async function receiptBlockedByTasks(db:Db,clientId:string,ids:string[]){
 export async function receiptStockSyncEvent(db:Db,clientId:string){
   if(!receiptChannelsEnabled()||process.env.WMS_WB_URGENT_STOCK_SYNC!=='true')return;
   await db.$executeRaw`INSERT INTO "WbStockSyncEvent" ("clientId","skuIds","allSkus") VALUES (${clientId},ARRAY[]::text[],true)`;
+}
+
+// FIX: opt-in approval filters availability, never physical balances or storage billing.
+export const receiptApprovalEnabled=()=>process.env.WMS_RECEIPT_APPROVAL_ENABLED==='true';
+export const receiptApprovalScopeKey=(clientId:string,warehouseId:string)=>`receipt.approval.scope.v1:${clientId}:${warehouseId}`;
+export const receiptApprovalKey=(clientId:string,warehouseId:string,id:string)=>`receipt.approval.v1:${clientId}:${warehouseId}:${id}`;
+type ApprovalScope={clientId:string;warehouseId:string;grandfatheredReceiptIds:string[];revision?:number};
+type Approval={available:boolean;revision:number;changedAt?:string;changedByName?:string;changedByUserId?:string};
+export function receiptApprovalState(id:string,scope:Pick<ApprovalScope,'grandfatheredReceiptIds'>|null,saved:Approval|null):Approval {
+  return saved??{available:!scope||scope.grandfatheredReceiptIds.includes(id),revision:0};
+}
+export async function receiptApprovalEntries(db:Db,clientId:string,warehouseId?:string|null,documents?:Receipt[]){
+  if(!receiptApprovalEnabled())return [] as Array<{doc:Receipt;approval:Approval}>;
+  const scopes=await db.systemSetting.findMany({where:{key:{startsWith:`receipt.approval.scope.v1:${clientId}:`}},select:{key:true,value:true}});
+  const selected=scopes.filter(s=>{const v=s.value as unknown as ApprovalScope;return v.clientId===clientId&&(!warehouseId||v.warehouseId===warehouseId);});
+  if(!selected.length)return [];
+  // A save takes the exclusive lock and bumps the scope revision. Picks retain this shared lock until commit.
+  await db.$queryRaw(Prisma.sql`SELECT key FROM "SystemSetting" WHERE key IN (${Prisma.join(selected.map(s=>s.key))}) ORDER BY key FOR SHARE`);
+  const out:Array<{doc:Receipt;approval:Approval}>=[];
+  for(const s of selected){const scope=s.value as unknown as ApprovalScope;
+    const docs=documents?.filter(d=>d.warehouseId===scope.warehouseId)??await receiptDocuments(db,clientId,scope.warehouseId);
+    const saved=await db.systemSetting.findMany({where:{key:{startsWith:`receipt.approval.v1:${clientId}:${scope.warehouseId}:`}},select:{key:true,value:true}});
+    const byKey=new Map(saved.map(row=>[row.key,row.value as unknown as Approval]));
+    for(const doc of docs)out.push({doc,approval:receiptApprovalState(doc.id,scope,byKey.get(receiptApprovalKey(clientId,scope.warehouseId,doc.id))??null)});
+  }return out;
+}
+export async function pendingReceiptBoxIds(db:Db,clientIds:string[],warehouseId?:string|null){
+  if(!receiptApprovalEnabled())return [] as string[];
+  const ids:string[]=[];for(const clientId of [...new Set(clientIds)])for(const row of await receiptApprovalEntries(db,clientId,warehouseId))if(!row.approval.available)ids.push(...row.doc.boxes.map(b=>b.id));
+  return [...new Set(ids)];
+}
+export async function assertReceiptStockAvailable(db:Db,clientId:string,boxIds:string[],warehouseId?:string|null){
+  if(!boxIds.length||!receiptApprovalEnabled())return;
+  const pending=new Set(await pendingReceiptBoxIds(db,[clientId],warehouseId));
+  if(boxIds.some(id=>pending.has(id)))throw new ConflictException('Приёмка на согласовании. Товар недоступен для отбора до подтверждения клиента.');
+}
+export async function changeReceiptApproval(db:Db,input:{clientId:string;warehouseId:string;id:string;available:boolean;revision:number},user:{id:string;name:string;roleCodes:string[]},save:boolean){
+  if(!receiptApprovalEnabled())throw new NotFoundException('Согласование приёмок не включено.');
+  if(typeof input.available!=='boolean'||!Number.isSafeInteger(input.revision)||input.revision<0)throw new BadRequestException('Укажите доступность и версию приёмки.');
+  const admin=user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r));
+  if(!admin&&!input.available)throw new ForbiddenException('Отключать доступ в остатках может только администратор.');
+  const scopeKey=receiptApprovalScopeKey(input.clientId,input.warehouseId);
+  if(save)await db.$queryRaw`SELECT key FROM "SystemSetting" WHERE key=${scopeKey} FOR UPDATE`;
+  const scope=await db.systemSetting.findUnique({where:{key:scopeKey}});if(!scope)throw new NotFoundException('Согласование не включено для этого клиента и филиала.');
+  const entry=(await receiptApprovalEntries(db,input.clientId,input.warehouseId)).find(e=>e.doc.id===input.id);
+  if(!entry)throw new NotFoundException('Приёмка не найдена в выбранном филиале.');
+  if(entry.approval.revision!==input.revision)throw new ConflictException('Приёмка уже изменена. Обновите список.');
+  if(!input.available){const boxes=entry.doc.boxes.map(b=>b.id),open={status:{notIn:['DONE','CANCELLED','REJECTED'] as any}};
+    const [selections,tasks,units]=await Promise.all([
+      db.clientRequestBoxSelection.findMany({where:{boxId:{in:boxes},requestItem:{request:open}},select:{requestItem:{select:{requestId:true}}}}),
+      db.fbsTsdAssembly.findMany({where:{clientId:input.clientId,status:{in:['RESERVED','IN_PROGRESS','RESCAN_REQUIRED','RETURN_REQUIRED','COMPLETED']},OR:[{boxId:{in:boxes}},{reservedBoxId:{in:boxes}}]},select:{requestId:true}}),
+      db.fboAssemblyUnit.findMany({where:{sourceBoxId:{in:boxes},state:{not:'RETURNED'},assembly:{request:open}},select:{requestId:true}}),
+    ]);
+    const ids=[...new Set([...selections.map(s=>s.requestItem.requestId),...tasks.map(t=>t.requestId),...units.map(u=>u.requestId)])];
+    const requests=await db.clientRequest.findMany({where:{id:{in:ids},...open},select:{number:true}});
+    if(requests.length)throw new ConflictException(`Товар занят заявками: ${requests.map(r=>'№'+r.number).join(', ')}. Сначала освободите резерв.`);
+    if(tasks.some(t=>t.requestId.startsWith('AUTO:')))throw new ConflictException('Товар зарезервирован заказами ФБС. Сначала освободите резерв.');
+  }
+  const next:Approval={available:input.available,revision:input.revision+1,changedAt:new Date().toISOString(),changedByName:user.name,changedByUserId:user.id};
+  if(save){const key=receiptApprovalKey(input.clientId,input.warehouseId,input.id);
+    await db.systemSetting.upsert({where:{key},create:{key,value:next as unknown as Prisma.InputJsonValue,updatedByUserId:user.id},update:{value:next as unknown as Prisma.InputJsonValue,updatedByUserId:user.id}});
+    await db.systemSetting.update({where:{key:scopeKey},data:{value:{...(scope.value as any),revision:Number((scope.value as any).revision||0)+1},updatedByUserId:user.id}});
+    await db.auditLog.create({data:{userId:user.id,action:'RECEIPT_STOCK_ACCESS_CHANGED',entity:'Receipt',entityId:input.id,payload:{clientId:input.clientId,warehouseId:input.warehouseId,sourceDocument:entry.doc.sourceDocument,previous:entry.approval as unknown as Prisma.InputJsonValue,next:next as unknown as Prisma.InputJsonValue}}});
+    await receiptStockSyncEvent(db,input.clientId);
+  }return {approval:next,sourceDocument:entry.doc.sourceDocument};
 }

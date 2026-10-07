@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientStockBalanceMode, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -175,10 +176,13 @@ export class StockBalancesService {
           ],
         }
       : undefined;
+    // FIX: visibility uses approval only; storage billing still reads physical balances directly.
+    const pendingBoxes = await pendingReceiptBoxIds(this.prisma, clients.map(c=>c.id), scopedWarehouseId);
     const where: Prisma.StockBalanceWhereInput = {
       AND: [
         { clientId: clientFilter },
         stockModeFilter,
+        ...(pendingBoxes.length ? [{ OR: [{ boxId: null }, { boxId: { notIn: pendingBoxes } }] }] : []),
         ...(warehouseFilter ? [warehouseFilter] : []),
       ],
       skuId: filter.skuId,

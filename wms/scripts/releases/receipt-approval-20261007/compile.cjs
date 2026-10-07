@@ -1,0 +1,5 @@
+const fs=require('fs'),cp=require('child_process'),path=require('path');
+const repo=path.resolve(__dirname,'../service-menu-tiles'),ts=require(repo+'/wms/node_modules/typescript');
+const modules=cp.execFileSync('git',['diff','--name-only'],{cwd:repo,encoding:'utf8'}).trim().split('\n').filter(n=>n.startsWith('wms/apps/api/src/')).map(n=>n.replace('wms/apps/api/src/','').replace(/\.ts$/,''));
+for(const m of modules)for(const label of ['old','new']){const source=label==='old'?cp.execFileSync('git',['show','47c9aba2:wms/apps/api/src/'+m+'.ts'],{cwd:repo,encoding:'utf8'}):fs.readFileSync(repo+'/wms/apps/api/src/'+m+'.ts','utf8');const p=__dirname+'/compiled-'+label+'/'+m+'.js';fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true}}).outputText);}
+fs.writeFileSync(__dirname+'/api-changes.json',JSON.stringify(modules.map(m=>m+'.js')));
