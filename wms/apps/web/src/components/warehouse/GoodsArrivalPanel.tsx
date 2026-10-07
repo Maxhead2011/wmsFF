@@ -15,6 +15,8 @@ import {
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
 export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
+  // FIX: clients can inspect arrivals but cannot post stock or billing operations.
+  const readOnly = session.user.roleCodes.includes('CLIENT');
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [arrivalDate, setArrivalDate] = useState(today());
@@ -58,6 +60,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (readOnly) return;
     setMessage('');
     try {
       await createGoodsArrival(session.accessToken, {
@@ -78,6 +81,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
   }
 
   async function bill() {
+    if (readOnly) return;
     setMessage('');
     try {
       const invoice = await billGoodsArrivals(session.accessToken, { clientId, periodFrom, periodTo });
@@ -89,6 +93,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
   }
 
   async function remove(id: string) {
+    if (readOnly) return;
     setMessage('');
     try {
       await deleteGoodsArrival(session.accessToken, id);
@@ -104,11 +109,11 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
     <div className="goods-arrivals">
       <form className="goods-arrivals__form" onSubmit={submit}>
         <label><span>Клиент</span><select value={clientId} onChange={(event) => setClientId(event.target.value)} required><option value="">Выберите клиента</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
-        <label><span>Дата прихода</span><input type="date" value={arrivalDate} onChange={(event) => setArrivalDate(event.target.value)} required /></label>
+        {!readOnly && <><label><span>Дата прихода</span><input type="date" value={arrivalDate} onChange={(event) => setArrivalDate(event.target.value)} required /></label>
         <label><span>Мешки</span><input type="number" min="0" value={bagCount} onChange={(event) => setBagCount(event.target.value)} /></label>
         <label><span>Короба</span><input type="number" min="0" value={boxCount} onChange={(event) => setBoxCount(event.target.value)} /></label>
         <label className="goods-arrivals__comment"><span>Комментарий</span><input value={comment} onChange={(event) => setComment(event.target.value)} /></label>
-        <button className="primary-button" type="submit" disabled={!clientId}><FilePlus2 size={16} /><span>Записать приход</span></button>
+        <button className="primary-button" type="submit" disabled={!clientId}><FilePlus2 size={16} /><span>Записать приход</span></button></>}
       </form>
 
       <div className="goods-arrivals__billing">
@@ -116,9 +121,9 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
         <label><span>Период по</span><input type="date" value={periodTo} onChange={(event) => setPeriodTo(event.target.value)} /></label>
         <div><span>За период</span><strong>{totals.bags} мешков · {totals.boxes} коробов</strong></div>
         <div><span>Ориентировочно</span><strong>{money(estimate?.estimatedRub ?? 0)} ₽</strong></div>
-        <button className="primary-button" type="button" onClick={() => void bill()} disabled={!clientId || rows.every((row) => Boolean(row.billingInvoiceId))}>
+        {!readOnly && <button className="primary-button" type="button" onClick={() => void bill()} disabled={!clientId || rows.every((row) => Boolean(row.billingInvoiceId))}>
           <ReceiptText size={16} /><span>Сформировать счет ППР</span>
-        </button>
+        </button>}
         <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}><RefreshCw size={16} /><span>Обновить</span></button>
       </div>
       {message ? <p className={message.includes('создан') || message.includes('записан') ? 'form-success' : 'form-error'}>{message}</p> : null}
@@ -126,7 +131,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
         <table className="warehouse-drafts__table">
           <thead><tr><th>Дата</th><th>Клиент</th><th>Мешки</th><th>Короба</th><th>Комментарий</th><th>Счет</th><th /></tr></thead>
           <tbody>
-            {rows.map((row) => <tr key={row.id}><td>{date(row.arrivalDate)}</td><td>{clients.find((client) => client.id === row.clientId)?.name ?? '-'}</td><td>{row.bagCount}</td><td>{row.boxCount}</td><td>{row.comment || '-'}</td><td>{row.billingInvoiceId ? 'Включен' : 'Не выставлен'}</td><td>{!row.billingInvoiceId ? <button className="icon-button danger-icon" type="button" onClick={() => void remove(row.id)} title="Удалить"><Trash2 size={15} /></button> : null}</td></tr>)}
+            {rows.map((row) => <tr key={row.id}><td>{date(row.arrivalDate)}</td><td>{clients.find((client) => client.id === row.clientId)?.name ?? '-'}</td><td>{row.bagCount}</td><td>{row.boxCount}</td><td>{row.comment || '-'}</td><td>{row.billingInvoiceId ? 'Включен' : 'Не выставлен'}</td><td>{!readOnly && !row.billingInvoiceId ? <button className="icon-button danger-icon" type="button" onClick={() => void remove(row.id)} title="Удалить"><Trash2 size={15} /></button> : null}</td></tr>)}
             {!rows.length ? <tr><td colSpan={7}>За выбранный период приходов нет.</td></tr> : null}
           </tbody>
         </table>

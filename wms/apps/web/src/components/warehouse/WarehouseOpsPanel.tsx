@@ -32,15 +32,18 @@ type WarehouseTopic =
   | 'drafts';
 
 export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelProps) {
-  const [activeTopic, setActiveTopic] = useState<WarehouseTopic | null>(null);
+  const [selectedTopic, setActiveTopic] = useState<WarehouseTopic | null>(null);
 
-  if (!canUse(session.user, 'stock:write')) {
+  // FIX: expose only four client topics; never expose warehouse mutation panels.
+  const clientView = import.meta.env.VITE_CLIENT_WAREHOUSE_ENABLED === 'true' && session.user.roleCodes.includes('CLIENT');
+  const activeTopic = clientView && selectedTopic && !['online-receipts','arrivals','receipt-batches','shipment-history'].includes(selectedTopic) ? null : selectedTopic;
+  if (!(clientView && canUse(session.user, 'stock:read')) && !canUse(session.user, 'stock:write')) {
     return null;
   }
 
   return (
     <div className="warehouse-workspace" aria-label="Склад и операции">
-      {!activeTopic ? <WarehouseTopicPicker onOpen={setActiveTopic} /> : null}
+      {!activeTopic ? <WarehouseTopicPicker onOpen={setActiveTopic} clientView={clientView} /> : null}
 
       {activeTopic ? (
         <button className="warehouse-topic-back" type="button" onClick={() => setActiveTopic(null)}>
@@ -60,7 +63,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
           <PackageCheck size={20} aria-hidden="true" />
         </div>
 
-        <OnlineReceiptPanel session={session} />
+        <OnlineReceiptPanel session={session} readOnly={clientView} />
       </section> : null}
 
       {activeTopic === 'arrivals' ? <section className="warehouse-panel warehouse-panel--arrivals" aria-label="Приход товара">
@@ -143,7 +146,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
   );
 }
 
-function WarehouseTopicPicker({ onOpen }: { onOpen: (topic: WarehouseTopic) => void }) {
+function WarehouseTopicPicker({ onOpen, clientView = false }: { onOpen: (topic: WarehouseTopic) => void; clientView?: boolean }) {
   const topics: Array<{ id: WarehouseTopic; eyebrow: string; title: string; description: string; icon: ReactNode }> = [
     { id: 'statistics', eyebrow: 'Сроки обработки', title: 'Статистика', description: 'От заказа до передачи в доставку WB/Ozon, по клиентам, филиалам и складам.', icon: <BarChart3 size={23} /> },
     { id: 'online-receipts', eyebrow: 'ТСД и приемка', title: 'Онлайн-приёмка', description: 'Проверяйте приёмку, которую ведут сотрудники на ТСД.', icon: <PackageCheck size={23} /> },
@@ -163,10 +166,10 @@ function WarehouseTopicPicker({ onOpen }: { onOpen: (topic: WarehouseTopic) => v
         <span>Операции открываются отдельно — список не мешает работе.</span>
       </div>
       <div className="warehouse-topic-grid">
-        {(ourWaveOverviewEnabled(window.location.hostname) ? [{ id: 'waves' as const, eyebrow: 'Планирование сборки', title: 'Волны сборки', description: 'Заявки FBS и существующие волны. Пока только просмотр.', icon: <PackageSearch size={23} /> }, ...topics] : topics).map((topic) => (
+        {(ourWaveOverviewEnabled(window.location.hostname) ? [{ id: 'waves' as const, eyebrow: 'Планирование сборки', title: 'Волны сборки', description: 'Заявки FBS и существующие волны. Пока только просмотр.', icon: <PackageSearch size={23} /> }, ...topics] : topics).filter(topic => !clientView || ['online-receipts','arrivals','receipt-batches','shipment-history'].includes(topic.id)).map((topic) => (
           <button className={`warehouse-topic-tile warehouse-topic-tile--${topic.id}`} key={topic.id} type="button" onClick={() => onOpen(topic.id)}>
             <span className="warehouse-topic-tile__icon">{topic.icon}</span>
-            <span className="warehouse-topic-tile__content"><small>{topic.eyebrow}</small><strong>{topic.title}</strong><span>{topic.description}</span></span>
+            <span className="warehouse-topic-tile__content"><small>{topic.eyebrow}</small><strong>{topic.title}</strong><span>{clientView && topic.id === 'arrivals' ? 'Просматривайте зарегистрированные поступления товара.' : topic.description}</span></span>
             <ChevronRight size={22} aria-hidden="true" />
           </button>
         ))}
