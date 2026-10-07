@@ -1,3 +1,15 @@
+# Опубликовано PR496 / 07.10.2026 — клиентский раздел «Склад»
+
+[Описание и проверки](client-warehouse-menu.md). Клиент видит онлайн-приёмку,
+приход товара, приёмки и отгруженные КИЗ. Только собственные данные;
+служебные операции недоступны. Подтверждение сверки PR494 сохранено.
+
+API `sha256:54e63ae72a0b6c9e8938e7b812a9735f23e093cc30f7a7dfb03d820db2bebb47`, web `sha256:ff58a71b2ebea3f394ba804886652c212a1b277251a855fc6ad9ede4e4b1d39c`.
+Baseline `2026-10-07-client-warehouse`, sourceParityVerified=false.
+WMS_CLIENT_WAREHOUSE_ENABLED=true; остальные флаги/APK218/sold WMS не изменены.
+API3120/web394/runtime2, TypeScript, browser и PostgreSQL READ ONLY прошли.
+Проверены health и runtime-хеши; бизнес-данные не менялись.
+
 # Опубликовано PR494 / 07.10.2026 — согласование приёмок
 
 [Описание и проверки](receipt-stock-approval.md). Клиент подтверждает собственную

@@ -1,0 +1,25 @@
+{
+  "published": true,
+  "at": 1791391100.9361506,
+  "pr": 496,
+  "mergeCommitSha": "51d050a7305652e03c8b8c54b0d5b5e92761a047",
+  "apiImage": "sha256:54e63ae72a0b6c9e8938e7b812a9735f23e093cc30f7a7dfb03d820db2bebb47",
+  "webImage": "sha256:ff58a71b2ebea3f394ba804886652c212a1b277251a855fc6ad9ede4e4b1d39c",
+  "apk": {
+    "versionCode": 218,
+    "versionName": "0.1.218-fbo-await-placement",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-await-placement-218.apk",
+    "sha256": "cb4356edde1ad120a5eceaa68f7651f05dd01427a63d312a9f2f59be1d47b58a",
+    "size": 5386647,
+    "releasedAt": "2026-10-07T13:50:34.241095+00:00",
+    "releaseNotes": "ФБО: принятое поступление без палет-сорта показано как ожидание размещения. После размещения обновите маршрут. Установите поверх приложения."
+  },
+  "otherContainersUnchanged": true,
+  "previousFlagsUnchanged": true,
+  "clientWarehouseEnabled": true,
+  "health": true,
+  "databaseMigration": false,
+  "businessRecordsChangedByRelease": false,
+  "scopeInitialized": false,
+  "sourceParityVerified": false
+}

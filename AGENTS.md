@@ -163,3 +163,6 @@ Latest verified PR492: baseline 2026-10-07-cabinet-fbo, sourceParityVerified=fal
 
 
 Latest verified PR494: baseline 2026-10-07-receipt-approval, sourceParityVerified=false. Client receipt approval enabled only for Lukin / FF Moscow. Existing 29 receipts grandfathered; storage physical quantities unchanged. APK218/sold unchanged. See current-production.md.
+
+
+Latest verified PR496: baseline 2026-10-07-client-warehouse, sourceParityVerified=false. Client warehouse menu has four scoped read-only sections; PR494 approval retained. WMS_CLIENT_WAREHOUSE_ENABLED=true only on our WMS. APK218/sold unchanged. See current-production.md.
