@@ -11,6 +11,8 @@ import {
 import { useRememberedClientId } from '../../lib/rememberedClient';
 
 export function ShipmentHistoryPanel({ session }: { session: AuthSession }) {
+  // FIX: clients read saved shipment history without triggering warehouse writes.
+  const readOnly = session.user.roleCodes.includes('CLIENT');
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [periodFrom, setPeriodFrom] = useState(dateInput(daysAgo(90)));
@@ -54,6 +56,7 @@ export function ShipmentHistoryPanel({ session }: { session: AuthSession }) {
   }
 
   async function sync() {
+    if (readOnly) return;
     setBusy(true);
     setMessage('');
     try {
@@ -103,10 +106,10 @@ export function ShipmentHistoryPanel({ session }: { session: AuthSession }) {
         <button className="secondary-button" type="button" onClick={() => void load()} disabled={busy}>
           Показать
         </button>
-        <button className="primary-button" type="button" onClick={() => void sync()} disabled={busy}>
+        {!readOnly && <button className="primary-button" type="button" onClick={() => void sync()} disabled={busy}>
           <RefreshCw size={16} aria-hidden="true" />
           {busy ? 'Обновляю…' : 'Обновить историю'}
-        </button>
+        </button>}
       </div>
 
       {message ? <p className="warehouse-inline">{message}</p> : null}

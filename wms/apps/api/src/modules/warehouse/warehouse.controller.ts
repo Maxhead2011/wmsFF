@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { ForbiddenException, Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -80,6 +80,7 @@ export class WarehouseController {
   }
 
   @Get('shipment-history')
+  @RequirePermissions() // FIX: narrowly scoped client reading is checked below; mutation routes keep their permissions.
   shipmentHistoryList(
     @CurrentUser() user: AuthUser,
     @Query('clientId') clientId?: string,
@@ -87,6 +88,8 @@ export class WarehouseController {
     @Query('periodTo') periodTo?: string,
     @Query('search') search?: string,
   ) {
+    const allowed = user.permissionCodes.some(p => p === 'system:admin' || p === 'warehouse:read') || (process.env.WMS_CLIENT_WAREHOUSE_ENABLED === 'true' && user.roleCodes.includes('CLIENT') && user.permissionCodes.includes('stock:read'));
+    if (!allowed) throw new ForbiddenException('Нет доступа к истории отгрузок.');
     return this.shipmentHistory.list({ clientId, periodFrom, periodTo, search }, user);
   }
 

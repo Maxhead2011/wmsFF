@@ -513,6 +513,9 @@ export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
     return false;
   }
 
+  // FIX: client warehouse is read-only and opt-in on our installation.
+  if (item.id === 'warehouse' && isClientOnlyUser(user) && import.meta.env.VITE_CLIENT_WAREHOUSE_ENABLED === 'true') return user.permissionCodes.includes('stock:read');
+
   if (isClientOnlyUser(user) && item.audience === 'internal') {
     return false;
   }
