@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { buildSettlements, record, type SettlementWork } from './billing-settlements.policy';
+import { invoiceCorrections } from './billing-correction-balance';
 
 export function settlementDates(from: string, to: string) {
   const parse = (s: string, end = false) => {
@@ -21,7 +22,7 @@ export function settlementDates(from: string, to: string) {
 @Injectable()
 export class BillingSettlementsService {
   constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService) {}
-  async list(dto: { periodFrom: string; periodTo: string; clientId?: string }, user: AuthUser) {
+  async list(dto: { periodFrom: string; periodTo: string; clientId?: string }, user: AuthUser, transaction?: Prisma.TransactionClient) {
     if (process.env.WMS_BILLING_SETTLEMENTS_ENABLED !== 'true') return { enabled: false as const };
     if (!user.permissionCodes.some(p => p === 'billing:read' || p === 'system:admin')) throw new ForbiddenException('Нет доступа к биллингу.');
     const warehouseId = user.activeWarehouseId;
@@ -32,16 +33,15 @@ export class BillingSettlementsService {
     // FIX: coverage reads historical charges; production already exceeds 20,000.
     const take = 20001, limit = 20000, chargeLimit = 100000;
     const clientFilter = { id: clientId, isDemo: user.isDemo === true };
-    return this.prisma.$transaction(async tx => {
-      // Enforce read-only at PostgreSQL level as well as in the application.
-      await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+    // FIX: close reuses the same scoped projection inside its financial transaction.
+    const load = async (tx: Prisma.TransactionClient) => {
       const clients = await tx.client.findMany({ where: clientFilter, select: { id: true, code: true, name: true }, take });
       const warehouse = await tx.warehouse.findUnique({ where: { id: warehouseId }, select: { name: true } });
       if (!warehouse) throw new BadRequestException('Выбранный филиал не найден.');
       const ids = clients.map(c => c.id);
-      const [charges, invoices, advances, shipments, current, history] = await Promise.all([
-        // Coverage includes historical/other-branch charges; projection never exposes those branch amounts.
-        tx.billingCharge.findMany({ where: { clientId: { in: ids }, status: { not: 'CANCELLED' } }, take: chargeLimit + 1, orderBy: { id: 'asc' },
+      const [charges, invoices, advances, shipments, current, history, coverageCharges] = await Promise.all([
+        // FIX: only period charges need financial/request/invoice relations; historical coverage is loaded separately below.
+        tx.billingCharge.findMany({ where: { clientId: { in: ids }, status: { not: 'CANCELLED' }, serviceDate: { gte: from, lte: to } }, take: chargeLimit + 1, orderBy: { id: 'asc' },
           select: { id: true, clientId: true, client: { select: { id: true, code: true, name: true } }, requestId: true,
             request: { select: { id: true, number: true, warehouseId: true } }, status: true, description: true,
             quantity: true, unitPriceRub: true, totalRub: true, serviceDate: true, metadata: true,
@@ -64,8 +64,13 @@ export class BillingSettlementsService {
             itemCount: true, completedAt: true }, take }),
         tx.fbsAssemblyAttemptHistory.findMany({ where: { clientId: { in: ids }, completedAt: { gte: from, lte: to } },
           select: { id: true, clientId: true, requestId: true, orderId: true, completedAt: true, taskSnapshot: true }, take }),
+        // FIX: retain historical and cross-branch coverage, without loading historical financial relations.
+        tx.billingCharge.findMany({ where: { clientId: { in: ids }, status: { not: 'CANCELLED' },
+          OR: [{ metadata: { path: ['kind'], equals: 'FBS' } }, { service: { code: 'FBS_PROCESSING' } }] },
+          select: { id: true, clientId: true, status: true, metadata: true, service: { select: { code: true } } },
+          take: chargeLimit + 1, orderBy: { id: 'asc' } }),
       ]);
-      if (charges.length > chargeLimit || [clients, invoices, advances, shipments, current, history].some(a => a.length > limit))
+      if (charges.length > chargeLimit || coverageCharges.length > chargeLimit || [clients, invoices, advances, shipments, current, history].some(a => a.length > limit))
         throw new BadRequestException('Объём превышает лимит расчёта. Выберите одного клиента или меньший период; неполные суммы не показываются.');
       const work: SettlementWork[] = current.filter(w => w.completedAt).map(w => ({ ...w, completedAt: w.completedAt! }));
       for (const fact of shipments) {
@@ -87,7 +92,13 @@ export class BillingSettlementsService {
       const requests = await tx.clientRequest.findMany({ where: { id: { in: requestIds }, clientId: { in: ids }, warehouseId },
         select: { id: true, number: true, warehouseId: true } });
       return buildSettlements({ warehouseId, warehouseName: warehouse.name, from, to,
-        now: new Date(), clients, charges, invoices, advances, work, requests });
+        now: new Date(), clients, charges, coverageCharges, invoices, advances, work, requests,
+        corrections: await invoiceCorrections(tx, invoices.map(i => i.id)) });
+    };
+    if (transaction) return load(transaction);
+    return this.prisma.$transaction(async tx => {
+      await tx.$executeRaw`SET TRANSACTION READ ONLY`;
+      return load(tx);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
   }
 }

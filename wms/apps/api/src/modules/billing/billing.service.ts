@@ -42,6 +42,7 @@ import { UpdateInvoicePaymentAccountDto } from './dto/update-invoice-payment-acc
 import { UpsertClientBillingServiceDto } from './dto/upsert-client-billing-service.dto';
 import { classifyBillingRegistryInvoice, parseBillingPeriod, type PeriodCharge, type PeriodInvoice, type BillingServiceCategory } from './billing-period-policy';
 import { afterBillingCommit, runBillingMutation, withBillingDb } from './billing-mutation';
+import { correctedInvoiceBalance, invoiceBalance, invoiceCorrections } from './billing-correction-balance';
 
 type MergeInvoiceRow = {
   chargeId: string | null;
@@ -268,7 +269,9 @@ export class BillingService {
       }),
     ]);
 
-    return buildBillingReconciliation(invoices, advances, periodFrom, periodTo);
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED !== 'true') return buildBillingReconciliation(invoices, advances, periodFrom, periodTo);
+    const corrections = await invoiceCorrections(this.prisma, invoices.map(i => i.id));
+    return buildBillingReconciliation(invoices.map(i => ({ ...i, ...correctedInvoiceBalance(i.totalRub, i.paidRub, corrections.filter(c => c.invoiceId === i.id).map(c => c.amountRub)) })), advances, periodFrom, periodTo);
   }
 
   async listAdvances(clientId: string | undefined, user: AuthUser) {
@@ -525,14 +528,14 @@ export class BillingService {
           break;
         }
         const invoiceRemainingRub = roundMoney(
-          (decimalToNumber(invoice.totalRub) ?? 0) - (decimalToNumber(invoice.paidRub) ?? 0),
+          (await invoiceBalance(tx, invoice)).remainingRub,
         );
         if (invoiceRemainingRub <= 0.009) {
           continue;
         }
         const amountRub = roundMoney(Math.min(remainingAdvanceRub, invoiceRemainingRub));
         const nextPaidRub = roundMoney((decimalToNumber(invoice.paidRub) ?? 0) + amountRub);
-        const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
+        const totalRub = (await invoiceBalance(this.prisma, invoice)).effectiveTotalRub;
         const nextStatus = nextPaidRub >= totalRub ? BillingInvoiceStatus.PAID : BillingInvoiceStatus.ISSUED;
         await tx.billingPayment.create({
           data: {
@@ -1179,6 +1182,14 @@ export class BillingService {
 
     this.clientScopes.requireClientAccess(user, charge.clientId, 'write');
 
+    // FIX: keep the source of issued work intact; corrections are separate signed documents.
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true') {
+      const fixed = await this.prisma.$queryRaw<Array<{ id: string }>>`SELECT i.id FROM "BillingInvoiceItem" l
+        JOIN "BillingInvoice" i ON i.id=l."invoiceId" WHERE l."chargeId"=${chargeId}
+        AND (i.status::text IN ('ISSUED','PAID') OR i."issuedAt" IS NOT NULL OR wms_billing_snapshot_protected(i.id)) LIMIT 1`;
+      if (fixed.length) throw new BadRequestException('Начисление уже включено в зафиксированный счёт. Оформите отдельную корректировку.');
+    }
+
     return this.prisma.billingCharge.update({
       where: { id: chargeId },
       data: {
@@ -1466,9 +1477,11 @@ export class BillingService {
         warehouse: { select: { id: true, name: true } } },
       orderBy: [{ periodFrom: 'desc' }, { createdAt: 'desc' }],
     });
-    if (cabinet) return invoices;
+    const corrections = await invoiceCorrections(this.prisma, invoices.map(i => i.id));
+    const balances = new Map(process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' ? invoices.map(i => [i.id, correctedInvoiceBalance(i.totalRub, i.paidRub, corrections.filter(c => c.invoiceId === i.id).map(c => c.amountRub))] as const) : []);
+    if (cabinet) return invoices.map(i => ({ ...i, ...balances.get(i.id) }));
     // FIX: include mixed completed-work recoveries in the FBS registry and merge selection.
-    return invoices.map(invoice => ({ ...invoice, serviceCategory: classifyBillingRegistryInvoice(invoice) }))
+    return invoices.map(invoice => ({ ...invoice, ...balances.get(invoice.id), serviceCategory: classifyBillingRegistryInvoice(invoice) }))
       .filter(invoice => !query.serviceCategory || invoice.serviceCategory === query.serviceCategory);
   }
 
@@ -1477,6 +1490,7 @@ export class BillingService {
   async writePeriodDraft(tx: Prisma.TransactionClient, input: {
     clientId: string; warehouseId: string; category: BillingServiceCategory; periodFrom: string; periodTo: string;
     sourceKey: string; charges: PeriodCharge[]; invoices: PeriodInvoice[];
+    requestNumbers?: number[];
   }, user: AuthUser) {
     this.requireInvoiceWrite({ clientId: input.clientId, warehouseId: input.warehouseId }, user);
     for (const invoice of input.invoices) this.requireInvoiceWrite(invoice, user);
@@ -1505,7 +1519,8 @@ export class BillingService {
     const invoice = await tx.billingInvoice.create({ data: { clientId: input.clientId, warehouseId: input.warehouseId,
       number, periodFrom: from, periodTo: to, status: 'DRAFT', source: 'MANUAL', sourceKey: input.sourceKey,
       totalRub, ...paymentAccount, createdByUserId: user.id,
-      comment: `Счёт за период ${input.periodFrom} — ${input.periodTo}; ${input.category}. Исходные счета: ${input.invoices.map(i => i.number).join(', ') || 'нет'}.`,
+      comment: input.requestNumbers ? `Единый счёт по сданным заявкам за ${input.periodFrom} — ${input.periodTo}. Заявки: ${input.requestNumbers.join(', ')}. Исходные счета: ${input.invoices.map(i => i.number).join(', ') || 'нет'}.` :
+        `Счёт за период ${input.periodFrom} — ${input.periodTo}; ${input.category}. Исходные счета: ${input.invoices.map(i => i.number).join(', ') || 'нет'}.`,
       items: { create: rows.map(r => ({ ...r })) } }, include: billingInvoiceInclude });
     if (ids.length) {
       const changed = await tx.billingInvoice.updateMany({ where: { id: { in: ids }, status: 'DRAFT', paidRub: 0, payments: { none: {} } },
@@ -1543,6 +1558,12 @@ export class BillingService {
       throw new NotFoundException('Счёт не найден.');
     }
     this.requireInvoiceWrite(invoice, user);
+    // FIX: bank details belong to the closed document snapshot; do not let this route bypass its freeze.
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true') {
+      const locked = await this.prisma.$queryRaw<Array<{ id: string }>>`SELECT id FROM "BillingPeriodClose" WHERE "invoiceIds" @> ARRAY[${invoiceId}]::text[]
+        UNION ALL SELECT id FROM "BillingInvoiceCorrection" WHERE "invoiceId"=${invoiceId}`;
+      if (locked.length) throw new BadRequestException('Реквизиты закрытого или скорректированного счёта зафиксированы в исходном документе.');
+    }
     if (invoice.status === BillingInvoiceStatus.CANCELLED) throw new BadRequestException('Нельзя менять отменённый счёт.');
     if (invoice.status === BillingInvoiceStatus.PAID || invoice.payments.length > 0) {
       throw new BadRequestException('Нельзя менять расчётный счёт после регистрации оплаты.');
@@ -1633,8 +1654,12 @@ export class BillingService {
       orderBy: [{ periodFrom: 'desc' }, { createdAt: 'desc' }],
     });
 
+    // FIX: select outstanding documents using amendments while keeping original PDF amounts intact.
+    const corrections = query.unpaidOnly ? await invoiceCorrections(this.prisma, invoices.map(i => i.id)) : [];
     const selectedInvoices = query.unpaidOnly
-      ? invoices.filter((invoice) => Number(invoice.totalRub) - Number(invoice.paidRub) > 0.005)
+      ? invoices.filter((invoice) => process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true'
+        ? correctedInvoiceBalance(invoice.totalRub, invoice.paidRub, corrections.filter(c => c.invoiceId === invoice.id).map(c => c.amountRub)).remainingRub > 0
+        : Number(invoice.totalRub) - Number(invoice.paidRub) > 0.005)
       : invoices;
 
     if (selectedInvoices.length === 0) {
@@ -2928,6 +2953,10 @@ export class BillingService {
       throw new NotFoundException('Счет не найден.');
     }
     this.requireInvoiceWrite(invoice, user);
+    // FIX: issued financial snapshots remain immutable in our period-close rollout, even before the first payment.
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' && (invoice.status !== BillingInvoiceStatus.DRAFT || invoice.issuedAt)) {
+      throw new BadRequestException('Выставленный счёт нельзя редактировать. Оформите исправление отдельным документом с причиной.');
+    }
     const clientChanged = invoice.clientId !== dto.clientId;
     if (clientChanged) {
       this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
@@ -3160,9 +3189,49 @@ export class BillingService {
     }
 
     this.requireInvoiceWrite(invoice, user);
+    // FIX: reopening an issued snapshot must not bypass the amount/line protection; payments still use their existing flow.
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' && dto.status === BillingInvoiceStatus.DRAFT &&
+      (invoice.status === BillingInvoiceStatus.ISSUED || invoice.status === BillingInvoiceStatus.PAID || invoice.issuedAt)) {
+      throw new BadRequestException('Выставленный счёт нельзя вернуть в черновик. Оформите отдельный документ исправления.');
+    }
+    // FIX: late invoices require an explicit reason document before issue; warehouse work can still create drafts.
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' && invoice.status === BillingInvoiceStatus.DRAFT &&
+      [BillingInvoiceStatus.ISSUED, BillingInvoiceStatus.PAID].includes(dto.status as 'ISSUED' | 'PAID')) {
+      const source = await this.prisma.billingInvoice.findUnique({ where: { id: invoiceId }, select: { periodFrom: true, periodTo: true } });
+      if (source) {
+        const closed = await this.prisma.$queryRaw<Array<{ id: string }>>`SELECT id FROM "BillingPeriodClose" WHERE "clientId"=${invoice.clientId}
+          AND "warehouseId"=${invoice.warehouseId ?? invoice.request?.warehouseId} AND "periodFrom"<=${source.periodTo} AND "periodTo">=${source.periodFrom}`;
+        if (closed.length) throw new BadRequestException('Поздний счёт за закрытый период выставляется через отдельный документ исправления с причиной.');
+      }
+    }
 
     const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
-    const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
+    const totalRub = (await invoiceBalance(this.prisma, invoice)).effectiveTotalRub;
+    // FIX: explicit full-payment confirmation records the remaining receipt under the existing financial lock.
+    const fullReceiptEnabled = process.env.WMS_BILLING_INVOICE_PAID_RECEIPT_ENABLED === 'true';
+    if (fullReceiptEnabled && dto.status === BillingInvoiceStatus.PAID) {
+      assertPositiveInvoiceTotal(totalRub);
+      if (invoice.status === BillingInvoiceStatus.CANCELLED) {
+        throw new BadRequestException('Нельзя оплатить отменённый счёт.');
+      }
+      const remainingRub = roundMoney(totalRub - paidRub);
+      if (remainingRub > 0) {
+        return this.createPaymentLocked({
+          invoiceId: invoice.id,
+          amountRub: remainingRub,
+          comment: 'Полная оплата подтверждена в карточке счёта.',
+        }, user);
+      }
+      if (invoice.status === BillingInvoiceStatus.PAID) {
+        return this.prisma.billingInvoice.findUniqueOrThrow({ where: { id: invoice.id }, include: billingInvoiceInclude });
+      }
+    }
+    // FIX: correcting an issued invoice cannot manufacture receipts through a status shortcut.
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' && dto.status === BillingInvoiceStatus.PAID && paidRub < totalRub)
+      throw new BadRequestException('Сначала зарегистрируйте фактическую оплату через приход денежных средств.');
+    if (process.env.WMS_BILLING_PERIOD_CLOSE_ENABLED === 'true' && dto.status === BillingInvoiceStatus.CANCELLED &&
+      (invoice.issuedAt || invoice.status === BillingInvoiceStatus.ISSUED || invoice.status === BillingInvoiceStatus.PAID))
+      throw new BadRequestException('Выставленный счёт исправляется отдельной корректировкой.');
     if (
       dto.status === BillingInvoiceStatus.ISSUED ||
       dto.status === BillingInvoiceStatus.PAID
@@ -3182,7 +3251,7 @@ export class BillingService {
         where: { id: invoiceId },
         data: {
           status: dto.status,
-          paidRub: dto.status === BillingInvoiceStatus.PAID ? totalRub : invoice.paidRub,
+          paidRub: dto.status === BillingInvoiceStatus.PAID && !fullReceiptEnabled ? totalRub : invoice.paidRub,
           issuedAt:
             dto.status === BillingInvoiceStatus.DRAFT
               ? null
@@ -3301,7 +3370,7 @@ export class BillingService {
         if (invoice.status === BillingInvoiceStatus.CANCELLED) {
           throw new BadRequestException(`Счёт №${invoice.number} отменён — оплату по нему принять нельзя.`);
         }
-        const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
+        const totalRub = (await invoiceBalance(this.prisma, invoice)).effectiveTotalRub;
         const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
         const remainingRub = roundMoney(totalRub - paidRub);
         if (remainingRub <= 0) {
@@ -3428,7 +3497,7 @@ export class BillingService {
       throw new BadRequestException('Нельзя принять оплату по отмененному счету.');
     }
 
-    const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
+    const totalRub = (await invoiceBalance(this.prisma, invoice)).effectiveTotalRub;
     const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const remainingRub = roundMoney(totalRub - paidRub);
     if (!Number.isFinite(dto.amountRub) || dto.amountRub <= 0 || remainingRub <= 0) {
@@ -4166,7 +4235,7 @@ function buildBillingReconciliation(
   };
 
   invoices.forEach((invoice) => {
-    const totalRub = decimalToNumber(invoice.totalRub) ?? 0;
+    const totalRub = Number((invoice as typeof invoice & { effectiveTotalRub?: number }).effectiveTotalRub ?? invoice.totalRub);
     const paidRub = decimalToNumber(invoice.paidRub) ?? 0;
     const remainingRub = roundMoney(Math.max(0, totalRub - paidRub));
     const overdueDays = calculateOverdueDays(invoice.dueDate, remainingRub, invoice.status, now);

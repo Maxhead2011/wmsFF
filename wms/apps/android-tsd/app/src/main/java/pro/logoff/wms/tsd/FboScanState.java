@@ -54,8 +54,12 @@ final class FboScanState {
         if(value!=null){pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");}
     }
     boolean scanLocation(TsdFboPlan plan,String code) {
-        if(pallet.isEmpty())for(TsdFboPlan.Route r:plan.route)if(!r.pallet.isEmpty()&&r.pallet.equalsIgnoreCase(code.trim())){pallet=r.pallet;source="";return true;}
-        for(TsdFboPlan.Route r:plan.route)if(r.pallet.equals(pallet)&&r.boxCode.equalsIgnoreCase(code.trim())){source=r.boxCode;return true;}
+        return scanLocation(plan.route,code);
+    }
+    // FIX: accept only locations in the active picking route; legacy callers retain the full route.
+    boolean scanLocation(java.util.List<TsdFboPlan.Route> route,String code) {
+        if(pallet.isEmpty())for(TsdFboPlan.Route r:route)if(!r.pallet.isEmpty()&&r.pallet.equalsIgnoreCase(code.trim())){pallet=r.pallet;source="";return true;}
+        for(TsdFboPlan.Route r:route)if(r.pallet.equals(pallet)&&r.boxCode.equalsIgnoreCase(code.trim())){source=r.boxCode;return true;}
         return false;
     }
     // FIX: workflow selection never changes the persisted collection phase.

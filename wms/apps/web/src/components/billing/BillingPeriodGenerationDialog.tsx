@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent } from 'react';
 import { generateBillingPeriod, previewBillingPeriod, type AuthSession, type BillingServiceCategory, type ClientSummary } from '../../lib/api';
 
 type Props = {
+  doneRequests?: boolean;
   session: AuthSession;
   clients: ClientSummary[];
   clientId?: string;
@@ -41,8 +42,9 @@ export function billingPeriodPreset(start: string, preset: 'week' | 'fortnight' 
 // ADDED: preview/confirmation uses existing server billing rules, never a local tariff calculation.
 export function BillingPeriodGenerationDialog(props: Props) {
   const [clientId, setClientId] = useState(props.clientId ?? '');
-  const [periodFrom, setPeriodFrom] = useState(props.periodFrom);
-  const [periodTo, setPeriodTo] = useState(props.periodTo);
+  // FIX: surrender mode requires explicit dates chosen by the operator.
+  const [periodFrom, setPeriodFrom] = useState(props.doneRequests ? '' : props.periodFrom);
+  const [periodTo, setPeriodTo] = useState(props.doneRequests ? '' : props.periodTo);
   const [categories, setCategories] = useState<BillingServiceCategory[]>(['FBS', 'PROCESSING', 'PRR', 'STORAGE']);
   const [excludeLukin, setExcludeLukin] = useState(true);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -60,7 +62,8 @@ export function BillingPeriodGenerationDialog(props: Props) {
   }
   function input() {
     // FIX: explicit client selection overrides the mass-only exclusion without losing its preference.
-    return { ...(clientId ? { clientId } : {}), periodFrom, periodTo, categories, excludeLukin: !clientId && excludeLukin };
+    return { ...(clientId ? { clientId } : {}), periodFrom, periodTo, categories, excludeLukin: !props.doneRequests && !clientId && excludeLukin,
+      ...(props.doneRequests ? { doneRequests: true } : {}) };
   }
   function preset(value: 'week' | 'fortnight' | 'month') {
     if (requestLock.current) return;
@@ -130,11 +133,11 @@ export function BillingPeriodGenerationDialog(props: Props) {
     <div className="billing-invoice-edit-modal" role="dialog" aria-modal="true" aria-labelledby="billing-period-title" onKeyDown={handleKeys}>
       <section className="billing-invoice-edit-modal__panel">
         <header className="billing-invoice-edit-modal__header">
-          <h3 id="billing-period-title">Формирование счетов за период</h3>
+          <h3 id="billing-period-title">{props.doneRequests ? 'Единый счёт по сданным заявкам' : 'Формирование счетов за период'}</h3>
           <button type="button" className="secondary-button" disabled={busy} onClick={props.onClose}>Закрыть</button>
         </header>
         <div className="billing-invoice-edit-modal__body billing-form" aria-busy={busy}>
-          <p>Отдельный счёт для каждого контрагента, филиала и вида услуг. Действует текущая филиальная область доступа. Календарные даты услуг соответствуют датам в существующем биллинге, обе границы включены.</p>
+          <p>{props.doneRequests ? 'Один общий черновик для каждого клиента выбранного филиала. Заявки отбираются по последней дате перехода в «Сдано», по московскому времени; обе границы включены. Суммируются утверждённые начисления всех видов услуг. Существующие счета, включая черновики, не меняются; уже охваченные счётом заявки и периоды исключаются. Исходные даты услуг и тарифы сохраняются.' : 'Отдельный счёт для каждого контрагента, филиала и вида услуг. Действует текущая филиальная область доступа. Календарные даты услуг соответствуют датам в существующем биллинге, обе границы включены.'}</p>
           <fieldset disabled={busy}>
             <legend>Период и услуги</legend>
             <div className="billing-fields">
@@ -144,8 +147,8 @@ export function BillingPeriodGenerationDialog(props: Props) {
                   {props.clients.map(client => <option key={client.id} value={client.id}>{client.code} — {client.name}</option>)}
                 </select>
               </label>
-              <label><span>Дата услуг с</span><input autoFocus name="periodFrom" type="date" value={periodFrom} onChange={event => { invalidate(); setPeriodFrom(event.target.value); }} /></label>
-              <label><span>Дата услуг по</span><input name="periodTo" type="date" value={periodTo} onChange={event => { invalidate(); setPeriodTo(event.target.value); }} /></label>
+              <label><span>{props.doneRequests ? 'Дата сдачи с' : 'Дата услуг с'}</span><input autoFocus name="periodFrom" type="date" value={periodFrom} onChange={event => { invalidate(); setPeriodFrom(event.target.value); }} /></label>
+              <label><span>{props.doneRequests ? 'Дата сдачи по' : 'Дата услуг по'}</span><input name="periodTo" type="date" value={periodTo} onChange={event => { invalidate(); setPeriodTo(event.target.value); }} /></label>
             </div>
             <div className="billing-period-actions">
               <button className="secondary-button" type="button" onClick={() => preset('week')}>За неделю</button>
@@ -153,7 +156,7 @@ export function BillingPeriodGenerationDialog(props: Props) {
               <button className="secondary-button" type="button" onClick={() => preset('month')}>За месяц</button>
             </div>
             <p>Неделя и две недели — от выбранной начальной даты. Месяц — календарный месяц этой даты.</p>
-            <div className="billing-period-categories">
+            {!props.doneRequests && <><div className="billing-period-categories">
               {generationCategories.map(category => (
                 <label key={category}><input type="checkbox" checked={categories.includes(category)} onChange={event => {
                   invalidate(); setCategories(current => event.target.checked ? [...current, category] : current.filter(item => item !== category));
@@ -161,24 +164,27 @@ export function BillingPeriodGenerationDialog(props: Props) {
               ))}
             </div>
             <label><input type="checkbox" disabled={Boolean(clientId)} checked={!clientId && excludeLukin} onChange={event => { invalidate(); setExcludeLukin(event.target.checked); }} /> Исключить ИП Лукин</label>
-            {clientId && <p>Исключение Лукина действует только при расчёте по всем контрагентам. Выбранный клиент включён в расчёт.</p>}
+            {clientId && <p>Исключение Лукина действует только при расчёте по всем контрагентам. Выбранный клиент включён в расчёт.</p>}</>}
           </fieldset>
           <p>Нулевые счета не создаются. Неподтверждённые начисления, неизвестные тарифы и другие спорные суммы не включаются в итог автоматически.</p>
+          {props.doneRequests && <p>Заявки без начислений попадут в список проверки. Этот расчёт не восстанавливает пропущенные услуги и не меняет складские остатки. Перед созданием проверьте исключения.</p>}
           <button className="secondary-button" type="button" disabled={busy} onClick={calculate}>Предварительный расчёт</button>
           {busy ? <p role="status">Выполняется запрос. Дождитесь результата, не закрывайте окно.</p> : null}
           {error ? <p role="alert" className="form-error">{error}</p> : null}
           {preview ? <section aria-label="Предварительный расчёт счетов">
             <h4>Расчёт: {preview.periodFrom} — {preview.periodTo}</h4>
-            <p>Уже выставлено позиций: {preview.alreadyBilledCount}. Нулевых позиций исключено: {preview.zeroCount}.</p>
+            {props.doneRequests && preview.requests ? <details open><summary>Сданные заявки: {preview.requests.length}</summary>
+              <ul>{preview.requests.map(r => <li key={r.id}>№{r.number} · {r.clientName} · Сдано {new Date(r.surrenderedAt).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}</li>)}</ul></details> : null}
+            <p>{props.doneRequests ? 'Уже сформировано счетов' : 'Уже выставлено позиций'}: {preview.alreadyBilledCount}. Нулевых позиций исключено: {preview.zeroCount}.</p>
             <p>Создать новых: {preview.groups.filter(group => group.action !== 'EXISTING').length}. Существующих за весь период: {preview.groups.filter(group => group.action === 'EXISTING').length}. Итого: {money(preview.groups.reduce((sum, group) => sum + group.totalRub, 0))}. Нерешённые суммы в итог не входят.</p>
             {preview.groups.length ? <div className="billing-table-wrap"><table className="billing-table">
               <thead><tr><th>Контрагент</th><th>Филиал (ID)</th><th>Услуги</th><th>Действие</th><th>Позиций</th><th>Начисления / черновики</th><th>Сумма</th></tr></thead>
               <tbody>{preview.groups.map(group => <tr key={group.key}>
-                <td>{group.clientName}</td><td>{group.warehouseId}</td><td>{categoryLabels[group.category]}</td><td>{group.action === 'EXISTING' ? 'Существующий счёт' : 'Создать черновик'}</td><td>{group.itemCount}</td><td>{group.chargeIds.length} / {group.invoiceIds.length}</td><td>{money(group.totalRub)}</td>
+                <td>{group.clientName}</td><td>{group.warehouseId}</td><td>{props.doneRequests ? 'Все услуги по заявкам' : categoryLabels[group.category]}</td><td>{group.action === 'EXISTING' ? 'Существующий счёт' : 'Создать черновик'}</td><td>{group.itemCount}</td><td>{group.chargeIds.length} / {group.invoiceIds.length}</td><td>{money(group.totalRub)}</td>
               </tr>)}</tbody>
             </table></div> : <p>Нет доступных начислений для создания счетов.</p>}
             {preview.groups.map(group => <details key={`sources:${group.key}`}>
-              <summary>Состав: {group.clientName} · {categoryLabels[group.category]} · {group.itemCount} поз.</summary>
+              <summary>Состав: {group.clientName} · {props.doneRequests ? 'Все услуги по заявкам' : categoryLabels[group.category]} · {group.itemCount} поз.</summary>
               <div className="billing-table-wrap"><table className="billing-table">
                 <thead><tr><th>Источник</th><th>Услуга</th><th>Дата услуги</th><th>Количество</th><th>Ед.</th><th>Тариф</th><th>Сумма</th></tr></thead>
                 <tbody>{(group.lines ?? []).map((line, index) => <tr key={`${line.sourceId}:${line.invoiceItemId ?? index}`}>
@@ -188,7 +194,7 @@ export function BillingPeriodGenerationDialog(props: Props) {
               </table></div>
             </details>)}
             {preview.issues.length ? <div role="status"><h4>Не включено — требуется проверка</h4><ul>{preview.issues.map((issue, index) => <li key={`${issue.id}-${index}`}>{issue.clientName}: {issue.message}</li>)}</ul></div> : null}
-            {preview.groups.length ? <><p>Подтверждение создаст документы с действием «Создать черновик». Подходящие существующие счета будут сохранены. Уже выставленные и оплаченные счета не переписываются. Сервер повторно проверит исходные данные.</p><button className="primary-button" type="button" disabled={busy} onClick={confirm}>Подтвердить создание черновиков</button></> : null}
+            {preview.groups.length ? <><p>{props.doneRequests ? 'Подтверждение создаст только новые черновики. Все существующие счета сохраняются без изменений. Периоды, уже охваченные счётом, исключены. Сервер повторно проверит исходные данные.' : 'Подтверждение создаст документы с действием «Создать черновик». Подходящие существующие счета будут сохранены. Уже выставленные и оплаченные счета не переписываются. Сервер повторно проверит исходные данные.'}</p><button className="primary-button" type="button" disabled={busy} onClick={confirm}>Подтвердить создание черновиков</button></> : null}
           </section> : null}
           {created ? <div role="status"><h4>{created.replayed ? 'Результат ранее выполненного формирования' : 'Результат формирования'}</h4><ul>{created.invoices.map(invoice => <li key={invoice.id}>{invoice.number} · {invoice.disposition === 'EXISTING' ? 'Существующий счёт' : 'Создан черновик'}</li>)}</ul><p>Откройте счёт в реестре для проверки и последующих действий.</p></div> : null}
         </div>

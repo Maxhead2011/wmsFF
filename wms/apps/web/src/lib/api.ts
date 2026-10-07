@@ -871,6 +871,11 @@ export type BillingPaymentSummary = {
 };
 
 export type BillingInvoiceSummary = {
+  originalTotalRub?: number;
+  correctionRub?: number;
+  effectiveTotalRub?: number;
+  remainingRub?: number;
+  overpaymentRub?: number;
   // ADDED: category/branch in the period register; older endpoints remain compatible.
   serviceCategory?: BillingServiceCategory;
   warehouse?: { id: string; name: string } | null;
@@ -8372,10 +8377,13 @@ export async function generateStorageCharge(accessToken: string, payload: Genera
 
 export type BillingServiceCategory = 'FBS' | 'PROCESSING' | 'PRR' | 'STORAGE' | 'OTHER';
 export type BillingPeriodInput = {
+  // FIX: optional surrender mode leaves existing consumers unchanged.
+  doneRequests?: boolean;
   clientId?: string; periodFrom: string; periodTo: string;
   categories: BillingServiceCategory[]; excludeLukin: boolean;
 };
 export type BillingPeriodPreview = {
+  requests?: Array<{ id: string; number: number; clientName: string; surrenderedAt: string }>;
   previewHash: string; periodFrom: string; periodTo: string;
   groups: Array<{ key: string; clientId: string; clientName: string; warehouseId: string;
     category: BillingServiceCategory; chargeIds: string[]; invoiceIds: string[]; totalRub: number; itemCount: number;
@@ -8386,6 +8394,9 @@ export type BillingPeriodPreview = {
   alreadyBilledCount: number; zeroCount: number;
 };
 // ADDED: server-calculated preview, followed by explicit confirmed draft creation.
+export function fetchBillingDoneRequestsCapabilities(accessToken: string) {
+  return request<{ enabled: boolean }>('/billing/invoices/done-requests/capabilities', { accessToken });
+}
 export function previewBillingPeriod(accessToken: string, input: BillingPeriodInput) {
   return request<BillingPeriodPreview>('/billing/invoices/period/preview', { method: 'POST', accessToken, body: input });
 }

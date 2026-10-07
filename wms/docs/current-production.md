@@ -1,3 +1,180 @@
+# Опубликовано PR490 / 07.10.2026 — планшет учёта времени 0.4.0
+
+APK: https://wms.logoff.pro/downloads/logoff-attendance-0.4.0-pilot.apk
+VersionCode 7; SHA256 `28e77833b3e692aaae423ee2f46ee595cfe26cefd9bc04207476c016a5c3cba0`.
+Адаптивные экраны, крупные имена/действия, сохранение черновика при возврате/повороте,
+видимая кнопка сохранения, локальная история работ и доставки. Обновление поверх старого
+приложения с тем же ключом. Тихая установка отсутствует. Физический планшет пока не проверен.
+92 Android tests, lintDebug, assembleRelease и проверка APK прошли.
+
+Web `sha256:bf4632ada0da13bf1fab7c2847a374b4cc676b2b3345f978f33d1423977c4d84`:
+добавлен только версионный APK в downloads; все остальные файлы сверены по SHA256.
+API `sha256:961d496898b8e5fbdf809afdcce4197795f9ed6de0fb6cf7fcbb91ac8d717c05` сохранён;
+baseline `2026-10-06-payroll-corrections` остаётся актуальным для API, sourceParityVerified=false.
+БД, флаги, ТСД217 и sold WMS не изменены. Откат web: `logoff-web:before-attendance040-20261007`.
+[Запись выпуска](releases/attendance-adaptive-040.json).
+
+## Опубликовано PR488 / 06.10.2026 — исправления и история ФОТ
+
+Исправлен фильтр сводки выплат (PR487): пустые суммы скрыты. В редакторе смены
+можно выбрать правильного сотрудника, а у погрузки/разгрузки — участников,
+время и объёмы. В настройках: История изменений → выбрать → Отменить изменение.
+[Сценарий и ограничения](payroll-corrections.md), [запись выпуска](releases/payroll-corrections-20261006.json).
+
+Новый флаг `WMS_PAYROLL_CORRECTIONS_ENABLED=true` только в нашей ВМС. Оплаченные
+и изменённые позже записи защищены от отката; старые события без снимка доступны
+для просмотра. Миграции БД нет, рабочие записи при выпуске не менялись.
+
+API `sha256:961d496898b8e5fbdf809afdcce4197795f9ed6de0fb6cf7fcbb91ac8d717c05`; web `sha256:3471d224cc152b9ac7bdea36469b2fa607dc56a7f53883136d6bb580ec41e374`.
+Снимок `baselines/our-wms/2026-10-06-payroll-corrections`; sourceParityVerified=false.
+Изменены ровно пять API-модулей, web сохраняет прежние файлы и APK217/attendance.
+3096 API + 387 web тестов прошли; 141/2 пропущены, отдельная KIZ DB suite исключена.
+Отдельно прошли 18 PostgreSQL-тестов, 9 на готовом API и браузерный сценарий
+на публикуемом JS. TypeScript и серверная история (только чтение) проверены.
+Первый запуск автоматически откатился из-за рабочей папки проверочного скрипта;
+повторная публикация успешна. Проданная ВМС не изменена.
+
+## Опубликовано PR485 / 05.10.2026 — ТСД217
+
+Отбор ФБО LOGOFF разделён на «Сборку целых коробов» и «Частичный отбор».
+[Сценарий и тесты](fbo-two-stage-picking.md), [запись выпуска](releases/fbo-separated-picking-217.json).
+Подпись совместима с216; 678 Android-тестов прошли. Воспроизводимость базового APK216
+проверена по всем неподписанным записям; остальные классы217 сохранены.
+Физический скан на ТСД ещё не проверен. Обновление устанавливается поверх текущего приложения.
+
+API `sha256:fb456470d653863bf080da21a1eef7284de775f06e6f2221d8ae63cc4d1fabcf` сохранён без перезапуска; web `sha256:cab415deba5d10f5c920f86480d85601ec9a7876789da4a7d12e3fe45de14d86` меняет только три файла downloads.
+Веб-приложение, флаги, конфигурация, БД и проданная WMS не изменены.
+Снимок `baselines/our-wms/2026-10-05-fbo-picking-217` содержит свежий API runtime,
+его неизменность проверена baseline guard. API sourceParityVerified=false;
+это не разрешение полной сборки API/web из исходников. Откат web: `sha256:7d2b02b61b91203417468dc808432711eaaa407533268b270b6108cf73a70f36`.
+
+# Published PR472 / 04.10.2026
+
+<!-- FIX: permanent client/branch closure and signed documents preserve original finances. -->
+«Биллинг → Клиенты и расчёты»: выбрать клиента, даты и активный филиал.
+Закрытие требует предварительной проверки и основания; неоплаченные счета сохраняют долг.
+Доначисление/уменьшение — отдельный документ с причиной и автором; поздняя работа — отдельный счёт.
+Флаг `WMS_BILLING_PERIOD_CLOSE_ENABLED=true` только в нашей WMS.
+Миграция `20261003220000_billing_period_close` применена атомарно и записана в Prisma history;
+хеши исходных BillingInvoice/Item/Payment/Charge в транзакции не изменились.
+Первый запуск остановлен lock timeout и полностью откатился; повтор после проверки блокировок успешен.
+API `sha256:7ff2c21d01327774b1ff328cc9c842ec25b02eef031dbda79753050676dbbd3e`;
+web `sha256:9af39b73ad64bb3930496e46f4ff3b47c6d28d2adfaf25238c6eb5a173f910ce`.
+10 API-файлов, 29 новых JS chunks, 1714 старых assets сохранены. API569/web1744.
+Перед выпуском сохранён новый live FBO TSD runtime из API `3ef0489614fe...`; он не изменён overlay.
+Полные runtime/public hashes, offline candidate, два браузерных сценария и health прошли.
+GET history/invoices/settlements200; гипотетические signed previews201; запись документов не выполнялась.
+INV-202609-0007: оплата450000 и долг100535,37 сохранены. Новых closes/corrections0.
+API3059/web372 passed, API132/web2 skipped; отдельная KIZ DB suite исключена.
+TypeScript/Prisma validate/Vite прошли. Изолированный PostgreSQL проверил защиту, конкурентные строки,
+взаимную блокировку до исправления и exact publication SQL с откатом финансового вмешательства.
+Проданная WMS/FFULHAB/APK/compose и прочие контейнеры не менялись. Source parity false.
+Локальная копия `C:/WMSFF2207/baselines/our-wms-runtime-period-close-20261004`;
+current pointer обновлён; полный эталон01.10 неизменён.
+До появления новых документов rollback images `logoff-api:before-billing-period-close-20261004`
+и `logoff-web:before-billing-period-close-20261004`. После использования корректировок нельзя выключать
+их учёт старым runtime: нужен совместимый расчёт и восстановление вперёд.
+[Запись выпуска](releases/billing-period-close-20261004.json).
+
+# Published PR469 / 03.10.2026
+
+<!-- FIX: register hides settled clients while preserving unfinished calculations. -->
+«Клиенты и расчёты» скрывает полностью рассчитавшихся клиентов, включая архивных.
+Долг, невыставленные услуги, черновики, работа без начисления и нерешённые проверки
+сохраняют строку. Один аванс строку не удерживает и не вычитается из долга.
+Документы и деньги не менялись. Фильтр относится к реестру, не к удалению клиентов.
+API `sha256:e7aa81ff68a153426ea7fdd4efc8a994f3119f107ee8b4b2d58ce4bdefd6a67b`;
+web `sha256:7fab10dcd44ce9813cd63689ea03fbc7ad4e5b461c57950ceec8e59bd8200532`.
+Один API-модуль, сообщение пустого списка, 29 новых JS chunks; 1685 старых assets сохранены.
+Полные runtime/public hashes, offline candidate, browser и health прошли.
+READ ONLY сравнение: 44 → 8 строк, скрыты 36 рассчитавшихся, из них 9 архивных;
+суммы оставшихся и issues идентичны. Published GET settlements200, 5644ms;
+invoices200, прежняя оплата INV-202609-0007 450000 и остаток100535,37 сохранены.
+API3036/web368 passed, API132/web2 skipped; KIZ DB-suite требует отдельной БД.
+TypeScript API/web прошёл. Проданная WMS/FFULHAB/APK/compose и другие сервисы не затронуты.
+Source parity false; опубликован только проверенный overlay актуального runtime.
+Локальный runtime: `C:/WMSFF2207/baselines/our-wms-runtime-settlements-visible-20261003`
+(API564/web1715); current pointer обновлён, полный эталон 01.10 сохранён.
+Rollback: `logoff-api:before-billing-settlements-visible-20261003`,
+`logoff-web:before-billing-settlements-visible-20261003`.
+[Запись выпуска](releases/billing-settlements-visible-20261003.json).
+
+# Published PR467 / 03.10.2026
+
+Исправлены ошибка 500 «Клиенты и расчёты» и подстановка полной оплаты вместо
+введённого поступления в «Приход ДС». Подробности начислений ограничены датами
+услуг, историческая FBS-проверка сохранена в лёгкой проекции. READ ONLY/RepeatableRead,
+timeout30s, долг по всем выставленным счетам филиала и отдельный аванс сохранены.
+Галочка распределяет только введённую сумму; история поступлений включает оплаченные
+счета и отменённые записи. Прежние фильтр статуса и кнопка по сданным заявкам сохранены.
+API `sha256:6c7be0f55b5334f80d8d78880beead3b19967b2018d5dba13ec633f00b2ecbf2`;
+web `sha256:30fbd82b11b051a579f2b00b2f4bef1170570b6ba035297a66b85cdbaeab49cb`.
+Два API-файла, 29 новых JS chunks, 1656 прежних assets сохранены. Compose не менялся.
+Другие сервисы/sold WMS/FFULHAB/APK не затрагивались. Source parity false.
+Коррекция по подтверждению владельца: INV-202609-0007, проведено 450000 ₽,
+остаток 100535,37 ₽, ISSUED; первоначальный ошибочный платёж отменён и сохранён.
+Есть before/after audit; dry run с rollback и проверка после commit прошли.
+Published GET settlements и invoices вернули 200; запись оплаты/история/остаток проверены.
+Повторная проверка под рабочей нагрузкой: settlements 22304 мс, оба GET вместе
+63124 мс. Это HTTP-время; 2853 мс ниже относится к отдельному READ ONLY кандидату.
+API3034/web367 passed, TypeScript, Vite, 5Node+1Python, browser, offline candidate,
+полные хеши runtime/public assets/health прошли. READ ONLY кандидат2853ms.
+Локальная копия: `C:/WMSFF2207/baselines/our-wms-runtime-partial-receipt-20261003`
+(API564/web1686); указатель `baselines/OUR_WMS_CURRENT_RUNTIME.json` обновлён.
+Полный эталон 01.10 не менялся. Runtime rollback отдельно от денежной коррекции:
+`logoff-api:before-billing-settlements-timeout-20261003`,
+`logoff-web:before-billing-settlements-timeout-20261003`.
+[Описание](billing-partial-receipt-fix.md), [запись](releases/billing-partial-receipt-20261003.json).
+
+# Published PR465 / 03.10.2026
+
+«Биллинг → Счета → Статус счёта»: Все статусы / Черновик / Выставлен / Оплачен /
+Отменён. Доступен в списке и темах, выбор сохраняется, метрики тем учитывают статус.
+API и документы не изменялись; прежняя кнопка счёта по сданным заявкам сохранена.
+Web `sha256:019e9c307cb64eb4da299c8643f1b59607416ca257e6aeb363682720ecfa6587`;
+API остаётся `sha256:f541c929317c030370f40d360c25bc19f0cf69ea568762b8f18fbdd64cfbcf3a`.
+1627 прежних assets сохранены, новый граф 29 JS-файлов. Пересоздан только web.
+Локальный runtime: `C:/WMSFF2207/baselines/our-wms-runtime-invoice-status-20261003`
+(API564/web1657), указатель `baselines/OUR_WMS_CURRENT_RUNTIME.json` обновлён.
+Source parity false: только точечные изменения поверх свежего runtime.
+Полный эталон 01.10 не менялся; sold WMS/FFULHAB не затрагивались.
+Web365/API3033 passed, TypeScript/Vite, Node/Python guards, browser actual graph,
+server candidate/full hash verification/public graph/health прошли.
+Откат: `logoff-web:before-billing-invoice-status-20261003`.
+[Описание](billing-invoice-status-filter.md), [запись выпуска](releases/billing-invoice-status-20261003.json).
+
+# Published PR463 / 03.10.2026
+
+«Биллинг → Счета → Создать счёт по сданным заявкам»: обе даты выбирает оператор,
+отбор по последнему переходу в «Сдано» (МСК), единый новый черновик на клиента/филиал
+из утверждённых начислений всех услуг. Все существующие счета, включая черновики,
+сохраняются: охваченные заявки и пересекающиеся периоды исключаются с номером счёта.
+Пропущенные начисления не восстанавливаются автоматически; исключения видны в расчёте.
+Флаг `WMS_BILLING_DONE_REQUESTS_ENABLED=true` включён только в нашей WMS.
+
+API `sha256:f541c929317c030370f40d360c25bc19f0cf69ea568762b8f18fbdd64cfbcf3a`;
+web `sha256:28b7131de8ddd6bd02b2062a58872f1eb98ad57e95e7e3784143769c31291007`.
+Точный delta: шесть API-файлов из свежего runtime, новый граф из 29 JS-файлов.
+1598 прежних web assets сохранены; остальные контейнеры/APK/sold WMS/FFULHAB не менялись.
+Откат: `logoff-api:before-billing-done-requests-20261003`,
+`logoff-web:before-billing-done-requests-20261003`; compose-before.yml в каталоге выпуска.
+
+API 3033 passed / 132 skipped, web 364 passed / 2 skipped; отдельная KIZ DB suite
+исключена. TypeScript, Vite, 3 Node + 3 Python release tests, browser actual graph,
+offline candidate smoke и published HTTP read-only preview прошли. Реальный расчёт
+01–02.10: 60 сданных заявок, 72 существующих счета, 87 исключений, новых документов 0.
+Сверка до/после: финансовые поля всех 5458 счетов и все 51375 строк неизменны.
+Health, все API-хеши/прежние web assets/новый public graph и флаг проверены.
+
+Проверенная локальная копия runtime:
+`C:/WMSFF2207/baselines/our-wms-runtime-done-requests-20261003`
+(API564/web1628 файлов), указатель `baselines/OUR_WMS_CURRENT_RUNTIME.json`.
+Исходный полный серверный эталон 01.10 сохранён без изменений. Source parity false:
+полную локальную сборку публиковать нельзя; перед следующей правкой сверить сервер.
+[Описание](billing-done-requests.md), [запись выпуска](releases/billing-done-requests-20261003.json).
+
+## Предыдущие выпуски
+
 # Published PR461 / 03.10.2026
 
 Cancelled unfinished KIZ reuse: physical admin confirmation, RELEASED/non-completed tasks in closed requests, no shipment history, exact saved WB cancellation and later per-mark sorting/movement proof. Fresh contradictory WB evidence rejects. Full task/evidence saved before conditional removal of old KIZ binding. Current review still needs manager approval. Sold WMS unchanged; existing flags only.

@@ -7,6 +7,7 @@ export type SettlementLine = { id: string; kind: string; description: string; da
   payments?: Array<{ id: string; date: string; amountRub: number }> };
 export type SettlementRow = { client: { id: string; code: string; name: string }; warehouseId: string | null; warehouseName: string;
   unbilledRub: number; draftRub: number; reviewRub: number; debtRub: number; overdueRub: number; clientAdvanceRub: number;
+  clientCreditRub?: number;
   missingWorkCount: number; lines: SettlementLine[] };
 export type SettlementIssue = { id: string; clientId: string; clientName: string; warehouseId: string | null;
   code: string; reason: string; action: string; line: SettlementLine };

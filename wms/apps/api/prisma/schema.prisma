@@ -593,6 +593,8 @@ model User {
   createdBillingCharges          BillingCharge[]                @relation("BillingChargeCreatedBy")
   approvedBillingCharges         BillingCharge[]                @relation("BillingChargeApprovedBy")
   createdBillingInvoices         BillingInvoice[]               @relation("BillingInvoiceCreatedBy")
+  closedBillingPeriods           BillingPeriodClose[]
+  billingCorrections             BillingInvoiceCorrection[]
   createdBillingPayments         BillingPayment[]               @relation("BillingPaymentCreatedBy")
   updatedClientBillingServices   ClientBillingService[]         @relation("ClientBillingServiceUpdatedBy")
   createdDeliveries              LogisticsDeliveryRequest[]     @relation("LogisticsDeliveryCreatedBy")
@@ -612,6 +614,7 @@ model User {
   updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
   systemSettings                 SystemSetting[]
   auditLogs                      AuditLog[]
+  fboProcessingTariffs            ClientFboProcessingTariff[]
   createdWmsApiCredentials       WmsApiCredential[]             @relation("WmsApiCredentialCreatedBy")
   createdExpenseEntries          ExpenseEntry[]                 @relation("ExpenseEntryCreatedBy")
   cancelledExpenseEntries        ExpenseEntry[]                 @relation("ExpenseEntryCancelledBy")
@@ -826,9 +829,11 @@ model Client {
   requests                     ClientRequest[]
   billingCharges               BillingCharge[]
   billingInvoices              BillingInvoice[]
+  closedBillingPeriods         BillingPeriodClose[]
   billingPayments              BillingPayment[]
   billingServicePrices         ClientBillingService[]
   fbsBillingSettings           ClientFbsBillingSettings?
+  fboProcessingTariff          ClientFboProcessingTariff?
   deliveryRequests             LogisticsDeliveryRequest[]
   requestFiles                 ClientRequestFile[]
   requestPackages              ClientRequestPackage[]
@@ -997,6 +1002,7 @@ model Warehouse {
   stockMovements          StockMovement[]
   stockBalances           StockBalance[]
   billingInvoices         BillingInvoice[]
+  closedBillingPeriods    BillingPeriodClose[]
   inventorySessions       InventorySession[]            @relation("InventorySessionWarehouse")
   pickWaves               PickWave[]
   inventoryRescanRequests InventoryBoxRescanRequest[]    @relation("InventoryRescanWarehouse")
@@ -2239,6 +2245,19 @@ model ClientBillingService {
   @@index([updatedByUserId])
 }
 
+// FIX: new FBO compositions are separate immutable snapshots; existing client/FBS prices are never migrated.
+model ClientFboProcessingTariff {
+  id              String   @id @default(uuid())
+  clientId        String   @unique
+  operationKey    String   @unique
+  definition      Json
+  definitionHash  String
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  client          Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  createdBy       User     @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+}
+
 model ClientFbsBillingSettings {
   id                             String                       @id @default(uuid())
   clientId                       String                       @unique
@@ -3074,6 +3093,7 @@ model BillingInvoice {
   createdBy                   User?                @relation("BillingInvoiceCreatedBy", fields: [createdByUserId], references: [id])
   items                       BillingInvoiceItem[]
   payments                    BillingPayment[]
+  corrections                 BillingInvoiceCorrection[]
   createdAt                   DateTime             @default(now())
   updatedAt                   DateTime             @updatedAt
 
@@ -3084,6 +3104,40 @@ model BillingInvoice {
   @@index([source, periodFrom])
   @@index([createdByUserId])
   @@index([paymentBankAccountId])
+}
+
+// FIX: permanent close snapshots and signed amendments are separate from original documents and actual receipts.
+model BillingPeriodClose {
+  id              String   @id @default(uuid())
+  clientId        String
+  warehouseId     String
+  periodFrom      DateTime
+  periodTo        DateTime
+  invoiceIds      String[]
+  snapshot        Json
+  previewHash     String
+  reason          String
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  client          Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy       User @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  @@index([clientId, warehouseId, periodFrom, periodTo])
+  @@index([invoiceIds], type: Gin)
+}
+
+model BillingInvoiceCorrection {
+  id              String @id @default(uuid())
+  invoiceId       String
+  amountRub       Decimal @db.Decimal(14, 2)
+  kind            String @default("ADJUSTMENT")
+  reason          String
+  operationKey    String @unique
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  invoice         BillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  createdBy       User @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
+  @@index([invoiceId, createdAt])
 }
 
 model BillingInvoiceItem {

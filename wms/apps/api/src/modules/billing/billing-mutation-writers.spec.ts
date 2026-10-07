@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BillingService } from './billing.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 
@@ -29,6 +29,66 @@ function setup(patch: any = {}) {
 }
 
 describe('legacy invoice mutation safety', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  // TEST: cancelling the source cannot bypass a fixed invoice's correction document.
+  it('rejects changes to a charge used by a frozen invoice', async () => {
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'true');
+    const { service, db } = setup();
+    db.billingCharge = { findUnique: vi.fn().mockResolvedValue({ id: 'charge', clientId: 'c1' }), update: vi.fn() };
+    db.$queryRaw.mockResolvedValue([{ id: 'i1' }]);
+    await expect(service.updateChargeStatus('charge', { status: 'CANCELLED' } as any, user)).rejects.toThrow(/отдельн/);
+    expect(db.billingCharge.update).not.toHaveBeenCalled();
+  });
+  // TEST: a credit clears the original unpaid invoice from outstanding PDF selection.
+  it('uses corrected debt when selecting unpaid documents for a combined PDF', async () => {
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'true');
+    const { service, db } = setup({ status: 'ISSUED', paidRub: 45 });
+    db.client.findFirst = db.client.findUnique;
+    db.$queryRaw.mockResolvedValue([{ id: 'note', invoiceId: 'i1', amountRub: '-55' }]);
+    await expect(service.listInvoicesForCombinedPdf({ clientId: 'c1', unpaidOnly: true } as any, user)).rejects.toThrow(/нет счетов/);
+    db.$queryRaw.mockResolvedValue([{ id: 'note', invoiceId: 'i1', amountRub: '25' }]);
+    expect((await service.listInvoicesForCombinedPdf({ clientId: 'c1', unpaidOnly: true } as any, user)).invoiceIds).toEqual(['i1']);
+  });
+  // TEST: incoming money cannot exceed the corrected balance; full payment is based on real receipts plus the signed amendment.
+  it('uses a credit note for payment limits and leaves the original amount unchanged', async () => {
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'true');
+    const { service, db, invoice } = setup({ status: 'ISSUED', paidRub: 45 });
+    db.$queryRaw.mockImplementation(async (q: any) => q.text?.includes('BillingInvoiceCorrection') ? [{ id: 'credit', invoiceId: 'i1', amountRub: '-50' }] : []);
+    await expect(service.createPayment({ invoiceId: 'i1', amountRub: 6 } as any, user)).rejects.toThrow(/превышает/);
+    await service.createPayment({ invoiceId: 'i1', amountRub: 5 } as any, user);
+    expect(invoice).toMatchObject({ totalRub: 100, paidRub: 50, status: 'PAID' });
+    expect(db.billingPayment.create).toHaveBeenCalledTimes(1);
+  });
+  // TEST: an issued snapshot cannot be edited or reopened even when it has no payments.
+  it('protects an unpaid issued invoice in the own-WMS period-close rollout', async () => {
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'true');
+    const { service, db } = setup({ status: 'ISSUED', issuedAt: new Date('2026-10-01'), items: [] });
+    db.billingCharge = { create: vi.fn().mockResolvedValue({ id: 'new-charge' }) };
+    db.billingInvoiceItem = { create: vi.fn().mockResolvedValue({ id: 'new-item' }) };
+    const seedServices = vi.spyOn(service as any, 'ensureStandardClientBillingServices').mockResolvedValue(undefined);
+    await expect(service.updateManualInvoice('i1', { clientId: 'c1', periodFrom: '2026-10-01', periodTo: '2026-10-01', rows: [{ description: 'Изменённая услуга', quantity: 1, unitPriceRub: 200 }] } as any, user))
+      .rejects.toThrow(/Выставленный счёт.*отдельн/);
+    expect(db.billingInvoice.update).not.toHaveBeenCalled();
+    expect(seedServices).not.toHaveBeenCalled();
+  });
+  // TEST: changing the status cannot be used to bypass the immutable issued snapshot.
+  it('does not reopen an issued snapshot as a draft', async () => {
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'true');
+    const { service, db } = setup({ status: 'ISSUED' });
+    await expect(service.updateInvoiceStatus('i1', { status: 'DRAFT' } as any, user)).rejects.toThrow(/Выставленный счёт.*черновик/);
+    expect(db.billingInvoice.update).not.toHaveBeenCalled();
+  });
+  // TEST: switching off the own-WMS rollout retains sold-WMS status behavior; payments remain possible when enabled.
+  it('keeps legacy reopening with the flag off and allows payment of the protected snapshot', async () => {
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'false');
+    const legacy = setup({ status: 'ISSUED' });
+    await legacy.service.updateInvoiceStatus('i1', { status: 'DRAFT' } as any, user);
+    expect(legacy.invoice.status).toBe('DRAFT');
+    vi.stubEnv('WMS_BILLING_PERIOD_CLOSE_ENABLED', 'true');
+    const current = setup({ status: 'ISSUED' });
+    await current.service.createPayment({ invoiceId: 'i1', amountRub: 45 } as any, user);
+    expect(current.invoice).toMatchObject({ status: 'ISSUED', totalRub: 100, paidRub: 45 });
+  });
   // TEST: the eligibility read must happen after the common financial transaction lock.
   it('serializes concurrent payments and rechecks the actual remaining balance', async () => {
     const { service, payments, invoice } = setup();

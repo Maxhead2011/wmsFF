@@ -1,0 +1,46 @@
+{
+  "release": "PR463",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/463",
+  "mergeCommit": "35009d4f16ec8068642fad3b513ae49922c75da0",
+  "publishedAt": "2026-10-03",
+  "sourceParityVerified": false,
+  "containers": {
+    "infra-api-1": {
+      "image": "sha256:f541c929317c030370f40d360c25bc19f0cf69ea568762b8f18fbdd64cfbcf3a"
+    },
+    "infra-web-1": {
+      "image": "sha256:28b7131de8ddd6bd02b2062a58872f1eb98ad57e95e7e3784143769c31291007"
+    },
+    "infra-postgres-1": {
+      "image": "sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"
+    },
+    "infra-analytics-postgres-1": {
+      "image": "sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb"
+    },
+    "infra-redis-1": {
+      "image": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+    },
+    "infra-ollama-1": {
+      "image": "sha256:be17b353bf3cfab0b6980530284e64716a57589ed753a82d9a6a2a5fa9a61a31"
+    }
+  },
+  "runtimeBaseline": "C:\\WMSFF2207\\baselines\\our-wms-runtime-done-requests-20261003",
+  "runtimeFileCounts": {
+    "api-runtime.tar.gz": 564,
+    "web-runtime.tar.gz": 1628
+  },
+  "checks": {
+    "apiPassed": 3033,
+    "apiSkipped": 132,
+    "webPassed": 364,
+    "webSkipped": 2,
+    "releaseTests": 6,
+    "browserSmoke": true,
+    "candidateSmoke": true,
+    "health": true,
+    "existingInvoicesUnchanged": 5458,
+    "existingInvoiceItemsUnchanged": 51375,
+    "businessDocumentsCreated": 0,
+    "otherServicesUnchanged": true
+  }
+}

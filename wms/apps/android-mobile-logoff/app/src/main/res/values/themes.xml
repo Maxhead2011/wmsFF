@@ -1,0 +1,52 @@
+<resources>
+    <style name="Theme.LogoffWms" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/logoff_red</item>
+        <item name="colorOnPrimary">@color/logoff_white</item>
+        <item name="colorSecondary">@color/logoff_black</item>
+        <item name="colorSurface">@color/logoff_card</item>
+        <item name="colorOnSurface">@color/logoff_black</item>
+        <item name="colorSurfaceVariant">@color/logoff_surface_alt</item>
+        <item name="colorOutline">@color/logoff_border</item>
+        <item name="android:fontFamily">serif</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@color/logoff_chrome</item>
+        <item name="android:navigationBarColor">@color/logoff_navigation</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Logoff.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Logoff.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Logoff.Large</item>
+    </style>
+    <style name="Theme.LogoffWms.Modern" parent="Theme.LogoffWms">
+        <item name="colorPrimary">@color/theme_modern_primary</item>
+        <item name="colorSecondary">@color/theme_modern_secondary</item>
+    </style>
+    <style name="Theme.LogoffWms.Aerospace" parent="Theme.LogoffWms">
+        <item name="colorPrimary">@color/theme_aerospace_primary</item>
+        <item name="colorSecondary">@color/theme_aerospace_secondary</item>
+    </style>
+    <style name="Theme.LogoffWms.Obsidian" parent="Theme.LogoffWms">
+        <item name="colorPrimary">@color/theme_obsidian_primary</item>
+        <item name="colorSecondary">@color/theme_obsidian_secondary</item>
+    </style>
+    <style name="Theme.LogoffWms.Polar" parent="Theme.LogoffWms">
+        <item name="colorPrimary">@color/theme_polar_primary</item>
+        <item name="colorSecondary">@color/theme_polar_secondary</item>
+    </style>
+    <style name="Theme.LogoffWms.Future" parent="Theme.LogoffWms">
+        <item name="colorPrimary">@color/theme_future_primary</item>
+        <item name="colorSecondary">@color/theme_future_secondary</item>
+    </style>
+    <style name="Theme.LogoffWms.WingX" parent="Theme.LogoffWms">
+        <item name="colorPrimary">@color/theme_wingx_primary</item>
+        <item name="colorSecondary">@color/theme_wingx_secondary</item>
+    </style>
+    <style name="ShapeAppearance.Logoff.Small" parent="ShapeAppearance.Material3.Corner.Medium">
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="ShapeAppearance.Logoff.Medium" parent="ShapeAppearance.Material3.Corner.Large">
+        <item name="cornerSize">18dp</item>
+    </style>
+    <style name="ShapeAppearance.Logoff.Large" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
+        <item name="cornerSize">26dp</item>
+    </style>
+</resources>

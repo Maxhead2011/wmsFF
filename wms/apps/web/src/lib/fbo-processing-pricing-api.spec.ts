@@ -1,0 +1,7 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { fetchFboRegistry, fboPreview, saveFboTariff } from './fbo-processing-pricing-api';
+afterEach(() => vi.unstubAllGlobals());
+// TEST: each variant has its own per-unit amount, using the existing 6% convention.
+it('previews service sum and separate cut prices', () => { const part = { serviceId: 's', priceRub: '30', multiplier: '1', taxMode: 'ADD_6_PERCENT' as const }; expect(fboPreview([part])).toBe('31.91'); expect(fboPreview([{ ...part, priceRub: '60' }])).toBe('63.83'); expect(fboPreview([{ ...part, priceRub: '10,64', taxMode: 'INCLUDED' }, { ...part, serviceId: 's2', priceRub: '4,26', taxMode: 'INCLUDED' }])).toBe('14.90'); });
+it('does not display invalid input as a zero price', () => { expect(fboPreview([{ serviceId: 's', priceRub: '', multiplier: '1', taxMode: 'INCLUDED' }])).toBe(null); });
+it('opening is GET only; saving sends one separate FBO definition', async () => { const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ enabled: true }) }); vi.stubGlobal('fetch', fetch); const session: any = { accessToken: 'fixture' }; await fetchFboRegistry(session); expect(fetch.mock.calls[0][1].method).toBeUndefined(); await saveFboTariff(session, 'client', { common: [], variants: [] }, 'nonce'); expect(fetch.mock.calls[1][0]).toMatch(/billing\/fbo-processing\/client$/); expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ operationKey: 'nonce', definition: { common: [], variants: [] } }); });

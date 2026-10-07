@@ -43,6 +43,11 @@ export class BillingController {
   ) {}
 
   // ADDED: preview is read-only; generation requires its current fingerprint.
+  // FIX: button is shown only where the new request workflow is enabled.
+  @Get('invoices/done-requests/capabilities')
+  @RequirePermissions('billing:write')
+  doneRequestsCapabilities() { return this.periods.doneRequestsCapabilities(); }
+
   @Post('invoices/period/preview')
   @RequirePermissions('billing:write')
   previewPeriod(@Body() dto: PreviewBillingPeriodDto, @CurrentUser() user: AuthUser) {

@@ -1,4 +1,5 @@
 // FIX: read-only financial projection; drafts, issued debt and unbilled work never overlap.
+import { correctedInvoiceBalance } from './billing-correction-balance';
 type Money = string | number | { toString(): string };
 type Client = { id: string; code: string; name: string };
 type Request = { id?: string; number?: number; warehouseId: string | null };
@@ -18,7 +19,7 @@ export type SettlementLine = { id: string; kind: string; description: string; da
 type Issue = { id: string; clientId: string; clientName: string; warehouseId: string | null; code: string; reason: string;
   action: string; line: SettlementLine };
 type Row = { client: Client; warehouseId: string | null; warehouseName: string; unbilledRub: number; draftRub: number;
-  reviewRub: number; debtRub: number; overdueRub: number; clientAdvanceRub: number; missingWorkCount: number; lines: SettlementLine[] };
+  reviewRub: number; debtRub: number; overdueRub: number; clientAdvanceRub: number; clientCreditRub: number; missingWorkCount: number; lines: SettlementLine[] };
 export function record(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function strings(value: unknown): string[] { return Array.isArray(value) ? value.filter((x): x is string => typeof x === 'string') : []; }
 function cents(value: Money) { const n = Math.round(Number(String(value)) * 100); return Number.isSafeInteger(n) ? n : null; }
@@ -27,8 +28,9 @@ function identity(clientId: string, marketplace: string, connectionId: string, o
 }
 export function buildSettlements(input: { warehouseId: string; warehouseName: string; from: Date; to: Date; now: Date;
   clients: Client[]; charges: Charge[]; invoices: Invoice[];
+  coverageCharges?: Array<Pick<Charge, 'id' | 'clientId' | 'metadata' | 'service' | 'status'>>;
   advances: Array<{ id: string; clientId: string; amountRub: Money; paidAt: Date }>;
-  work: SettlementWork[]; requests: Array<Request & { id: string }> }) {
+  work: SettlementWork[]; requests: Array<Request & { id: string }>; corrections?: Array<{ id: string; invoiceId: string; amountRub: unknown; reason: string; createdAt: Date }> }) {
   const rows = new Map<string, Row>(), issues: Issue[] = [];
   const clients = new Map(input.clients.map(c => [c.id, c]));
   const invoiceMap = new Map(input.invoices.map(i => [i.id, i]));
@@ -37,7 +39,7 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
   const row = (client: Client, warehouseId: string | null) => {
     const key = JSON.stringify([client.id, warehouseId]);
     if (!rows.has(key)) rows.set(key, { client, warehouseId, warehouseName: warehouseId ? input.warehouseName : 'Филиал не определён',
-      unbilledRub: 0, draftRub: 0, reviewRub: 0, debtRub: 0, overdueRub: 0, clientAdvanceRub: 0, missingWorkCount: 0, lines: [] });
+      unbilledRub: 0, draftRub: 0, reviewRub: 0, debtRub: 0, overdueRub: 0, clientAdvanceRub: 0, clientCreditRub: 0, missingWorkCount: 0, lines: [] });
     return rows.get(key)!;
   };
   const issue = (r: Row, line: SettlementLine, code: string, reason: string, action: string) => {
@@ -45,7 +47,8 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
     if (!line.buckets.includes('review')) line.buckets.push('review');
   };
   for (const client of input.clients) row(client, input.warehouseId);
-  for (const c of input.charges) {
+  // FIX: historical FBS coverage needs identity only, not financial relations or period amounts.
+  for (const c of input.coverageCharges ?? input.charges) {
     if (c.status === 'CANCELLED') continue;
     const m = record(c.metadata), ids = strings(Object.hasOwn(m, 'processingOrderIds') ? m.processingOrderIds : m.orderIds);
     const legacyIdentity = typeof m.shipmentKey === 'string' ? /^(WILDBERRIES|OZON):([^:]+):/.exec(m.shipmentKey) : null;
@@ -58,6 +61,13 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
         const values = coverage.get(key) ?? new Set<string>(); values.add(c.id); coverage.set(key, values);
       } else ambiguous.add(JSON.stringify([c.clientId, orderId]));
     }
+  }
+  for (const c of input.charges) {
+    if (c.status === 'CANCELLED') continue;
+    const m = record(c.metadata);
+    const legacyIdentity = typeof m.shipmentKey === 'string' ? /^(WILDBERRIES|OZON):([^:]+):/.exec(m.shipmentKey) : null;
+    const marketplace = typeof m.marketplace === 'string' ? m.marketplace : legacyIdentity?.[1];
+    const connectionId = typeof m.connectionId === 'string' ? m.connectionId : legacyIdentity?.[2];
     const branch = c.request?.warehouseId ?? (typeof m.warehouseId === 'string' ? m.warehouseId : null);
     if (branch && branch !== input.warehouseId) continue;
     if (c.serviceDate < input.from || c.serviceDate > input.to) continue;
@@ -87,6 +97,7 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
     const branch = inv.warehouseId ?? inv.request?.warehouseId ?? null;
     if (branch && branch !== input.warehouseId) continue;
     const amount = cents(inv.totalRub), paid = cents(inv.paidRub);
+    const amendments = (input.corrections ?? []).filter(c => c.invoiceId === inv.id);
     const r = row(inv.client, branch);
     const inPeriod = inv.items.some(i => i.serviceDate >= input.from && i.serviceDate <= input.to);
     if (inv.status === 'DRAFT' && !inPeriod) continue;
@@ -96,7 +107,7 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
       payments: (inv.payments ?? []).map(p => ({ id: p.id, date: p.paidAt.toISOString(), amountRub: (cents(p.amountRub) ?? 0) / 100 })), buckets: [] };
     r.lines.push(line);
     if (!branch) { issue(r, line, 'UNKNOWN_BRANCH', 'Не определён филиал счёта.', 'Проверить источник счёта'); continue; }
-    if (amount === null || paid === null || amount < 0 || paid < 0 || paid > amount) {
+    if (amount === null || paid === null || amount < 0 || paid < 0 || (!amendments.length && paid > amount)) {
       issue(r, line, 'INVALID_AMOUNT', 'Некорректная сумма счёта или оплаты.', 'Сверить счёт с оплатами'); continue;
     }
     const itemAmounts = inv.items.map(i => cents(i.totalRub));
@@ -109,14 +120,20 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
       const periodAmount = inv.items.filter(i => i.serviceDate >= input.from && i.serviceDate <= input.to).reduce((s, i) => s + (cents(i.totalRub) ?? 0), 0);
       line.date = inv.items.find(i => i.serviceDate >= input.from && i.serviceDate <= input.to)!.serviceDate.toISOString();
       r.draftRub += periodAmount; line.totalRub = periodAmount / 100; line.buckets.push('draft');
-    } else if (inv.status !== 'PAID') {
-      const remaining = amount - paid;
-      r.debtRub += remaining; line.totalRub = remaining / 100; line.buckets.push('debt');
+    } else if (inv.status !== 'PAID' || amendments.length) {
+      const balance = amendments.length ? correctedInvoiceBalance(inv.totalRub, inv.paidRub, amendments.map(c => c.amountRub))
+        : { remainingRub: (amount - paid) / 100, overpaymentRub: 0 };
+      const remaining = Math.round(balance.remainingRub * 100);
+      r.clientCreditRub += Math.round(balance.overpaymentRub * 100);
+      if (balance.overpaymentRub > 0) { line.buckets.push('credit'); line.totalRub = balance.overpaymentRub; }
+      r.debtRub += remaining; if (!balance.overpaymentRub) line.totalRub = remaining / 100; line.buckets.push('debt');
       const today = input.now.toISOString().slice(0, 10);
       if (remaining > 0 && inv.dueDate && inv.dueDate.toISOString().slice(0, 10) < today) {
         r.overdueRub += remaining; line.buckets.push('overdue');
       }
     }
+    for (const c of amendments) r.lines.push({ id: c.id, kind: 'CORRECTION', description: `Корректировка: ${c.reason}`,
+      date: c.createdAt.toISOString(), orderIds: [], totalRub: Number(c.amountRub), invoices: line.invoices, buckets: ['correction', 'debt', 'credit'] });
     // Keep invoice details attached to its projection without returning unrestricted metadata.
     for (const item of inv.items) r.lines.push({ id: `${inv.id}:${r.lines.length}`, kind: 'INVOICE_ITEM', description: item.description,
       date: item.serviceDate.toISOString(), orderIds: [], quantity: String(item.quantity), unitPriceRub: String(item.unitPriceRub),
@@ -148,11 +165,15 @@ export function buildSettlements(input: { warehouseId: string; warehouseName: st
     r.lines.push({ id: advance.id, kind: 'ADVANCE', description: 'Аванс клиента — все филиалы', date: advance.paidAt.toISOString(),
       orderIds: [], totalRub: amount / 100, invoices: [], buckets: ['advance'] });
   }
-  for (const r of rows.values()) for (const field of ['unbilledRub', 'draftRub', 'reviewRub', 'debtRub', 'overdueRub', 'clientAdvanceRub'] as const) {
+  for (const r of rows.values()) for (const field of ['unbilledRub', 'draftRub', 'reviewRub', 'debtRub', 'overdueRub', 'clientAdvanceRub', 'clientCreditRub'] as const) {
     if (!Number.isSafeInteger(r[field])) throw new Error('Сумма превышает безопасный предел расчёта. Выберите одного клиента.');
     r[field] /= 100;
   }
+  // FIX: settled clients, including archived ones, do not inflate the register; advances alone are not client debt.
+  const reviewRows = new Set(issues.map(i => JSON.stringify([i.clientId, i.warehouseId])));
+  const visibleRows = [...rows.values()].filter(r => r.debtRub > 0 || r.clientCreditRub > 0 || r.unbilledRub > 0 || r.draftRub > 0 ||
+    r.reviewRub > 0 || r.missingWorkCount > 0 || reviewRows.has(JSON.stringify([r.client.id, r.warehouseId])));
   return { enabled: true as const, periodFrom: input.from.toISOString().slice(0, 10), periodTo: input.to.toISOString().slice(0, 10),
     warehouseId: input.warehouseId, warehouseName: input.warehouseName, calculatedAt: input.now.toISOString(),
-    workCoverage: 'FBS_CONFIRMED_OPERATIONS' as const, rows: [...rows.values()].sort((a, b) => a.client.name.localeCompare(b.client.name, 'ru')), issues };
+    workCoverage: 'FBS_CONFIRMED_OPERATIONS' as const, rows: visibleRows.sort((a, b) => a.client.name.localeCompare(b.client.name, 'ru')), issues };
 }

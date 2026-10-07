@@ -44,6 +44,11 @@ describe('cabinet stock export audit', () => {
     const errors = await validate(plainToInstance(CabinetStockExportDto, invalid), { whitelist: true, forbidNonWhitelisted: true });
     expect(errors.map(error => error.property)).toEqual(expect.arrayContaining(['ipAddress', 'filters', 'rows']));
   });
+  // TEST: keep the published six-column product/article/barcode/color/size/quantity export.
+  it('accepts the current cabinet export without inventing status or timestamps', async () => {
+    const snapshot = { ...dto(), rows: [{ barcode: '123', name: 'Suit', article: 'Paris', color: 'blue', size: 'M', quantity: 5 }] };
+    expect(await validate(plainToInstance(CabinetStockExportDto, snapshot), { whitelist: true, forbidNonWhitelisted: true })).toEqual([]);
+  });
   it('rejects missing filters and oversized exports', async () => {
     const errors = await validate(plainToInstance(CabinetStockExportDto, { ...dto(), filters: undefined, rows: Array(20001).fill(dto().rows[0]) }));
     expect(errors.map(error => error.property)).toEqual(expect.arrayContaining(['filters', 'rows']));

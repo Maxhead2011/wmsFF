@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 216 // FIX: client-specific product descriptions; preserve Ozon per-article counters.
-            versionName = "0.1.216-client-display"
+            versionCode = 218 // FIX: show accepted FBO stock awaiting placement only in the LOGOFF release.
+            versionName = "0.1.218-fbo-await-placement"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

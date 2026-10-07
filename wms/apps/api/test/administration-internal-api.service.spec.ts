@@ -18,6 +18,10 @@ afterEach(() => {
 });
 
 describe('AdministrationInternalApiService', () => {
+  // TEST: opt-in period closure routes remain discoverable in the existing billing group.
+  it('регистрирует закрытие периода и отдельные документы исправления', () => {
+    expect(INTERNAL_API_DEFINITIONS.find(d => d.id === 'billing')?.prefixes).toContain('/billing/period-close');
+  });
   // TEST: a read-only settlements controller is discoverable without adding mutation routes.
   it('регистрирует реестр расчётов в существующей группе биллинга', () => {
     expect(INTERNAL_API_DEFINITIONS.find(d => d.id === 'billing')?.prefixes).toContain('/billing/settlements');

@@ -1,0 +1,13 @@
+.fbo-pricing { min-width: 0; }
+.fbo-pricing table { width: 100%; border-collapse: collapse; }
+.fbo-pricing th, .fbo-pricing td { padding: 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border-color, #aaa); overflow-wrap: anywhere; }
+.fbo-pricing__scroll { overflow-x: auto; }
+.fbo-pricing td:first-child { min-width: 160px; }
+.fbo-pricing label { display: block; margin: 8px 0; }
+.fbo-pricing input:not([type=checkbox]), .fbo-pricing select { display: block; max-width: 100%; min-width: 0; padding: 8px; }
+.fbo-pricing__form { margin-top: 24px; padding: 16px; border: 1px solid var(--border-color, #aaa); border-radius: 12px; }
+.fbo-pricing fieldset { min-width: 0; margin-bottom: 16px; padding: 12px; }
+.fbo-pricing__fields { display: flex; gap: 16px; flex-wrap: wrap; }
+.fbo-pricing__service { padding: 4px 0; }
+.fbo-pricing__products { max-height: 280px; overflow: auto; }
+.fbo-pricing button { margin: 4px 0; }

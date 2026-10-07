@@ -3,6 +3,8 @@ import { BILLING_CATEGORIES, type BillingServiceCategory } from '../billing-peri
 
 // ADDED: explicit calendar dates and bounded category selection; no client-supplied prices.
 export class PreviewBillingPeriodDto {
+  // FIX: opt-in request surrender workflow; existing service-date mode is unchanged.
+  @IsOptional() @IsBoolean() doneRequests?: boolean;
   @IsOptional() @IsUUID() clientId?: string;
   @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) periodFrom!: string;
   @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) periodTo!: string;

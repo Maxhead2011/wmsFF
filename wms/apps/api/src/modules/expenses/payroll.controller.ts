@@ -13,9 +13,13 @@ import { PayrollService } from './payroll.service';
 export class PayrollController {
   constructor(private readonly payroll: PayrollService) {}
   @Get('capabilities') capabilities(@CurrentUser() user: AuthUser) {
-    return { enabled: process.env.WMS_PAYROLL_ATTENDANCE_ENABLED === 'true' && user.roleCodes.some(r => ['ADMIN', 'OWNER'].includes(r)) };
+    const enabled = process.env.WMS_PAYROLL_ATTENDANCE_ENABLED === 'true' && user.roleCodes.some(r => ['ADMIN', 'OWNER'].includes(r));
+    return { enabled, correctionsEnabled: enabled && process.env.WMS_PAYROLL_CORRECTIONS_ENABLED === 'true' };
   }
   @Get('employees') employees(@CurrentUser() user: AuthUser) { return this.payroll.employees(user); }
+  @Get('history') history(@Query('from') from: string, @Query('to') to: string, @Query('cursor') cursor: string | undefined, @CurrentUser() user: AuthUser) { return this.payroll.correctionHistory(from, to, cursor, user); }
+  @Post('history/:id/undo') @RequirePermissions('expenses:write')
+  undo(@Param('id') id: string, @Body() dto: PayrollHandlingCancelDto, @CurrentUser() user: AuthUser) { return this.payroll.undoCorrection(id, dto.reason, user); }
   @Get('picking-users') users(@CurrentUser() user: AuthUser) { return this.payroll.pickingUsers(user); }
   @Post('employees') @RequirePermissions('expenses:write')
   create(@Body() dto: PayrollEmployeeDto, @CurrentUser() user: AuthUser) { return this.payroll.saveEmployee(undefined, dto, user); }

@@ -20,6 +20,41 @@ function report(extra: any = {}) { return buildSettlements({ warehouseId: 'w1', 
 
 // TEST: money categories remain disjoint; a draft is not a receivable or a second unbilled charge.
 describe('settlements accounting', () => {
+  // TEST: signed notes preserve invoice details and actual receipts, exposing overpayment separately from advances.
+  it('projects reductions, overpayment and new debt without changing the original invoice amount', () => {
+    const note = { id: 'credit', invoiceId: 'i1', amountRub: '-90', reason: 'Ошибочная услуга', createdAt: new Date('2026-10-03') };
+    const reduced = report({ invoices: [invoice()], corrections: [note] });
+    expect(reduced.rows[0]).toMatchObject({ debtRub: 0, clientCreditRub: 15, clientAdvanceRub: 0 });
+    expect(reduced.issues).toEqual([]);
+    expect(reduced.rows[0].lines.find(l => l.kind === 'CORRECTION')?.totalRub).toBe(-90);
+    const increased = report({ invoices: [invoice({ status: 'PAID', paidRub: 100 })], corrections: [{ ...note, amountRub: '20' }] });
+    expect(increased.rows[0]).toMatchObject({ debtRub: 20, clientCreditRub: 0 });
+  });
+  // TEST: active and archived clients with only settled documents/advances must not inflate the register.
+  it('omits settled and advance-only clients, including archived clients', () => {
+    const archived = { ...client, id: 'archived', name: 'Архивный', status: 'ARCHIVED' };
+    const payments = [{ id: 'paid', amountRub: 100, paidAt: new Date() }];
+    const result = report({ clients: [client, archived], invoices: [invoice({ status: 'ISSUED', paidRub: 100, payments }),
+      invoice({ id: 'archived-invoice', clientId: archived.id, client: archived, status: 'PAID', paidRub: 100, payments })],
+      advances: [{ id: 'a', clientId: client.id, amountRub: 500, paidAt: new Date() }, { id: 'b', clientId: archived.id, amountRub: 500, paidAt: new Date() }] });
+    expect(result.rows).toEqual([]);
+    expect(result.issues).toEqual([]);
+  });
+  // TEST: zero issued debt does not hide unbilled services, drafts, missing work or unresolved calculations.
+  it('retains unfinished calculations and archived debt without subtracting advances', () => {
+    const archived = { ...client, status: 'ARCHIVED' };
+    const cases = [
+      { charges: [charge()] },
+      { invoices: [invoice({ status: 'DRAFT', paidRub: 0 })] },
+      { work: [work()] },
+      { charges: [charge({ totalRub: 0, unitPriceRub: 0 })] },
+      { clients: [archived], invoices: [invoice({ client: archived })], advances: [{ id: 'a', clientId: client.id, amountRub: 1000, paidAt: new Date() }] },
+    ];
+    for (const scenario of cases) expect(report(scenario).rows).toHaveLength(1);
+    const debt = report(cases[4]).rows[0];
+    expect(debt).toMatchObject({ debtRub: 75, overdueRub: 75, clientAdvanceRub: 1000 });
+    expect(report().rows).toEqual([]);
+  });
   it('excludes issued charges from unbilled and exposes remaining debt and overdue', () => {
     const r = report({ charges: [charge({ invoiceItems: [{ invoice: { id: 'i1', status: 'ISSUED' } }] })], invoices: [invoice()] });
     expect(r.rows[0]).toMatchObject({ unbilledRub: 0, draftRub: 0, debtRub: 75, overdueRub: 75 });
@@ -106,6 +141,28 @@ describe('settlements access', () => {
     const db: any = { $transaction: vi.fn((fn: any) => fn(tx)) };
     return { tx, db, s: new BillingSettlementsService(db, new ClientScopeService()) };
   }
+  // TEST: reading historical financial relations expires the transaction; lightweight coverage must still suppress false missing work.
+  it('reads period financial details separately from historical FBS coverage without losing debt or advances', async () => {
+    process.env.WMS_BILLING_SETTLEMENTS_ENABLED = 'true';
+    const { tx, s } = setup();
+    tx.billingCharge.findMany.mockImplementation(async (query: any) => {
+      if (query.select.invoiceItems && !query.where.serviceDate) throw new Error('Historical financial query exceeded transaction timeout');
+      if (query.select.invoiceItems) return [charge({ service: { code: 'PACKING' }, metadata: {} })];
+      return [charge({ serviceDate: new Date('2026-09-01') })];
+    });
+    tx.billingInvoice.findMany.mockResolvedValue([invoice({ items: [{ ...invoice().items[0], serviceDate: new Date('2026-09-01') }] })]);
+    tx.billingPayment.findMany.mockResolvedValue([{ id: 'advance', clientId: 'c1', amountRub: '90', paidAt: new Date() }]);
+    tx.wbOrderShipment.findMany.mockResolvedValue([{ ...work(), assemblyId: 'a1', quantity: 2, shippedAt: work().completedAt, assemblySnapshot: {} }]);
+    const result = await s.list({ periodFrom: '2026-10-01', periodTo: '2026-10-02' }, user);
+    if (!result.enabled) throw new Error('Expected enabled register');
+    expect(result.rows[0]).toMatchObject({ unbilledRub: 100, debtRub: 75, overdueRub: 75, clientAdvanceRub: 90, missingWorkCount: 0 });
+    expect(result.issues.filter(i => i.code === 'WORK_WITHOUT_CHARGE')).toHaveLength(0);
+    const queries = tx.billingCharge.findMany.mock.calls.map((call: any[]) => call[0]);
+    const historical = queries.find((q: any) => !q.where.serviceDate);
+    expect(historical.select.request).toBeUndefined();
+    expect(historical.select.invoiceItems).toBeUndefined();
+    expect(historical.where.OR).toEqual([{ metadata: { path: ['kind'], equals: 'FBS' } }, { service: { code: 'FBS_PROCESSING' } }]);
+  });
   it('uses repeatable-read, read-only SQL and authorized client scope for every source', async () => {
     process.env.WMS_BILLING_SETTLEMENTS_ENABLED = 'true';
     const { tx, db, s } = setup();

@@ -34,15 +34,38 @@ const preview: any = {
   issues: [{ id: 'missing', clientName: 'Клиент', message: 'Нет тарифа ПРР' }], alreadyBilledCount: 3, zeroCount: 1,
 };
 let onCreated = vi.fn();
-function render(clientId?: string) {
+function render(clientId?: string, doneRequests?: boolean) {
   hooks.cursor = 0;
-  return BillingPeriodGenerationDialog({ session: { accessToken: 'token', user: {} } as any, clients: [{ id: 'client', code: '001', name: 'Клиент' }] as any, clientId, periodFrom: '2026-08-01', periodTo: '2026-08-31', onClose: vi.fn(), onCreated });
+  return BillingPeriodGenerationDialog({ session: { accessToken: 'token', user: {} } as any, clients: [{ id: 'client', code: '001', name: 'Клиент' }] as any, clientId, doneRequests, periodFrom: '2026-08-01', periodTo: '2026-08-31', onClose: vi.fn(), onCreated });
 }
 function button(tree: any, label: string) { return elements(tree).find(node => node.type === 'button' && text(node) === label); }
 async function getPreview() { await button(render(), 'Предварительный расчёт').props.onClick(); return render(); }
 
 describe('billing period generation', () => {
   beforeEach(() => { hooks.values = []; hooks.cursor = 0; vi.clearAllMocks(); onCreated = vi.fn(); vi.mocked(previewBillingPeriod).mockResolvedValue(preview); });
+  // TEST: explicit surrender workflow includes all clients/categories and exposes selected request dates.
+  it('creates combined request drafts by surrender date without excluding Lukin', async () => {
+    const tree = render(undefined, true);
+    expect(text(tree)).toContain('Дата сдачи с');
+    expect(text(tree)).not.toContain('Исключить ИП Лукин');
+    expect(text(tree)).toContain('не восстанавливает пропущенные услуги');
+    expect(elements(tree).find(n => n.props?.name === 'periodFrom').props.value).toBe('');
+    expect(elements(tree).find(n => n.props?.name === 'periodTo').props.value).toBe('');
+    await button(tree, 'Предварительный расчёт').props.onClick();
+    expect(previewBillingPeriod).not.toHaveBeenCalled();
+    elements(tree).find(n => n.props?.name === 'periodFrom').props.onChange({ target: { value: '2026-08-01' } });
+    elements(render(undefined, true)).find(n => n.props?.name === 'periodTo').props.onChange({ target: { value: '2026-08-31' } });
+    vi.mocked(previewBillingPeriod).mockResolvedValue({ ...preview, requests: [{ id: 'r', number: 1244, clientName: 'Клиент', surrenderedAt: '2026-08-10T21:00:00Z' }] });
+    await button(render(undefined, true), 'Предварительный расчёт').props.onClick();
+    expect(previewBillingPeriod).toHaveBeenCalledWith('token', expect.objectContaining({ doneRequests: true, excludeLukin: false }));
+    const calculated = render(undefined, true);
+    expect(text(calculated)).toContain('№1244');
+    expect(text(calculated)).toContain('Все услуги по заявкам');
+    vi.mocked(generateBillingPeriod).mockResolvedValue({ invoices: [{ id: 'i', number: 'INV-NEW', disposition: 'CREATED' }], replayed: false });
+    await button(calculated, 'Подтвердить создание черновиков').props.onClick();
+    expect(generateBillingPeriod).toHaveBeenCalledWith('token', expect.objectContaining({ doneRequests: true, previewHash: 'snapshot-1' }));
+    expect(text(render(undefined, true))).toContain('INV-NEW');
+  });
   // TEST: presets use inclusive calendar days, not elapsed hours/local timezone.
   it('does not silently exclude a client explicitly selected when opening the dialog', async () => {
     const tree = render('client');

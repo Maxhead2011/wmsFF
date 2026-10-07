@@ -1,0 +1,20 @@
+{
+  "date": "2026-10-03",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/467",
+  "mergeCommit": "331e23fe44de6cd32af4e6219ccc0db860abbfa0",
+  "api": "sha256:6c7be0f55b5334f80d8d78880beead3b19967b2018d5dba13ec633f00b2ecbf2",
+  "web": "sha256:30fbd82b11b051a579f2b00b2f4bef1170570b6ba035297a66b85cdbaeab49cb",
+  "sourceParityVerified": false,
+  "otherServicesUnchanged": true,
+  "composeUnchanged": true,
+  "apiDelta": ["modules/billing/billing-settlements.service.js", "modules/billing/billing-settlements.policy.js"],
+  "preservedWebAssets": 1656,
+  "newGraphFiles": 29,
+  "baseline": "C:/WMSFF2207/baselines/our-wms-runtime-partial-receipt-20261003",
+  "apiFiles": 564,
+  "webFiles": 1686,
+  "publishedSettlementMs": 22304,
+  "publishedSettlementAndInvoicesTotalMs": 63124,
+  "confirmedReceiptCorrection": { "number": "INV-202609-0007", "paidRub": 450000, "remainingRub": 100535.37, "status": "ISSUED", "originalRetainedCancelled": true, "auditBeforeAfter": true, "dryRunRollback": true },
+  "tests": { "apiPassed": 3034, "apiSkipped": 132, "webPassed": 367, "webSkipped": 2, "releaseAndCorrectionTests": 6, "browser": true, "typecheck": true, "build": true, "publicHashes": true, "health": true, "publishedSettlementHttp": 200, "publishedInvoiceHttp": 200, "readOnlyCandidateMs": 2853 }
+}

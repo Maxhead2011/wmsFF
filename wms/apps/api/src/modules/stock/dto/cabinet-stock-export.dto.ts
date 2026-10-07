@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsDateString, IsDefined, IsIn, IsInt, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsDateString, IsDefined, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, ValidateNested } from 'class-validator';
 
 class ExportFilters {
   @IsString() @MaxLength(1000) search!: string;
@@ -8,11 +8,14 @@ class ExportFilters {
 }
 class ExportRow {
   @IsString() @MaxLength(500) barcode!: string;
-  @IsString() @MaxLength(4000) internalSku!: string;
+  @IsOptional() @IsString() @MaxLength(4000) internalSku?: string;
   @IsString() @MaxLength(4000) name!: string;
-  @IsString() @MaxLength(500) status!: string;
+  @IsOptional() @IsString() @MaxLength(500) status?: string;
+  @IsOptional() @IsString() @MaxLength(4000) article?: string;
+  @IsOptional() @IsString() @MaxLength(500) color?: string;
+  @IsOptional() @IsString() @MaxLength(500) size?: string;
   @IsInt() @Min(1) @Max(1000000000) quantity!: number;
-  @IsDateString() updatedAt!: string;
+  @IsOptional() @IsDateString() updatedAt?: string;
 }
 // FIX: accept only the bounded exported snapshot, never actor/IP supplied by the browser.
 export class CabinetStockExportDto {

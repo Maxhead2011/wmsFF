@@ -1,6 +1,17 @@
+# Текущий выпуск PR488 / 06.10.2026
+
+[Исправления и история ФОТ](payroll-corrections.md), [паспорт](current-production.md).
+Фильтры выплат, смена сотрудника и отмена новых исправлений опубликованы вместе.
+
 # Индекс нашей WMS
 
-Текущий API выпуск PR461: [паспорт](current-production.md), проверенный API baseline
+Опубликовано PR485 / 05.10.2026: LOGOFF ТСД217, [два маршрута отбора ФБО](fbo-two-stage-picking.md).
+[Проверенный снимок](../baselines/our-wms/2026-10-05-fbo-picking-217/manifest.json); API и веб-приложение сохранены.
+
+Опубликовано PR463 / 03.10.2026: [единый черновик по сданным заявкам](billing-done-requests.md),
+отбор по дате сдачи, отдельный флаг нашей WMS.
+
+Предыдущий API выпуск PR461: [паспорт](current-production.md), проверенный API baseline
 [baselines/our-wms/2026-10-03-kiz-unfinished-release](../baselines/our-wms/2026-10-03-kiz-unfinished-release/manifest.json). Предыдущая запись PR455 ниже
 сохраняет сведения о неизменившемся web.
 

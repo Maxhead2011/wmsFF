@@ -1,0 +1,30 @@
+{
+  "release": "billing-period-close-20261004",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/472",
+  "mergeCommit": "5ede9712e308f7d636d0ce807e4b0e7e9f4e08b0",
+  "scope": "our-wms",
+  "sourceParityVerified": false,
+  "api": "sha256:7ff2c21d01327774b1ff328cc9c842ec25b02eef031dbda79753050676dbbd3e",
+  "web": "sha256:9af39b73ad64bb3930496e46f4ff3b47c6d28d2adfaf25238c6eb5a173f910ce",
+  "apiBaseline": "sha256:3ef0489614fef715a1ec2a3d476f3bf4edb58e03b0fd10e269a81081d8b11d32",
+  "runtimeBaseline": "C:/WMSFF2207/baselines/our-wms-runtime-period-close-20261004",
+  "runtimeFileCounts": {"api": 569, "web": 1744},
+  "apiChangedFiles": 10,
+  "newWebChunks": 29,
+  "preservedWebAssets": 1714,
+  "migration": "20261003220000_billing_period_close",
+  "flags": {"WMS_BILLING_PERIOD_CLOSE_ENABLED": true, "WMS_BILLING_SETTLEMENTS_ENABLED": true, "WMS_BILLING_DONE_REQUESTS_ENABLED": true},
+  "checks": {
+    "apiPassed": 3059, "apiSkipped": 132, "webPassed": 372, "webSkipped": 2,
+    "types": true, "prismaValidate": true, "vite": true, "liveOverlayBrowser": true,
+    "statusAndPartialReceiptBrowser": true, "postgresConcurrency": true,
+    "exactPublicationSql": true, "migrationTamperRollback": true,
+    "fullRuntimeHashes": true, "publicAssetHashes": true, "health": true,
+    "otherServicesUnchanged": true, "originalFinancialDataPreserved": true,
+    "newBusinessDocuments": 0,
+    "capabilitiesHistoryInvoicesSettlementsHttp": 200,
+    "positiveAndNegativePreviewHttp": 201,
+    "partialPaymentRub": 450000, "remainingRub": 100535.37
+  },
+  "rollbackLimitation": "Previous runtime is safe only before new close/correction documents exist; afterwards keep signed balances and recover forward."
+}

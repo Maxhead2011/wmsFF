@@ -33,6 +33,9 @@ export class PayrollConditionDto {
 }
 
 export class PayrollShiftDto {
+  // FIX: only the correction path may move a closed shift to another employee.
+  @IsOptional() @IsString() employeeId?: string;
+  @IsOptional() @IsInt() @Min(1) expectedVersion?: number;
   @IsISO8601() startsAt!: string;
   @IsOptional() @IsISO8601() endsAt?: string;
   @IsString() @MaxLength(1000) reason!: string;
@@ -49,6 +52,7 @@ export class PayrollHistoryEditDto {
 }
 
 export class PayrollHandlingDto {
+  @IsOptional() @IsString() @MaxLength(64) expectedState?: string;
   @IsString() warehouseId!: string;
   @IsISO8601() startsAt!: string;
   @IsIn(['LOAD', 'UNLOAD']) operation!: string;

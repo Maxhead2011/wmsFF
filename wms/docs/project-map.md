@@ -1,5 +1,35 @@
 # Карта проекта
 
+Опубликовано PR472 04.10.2026: [закрытие расчётных периодов](billing-period-close.md).
+`BillingPeriodClosingPanel` → `/billing/period-close` → `BillingPeriodCloseService` →
+отдельные `BillingPeriodClose` и `BillingInvoiceCorrection`; `billing-correction-balance.ts`
+рассчитывает итоговый долг без изменения исходной суммы/приходов.
+Отдельный флаг только нашей WMS. Runtime `baselines/our-wms-runtime-period-close-20261004`;
+API569/web1744. Исходные счета/строки/приходы/начисления сохранены, новых бизнес-документов0.
+
+Опубликовано PR469: `buildSettlements` → `visibleRows` после расчёта денежных сумм.
+Строки без долга и незавершённых расчётов скрыты, независимо от архивности клиента.
+`BillingSettlementsPanel` объясняет пустой отфильтрованный реестр.
+Текущий runtime: `C:/WMSFF2207/baselines/our-wms-runtime-settlements-visible-20261003`.
+[Запись выпуска](releases/billing-settlements-visible-20261003.json).
+
+Опубликовано PR467: [частичный приход и загрузка расчётов](billing-partial-receipt-fix.md).
+`BillingSettlementsService.list` → отдельные `charges` за период и исторические
+`coverageCharges` → `buildSettlements`. `BillingCashReceiptPanel.toggleInvoice`
+сохраняет введённую сумму; `receiptHistory` читает оплаты всех счетов клиента.
+Текущий runtime: `C:/WMSFF2207/baselines/our-wms-runtime-partial-receipt-20261003`.
+
+Опубликовано PR465: [фильтр статуса счетов](billing-invoice-status-filter.md).
+`BillingPanel.invoiceStatusFilter` → server register query + `filterBillingRegisterInvoices`
+и `invoiceKindTiles`. Оба представления используют один выбор статуса; API не менялся.
+Текущий runtime: `C:/WMSFF2207/baselines/our-wms-runtime-invoice-status-20261003`.
+
+Опубликовано PR463: [черновик по сданным заявкам](billing-done-requests.md).
+`BillingPanel` → `BillingPeriodGenerationDialog(doneRequests)` → прежние period
+preview/generate routes → `BillingPeriodService.loadDoneRequests` →
+`billing-done-requests.policy.ts` → существующий `writePeriodDraft`.
+Отбор по событиям сдачи; отдельный флаг нашей WMS, без складских изменений.
+
 ## Биллинг: клиенты, суммы и проверки — PR455
 
 `apps/web/src/components/billing/BillingPanel.tsx` → `BillingSettlementsPanel.tsx` →

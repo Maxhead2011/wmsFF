@@ -13,6 +13,12 @@ const row: SettlementRow = { client: { id: 'c1', code: 'CL1', name: 'Лукин'
 beforeEach(() => { hooks.index = 0; hooks.values = []; });
 // TEST: financial drilldown never mixes debt, draft and unbilled amounts.
 describe('settlements workspace', () => {
+  // TEST: an empty filtered report describes settled clients without implying their historical invoices disappeared.
+  it('explains that no clients have debt or unfinished calculations', () => {
+    hooks.values[4] = { enabled: true, warehouseName: 'Москва', calculatedAt: '2026-10-03', rows: [], issues: [] };
+    hooks.values[5] = 'ready';
+    expect(renderToStaticMarkup(<BillingSettlementsPanel session={session} clients={[]} />)).toContain('Нет клиентов с задолженностью или незавершёнными расчётами');
+  });
   it('renders register, known-operation chain and missing-work review without inventing a tariff', () => {
     hooks.values[4] = { enabled: true, warehouseName: 'Москва', calculatedAt: '2026-10-02', rows: [row], issues: [{ id: 'work', code: 'WORK_WITHOUT_CHARGE',
       clientId: 'c1', clientName: 'Лукин', reason: 'Обработка выполнена, начисление не найдено.', action: 'Проверить тариф', line: { ...line, id: 'work', totalRub: null, unitPriceRub: undefined } }] };

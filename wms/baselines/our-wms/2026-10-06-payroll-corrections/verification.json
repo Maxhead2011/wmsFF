@@ -1,0 +1,16 @@
+{
+  "apiTestsPassed": 3096,
+  "apiTestsSkipped": 141,
+  "excludedSuite": "kiz-duplicate.integration.spec.ts (dedicated database unavailable)",
+  "webTestsPassed": 387,
+  "webTestsSkipped": 2,
+  "postgresqlTestsPassed": 18,
+  "candidatePostgresqlTestsPassed": 9,
+  "candidateBrowserScenarioPassed": true,
+  "typeScriptPassed": true,
+  "historyProductionReadOnlyPassed": true,
+  "sourceParityVerified": false,
+  "initialPublicationRolledBack": "Read-only smoke launched from wrong directory; corrected and retry passed",
+  "schemaMigration": false,
+  "soldWmsChanged": false
+}

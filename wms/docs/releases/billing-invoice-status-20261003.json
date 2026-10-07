@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-03",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/465",
+  "mergeCommit": "ecfb39380280cad461f8241b9c3f1c171d1e0a81",
+  "web": "sha256:019e9c307cb64eb4da299c8643f1b59607416ca257e6aeb363682720ecfa6587",
+  "api": "sha256:f541c929317c030370f40d360c25bc19f0cf69ea568762b8f18fbdd64cfbcf3a",
+  "apiUnchanged": true,
+  "businessDocumentsCreated": 0,
+  "otherServicesUnchanged": true,
+  "sourceParityVerified": false,
+  "preservedWebAssets": 1627,
+  "newGraphFiles": 29,
+  "baseline": "C:/WMSFF2207/baselines/our-wms-runtime-invoice-status-20261003",
+  "webFiles": 1657,
+  "apiFiles": 564,
+  "rollback": "logoff-web:before-billing-invoice-status-20261003",
+  "tests": { "webPassed": 365, "webSkipped": 2, "apiPassed": 3033, "apiSkipped": 132, "releaseGuards": 2, "browser": true, "typecheck": true, "build": true, "publicHashes": true, "health": true }
+}

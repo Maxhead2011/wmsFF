@@ -5,6 +5,7 @@ import {
   downloadBillingInvoiceActPdf,
   downloadBillingInvoicePdf,
   fetchBillingCharges,
+  fetchBillingDoneRequestsCapabilities,
   fetchBillingInvoiceActDocument,
   fetchBillingInvoiceDocument,
   fetchBillingInvoices,
@@ -44,9 +45,11 @@ import { BillingPeriodSummary } from './BillingPeriodSummary';
 import { BillingReconciliationPanel } from './BillingReconciliationPanel';
 import { BillingServiceForm } from './BillingServiceForm';
 import { BillingPaymentForm } from './BillingPaymentForm';
+import { BillingInvoiceClosePaymentButton } from './BillingInvoiceClosePaymentButton';
 import { BillingPeriodGenerationDialog } from './BillingPeriodGenerationDialog';
 // FIX: additive workspace; existing financial actions remain on their original tabs.
 import { BillingSettlementsPanel } from './BillingSettlementsPanel';
+import { FboProcessingPricingPanel } from './FboProcessingPricingPanel';
 import { billingInvoiceStatusLabel, billingInvoiceStatusOptions } from './billingMeta';
 
 type LoadState<T> = {
@@ -73,7 +76,7 @@ const billingTabs = [
   { id: 'create', label: 'Создать счет' },
 ] as const;
 
-type BillingTab = 'home' | 'settlements' | (typeof billingTabs)[number]['id'];
+type BillingTab = 'home' | 'settlements' | 'fbo-processing' | (typeof billingTabs)[number]['id'];
 type InvoiceKindFilter = 'ALL' | 'FBS' | 'PRIMARY_PROCESSING' | 'PROCESSING' | 'PRR' | 'STORAGE' | 'OTHER';
 type InvoiceView = 'topics' | 'list';
 
@@ -112,6 +115,17 @@ export function BillingPanel({ session }: BillingPanelProps) {
   const [invoiceView, setInvoiceView] = useState<InvoiceView>('list');
   const [invoiceStatusFilter, setInvoiceStatusFilter] = useState<BillingInvoiceStatus | ''>('');
   const [showPeriodGeneration, setShowPeriodGeneration] = useState(false);
+  // FIX: new button is server-gated; sold WMS and unavailable endpoints remain unchanged.
+  const [doneRequestsEnabled, setDoneRequestsEnabled] = useState(false);
+  const [showDoneRequests, setShowDoneRequests] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setDoneRequestsEnabled(false);
+    if (canWrite) void fetchBillingDoneRequestsCapabilities(session.accessToken).then(result => {
+      if (active) setDoneRequestsEnabled(result.enabled);
+    }).catch(() => { if (active) setDoneRequestsEnabled(false); });
+    return () => { active = false; };
+  }, [session.accessToken, canWrite]);
   const [invoicePeriodFrom, setInvoicePeriodFrom] = useState(currentMonthStart());
   const [invoicePeriodTo, setInvoicePeriodTo] = useState(todayDate());
 
@@ -144,6 +158,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
       const items = invoiceRegisterSourceInvoices.filter(
         (invoice) =>
           matchesInvoiceKind(invoice, kind) &&
+          (!invoiceStatusFilter || invoice.status === invoiceStatusFilter) &&
           matchesInvoicePeriod(invoice, invoicePeriodFrom, invoicePeriodTo),
       );
       return {
@@ -152,13 +167,13 @@ export function BillingPanel({ session }: BillingPanelProps) {
         totalRub: items.reduce((sum, invoice) => sum + Number(invoice.totalRub), 0),
       };
     }),
-    [invoicePeriodFrom, invoicePeriodTo, invoiceRegisterSourceInvoices],
+    [invoicePeriodFrom, invoicePeriodTo, invoiceStatusFilter, invoiceRegisterSourceInvoices],
   );
   const unpaidIssuedInvoices = useMemo(
     () => selectedClientInvoices.filter(
       (invoice) =>
         invoice.status === 'ISSUED' &&
-        Number(invoice.totalRub) - Number(invoice.paidRub) > 0.005,
+        Number(invoice.effectiveTotalRub ?? invoice.totalRub) - Number(invoice.paidRub) > 0.005,
     ),
     [selectedClientInvoices],
   );
@@ -297,6 +312,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
   async function loadVisibleData() {
     const generation = ++loadGeneration.current;
     setError(null);
+    // FIX: the FBO registry has its own read-only loader; do not initialize legacy service defaults.
+    if (activeTab === 'fbo-processing') return;
     async function load<T>(fetcher: () => Promise<T>, setter: Dispatch<SetStateAction<{ status: 'idle' | 'loading' | 'ready' | 'error'; data: T; error?: string }>>, accepted?: (data: T) => void) {
       setter(current => ({ ...current, status: 'loading', error: undefined }));
       try {
@@ -314,10 +331,15 @@ export function BillingPanel({ session }: BillingPanelProps) {
         setSelectedClientId(current => validRememberedClientId(current, nextClients));
         setInvoiceClientId(current => validRememberedClientId(current, nextClients));
       }),
-      // Required by unpaid-PDF and payment controls; preserve their complete dataset.
-      load(() => fetchBillingInvoices(session.accessToken), setInvoices),
       load(() => fetchBillingServices(session.accessToken), setServices),
     ];
+    // FIX: receipts need only the selected client's invoices; other tabs retain the complete dataset.
+    if (activeTab === 'cash-receipt' && !selectedClientId) {
+      setInvoices({ status: 'ready', data: [] });
+    } else {
+      pending.push(load(() => fetchBillingInvoices(session.accessToken,
+        activeTab === 'cash-receipt' ? { clientId: selectedClientId } : undefined), setInvoices));
+    }
     if (activeTab === 'overview' || activeTab === 'charges') {
       pending.push(load(() => fetchBillingCharges(session.accessToken, { clientId: selectedClientId || undefined }), setCharges));
     }
@@ -642,6 +664,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
         </button>
         {fastOpening ? <button role="tab" type="button" aria-selected={activeTab === 'settlements'}
           onClick={() => setActiveTab('settlements')}>Клиенты и расчёты</button> : null}
+        {fastOpening ? <button role="tab" type="button" aria-selected={activeTab === 'fbo-processing'} onClick={() => setActiveTab('fbo-processing')}>Первоначальная обработка</button> : null}
         {billingTabs.map((tab) => (
           <button
             aria-selected={activeTab === tab.id}
@@ -657,11 +680,13 @@ export function BillingPanel({ session }: BillingPanelProps) {
       </div> : null}
 
       {error ? <p className="form-error">{error}</p> : null}
+      {activeTab === 'fbo-processing' && fastOpening ? <FboProcessingPricingPanel session={session} /> : null}
       {activeTab === 'settlements' && fastOpening ? <BillingSettlementsPanel session={session} clients={clients.data} revision={registerRevision}
         onReview={(clientId, section) => { setSelectedClientId(clientId); setInvoiceClientId(clientId); setActiveTab(section); }} /> : null}
 
       {activeTab === 'home' ? (
         <section className="billing-topic-grid" aria-label="Разделы биллинга">
+          {fastOpening ? <button className="billing-topic-tile" type="button" onClick={() => setActiveTab('fbo-processing')}><span className="billing-topic-tile__content"><strong>Первоначальная обработка</strong><span>Услуги, стоимость за единицу и варианты товаров клиента</span></span></button> : null}
           {billingTopics(canWrite).map((topic) => (
             <button
               className={`billing-topic-tile billing-topic-tile--${topic.id}`}
@@ -712,6 +737,10 @@ export function BillingPanel({ session }: BillingPanelProps) {
               </div>
 
               <div className="billing-invoice-period" aria-label="Период счетов">
+                {/* // FIX: keep the same status selection accessible before choosing a service topic. */}
+                <label><span>Статус счёта</span><select aria-label="Статус счёта" value={invoiceStatusFilter} onChange={event => setInvoiceStatusFilter(event.target.value as BillingInvoiceStatus | '')}>
+                  <option value="">Все статусы</option>{billingInvoiceStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select></label>
                 <div className="billing-invoice-period__presets">
                   <button type="button" onClick={() => { setInvoicePeriodFrom(''); setInvoicePeriodTo(''); }}>Весь период</button>
                   <button type="button" onClick={() => { setInvoicePeriodFrom(currentMonthStart()); setInvoicePeriodTo(todayDate()); }}>Текущий месяц</button>
@@ -764,7 +793,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
               <label><span>Вид услуг</span><select value={invoiceKindFilter} onChange={event => setInvoiceKindFilter(event.target.value as InvoiceKindFilter)}>
                 <option value="ALL">Все виды услуг</option><option value="FBS">FBS</option><option value="PROCESSING">Первичная обработка</option><option value="PRR">ПРР</option><option value="STORAGE">Хранение</option><option value="OTHER">Другие услуги</option>
               </select></label>
-              <label><span>Статус</span><select value={invoiceStatusFilter} onChange={event => setInvoiceStatusFilter(event.target.value as BillingInvoiceStatus | '')}>
+              <label><span>Статус счёта</span><select aria-label="Статус счёта" value={invoiceStatusFilter} onChange={event => setInvoiceStatusFilter(event.target.value as BillingInvoiceStatus | '')}>
                 <option value="">Все статусы</option>{billingInvoiceStatusOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select></label>
             </div>
@@ -788,6 +817,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
                 </span>
               </div>
             <div className="billing-panel__actions">
+              {canWrite && doneRequestsEnabled ? <button className="primary-button" type="button"
+                onClick={() => setShowDoneRequests(true)} disabled={clients.status !== 'ready'}>Создать счёт по сданным заявкам</button> : null}
               {canWrite ? (
                 <button className="primary-button" type="button" onClick={() => setShowPeriodGeneration(true)} disabled={clients.status !== 'ready'}>
                   Сформировать за период
@@ -863,19 +894,23 @@ export function BillingPanel({ session }: BillingPanelProps) {
             <div className="billing-register-totals" aria-label="Итого по реестру">
               <span>Сумма: <strong>{formatMoney(invoiceRegisterInvoices.reduce((sum, invoice) => sum + Number(invoice.totalRub), 0))} ₽</strong></span>
               <span>Оплачено: <strong>{formatMoney(invoiceRegisterInvoices.reduce((sum, invoice) => sum + Number(invoice.paidRub), 0))} ₽</strong></span>
-              <span>Долг: <strong>{formatMoney(invoiceRegisterInvoices.filter(invoice => invoice.status === 'ISSUED').reduce((sum, invoice) => sum + Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub)), 0))} ₽</strong></span>
+              <span>Долг: <strong>{formatMoney(invoiceRegisterInvoices.filter(invoice => invoice.status === 'ISSUED').reduce((sum, invoice) => sum + Math.max(0, Number(invoice.effectiveTotalRub ?? invoice.totalRub) - Number(invoice.paidRub)), 0))} ₽</strong></span>
             </div>
           </section>
           )}
         </div>
       ) : null}
 
-      {activeTab === 'cash-receipt' && canWrite && clients.status === 'ready' && invoices.status === 'ready' ? (
+      {/* FIX: our WMS keeps the form visible during loading and offers retry after failure. */}
+      {activeTab === 'cash-receipt' && canWrite && (fastOpening || (clients.status === 'ready' && invoices.status === 'ready')) ? (
         <BillingCashReceiptPanel
-          clients={clients.data}
-          invoices={invoices.data}
+          clients={clients.status === 'ready' ? clients.data : []}
+          invoices={invoices.status === 'ready' ? invoices.data : []}
           session={session}
           onPaid={acceptIncomingPayments}
+          loading={fastOpening && (['idle', 'loading'].includes(clients.status) || ['idle', 'loading'].includes(invoices.status))}
+          loadError={fastOpening ? clients.error || invoices.error : undefined}
+          onRetry={fastOpening ? () => void loadVisibleData() : undefined}
         />
       ) : null}
 
@@ -1147,10 +1182,11 @@ export function BillingPanel({ session }: BillingPanelProps) {
         </div>
       ) : null}
 
-      {showPeriodGeneration ? <BillingPeriodGenerationDialog
+      {showPeriodGeneration || showDoneRequests ? <BillingPeriodGenerationDialog
+        doneRequests={showDoneRequests}
         session={session} clients={clients.data} clientId={invoiceClientId || undefined}
         periodFrom={invoicePeriodFrom || currentMonthStart()} periodTo={invoicePeriodTo || todayDate()}
-        onClose={() => setShowPeriodGeneration(false)} onCreated={() => { void loadData(); }}
+        onClose={() => { setShowPeriodGeneration(false); setShowDoneRequests(false); }} onCreated={() => { void loadData(); }}
       /> : null}
       {editingInvoice && clients.status === 'ready' ? (
         <div ref={invoiceCardRef} className="billing-invoice-edit-modal" role="dialog" aria-modal="true" aria-label="Карточка счёта"
@@ -1183,8 +1219,10 @@ export function BillingPanel({ session }: BillingPanelProps) {
                 <button className="secondary-button" type="button" onClick={() => void openInvoiceDocument(editingInvoice, 'act')}>Акт</button>
               </div>
               {billingInvoiceCardPermissions(editingInvoice, canWrite).canPay ? <section className="billing-invoice-card-payment" aria-label="Регистрация оплаты счёта">
-                <h4>Зарегистрировать оплату</h4>
-                <BillingPaymentForm key={`${editingInvoice.id}:${editingInvoice.paidRub}`} invoices={[editingInvoice]} session={session} onPaid={acceptMutatedInvoice} />
+                {/* FIX: our WMS confirms full payment here; partial receipts remain in cash receipts. */}
+                <h4>{fastOpening ? 'Подтвердить полную оплату' : 'Зарегистрировать оплату'}</h4>
+                {fastOpening ? <BillingInvoiceClosePaymentButton key={editingInvoice.id} invoiceId={editingInvoice.id} session={session} onPaid={acceptMutatedInvoice} /> :
+                  <BillingPaymentForm key={`${editingInvoice.id}:${editingInvoice.paidRub}`} invoices={[editingInvoice]} session={session} onPaid={acceptMutatedInvoice} />}
               </section> : null}
               {billingInvoiceCardPermissions(editingInvoice, canWrite).canEdit ? <BillingInvoiceForm
                 key={editingInvoice.id}
@@ -1502,8 +1540,8 @@ export function billingInvoiceCardPermissions(invoice: BillingInvoiceSummary, ca
   const comment = invoice.comment?.trim() ?? '';
   const merged = comment.startsWith('Объединено в FBS-счёт') || comment.startsWith('Объединено в счёт');
   const active = invoice.status === 'DRAFT' || invoice.status === 'ISSUED';
-  const remainingRub = Math.max(0, Number(invoice.totalRub) - Number(invoice.paidRub));
-  return { canEdit: canWrite && active && !merged, canPay: canWrite && active && !merged && remainingRub > 0, remainingRub };
+  const remainingRub = Math.max(0, Number(invoice.effectiveTotalRub ?? invoice.totalRub) - Number(invoice.paidRub));
+  return { canEdit: canWrite && active && !merged && (invoice.effectiveTotalRub === undefined || (invoice.status === 'DRAFT' && !invoice.issuedAt)), canPay: canWrite && active && !merged && remainingRub > 0, remainingRub };
 }
 
 function dateKey(value: Date) {

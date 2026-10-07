@@ -13,6 +13,10 @@ import { BillingPeriodService } from './billing-period.service';
 // FIX: opt-in, read-only settlements workspace.
 import { BillingSettlementsController } from './billing-settlements.controller';
 import { BillingSettlementsService } from './billing-settlements.service';
+import { BillingPeriodCloseController } from './billing-period-close.controller';
+import { BillingPeriodCloseService } from './billing-period-close.service';
+import { FboProcessingPricingService } from './fbo-processing-pricing.service';
+import { FboProcessingPricingController } from './fbo-processing-pricing.controller';
 
 @Module({
   imports: [
@@ -23,8 +27,8 @@ import { BillingSettlementsService } from './billing-settlements.service';
     MarketplaceConnectionsModule,
     OwnCompaniesModule,
   ],
-  controllers: [BillingController, BillingSettlementsController],
-  providers: [BillingService, BillingDocumentService, BillingPdfService, BillingPeriodService, BillingSettlementsService],
+  controllers: [BillingController, BillingSettlementsController, BillingPeriodCloseController, FboProcessingPricingController],
+  providers: [BillingService, BillingDocumentService, BillingPdfService, BillingPeriodService, BillingSettlementsService, BillingPeriodCloseService, FboProcessingPricingService],
   exports: [BillingService],
 })
 export class BillingModule {}

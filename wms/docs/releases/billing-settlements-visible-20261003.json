@@ -1,0 +1,20 @@
+{
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/469",
+  "mergeCommit": "ba64e28221cf92372efcc5b517e14b3f23ea6874",
+  "scope": "our-wms",
+  "sourceParityVerified": false,
+  "apiImage": "sha256:e7aa81ff68a153426ea7fdd4efc8a994f3119f107ee8b4b2d58ce4bdefd6a67b",
+  "webImage": "sha256:7fab10dcd44ce9813cd63689ea03fbc7ad4e5b461c57950ceec8e59bd8200532",
+  "apiDelta": ["modules/billing/billing-settlements.policy.js"],
+  "webNewChunks": 29,
+  "preservedWebAssets": 1685,
+  "runtimeBaseline": "C:/WMSFF2207/baselines/our-wms-runtime-settlements-visible-20261003",
+  "runtimeFiles": {"api": 564, "web": 1715},
+  "readOnlyComparison": {"before": 44, "after": 8, "removed": 36, "removedArchived": 9, "retainedAmountsUnchanged": true, "issuesUnchanged": true},
+  "publishedHttp": {"settlements": 200, "invoices": 200, "settlementMs": 5644},
+  "checks": {"apiPassed": 3036, "apiSkipped": 132, "webPassed": 368, "webSkipped": 2, "typecheck": true, "browser": true, "offlineCandidate": true, "fullRuntimeHashes": true, "health": true},
+  "businessWrites": 0,
+  "composeChanged": false,
+  "otherServicesUnchanged": true,
+  "rollback": {"api": "logoff-api:before-billing-settlements-visible-20261003", "web": "logoff-web:before-billing-settlements-visible-20261003"}
+}
