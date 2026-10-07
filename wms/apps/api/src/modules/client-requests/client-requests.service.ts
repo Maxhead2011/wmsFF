@@ -8,6 +8,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
+import { receiptAllows, receiptRules } from '../warehouse/receipt-channel-policy';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
@@ -335,6 +336,11 @@ export class ClientRequestsService {
       includeLegacyMoscowRows,
     );
 
+    // FIX: recent accepted receipts are reservable for FBO, but are not pickable until placed.
+    const pendingBySku = wbOrderStockLifecycleEnabled()
+      ? await this.pendingPlacementBySkuId(dto.clientId, skuIds, warehouseId)
+      : new Map<string, number>();
+    const consumedBySku = new Map<string, number>();
     const lines = resolved.map((line) => {
       if (!line.skuId) {
         return {
@@ -348,10 +354,15 @@ export class ClientRequestsService {
         };
       }
 
-      const stockQuantity = stockBySkuId.get(line.skuId) ?? 0;
+      const placedQuantity = stockBySkuId.get(line.skuId) ?? 0;
+      const stockQuantity = placedQuantity + (pendingBySku.get(line.skuId) ?? 0);
       const reservation = reservationsBySkuId.get(line.skuId);
       const reservedQuantity = reservation?.quantity ?? 0;
-      const availableQuantity = Math.max(0, stockQuantity - reservedQuantity);
+      const consumed = consumedBySku.get(line.skuId) ?? 0;
+      const availableQuantity = Math.max(0, stockQuantity - reservedQuantity - consumed);
+      const readyQuantity = Math.max(0, placedQuantity - reservedQuantity - consumed);
+      const pendingPlacementQuantity = Math.max(0, availableQuantity - readyQuantity);
+      if (wbOrderStockLifecycleEnabled()) consumedBySku.set(line.skuId, consumed + line.requestedQuantity);
       const shortageQuantity = Math.max(0, line.requestedQuantity - availableQuantity);
 
       return {
@@ -359,6 +370,8 @@ export class ClientRequestsService {
         stockQuantity,
         reservedQuantity,
         availableQuantity,
+        readyQuantity,
+        pendingPlacementQuantity,
         shortageQuantity,
         canFulfill: shortageQuantity === 0,
         conflicts: reservation?.requests ?? [],
@@ -1892,6 +1905,37 @@ export class ClientRequestsService {
     });
   }
 
+  // FIX: positive committed RECEIPT movements prove physical acceptance; cap them by current stock.
+  private async pendingPlacementBySkuId(clientId: string, skuIds: string[], warehouseId: string) {
+    const result = new Map<string, number>();
+    if (!skuIds.length) return result;
+    const client = await this.prisma.client.findUniqueOrThrow({ where: { id: clientId },
+      select: { storesWithoutBoxes: true, stockBalanceMode: true } });
+    if (client.storesWithoutBoxes || client.stockBalanceMode !== 'PALLET_SORT') return result;
+    const balances = await this.prisma.stockBalance.groupBy({ by: ['boxId', 'skuId'], where: {
+      clientId, skuId: { in: skuIds }, status: 'AVAILABLE', quantity: { gt: 0 },
+      OR: [{ warehouseId }, { warehouseId: null, box: { warehouseId } }],
+      box: { clientId, warehouseId, status: 'active', storagePlacement: { is: null } },
+    }, _sum: { quantity: true } });
+    if (!balances.length) return result;
+    const now = new Date();
+    const [receipts, rules] = await Promise.all([
+      this.prisma.stockMovement.groupBy({ by: ['boxId', 'skuId'], where: {
+        clientId, warehouseId, boxId: { in: balances.flatMap(b => b.boxId ? [b.boxId] : []) },
+        skuId: { in: skuIds }, type: 'RECEIPT', status: 'AVAILABLE', quantity: { gt: 0 },
+        createdAt: { gte: new Date(now.getTime() - 7 * 86400000), lte: now },
+      }, _sum: { quantity: true } }),
+      receiptRules(this.prisma, clientId, warehouseId),
+    ]);
+    const accepted = new Map(receipts.map(r => [JSON.stringify([r.boxId, r.skuId]), r._sum.quantity ?? 0]));
+    for (const balance of balances) {
+      if (!balance.boxId || !receiptAllows(rules.get(balance.boxId), 'fbo')) continue;
+      const quantity = Math.min(balance._sum.quantity ?? 0, accepted.get(JSON.stringify([balance.boxId, balance.skuId])) ?? 0);
+      result.set(balance.skuId, (result.get(balance.skuId) ?? 0) + quantity);
+    }
+    return result;
+  }
+
   private async stockQuantityBySkuId(
     clientId: string,
     skuIds: string[],
@@ -2103,6 +2147,8 @@ export type ClientRequestAvailabilityLine = {
   stockQuantity: number;
   reservedQuantity: number;
   availableQuantity: number;
+  readyQuantity?: number;
+  pendingPlacementQuantity?: number;
   shortageQuantity: number;
   canFulfill: boolean;
   conflicts: ClientRequestAvailabilityConflict[];

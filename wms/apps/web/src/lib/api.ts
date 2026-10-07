@@ -1730,6 +1730,8 @@ export type OutboundRequestXlsxLine = {
   stockQuantity: number;
   reservedQuantity: number;
   availableQuantity: number;
+  readyQuantity?: number;
+  pendingPlacementQuantity?: number;
   shortageQuantity: number;
   sourceRows: number[];
   skuId: string | null;
@@ -1792,6 +1794,8 @@ export type ClientRequestAvailabilityLine = {
   stockQuantity: number;
   reservedQuantity: number;
   availableQuantity: number;
+  readyQuantity?: number;
+  pendingPlacementQuantity?: number;
   shortageQuantity: number;
   canFulfill: boolean;
   conflicts: ClientRequestAvailabilityConflict[];
@@ -11077,11 +11081,12 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 }
 
 export type FboPlan = {
+  pendingPlacementQuantity?:number;
   number?:number; observedAt?:string;
   pickedUnits?:Array<{id:string;requestItemId:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;wholeBox:boolean;state:string;pickedAt:string;packedAt:string|null;pickedBy:string|null;packedBy:string|null}>;
   requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
   compositionChanged:boolean; wholeBoxes:string[];
-  lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number}>;
+  lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number;pendingPlacementQuantity?:number}>;
   route:Array<{boxCode:string;pallet:string;zone:string;wholeBox:boolean;recount:boolean;tasks:Array<{skuId:string;barcode:string;name:string;quantity:number;requiresKiz:boolean}>}>;
   boxes:Array<{code:string;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
 };

@@ -14,6 +14,7 @@ import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remaini
 import { FboActionDto } from './dto/fbo-action.dto';
 import { cacheFboBoxDecision, loadFboRoutePreference, orderFboRequestBoxes } from './fbo-request-route';
 import { loadFboFbsAvailability } from './fbo-fbs-reservations';
+import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 const include = { items: { include: { sku: { include: { barcodes: true } } } }, client: true,
     _count: { select: { fbsOrderLinks: true, packages: true } }, pickWaveRequests: { include: { wave: true } } } satisfies Prisma.ClientRequestInclude;
 type Request = Prisma.ClientRequestGetPayload<{
@@ -98,6 +99,8 @@ export class FboTwoStageService {
                 storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
         });
         const route = [];
+        // FIX: PALLET_SORT stock is physically accepted but cannot be picked before placement.
+        const requiresPlacement = wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT';
         const availability = await loadFboFbsAvailability(tx, r, Object.keys(demand));
         const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
         // FIX: historical stock may have real marks even when the SKU flag was never filled.
@@ -112,6 +115,7 @@ export class FboTwoStageService {
                 box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)))), preference) : boxes;
         for (const box of ordered) {
             if (busyBoxes.has(box.id)) continue;
+            if (requiresPlacement && !box.storagePlacement) continue;
             const tasks: Array<{
                 skuId: string;
                 barcode: string;
@@ -135,7 +139,22 @@ export class FboTwoStageService {
             route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
                 zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount });
         }
-        return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED', lines, route,
+        const waitingBySku = new Map<string, number>();
+        if (requiresPlacement) for (const box of boxes) {
+            if (box.storagePlacement || busyBoxes.has(box.id)) continue;
+            for (const balance of box.balances) {
+                if (balance.status !== 'AVAILABLE' || balance.quantity <= 0) continue;
+                const quantity = Math.min(demand[balance.skuId] ?? 0, balance.quantity, availability.free(box.id, balance.skuId));
+                if (quantity <= 0) continue;
+                availability.take(box.id, balance.skuId, quantity);
+                demand[balance.skuId] -= quantity;
+                waitingBySku.set(balance.skuId, (waitingBySku.get(balance.skuId) ?? 0) + quantity);
+            }
+        }
+        const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
+        return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
+            lines: lines.map(l => { const pending = Math.min(l.remaining, waitingBySku.get(l.skuId) ?? 0); waitingBySku.set(l.skuId, (waitingBySku.get(l.skuId) ?? 0) - pending); return { ...l, pendingPlacementQuantity: pending }; }),
+            route, pendingPlacementQuantity,
             observedAt: new Date().toISOString(),
             pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
                 kiz: u.kiz, sourceBoxCode: u.sourceBoxCode, targetBoxCode: u.targetBoxCode, wholeBox: u.wholeBox, state: u.state,
@@ -191,6 +210,8 @@ export class FboTwoStageService {
                 const source = await this.box(tx, r, dto.sourceBoxCode);
                 await this.requireIdleBox(tx, source.id, id, true);
                 const location = await tx.box.findUniqueOrThrow({ where: { id: source.id }, include: { pallet: true, storagePlacement: { include: { pallet: true } } } });
+                if (wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT' && !location.storagePlacement)
+                    throw new ConflictException('Товар принят, ожидает размещения на палет-сорте. Разместите короб и обновите маршрут ФБО.');
                 const palletCode = location.storagePlacement?.pallet.code ?? location.pallet?.code;
                 if (palletCode && dto.palletCode !== palletCode)
                     throw new ConflictException('Сначала отсканируйте паллет, на котором сейчас находится этот короб.');

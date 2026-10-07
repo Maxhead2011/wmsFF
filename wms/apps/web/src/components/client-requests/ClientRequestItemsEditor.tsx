@@ -559,6 +559,9 @@ function availabilityClassName(line: ClientRequestAvailabilityPreview['lines'][n
 }
 
 function availabilityText(line: ClientRequestAvailabilityPreview['lines'][number]) {
+  // FIX: distinguish accepted stock awaiting placement from physical shortage.
+  const placementText = (line.pendingPlacementQuantity ?? 0) > 0
+    ? ` Принято, ожидает размещения: ${line.pendingPlacementQuantity} шт. Готово к отбору: ${line.readyQuantity ?? 0}.` : '';
   const conflictText = line.conflicts.length
     ? ` Участвует в заявке: ${line.conflicts
         .slice(0, 2)
@@ -571,8 +574,8 @@ function availabilityText(line: ClientRequestAvailabilityPreview['lines'][number
   }
 
   if (!line.canFulfill) {
-    return `Недостаточно: нужно ${line.requestedQuantity}, доступно ${line.availableQuantity}, занято ${line.reservedQuantity}.${conflictText}`;
+    return `Недостаточно: нужно ${line.requestedQuantity}, доступно ${line.availableQuantity}, занято ${line.reservedQuantity}.${placementText}${conflictText}`;
   }
 
-  return `Доступно ${line.availableQuantity}, занято ${line.reservedQuantity}.${conflictText}`;
+  return `Доступно для заявки ${line.availableQuantity}, занято ${line.reservedQuantity}.${placementText}${conflictText}`;
 }
