@@ -27,6 +27,8 @@ type HydratedOutboundLine = {
   stockQuantity: number;
   reservedQuantity: number;
   availableQuantity: number;
+  readyQuantity?: number;
+  pendingPlacementQuantity?: number;
   shortageQuantity: number;
   sourceRows: number[];
   skuId: string | null;
@@ -278,6 +280,8 @@ export class ClientRequestXlsxService {
       const stockQuantity = availabilityLine?.stockQuantity ?? 0;
       const reservedQuantity = availabilityLine?.reservedQuantity ?? 0;
       const availableQuantity = availabilityLine?.availableQuantity ?? 0;
+      const pendingPlacementQuantity = availabilityLine?.pendingPlacementQuantity ?? 0;
+      const readyQuantity = availabilityLine?.readyQuantity ?? availableQuantity;
       const shortageQuantity = Math.max(0, line.quantity - availableQuantity);
       const conflicts = availabilityLine?.conflicts ?? [];
 
@@ -289,6 +293,12 @@ export class ClientRequestXlsxService {
           severity: 'error',
         });
       }
+
+      // FIX: placement is a warning, not missing goods and not a reason to reject the request.
+      if (pendingPlacementQuantity > 0 && line.quantity > readyQuantity) issues.push({
+        row: firstRow, barcode: line.barcode, severity: 'warning',
+        message: `Принято, ожидает размещения: ${Math.min(pendingPlacementQuantity, line.quantity - readyQuantity)} шт. Заявку можно создать; отбор этих единиц начнётся после размещения на палет-сорте.`,
+      });
 
       lines.push({
         barcode: line.barcode,
@@ -303,6 +313,8 @@ export class ClientRequestXlsxService {
         stockQuantity,
         reservedQuantity,
         availableQuantity,
+        readyQuantity,
+        pendingPlacementQuantity,
         shortageQuantity,
         sourceRows: line.sourceRows,
         skuId: match.sku.id,
@@ -645,6 +657,7 @@ export class ClientRequestXlsxService {
       line.relabelTargetBarcode && line.relabelQuantity ? `Перемаркировка в: ${line.relabelTargetBarcode}` : null,
       line.relabelTargetBarcode && line.relabelQuantity ? `Количество перемаркировки: ${line.relabelQuantity}` : null,
       line.needsRelabel ? 'Перемаркировка: да' : null,
+      (line.pendingPlacementQuantity ?? 0) > 0 ? `Принято, ожидает размещения: ${Math.min(line.pendingPlacementQuantity!, Math.max(0, line.requestedQuantity - (line.readyQuantity ?? 0)))} шт.` : null,
       `Excel rows: ${line.sourceRows.join(', ')}`,
     ]
       .filter(Boolean)

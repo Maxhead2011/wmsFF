@@ -5,6 +5,8 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
 import { ListStockBalancesDto } from './dto/list-stock-balances.dto';
+import { CabinetStockExportDto } from './dto/cabinet-stock-export.dto';
+import { createHash } from 'node:crypto';
 
 export type BalanceKeyInput = {
   warehouseId?: string | null;
@@ -216,6 +218,24 @@ export class StockBalancesService {
       }
     }
     return rows.map(row => ({ ...row, freeQuantity: freeById.get(row.id) ?? 0 }));
+  }
+
+  // FIX: persist the exact browser export, rather than recalculating changing stock after download.
+  async recordCabinetExport(dto: CabinetStockExportDto, user: AuthUser, context: { ip?: string; userAgent?: string }) {
+    this.clientScopes.requireClientAccess(user, dto.clientId, 'read');
+    if (!wbOrderStockLifecycleEnabled()) return { recorded: false };
+    const snapshot = {
+      source: 'client-cabinet-browser', eventMeaning: 'file-prepared-not-confirmed-saved',
+      actorName: user.name, ipAddress: context.ip ?? null, userAgent: context.userAgent?.slice(0, 1000) ?? null,
+      fileName: dto.fileName, generatedAt: dto.generatedAt, filters: dto.filters,
+      rowCount: dto.rows.length, totalQuantity: dto.rows.reduce((sum, row) => sum + row.quantity, 0), rows: dto.rows,
+      rowsSha256: createHash('sha256').update(JSON.stringify(dto.rows)).digest('hex'),
+    };
+    const record = await this.prisma.auditLog.create({ data: {
+      userId: user.id, action: 'CLIENT_STOCK_EXPORT_PREPARED', entity: 'Client', entityId: dto.clientId,
+      payload: JSON.parse(JSON.stringify(snapshot)),
+    }, select: { id: true, createdAt: true } });
+    return { recorded: true, id: record.id, createdAt: record.createdAt };
   }
 
   balanceKey(input: BalanceKeyInput) {

@@ -122,6 +122,23 @@ export function ClientCabinetTables({
   });
   const [selectedProduct, setSelectedProduct] = useState<SkuDetail | null>(null);
   const [productError, setProductError] = useState('');
+  const [exportingStock, setExportingStock] = useState(false);
+  const [exportError, setExportError] = useState('');
+
+  // FIX: prevent duplicate clicks and make an audit failure visible before downloading.
+  async function exportStock() {
+    if (exportingStock) return;
+    setExportingStock(true);
+    setExportError('');
+    try {
+      await downloadClientCabinetStockExcel(client, visibleStock, canSeeStoragePlaces, stockReservationRequests,
+        { accessToken, search: stockSearch, section: activeSection });
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Не удалось сохранить выгрузку в журнал. Повторите скачивание.');
+    } finally {
+      setExportingStock(false);
+    }
+  }
 
   const skuRows = useMemo(() => buildSkuRows(visibleStock), [visibleStock]);
   const allSkuRows = useMemo(() => buildSkuRows(stock), [stock]);
@@ -196,11 +213,11 @@ export function ClientCabinetTables({
           <button
             className="icon-text-button"
             type="button"
-            onClick={() => downloadClientCabinetStockExcel(client, visibleStock, canSeeStoragePlaces, stockReservationRequests)}
-            disabled={visibleStock.length === 0}
+            onClick={exportStock}
+            disabled={visibleStock.length === 0 || exportingStock}
           >
             <FileSpreadsheet size={15} aria-hidden="true" />
-            <span>Остатки Excel</span>
+            <span>{exportingStock ? 'Подготовка Excel…' : 'Остатки Excel'}</span>
           </button>
         </div>
 
@@ -212,6 +229,7 @@ export function ClientCabinetTables({
         ) : null}
 
         {productError ? <p className="form-error">{productError}</p> : null}
+        {exportError ? <p className="form-error" role="alert">{exportError}</p> : null}
 
         {renderActiveTable({
           activeSection,

@@ -196,6 +196,8 @@ final class FboTwoStageScreen {
             if(packingChoices()&&("PACKING".equals(plan.phase)||"PICKING".equals(plan.phase)))wholeCartonProgress(root);
             if(plan.compositionChanged)text(root,"Состав заявки изменился. Нужна сверка.");
             if(plan.shortage>0)text(root,"Недостаточно доступного остатка: "+plan.shortage+" ед.");
+            // FIX: do not describe accepted goods awaiting placement as absent.
+            if(plan.pendingPlacementQuantity>0)text(root,"Принято, ожидает размещения: "+plan.pendingPlacementQuantity+" шт. Разместите короба на палет-сорте и обновите маршрут.");
             if(!FboScanState.phaseAllowed(packing,screenPhase()))text(root,packing?"Сначала завершите отбор в Сборка FBO.":"Отбор завершён. Откройте Упаковка FBO.");
             else if("NOT_STARTED".equals(screenPhase()))button(root,"Начать отбор",ready(),()->send("START",null));
             else if("COMPLETED".equals(screenPhase())){text(root,"Все короба поставки подтверждены");

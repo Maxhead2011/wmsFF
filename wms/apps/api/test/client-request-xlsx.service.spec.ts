@@ -6,6 +6,19 @@ import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestXlsxService } from '../src/modules/client-requests/client-request-xlsx.service';
 
 describe('ClientRequestXlsxService', () => {
+  // TEST: accepted unplaced goods produce a warning and remain valid for FBO creation.
+  it('allows a recent receipt while explaining the placement wait', async () => {
+    const service = new ClientRequestXlsxService({ barcode: { findMany: async () => [
+      { skuId: 'sku-1', value: '460000000001', sku: { id: 'sku-1', internalSku: 'S', name: 'Suit' } },
+    ] } } as never, new ClientScopeService(), { previewAvailability: async () => ({ lines: [
+      { ...availabilityLine({ index: 0, skuId: 'sku-1', requestedQuantity: 3, stockQuantity: 3, availableQuantity: 3 }), readyQuantity: 0, pendingPlacementQuantity: 3 },
+    ] }) } as never);
+    const preview = await service.previewOutboundRequest(fileFixture([['barcode', 'qty'], ['460000000001', 3]]),
+      { clientId: 'client-1', destinationCity: 'Москва' }, user({ writableClientIds: ['client-1'], clientIds: ['client-1'] }));
+    expect(preview.canCommit).toBe(true);
+    expect(preview.summary.shortageQuantity).toBe(0);
+    expect(preview.issues).toContainEqual(expect.objectContaining({ severity: 'warning', message: expect.stringContaining('Принято, ожидает размещения: 3') }));
+  });
   it('показывает доступность SKU и дефицит по Excel-файлу', async () => {
     const prisma = {
       barcode: {

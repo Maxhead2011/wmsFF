@@ -568,6 +568,9 @@ function xlsxLineText(line: EditableXlsxLine) {
         .join('; ')}.`
     : '';
   const relabelText = hasRelabel(line) ? ` Перемаркировка: ${line.barcode} -> ${line.relabelTargetBarcode}, ${line.relabelQuantity} шт.` : '';
+  // FIX: a reservable recent receipt may still be waiting for its picking location.
+  const placementText = (line.pendingPlacementQuantity ?? 0) > 0
+    ? ` Принято, ожидает размещения: ${line.pendingPlacementQuantity} шт. Готово к отбору: ${line.readyQuantity ?? 0}.` : '';
 
   if (!line.skuId) {
     if (line.actionSuggestions?.length) {
@@ -577,10 +580,10 @@ function xlsxLineText(line: EditableXlsxLine) {
   }
 
   if (!adjustedCanFulfill(line)) {
-    return `Нужно ${line.requestedQuantity}, доступно ${line.availableQuantity}, занято ${line.reservedQuantity}.${relabelText}${conflictText}`;
+    return `Нужно ${line.requestedQuantity}, доступно ${line.availableQuantity}, занято ${line.reservedQuantity}.${placementText}${relabelText}${conflictText}`;
   }
 
-  return `Доступно ${line.availableQuantity}, занято ${line.reservedQuantity}.${relabelText}${conflictText}`;
+  return `Доступно для заявки ${line.availableQuantity}, занято ${line.reservedQuantity}.${placementText}${relabelText}${conflictText}`;
 }
 
 function xlsxLineLabel(line: EditableXlsxLine) {

@@ -6,6 +6,8 @@ public class TsdFboPlan {
     public boolean localRouteEnabled;
     public String requestId, title, phase;
     public int needed, picked, packed, looseRemaining, shortage;
+    // FIX: accepted stock may be reserved while its storage location is still pending.
+    public int pendingPlacementQuantity;
     public boolean compositionChanged, manualPackingEnabled, reusablePackingEnabled;
     public boolean fastAcknowledgementSupported;
     public List<Line> lines;

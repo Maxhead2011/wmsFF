@@ -57,6 +57,8 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     <FboProgress plan={plan} paused={scanMode||!!pending}/>
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
+    {/* FIX: accepted stock must not be presented as physically missing. */}
+    {(plan.pendingPlacementQuantity??0)>0&&<p role="status">Принято, ожидает размещения: {plan.pendingPlacementQuantity} шт. Разместите короба на палет-сорте и обновите маршрут.</p>}
     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
     {error&&<p role="alert">{error}</p>}
     {pending&&!busy&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void command(pending.action)}>Повторить неподтверждённый запрос</button>}

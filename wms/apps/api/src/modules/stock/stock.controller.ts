@@ -1,7 +1,9 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
+import type { Response, Request } from 'express';
+import { Req } from '@nestjs/common';
+import { CabinetStockExportDto } from './dto/cabinet-stock-export.dto';
 import type { AuthUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -43,6 +45,12 @@ export class StockController {
   @Get('storage')
   listStorage(@Query() query: ListStorageOverviewDto, @CurrentUser() user: AuthUser) {
     return this.storageOverview.getOverview(query, user);
+  }
+
+  // FIX: actor and IP come from authentication and Express, never from the export payload.
+  @Post('cabinet-export-audit')
+  recordCabinetExport(@Body() dto: CabinetStockExportDto, @CurrentUser() user: AuthUser, @Req() request: Request) {
+    return this.balances.recordCabinetExport(dto, user, { ip: request.ip, userAgent: request.headers['user-agent'] });
   }
 
   @Get('storage.xlsx')
