@@ -28,7 +28,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   // FIX: branch-scoped receipt channel controls, disabled by default.
   {
     id: 'receipt-channels', name: 'Направления приёмок',
-    prefixes: ['/warehouse/receipt-channels'], routeCount: 4,
+    prefixes: ['/warehouse/receipt-channels'], routeCount: 7, // FIX: approval, history and receipt file.
     description: 'Направления ФБС/ФБО по серии коробов с сохранением ранее поступивших заказов.',
     logic: ['Только ADMIN/OWNER своего филиала.', 'Предпросмотр, версия записи и аудит изменений.', 'Отдельный флаг нашей WMS.'],
     dependencies: ['Основная БД', 'Права warehouse:write'],

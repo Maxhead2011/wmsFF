@@ -1,3 +1,4 @@
+import { pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   ClientRequestEventType,
@@ -1170,6 +1171,7 @@ export class PickInstructionService {
       return [];
     }
 
+    const pendingBoxes = await pendingReceiptBoxIds(this.prisma, [clientId], warehouseId);
     const balances = await this.prisma.stockBalance.findMany({
       where: {
         clientId,
@@ -1177,7 +1179,7 @@ export class PickInstructionService {
         skuId: includeAllClientBalances ? undefined : { in: skuIds },
         status: StockStatus.AVAILABLE,
         quantity: { gt: 0 },
-        boxId: { not: null },
+        boxId: { not: null, notIn: pendingBoxes },
         box: {
           status: { notIn: ['deleted', 'archived'] },
         },

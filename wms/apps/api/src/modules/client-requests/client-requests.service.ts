@@ -8,7 +8,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { isClientNotificationEnabled } from '../client-notifications/client-notification-preferences';
 import { TelegramNotificationService } from '../client-notifications/telegram-notification.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
-import { receiptAllows, receiptRules } from '../warehouse/receipt-channel-policy';
+import { receiptAllows, receiptRules, assertReceiptStockAvailable } from '../warehouse/receipt-channel-policy';
 import { clientRequestFileSummarySelect } from './client-request-files.service';
 import { clientRequestPackageInclude } from './client-request-packages.include';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
@@ -1357,6 +1357,8 @@ export class ClientRequestsService {
         }
       }
 
+      // FIX: even a manually selected or stale box must be approved before reserving it.
+      await assertReceiptStockAvailable(tx,request.clientId,dto.selections.map(s=>s.boxId),request.warehouseId);
       await tx.clientRequestBoxSelection.deleteMany({ where: { requestItem: { requestId: request.id } } });
       await tx.clientRequestBoxSelection.createMany({
         data: dto.selections.map((selection) => ({

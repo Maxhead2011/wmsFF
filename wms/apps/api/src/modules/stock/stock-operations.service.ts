@@ -1,4 +1,4 @@
-import { assertReceiptTransfer } from '../warehouse/receipt-channel-policy';
+import { assertReceiptTransfer, assertReceiptStockAvailable, pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { createHash, randomUUID } from 'node:crypto';
@@ -2752,6 +2752,8 @@ export class StockOperationsService {
           select: { storesWithoutBoxes: true },
         })
       : null;
+    // FIX: direct shipment cannot consume receipts awaiting reconciliation.
+    const pendingBoxes=await pendingReceiptBoxIds(tx,[clientId],warehouseId);
     const lines = [];
     const balanceRemaining = new Map<string, number>();
     const sourceStatuses: StockStatus[] = [StockStatus.SHIPPING, StockStatus.PACKING, StockStatus.AVAILABLE];
@@ -2767,6 +2769,7 @@ export class StockOperationsService {
           clientId,
           skuId: sku.id,
           status: { in: sourceStatuses },
+          ...(pendingBoxes.length?{AND:[{OR:[{boxId:null},{boxId:{notIn:pendingBoxes}}]}]}:{}),
           warehouseId,
           quantity: { gt: 0 },
           ...(client?.storesWithoutBoxes
@@ -3129,6 +3132,8 @@ export class StockOperationsService {
 
     const skuIds = [...new Set(resolvedItems.map(({ sku }) => sku.id))];
     const boxIds = [...new Set(selections.map((selection) => selection.boxId))];
+    // FIX: saved box selections cannot bypass receipt approval on the actual picking transaction.
+    if(sourceStatuses.includes(StockStatus.AVAILABLE))await assertReceiptStockAvailable(tx,clientId,boxIds,warehouseId);
     const balances = await tx.stockBalance.findMany({
       where: {
         clientId,
@@ -3338,9 +3343,11 @@ export class StockOperationsService {
       StockStatus.PACKING,
       StockStatus.AVAILABLE,
     ];
+    const pendingBoxes=await pendingReceiptBoxIds(tx,[request.clientId],warehouseId);
     const balances = await tx.stockBalance.findMany({
       where: {
         clientId: request.clientId,
+        ...(pendingBoxes.length?{AND:[{OR:[{boxId:null},{boxId:{notIn:pendingBoxes}}]}]}:{}),
         skuId: { in: [...new Set(resolvedItems.map(({ sku }) => sku.id))] },
         status: { in: sourceStatuses },
         warehouseId,
@@ -3678,6 +3685,7 @@ export class StockOperationsService {
           select: { storesWithoutBoxes: true },
         })
       : null;
+    const pendingBoxes=sourceStatus===StockStatus.AVAILABLE?await pendingReceiptBoxIds(tx,[clientId],warehouseId):[];
     const lines = [];
     const balanceRemaining = new Map<string, number>();
 
@@ -3692,6 +3700,7 @@ export class StockOperationsService {
           clientId,
           skuId: sku.id,
           status: sourceStatus,
+          ...(pendingBoxes.length?{AND:[{OR:[{boxId:null},{boxId:{notIn:pendingBoxes}}]}]}:{}),
           warehouseId,
           quantity: { gt: 0 },
           ...(client?.storesWithoutBoxes
@@ -4482,6 +4491,7 @@ export class StockOperationsService {
       targetComment: string;
     },
   ) {
+    if(input.sourceStatus===StockStatus.AVAILABLE)await assertReceiptStockAvailable(tx,input.request.clientId,input.plan.lines.flatMap(l=>l.allocations.flatMap(a=>a.balance.boxId?[a.balance.boxId]:[])));
     for (const line of input.plan.lines) {
       for (const allocation of line.allocations) {
         await this.decrementSourceBalance(tx, allocation.balance, allocation.quantity);
