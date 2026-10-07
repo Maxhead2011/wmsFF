@@ -39,6 +39,17 @@ class AttendanceTest {
         repo.mark(device, employee.id, clockIn, photo(), time, 123456, 25, time - 10_000, id)
 
     // TEST: lunch and mixed cargo survive offline retries and do not duplicate.
+    @Test fun `handling after closed shift persists once through retry`() = runBlocking {
+        val at = System.currentTimeMillis() - 60000
+        mark(time = at)
+        mark(id = "out", clockIn = false, time = at + 1000)
+        assertNull(projectedOpen(employee, db.dao().pending()))
+        repo.handling(device, employee.id, listOf(employee.id), "3", at, "UNLOADING", "", 0, at, "after-out")
+        repo.handling(device, employee.id, listOf(employee.id), "3", at, "UNLOADING", "", 0, at, "after-out")
+        assertEquals(1, db.dao().pending().count { it.kind == "HANDLING" })
+        assertEquals("3", org.json.JSONObject(db.dao().event("after-out")!!.payload).getString("pallets"))
+    }
+
     @Test fun `offline lunch transitions preserve shift and block double taps`() = runBlocking {
         mark()
         val at = 1_790_001_000_000L
