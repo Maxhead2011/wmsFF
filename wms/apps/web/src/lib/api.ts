@@ -8987,6 +8987,21 @@ export async function fetchStockBalances(accessToken: string, filter: { clientId
   });
 }
 
+export type CabinetStockExportSnapshot = {
+  clientId: string;
+  fileName: string;
+  generatedAt: string;
+  filters: { search: string; section: 'skus' | 'stock' | 'requests' | 'invoices'; scope: 'all_filtered_rows' };
+  rows: Array<{ barcode: string; internalSku: string; name: string; status: string; quantity: number; updatedAt: string }>;
+};
+
+// FIX: await durable audit before starting a cabinet stock download.
+export function recordCabinetStockExport(accessToken: string, snapshot: CabinetStockExportSnapshot) {
+  return request<{ recorded: boolean; id?: string }>('/stock/cabinet-export-audit', {
+    accessToken, method: 'POST', body: snapshot,
+  });
+}
+
 export async function fetchBranches(accessToken: string) {
   return request<BranchSummary[]>('/branches', { accessToken });
 }

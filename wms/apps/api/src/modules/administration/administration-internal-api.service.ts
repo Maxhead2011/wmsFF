@@ -287,7 +287,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'stock',
     name: 'Остатки',
     prefixes: ['/stock'],
-    routeCount: 23,
+    routeCount: 24, // FIX: include the client stock export audit route.
     description: 'Доступные, резервные и физические остатки WMS и их движения.',
     logic: ['Считает остаток по коробу, SKU, клиенту и филиалу.', 'Создаёт движения при приёмке, резерве и отгрузке.', 'Формирует отчёты и сверки остатков.'],
     dependencies: ['Основная БД', 'Складские движения'],

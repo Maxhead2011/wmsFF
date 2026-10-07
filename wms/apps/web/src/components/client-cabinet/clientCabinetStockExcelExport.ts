@@ -1,12 +1,16 @@
 import type { ClientRequestSummary, ClientSummary, StockBalance } from '../../lib/api';
+import { recordCabinetStockExport, type CabinetStockExportSnapshot } from '../../lib/api';
 import { formatCabinetDate, formatCabinetNumber, primaryBarcode, stockStatusLabel } from './clientCabinetFormat';
 
-export function downloadClientCabinetStockExcel(
+export async function downloadClientCabinetStockExcel(
   client: ClientSummary,
   stock: StockBalance[],
   canSeeStoragePlaces: boolean,
   activeRequests: ClientRequestSummary[] = [],
+  audit?: { accessToken: string; search: string; section: CabinetStockExportSnapshot['filters']['section'] },
 ) {
+  const generatedAt = new Date();
+  const fileName = stockExcelFileName(client.code, generatedAt);
   const stockHeader = ['SKU', 'Наименование', 'Штрихкод', 'Статус', 'Количество', 'Обновлено'];
   const stockRows = aggregateStockRows(stock, activeRequests);
   const stockExportRows = stockRows.map((row) => [
@@ -20,7 +24,7 @@ export function downloadClientCabinetStockExcel(
 
   const rows = [
     ['Клиент', client.code, client.name],
-    ['Дата выгрузки', new Date().toLocaleString('ru-RU')],
+    ['Дата выгрузки', generatedAt.toLocaleString('ru-RU')],
     ['Строк остатков', stockRows.length],
     ['Единиц на остатке', formatCabinetNumber(stockRows.reduce((sum, row) => sum + row.quantity, 0))],
     [],
@@ -44,7 +48,13 @@ export function downloadClientCabinetStockExcel(
 </body>
 </html>`;
 
-  downloadExcelHtml(stockExcelFileName(client.code), html);
+  // FIX: log the very same frozen rows used above, not a fresh stock query with different quantities.
+  if (audit) await recordCabinetStockExport(audit.accessToken, {
+    clientId: client.id, fileName, generatedAt: generatedAt.toISOString(),
+    filters: { search: audit.search, section: audit.section, scope: 'all_filtered_rows' },
+    rows: stockRows,
+  });
+  downloadExcelHtml(fileName, html);
 }
 
 type AggregatedStockRow = {
@@ -185,9 +195,9 @@ function escapeHtml(value: string) {
     .replace(/"/g, '&quot;');
 }
 
-function stockExcelFileName(clientCode: string) {
+function stockExcelFileName(clientCode: string, generatedAt: Date) {
   const safeClient = clientCode.replace(/[\\/:*?"<>|]/g, '_') || 'client';
-  return `ostatki-${safeClient}-${new Date().toISOString().slice(0, 10)}.xls`;
+  return `ostatki-${safeClient}-${generatedAt.toISOString().slice(0, 10)}.xls`;
 }
 
 function downloadExcelHtml(fileName: string, html: string) {
