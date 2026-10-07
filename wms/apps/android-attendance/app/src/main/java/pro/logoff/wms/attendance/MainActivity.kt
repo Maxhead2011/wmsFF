@@ -1,26 +1,21 @@
 package pro.logoff.wms.attendance
 
-import android.app.DatePickerDialog
-import android.app.TimePickerDialog
 import android.os.Bundle
 import android.view.WindowManager
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.TextStyle
@@ -28,8 +23,6 @@ import kotlinx.coroutines.*
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Calendar
-import java.util.UUID
 
 private val formatTime = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm").withZone(ZoneId.of("Europe/Moscow"))
 fun clockText(time: Long) = formatTime.format(Instant.ofEpochMilli(time))
@@ -59,6 +52,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AttendanceScreen(app: AttendanceApp) {
     val scope = rememberCoroutineScope()
+    val drafts = rememberSaveableStateHolder()
+    var savedEventId by rememberSaveable { mutableStateOf<String?>(null) }
+    var handlingError by rememberSaveable { mutableStateOf("") }
     var device by remember { mutableStateOf<Device?>(null) }
     var initialized by remember { mutableStateOf(false) }
     var fatal by remember { mutableStateOf(false) }
@@ -95,9 +91,12 @@ fun AttendanceScreen(app: AttendanceApp) {
             if (++ticks % 15 == 0 && device != null) refresh(false)
         }
     }
+    BackHandler(enabled = screen != "list" || selected != null) {
+        if (!busy) { if (screen == "list") selected = null else screen = "list" }
+    }
     // Only selection expires; entered handling data and a captured photo are never discarded by a timer.
     LaunchedEffect(selected, screen, busy) {
-        if (screen == "list" && selected != null && !busy) { delay(45_000); selected = null }
+        if (screen == "list" && selected != null && !busy) { delay(120_000); selected = null }
     }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().padding(20.dp)) {
         Text("LOGOFF · Учёт времени", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
@@ -144,67 +143,58 @@ fun AttendanceScreen(app: AttendanceApp) {
                     }
                     photo.delete()
                     message = "Отметка сохранена на планшете: ${clockText(time)}. Ожидает подтверждения WMS"
-                    screen = "list"; selected = null; query = ""; refresh()
+                    screen = "list"; query = ""; refresh()
                 }
             }
         }, content = {
+        Box(Modifier.weight(1f)) {
         if (screen == "handling" && employee != null) {
-            HandlingScreen(employee, employees.filter { it.active && it.warehouseId == d.warehouseId }, busy,
-                onCancel = { screen = "list" }) { members, quantity, boxes, bags, rolls, start, type, note, id ->
-                if (!busy) {
-                    busy = true
-                    scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) { app.repo.handling(d, employee.id, members, quantity, start, type, note,
-                                app.store.offsetMs, app.store.syncedAt, id, boxes, bags, rolls) }
-                            message = "Работа сохранена на планшете. После отправки её проверит администратор"
-                            screen = "list"; selected = null; refresh()
-                        } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { message = e.message ?: "Не удалось сохранить работу" }
-                        finally { busy = false }
-                    }
-                }
-            }
-        } else if (screen == "queue") {
-            Button(onClick = { screen = "list" }) { Text("Назад к сотрудникам") }
-            LazyColumn {
-                items(events.filter { it.status != "ACCEPTED" }.takeLast(100).reversed(), key = { it.id }) {
-                    Text("${clockText(it.capturedAt)} · ${if (it.status == "REVIEW") "На проверке" else "Ожидает отправки"}\n${it.reason}", Modifier.padding(vertical = 10.dp))
-                }
-            }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(enabled = !marking, onClick = { refresh() }) { Text("Обновить") }
-                OutlinedButton(enabled = !marking, onClick = { screen = "queue"; selected = null }) { Text("Отправка отметок") }
-            }
-            OutlinedTextField(query, { query = it; selected = null }, enabled = !marking, label = { Text("Найти сотрудника") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-            if (employees.isEmpty()) Text("Список сотрудников появится после подключения к API планшетов WMS.", Modifier.padding(vertical = 16.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.weight(1f)) {
-                items(employees.filter { it.active && it.warehouseId == d.warehouseId && it.name.contains(query, true) }, key = { it.id }) { person ->
-                    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                        Column(Modifier.padding(16.dp)) {
-                            TextButton(enabled = !marking, onClick = { selected = person.id }, modifier = Modifier.fillMaxWidth().heightIn(min = 96.dp)) {
-                                Text(person.name + if (person.distinguishing.isNotBlank()) " · ${person.distinguishing}" else "", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                            }
-                            val open = projectedOpen(person, events)
-                            val pause = projectedBreak(person, events)
-                            Text(pause?.let { "На обеде с ${clockText(it)}" } ?: open?.let { "На смене с ${clockText(it)}" } ?: "Смена не открыта",
-                                color = if (pause != null) Color(0xFF8A4B00) else if (open != null) Color(0xFF21622B) else Color(0xFF374151), fontWeight = FontWeight.Bold)
-                            if (pause != null) Text("Время обеда вычитается из оплачиваемого времени", style = MaterialTheme.typography.bodySmall)
-                            if (person.id == selected) {
-                                Text("При отметке выполняется фотофиксация. Фото хранится на планшете 35 дней.", style = MaterialTheme.typography.bodySmall)
-                                Button(enabled = !marking, onClick = { screen = if (open == null) "clockIn" else "clockOut" }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)) {
-                                    Text(if (open == null) "Начать смену" else "Закончить смену")
-                                }
-                                if (open != null) OutlinedButton(enabled = !marking, onClick = { screen = if (pause == null) "breakStart" else "breakEnd" }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)) {
-                                    Text(if (pause == null) "Обед" else "Вернулся")
-                                }
-                                if (person.loader) OutlinedButton(enabled = !marking, onClick = { screen = "handling" }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)) { Text("Добавить погрузку / разгрузку") }
-                            }
+            drafts.SaveableStateProvider("handling:${employee.id}") {
+                HandlingScreen(employee, employees.filter { it.active && it.warehouseId == d.warehouseId }, busy,
+                    onCancel = { screen = "list" }, error = handlingError) { members, quantity, boxes, bags, rolls, start, type, note, id ->
+                    if (!busy) {
+                        busy = true; handlingError = ""
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) { app.repo.handling(d, employee.id, members, quantity, start, type, note,
+                                    app.store.offsetMs, app.store.syncedAt, id, boxes, bags, rolls) }
+                                drafts.removeState("handling:${employee.id}")
+                                savedEventId = id; screen = "saved"; message = ""; refresh()
+                            } catch (e: CancellationException) { throw e }
+                            catch (e: Exception) { handlingError = e.message ?: "Не удалось сохранить работу. Повторите попытку." }
+                            finally { busy = false }
                         }
                     }
                 }
             }
+        } else if (screen == "saved") {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                val saved = events.find { it.id == savedEventId }
+                Text("Работа сохранена", fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                Text(employee?.name.orEmpty(), fontWeight = FontWeight.Bold)
+                if (saved != null) { Text(workDescription(saved)); Text(deliveryLabel(saved), fontWeight = FontWeight.Bold) }
+                else Text("Сохранено на планшете · Ожидает отправки")
+                if (saved?.reason?.isNotBlank() == true) Text(saved.reason, color = MaterialTheme.colorScheme.error)
+                Button(onClick = { screen = "handling" }, enabled = employee != null, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)) { Text("Добавить ещё работу") }
+                OutlinedButton(onClick = { screen = "history" }, modifier = Modifier.fillMaxWidth().heightIn(min = 80.dp)) { Text("Мои работы") }
+                OutlinedButton(onClick = { screen = "list"; selected = null }, modifier = Modifier.fillMaxWidth()) { Text("Готово · К сотрудникам") }
+            }
+        } else if (screen == "queue" || screen == "history") {
+            WorkHistory(if (screen == "queue") null else employee, events, { screen = "list" }, { refresh() })
+        } else if (screen == "handling") {
+            Column { Text("Сотрудник больше недоступен. Черновик сохранён."); OutlinedButton(onClick = { screen = "list" }) { Text("Назад") } }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { refresh() }) { Text("Обновить", style = MaterialTheme.typography.bodySmall) }
+                    OutlinedButton(onClick = { screen = "queue" }) { Text("Отправка отметок", style = MaterialTheme.typography.bodySmall) }
+                }
+                Box(Modifier.weight(1f)) {
+                    AttendanceHome(employees.filter { it.active && it.warehouseId == d.warehouseId }, events, selected,
+                        { selected = it }, { handlingError = ""; screen = it })
+                }
+            }
+        }
         }
         })
     }
@@ -244,57 +234,5 @@ private fun Registration(busy: Boolean, register: (String, String) -> Unit) {
         Button(onClick = { register(code.trim(), name.trim()) }, enabled = !busy && code.isNotBlank() && name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(60.dp)) {
             Text(if (busy) "Подключение…" else "Подключить планшет")
         }
-    }
-}
-
-@Composable
-internal fun HandlingScreen(creator: Employee, employees: List<Employee>, busy: Boolean, onCancel: () -> Unit,
-    onSave: (List<String>, String, String, String, String, Long, String, String, String) -> Unit) {
-    val context = LocalContext.current
-    var participants by rememberSaveable { mutableStateOf<List<String>>(listOf(creator.id)) }
-    var quantity by rememberSaveable { mutableStateOf("") }
-    var boxes by rememberSaveable { mutableStateOf("") }
-    var bags by rememberSaveable { mutableStateOf("") }
-    var rolls by rememberSaveable { mutableStateOf("") }
-    var start by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
-    var type by rememberSaveable { mutableStateOf("UNLOADING") }
-    var note by rememberSaveable { mutableStateOf("") }
-    val id = rememberSaveable { UUID.randomUUID().toString() }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Погрузка / разгрузка", style = MaterialTheme.typography.titleLarge)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = type == "LOADING", onClick = { type = "LOADING" }, enabled = !busy, label = { Text("Погрузка") })
-            FilterChip(selected = type == "UNLOADING", onClick = { type = "UNLOADING" }, enabled = !busy, label = { Text("Разгрузка") })
-        }
-        OutlinedButton(enabled = !busy, onClick = {
-            val c = Calendar.getInstance(java.util.TimeZone.getTimeZone("Europe/Moscow")).apply { timeInMillis = start }
-            DatePickerDialog(context, { _, year, month, day ->
-                c.set(year, month, day)
-                TimePickerDialog(context, { _, hour, minute ->
-                    c.set(Calendar.HOUR_OF_DAY, hour); c.set(Calendar.MINUTE, minute); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
-                    start = c.timeInMillis
-                }, c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE), true).show()
-            }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
-        }) { Text("Начало (МСК): ${clockText(start)} · изменить") }
-        // FIX: one labelled row per cargo type; decimal pallets and integer units use appropriate keyboards.
-        OutlinedTextField(quantity, { quantity = it.take(10) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal), label = { Text("Палеты") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(boxes, { boxes = it.take(6) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), label = { Text("Короба") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(bags, { bags = it.take(6) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), label = { Text("Мешки") }, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(rolls, { rolls = it.take(6) }, enabled = !busy, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), label = { Text("Рулоны") }, modifier = Modifier.fillMaxWidth())
-        Text("1 палета = 16 коробов = 5 мешков = 30 рулонов. Заполняйте только фактически выполненный объём без повторного учёта.")
-        Text("Участники (создатель включён)")
-        employees.forEach { employee ->
-            Row {
-                Checkbox(checked = employee.id in participants, enabled = !busy && employee.id != creator.id, onCheckedChange = { checked ->
-                    participants = ArrayList(if (checked) (participants + employee.id).distinct() else participants - employee.id)
-                })
-                Text(employee.name, Modifier.padding(top = 12.dp))
-            }
-        }
-        OutlinedTextField(note, { note = it.take(1000) }, enabled = !busy, label = { Text("Комментарий") }, modifier = Modifier.fillMaxWidth())
-        Button(enabled = !busy && listOf(quantity,boxes,bags,rolls).any { it.isNotBlank() }, onClick = { onSave(participants, quantity, boxes, bags, rolls, start, type, note, id) }, modifier = Modifier.fillMaxWidth().height(60.dp)) {
-            Text(if (busy) "Сохранение…" else "Сохранить для проверки")
-        }
-        OutlinedButton(enabled = !busy, onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Отмена") }
     }
 }
