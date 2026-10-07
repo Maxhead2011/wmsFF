@@ -115,3 +115,6 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 
 
 Согласование приёмок PR494: receipt-channel-policy, receipt-channels controller, ReceiptDirectionsPanel; [описание](receipt-stock-approval.md).
+
+
+Клиентский Склад PR496: WarehouseOpsPanel, GoodsArrivalPanel, ShipmentHistoryPanel, canOpenWorkspace, shipment-history GET; [описание](client-warehouse-menu.md).

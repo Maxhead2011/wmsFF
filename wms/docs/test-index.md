@@ -151,3 +151,6 @@ PR492: API3109/141 skipped, web390/2 skipped, Android454; exact runtime tests и
 
 
 PR494: API3118/141 skipped, web391/2 skipped, runtime5, actual browser и PostgreSQL rollback; kiz-duplicate.integration требует отдельной тестовой БД.
+
+
+PR496: API3120/141 skipped, web394/2 skipped, runtime2, actual browser и PostgreSQL READ ONLY; kiz-duplicate.integration требует отдельной тестовой БД.
