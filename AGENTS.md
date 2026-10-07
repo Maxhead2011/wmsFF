@@ -160,3 +160,6 @@ Latest verified release PR488 / 06.10.2026: payroll filtered summaries, employee
 
 
 Latest verified PR492: baseline 2026-10-07-cabinet-fbo, sourceParityVerified=false. Cabinet export audit and recent FBO receipt placement; APK218. Flags/schema/sold unchanged. See current-production.md.
+
+
+Latest verified PR494: baseline 2026-10-07-receipt-approval, sourceParityVerified=false. Client receipt approval enabled only for Lukin / FF Moscow. Existing 29 receipts grandfathered; storage physical quantities unchanged. APK218/sold unchanged. See current-production.md.
