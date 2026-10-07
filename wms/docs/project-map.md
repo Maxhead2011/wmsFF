@@ -109,3 +109,6 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 `openclaw-candidate-smoke.cjs`; тесты рядом и `scripts/tests/test_deploy_openclaw.py`.
 Правило firewall ограничено внутренней сетью нашей WMS. При неизвестном результате
 задание не повторяется автоматически. В проданном окружении флаг не включать.
+
+
+Журнал выгрузок и ожидание размещения ФБО: stock/cabinet-export-audit, client-requests availability, FBO route; [описание](cabinet-export-and-fbo-placement.md).
