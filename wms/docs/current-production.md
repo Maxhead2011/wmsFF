@@ -1,3 +1,19 @@
+# Опубликовано PR490 / 07.10.2026 — планшет учёта времени 0.4.0
+
+APK: https://wms.logoff.pro/downloads/logoff-attendance-0.4.0-pilot.apk
+VersionCode 7; SHA256 `28e77833b3e692aaae423ee2f46ee595cfe26cefd9bc04207476c016a5c3cba0`.
+Адаптивные экраны, крупные имена/действия, сохранение черновика при возврате/повороте,
+видимая кнопка сохранения, локальная история работ и доставки. Обновление поверх старого
+приложения с тем же ключом. Тихая установка отсутствует. Физический планшет пока не проверен.
+92 Android tests, lintDebug, assembleRelease и проверка APK прошли.
+
+Web `sha256:bf4632ada0da13bf1fab7c2847a374b4cc676b2b3345f978f33d1423977c4d84`:
+добавлен только версионный APK в downloads; все остальные файлы сверены по SHA256.
+API `sha256:961d496898b8e5fbdf809afdcce4197795f9ed6de0fb6cf7fcbb91ac8d717c05` сохранён;
+baseline `2026-10-06-payroll-corrections` остаётся актуальным для API, sourceParityVerified=false.
+БД, флаги, ТСД217 и sold WMS не изменены. Откат web: `logoff-web:before-attendance040-20261007`.
+[Запись выпуска](releases/attendance-adaptive-040.json).
+
 ## Опубликовано PR488 / 06.10.2026 — исправления и история ФОТ
 
 Исправлен фильтр сводки выплат (PR487): пустые суммы скрыты. В редакторе смены
