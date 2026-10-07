@@ -157,3 +157,6 @@ Latest verified release PR485 / 05.10.2026: LOGOFF APK217 separates whole-box an
 
 
 Latest verified release PR488 / 06.10.2026: payroll filtered summaries, employee/time/cargo corrections and guarded audit undo. Baseline `wms/baselines/our-wms/2026-10-06-payroll-corrections`. WMS_PAYROLL_CORRECTIONS_ENABLED=true only on our WMS. Five API modules changed, schema/APK/sold unchanged; sourceParityVerified=false. See current-production.md.
+
+
+Latest verified PR492: baseline 2026-10-07-cabinet-fbo, sourceParityVerified=false. Cabinet export audit and recent FBO receipt placement; APK218. Flags/schema/sold unchanged. See current-production.md.

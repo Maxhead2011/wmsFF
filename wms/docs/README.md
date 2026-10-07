@@ -1,3 +1,16 @@
+# Опубликовано PR492 / 07.10.2026 — журнал выгрузок и ожидание размещения ФБО
+
+[Описание и проверки](cabinet-export-and-fbo-placement.md).
+Excel фиксирует точные строки, фильтры, пользователя и IP запроса. ФБО допускает
+подтверждённый приход за 7 суток без палет-сорта с ожиданием размещения.
+LOGOFF ТСД218 опубликован; установка поверх старой версии.
+
+API `sha256:4b83320f4ec8250aeb8bab8843a1db69e22c84363a372ab4908bb30f4ffeb8c8`, web `sha256:926bc59fbb684076283200ec073352e3ac568ecefec7231be2680cfd60530e9e`.
+Baseline `2026-10-07-cabinet-fbo`, sourceParityVerified=false.
+Флаги, схема, бизнес-записи и sold WMS не изменены. Проверены health, все хеши,
+подпись APK, read-only приёмка0610. Откат: `logoff-api:before-cabinet-fbo-20261007`
+и `logoff-web:before-cabinet-fbo-20261007`.
+
 # Текущий выпуск PR488 / 06.10.2026
 
 [Исправления и история ФОТ](payroll-corrections.md), [паспорт](current-production.md).
