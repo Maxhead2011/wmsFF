@@ -148,3 +148,6 @@ kiz-unfinished-cancelled.runtime.cjs: cancelled never-shipped binding, physical 
 
 
 PR492: API3109/141 skipped, web390/2 skipped, Android454; exact runtime tests и браузерный smoke в scripts/releases/cabinet-fbo-20261007. [Ограничения](cabinet-export-and-fbo-placement.md).
+
+
+PR494: API3118/141 skipped, web391/2 skipped, runtime5, actual browser и PostgreSQL rollback; kiz-duplicate.integration требует отдельной тестовой БД.

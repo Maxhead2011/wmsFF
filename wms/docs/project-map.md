@@ -112,3 +112,6 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 
 
 Журнал выгрузок и ожидание размещения ФБО: stock/cabinet-export-audit, client-requests availability, FBO route; [описание](cabinet-export-and-fbo-placement.md).
+
+
+Согласование приёмок PR494: receipt-channel-policy, receipt-channels controller, ReceiptDirectionsPanel; [описание](receipt-stock-approval.md).
