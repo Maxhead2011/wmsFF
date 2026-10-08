@@ -1,3 +1,9 @@
+# Published PR498 / 08.10.2026: single React runtime
+
+[Incident and review](single-react-incident-20261008.md). Web sha256:41b53ba7bea7475d139d8366e2a9b08064fde9904c64619b63fe5c4563bb5e6c.
+Requests/FBS/FBO/monitoring/administration verified in la_panthera, Soul and modern.
+API/APK218/flags unchanged. Baseline `2026-10-08-single-react`; sourceParityVerified=false.
+
 # Опубликовано PR494 / 07.10.2026 — согласование приёмок
 
 [Описание и проверки](receipt-stock-approval.md). Клиент подтверждает собственную
