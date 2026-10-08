@@ -1,0 +1,31 @@
+{
+  "published": true,
+  "at": 1791443378.794982,
+  "pr": 503,
+  "apiImage": "sha256:100c581357a3e892a6aa021f7111b03338519ee094d67ea11edff7039c2c13dc",
+  "base": "sha256:54e63ae72a0b6c9e8938e7b812a9735f23e093cc30f7a7dfb03d820db2bebb47",
+  "webApkFlagsUnchanged": true,
+  "businessRecordsChanged": false,
+  "smoke": {
+    "passed": true,
+    "readOnly": true,
+    "scoped": [
+      {
+        "box": "FFL_LKB2209_38",
+        "durationMs": 101,
+        "decision": "allowed"
+      },
+      {
+        "box": "FFL_LKB2209_38",
+        "durationMs": 38,
+        "decision": "allowed"
+      },
+      {
+        "box": "FFL_LKB2507_39",
+        "durationMs": 49,
+        "decision": "allowed"
+      }
+    ],
+    "referenceMs": 1619
+  }
+}
