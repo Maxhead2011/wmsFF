@@ -9,11 +9,13 @@ import { PrintController } from './print.controller';
 import { TsplLabelService } from './tspl-label.service';
 import { KizDuplicateController } from './kiz-duplicate.controller';
 import { KizDuplicateService } from './kiz-duplicate.service';
+import { PrintSeriesController } from './print-series.controller';
+import { PrintSeriesService } from './print-series.service';
 
 @Module({
   imports: [AuthModule, ConfigModule],
-  controllers: [PrintController, KizDuplicateController],
-  providers: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService, KizDuplicateService],
+  controllers: [PrintController, KizDuplicateController, PrintSeriesController],
+  providers: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService, KizDuplicateService, PrintSeriesService],
   exports: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService],
 })
 export class PrintModule {}
