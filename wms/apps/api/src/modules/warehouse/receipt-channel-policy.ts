@@ -1,3 +1,4 @@
+import { receiptStockIndexEnabled, readIndexedReceiptState } from './receipt-stock-index';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -49,6 +50,8 @@ export async function receiptDocuments(db: Db, clientId: string, warehouseId: st
 
 export async function receiptRules(db: Db, clientId: string, warehouseId?: string | null, boxIds?: string[]) {
   if(!receiptChannelsEnabled())return new Map<string,ReceiptRule>();
+  // FIX: all operational consumers share the durable index; reports keep receipt history.
+  if(receiptStockIndexEnabled())return (await readIndexedReceiptState(db,clientId,warehouseId,boxIds)).rules;
   const saved=await db.systemSetting.findMany({where:{key:{startsWith:prefix(clientId)}},select:{value:true}});
   const policies=saved.map(s=>s.value as unknown as ReceiptRule).filter(s=>s.clientId===clientId&&(!warehouseId||s.warehouseId===warehouseId));
   const result=new Map<string,ReceiptRule>();
@@ -262,6 +265,7 @@ export async function receiptApprovalEntries(db:Db,clientId:string,warehouseId?:
 }
 export async function pendingReceiptBoxIds(db:Db,clientIds:string[],warehouseId?:string|null,boxIds?:string[]){
   if(!receiptApprovalEnabled())return [] as string[];
+  if(receiptStockIndexEnabled()){const ids:string[]=[];for(const clientId of [...new Set(clientIds)])ids.push(...(await readIndexedReceiptState(db,clientId,warehouseId,boxIds,false)).pending);return [...new Set(ids)];}
   const ids:string[]=[];for(const clientId of [...new Set(clientIds)])for(const row of await receiptApprovalEntries(db,clientId,warehouseId,undefined,boxIds))if(!row.approval.available)ids.push(...row.doc.boxes.map(b=>b.id));
   return [...new Set(ids)];
 }
