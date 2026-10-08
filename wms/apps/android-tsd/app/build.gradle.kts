@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 218 // FIX: show accepted FBO stock awaiting placement only in the LOGOFF release.
-            versionName = "0.1.218-fbo-await-placement"
+            versionCode = 219 // FIX: compact confirmed FBO packing updates only for LOGOFF.
+            versionName = "0.1.219-fbo-compact-packing"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

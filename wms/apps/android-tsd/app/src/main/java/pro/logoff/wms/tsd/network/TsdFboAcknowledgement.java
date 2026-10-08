@@ -4,4 +4,5 @@ package pro.logoff.wms.tsd.network;
 public class TsdFboAcknowledgement {
     public String requestId, operationId, action;
     public boolean accepted;
+    public pro.logoff.wms.tsd.FboPackingReceipt.State packing;
 }
