@@ -1,8 +1,8 @@
 # Карта проекта
 
-Актуализировано 08.10.2026 по опубликованному PR509/510. Начинать с
+Актуализировано 08.10.2026 по опубликованному PR512. Начинать с
 [индекса](README.md), [паспорта](current-production.md) и
-[baseline 2026-10-08-receipt-stock-index](../baselines/our-wms/2026-10-08-receipt-stock-index/manifest.json).
+[baseline 2026-10-08-fbo-compact-packing](../baselines/our-wms/2026-10-08-fbo-compact-packing/manifest.json).
 `sourceParityVerified=false`; исходники и исполняемый runtime сверять отдельно.
 Пути ниже относительны `wms/`. Изменения публикуются только в нашей WMS.
 
@@ -10,6 +10,7 @@
 
 | Сценарий | Точки входа и поток | Границы поведения |
 | --- | --- | --- |
+| Упаковка ФБО, PR512 | ACK/status → fbo-packing-receipt → FboPackingReceipt / FboTwoStageScreen | Абсолютные счётчики без КИЗ-истории; LOGOFF219; fallback на полную сверку |
 | Доступность приёмки, PR509/510 | receiptRules / pendingReceiptBoxIds → receipt-stock-index → ReceiptStockIdentity | История агрегируется при записи; подтверждение читается актуальным; флаг только нашей ВМС |
 | Серия Windows, PR505 | `lib/printSeries.ts` → `/print/series` → `PrintSeriesService` → `PrintSeries.ps1` | Один PrintJob/PrintDocument; UUID, права филиала/клиента; потеря ACK не печатает повторно. Нужен новый агент |
 | Телефон, PR505 | `lib/phoneLayout.ts`, `components/layout/phone-layout.css`; runtime bridge | До 900 px: карточки, меню, прокрутка и zoom; только наша ВМС |
