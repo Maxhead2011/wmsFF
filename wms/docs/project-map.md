@@ -1,5 +1,35 @@
 # Карта проекта
 
+Актуализировано 08.10.2026 по опубликованному PR498. Начинать с
+[индекса](README.md), [паспорта](current-production.md) и
+[baseline 2026-10-08-single-react](../baselines/our-wms/2026-10-08-single-react/manifest.json).
+`sourceParityVerified=false`; исходники и исполняемый runtime сверять отдельно.
+Пути ниже относительны `wms/`. Изменения публикуются только в нашей WMS.
+
+## Актуальные связи
+
+| Сценарий | Точки входа и поток | Границы поведения |
+| --- | --- | --- |
+| Клиентский склад, PR496 | `apps/web/src/lib/workspaces.ts`: `canOpenWorkspace` → `components/warehouse/WarehouseOpsPanel.tsx` → `GoodsArrivalPanel.tsx`, `ShipmentHistoryPanel.tsx`, `ReceiptDirectionsPanel.tsx`; API `modules/warehouse/warehouse.controller.ts`: `shipmentHistoryList` | CLIENT видит ровно четыре раздела и свои данные. Онлайн-приёмка сохраняет `onlineReceiptVisibleToClient`. Флаги `WMS_CLIENT_WAREHOUSE_ENABLED` / `VITE_CLIENT_WAREHOUSE_ENABLED`; права записи склада не выдаются |
+| Подтверждение приёмки, PR494 | `apps/web/src/components/warehouse/ReceiptDirectionsPanel.tsx` → `apps/api/src/modules/warehouse/receipt-channels.controller.ts` → `receipt-channel-policy.ts`: `receiptApprovalEntries`, `changeReceiptApproval` | Клиент подтверждает свою приёмку; имя и время серверные. Отключение только ADMIN/OWNER без активного резерва. Флаг и scope клиента/склада, сейчас Лукин / ФФ Москва |
+| Доступность товара | `receipt-channel-policy.ts`: `pendingReceiptBoxIds`, `assertReceiptStockAvailable` → остатки, публикация WB, планирование и отбор ФБС/ФБО | Несогласованные короба недоступны для отбора и перемещения в обход проверки; физический учёт и хранение сохраняются. Направления ФБС/ФБО независимы от согласования |
+| Excel кабинета, PR492 | `apps/api/src/modules/stock/stock.controller.ts`: POST `/stock/cabinet-export-audit` → `CLIENT_STOCK_EXPORT_PREPARED` | Точные строки, фильтры, пользователь, серверное время и IP; подготовка файла не доказывает сохранение на устройстве |
+| Отбор и размещение ФБО, PR485/492 | `apps/api/src/modules/client-requests/`, `modules/stock/pick-instruction.service.ts`, `modules/tsd/fbo-request-route.ts`; Android `MainActivity.java` | Целые короба / частичный отбор используют один план. Подтверждённый приход за 7 суток может ожидать размещения; до размещения короб не доступен прямому отбору |
+| Исправления ФОТ, PR488 | `apps/web/src/components/expenses/PayrollManagement.tsx`, `PayrollHistory.tsx` → `apps/api/src/modules/expenses/payroll.service.ts` → `PayrollAudit` | Снимки до/после, причина, транзакция; оплата или более позднее изменение блокируют откат. Старые неполные события не имеют универсальной отмены |
+| React и навигация, PR498 | `scripts/single-react-graph.cjs`, `scripts/single-react-graph.test.cjs`, `scripts/releases/single-react-20261008/navigation.test.cjs` | Все достижимые lazy chunks используют один React. После переименования entry проверять граф и реальные переходы во всех затронутых темах |
+
+В этой таблице сокращённые `components/` относятся к `apps/web/src/`,
+`modules/` — к `apps/api/src/`. Подробности:
+[клиентский склад](client-warehouse-menu.md), [приёмки](receipt-stock-approval.md),
+[выгрузки и размещение](cabinet-export-and-fbo-placement.md),
+[ФОТ](payroll-corrections.md), [ФБО](fbo-two-stage-picking.md),
+[инцидент React](single-react-incident-20261008.md).
+
+## Биллинг: связи ранее опубликованных изменений
+
+Указанные ниже runtime-пути — исторические снимки соответствующих выпусков,
+а не текущая база для публикации.
+
 Опубликовано PR472 04.10.2026: [закрытие расчётных периодов](billing-period-close.md).
 `BillingPeriodClosingPanel` → `/billing/period-close` → `BillingPeriodCloseService` →
 отдельные `BillingPeriodClose` и `BillingInvoiceCorrection`; `billing-correction-balance.ts`
@@ -10,19 +40,19 @@ API569/web1744. Исходные счета/строки/приходы/начи
 Опубликовано PR469: `buildSettlements` → `visibleRows` после расчёта денежных сумм.
 Строки без долга и незавершённых расчётов скрыты, независимо от архивности клиента.
 `BillingSettlementsPanel` объясняет пустой отфильтрованный реестр.
-Текущий runtime: `C:/WMSFF2207/baselines/our-wms-runtime-settlements-visible-20261003`.
+Исторический runtime: `C:/WMSFF2207/baselines/our-wms-runtime-settlements-visible-20261003`.
 [Запись выпуска](releases/billing-settlements-visible-20261003.json).
 
 Опубликовано PR467: [частичный приход и загрузка расчётов](billing-partial-receipt-fix.md).
 `BillingSettlementsService.list` → отдельные `charges` за период и исторические
 `coverageCharges` → `buildSettlements`. `BillingCashReceiptPanel.toggleInvoice`
 сохраняет введённую сумму; `receiptHistory` читает оплаты всех счетов клиента.
-Текущий runtime: `C:/WMSFF2207/baselines/our-wms-runtime-partial-receipt-20261003`.
+Исторический runtime: `C:/WMSFF2207/baselines/our-wms-runtime-partial-receipt-20261003`.
 
 Опубликовано PR465: [фильтр статуса счетов](billing-invoice-status-filter.md).
 `BillingPanel.invoiceStatusFilter` → server register query + `filterBillingRegisterInvoices`
 и `invoiceKindTiles`. Оба представления используют один выбор статуса; API не менялся.
-Текущий runtime: `C:/WMSFF2207/baselines/our-wms-runtime-invoice-status-20261003`.
+Исторический runtime: `C:/WMSFF2207/baselines/our-wms-runtime-invoice-status-20261003`.
 
 Опубликовано PR463: [черновик по сданным заявкам](billing-done-requests.md).
 `BillingPanel` → `BillingPeriodGenerationDialog(doneRequests)` → прежние period
@@ -109,9 +139,3 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 `openclaw-candidate-smoke.cjs`; тесты рядом и `scripts/tests/test_deploy_openclaw.py`.
 Правило firewall ограничено внутренней сетью нашей WMS. При неизвестном результате
 задание не повторяется автоматически. В проданном окружении флаг не включать.
-
-
-Журнал выгрузок и ожидание размещения ФБО: stock/cabinet-export-audit, client-requests availability, FBO route; [описание](cabinet-export-and-fbo-placement.md).
-
-
-Согласование приёмок PR494: receipt-channel-policy, receipt-channels controller, ReceiptDirectionsPanel; [описание](receipt-stock-approval.md).
