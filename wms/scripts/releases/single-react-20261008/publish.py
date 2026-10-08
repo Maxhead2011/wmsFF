@@ -1,9 +1,14 @@
-import pathlib,json,subprocess,fcntl,time,urllib.request,hashlib
+import pathlib,json,subprocess,fcntl,time,urllib.request,urllib.error,hashlib
 r=pathlib.Path('/opt/logoff-wms/wms/work/soul-runtime-fix-20261008');app=pathlib.Path('/opt/logoff-wms/wms');locks=[]
 for name in ['/run/logoff-wms-release.lock','/opt/logoff-wms/.release.lock','/run/logoff-wms-web-release.lock']:
  f=open(name,'a');fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(f)
 def d(*a):return subprocess.check_output(['docker',*a],text=True).strip()
-def get(n):return urllib.request.urlopen('https://wms.logoff.pro/'+n,timeout=30).read()
+def get(n):
+ for attempt in range(15):
+  try:return urllib.request.urlopen('https://wms.logoff.pro/'+n,timeout=15).read()
+  except urllib.error.HTTPError as e:
+   if e.code not in [502,503,504] or attempt==14:raise
+   time.sleep(2)
 def switch(image):
  d('tag',image,'infra-web:latest');subprocess.run(['docker','compose','--env-file',str(app/'.env'),'-f',str(app/'infra/docker-compose.yml'),'up','-d','--no-deps','--no-build','--pull','never','--timeout','30','web'],check=True)
 v=json.loads((r/'verification.json').read_text());pr=json.loads((r/'pr.json').read_text());assert v['passed'] and pr['merged'];assert d('inspect','infra-web-1','--format','{{.Image}}')==v['base']

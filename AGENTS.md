@@ -163,3 +163,5 @@ Latest verified PR492: baseline 2026-10-07-cabinet-fbo, sourceParityVerified=fal
 
 
 Latest verified PR494: baseline 2026-10-07-receipt-approval, sourceParityVerified=false. Client receipt approval enabled only for Lukin / FF Moscow. Existing 29 receipts grandfathered; storage physical quantities unchanged. APK218/sold unchanged. See current-production.md.
+
+Latest verified PR498: baseline2026-10-08-single-react; sourceParityVerified=false. Web navigation crash repaired. API/APK/flags unchanged. See current-production.md.
