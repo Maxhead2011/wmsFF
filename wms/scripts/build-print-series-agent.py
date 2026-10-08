@@ -22,6 +22,13 @@ agent = agent.replace("Add-Type -AssemblyName System.Drawing", "Add-Type -Assemb
 agent = agent.replace('  Start-Sleep -Seconds 2', '  try { if (Invoke-PrintSeriesCycle $cfg) { continue } } catch { Write-Warning $_.Exception.Message }\n  Start-Sleep -Seconds 2')
 files[name] = agent.encode('utf-8-sig')
 files['PrintSeries.ps1'] = (root/'apps/windows-print-agent/PrintSeries.ps1').read_text(encoding='utf-8').encode('utf-8-sig')
+# FIX: the updated entry point requires its companion module on existing stations.
+readme = files['README.txt'].decode('utf-8-sig')
+old_instruction = 'На уже подключённой станции замените файл LOGOFF-FBS-Print-Agent.ps1 обновлённым из архива и перезапустите агент.'
+if old_instruction not in readme:
+    raise SystemExit('Unexpected public agent update instructions')
+readme = readme.replace(old_instruction, 'На уже подключённой станции остановите задачу «LOGOFF FBS Print Agent» в планировщике Windows. Скопируйте рядом с существующим config.json оба файла из архива: LOGOFF-FBS-Print-Agent.ps1 и PrintSeries.ps1. Сохраните существующий config.json и запустите задачу снова. Серия печатается одним многостраничным заданием Windows. Не запускайте второй экземпляр агента одновременно.')
+files['README.txt'] = readme.encode('utf-8-sig')
 with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as z:
     for name, data in files.items():
         z.writestr(name, data)
