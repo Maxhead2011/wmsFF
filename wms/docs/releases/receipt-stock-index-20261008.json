@@ -1,0 +1,161 @@
+{
+  "published": true,
+  "at": 1791451320.1854353,
+  "startedAt": 1791451300.9008672,
+  "pr": 510,
+  "base": "sha256:91cc1fb9ac47b6af22bc0f0c4da578f8aa9111a97f5f7d01172c3bbc9fad0216",
+  "api": "sha256:5725c2d33e7548b431b1e3fdaa8c004a951a04c17692d804d6f5079dee28d6e3",
+  "web": "sha256:2ba4b44a40bdf6051645f43449effdcb92ec240b7f5366a056e6b4a7e057b527",
+  "flag": "WMS_RECEIPT_STOCK_INDEX_ENABLED=true",
+  "migration": "20261008120000_receipt_stock_identity",
+  "migrationSha256": "2f25470199645b1a3df391125d2f684f5b51e78845bdae339cff44b5d8f64010",
+  "apkAndOtherContainersUnchanged": true,
+  "benchmark": {
+    "passed": true,
+    "temporaryIndex": false,
+    "rolledBack": true,
+    "comparisons": [
+      {
+        "kind": "pending",
+        "boxes": 319
+      },
+      {
+        "kind": "rules",
+        "boxes": 1421
+      },
+      {
+        "kind": "FBO-plan",
+        "lines": 231,
+        "routeBoxes": 705,
+        "picked": 378
+      }
+    ],
+    "timings": [
+      {
+        "name": "pending-before",
+        "ms": 1290,
+        "queries": 7
+      },
+      {
+        "name": "pending-after",
+        "ms": 87,
+        "queries": 3
+      },
+      {
+        "name": "rules-before",
+        "ms": 1397,
+        "queries": 17
+      },
+      {
+        "name": "rules-after",
+        "ms": 97,
+        "queries": 3
+      },
+      {
+        "name": "FBS-box-check-before-0",
+        "ms": 77,
+        "queries": 13
+      },
+      {
+        "name": "FBS-box-check-after-0",
+        "ms": 6,
+        "queries": 3
+      },
+      {
+        "name": "FBS-box-check-before-1",
+        "ms": 35,
+        "queries": 13
+      },
+      {
+        "name": "FBS-box-check-after-1",
+        "ms": 4,
+        "queries": 3
+      },
+      {
+        "name": "FBS-box-check-before-2",
+        "ms": 29,
+        "queries": 13
+      },
+      {
+        "name": "FBS-box-check-after-2",
+        "ms": 4,
+        "queries": 3
+      },
+      {
+        "name": "FBO-plan-before",
+        "ms": 5339,
+        "queries": 42
+      },
+      {
+        "name": "FBO-plan-after",
+        "ms": 1717,
+        "queries": 28
+      }
+    ]
+  },
+  "implementationPR": 509,
+  "migrationFixPR": 510,
+  "changedFiles": [
+    "modules/warehouse/receipt-stock-index.js",
+    "modules/warehouse/receipt-channel-policy.js",
+    "modules/tsd/fbo-two-stage.service.js"
+  ],
+  "validation": {
+    "apiPassed": 3149,
+    "apiSkipped": 141,
+    "webPassed": 398,
+    "webSkipped": 2,
+    "isolatedMigrationAndConcurrency": true,
+    "backfillRegression": true,
+    "dedicatedKizIntegration": "excluded: isolated fixture unavailable"
+  },
+  "initialAttempt": "90s per-box backfill timed out and rolled back; replaced with one grouped insert before switching API",
+  "rollback": {
+    "api": "logoff-api:before-receipt-stock-index-20261008",
+    "flag": "Restore previous WMS_RECEIPT_STOCK_INDEX_ENABLED; additive index table can remain"
+  },
+  "sourceParityVerified": false,
+  "initialScanSamples": {
+    "since": "2026-10-08T09:22:00.185Z",
+    "readOnly": true,
+    "rows": [
+      {
+        "flow": "FBS",
+        "step": "complete",
+        "samples": 2,
+        "errors": 0,
+        "meanMs": 362,
+        "medianMs": 361.5,
+        "p95Ms": 371.85
+      },
+      {
+        "flow": "FBS",
+        "step": "scan",
+        "samples": 1,
+        "errors": 0,
+        "meanMs": 477,
+        "medianMs": 477,
+        "p95Ms": 477
+      },
+      {
+        "flow": "FBS",
+        "step": "scan-box",
+        "samples": 3,
+        "errors": 0,
+        "meanMs": 501,
+        "medianMs": 378,
+        "p95Ms": 791.0999999999999
+      },
+      {
+        "flow": "FBS",
+        "step": "scan-kiz",
+        "samples": 1,
+        "errors": 0,
+        "meanMs": 2047,
+        "medianMs": 2047,
+        "p95Ms": 2047
+      }
+    ]
+  },
+  "scanComparisonLimitation": "Too few post-release samples for a reliable end-to-end speed comparison; camera/network excluded."
+}

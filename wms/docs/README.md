@@ -1,11 +1,11 @@
-# Latest release: PR507 / FBO plan approval scope
+# Latest release: PR509/510 / Receipt stock index
 
-See [published state](current-production.md) and [verification](releases/fbo-receipt-plan-20261008.json).
+See [published state](current-production.md) and [verification](releases/receipt-stock-index-20261008.json).
 
 # Индекс нашей WMS
 
-Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR505**:
-[серийная печать и браузер телефона](print-series-phone-layout.md).
+Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR509/510**:
+[индекс доступности приёмок](receipt-stock-index.md).
 API и web image ID сверены с действующими контейнерами 08.10.2026.
 LOGOFF ТСД218 сохранён. Проданная ВМС не обновляется.
 
@@ -15,7 +15,7 @@ LOGOFF ТСД218 сохранён. Проданная ВМС не обновля
 2. [Карта проекта](project-map.md) — точки входа и связи модулей.
 3. [Индекс проверок](test-index.md) — связанные сценарии и ограничения тестов.
 4. [Порядок выпуска](release-workflow.md) — свежая база, отдельная ветка, PR и проверка артефакта.
-5. [Запись PR505](releases/print-phone-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-print-phone/manifest.json).
+5. [Запись PR509/510](releases/receipt-stock-index-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-receipt-stock-index/manifest.json).
 
 Интеграционная ветка нашей WMS — `feature/wb-print-check`. Рабочие каталоги —
 `D:/WMSFF/_Kof` и его подпапки, продукт — `wms/` в репозитории.
