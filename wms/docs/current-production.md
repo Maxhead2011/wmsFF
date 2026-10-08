@@ -1,3 +1,10 @@
+# Published PR507 / 08.10.2026: FBO receipt approval plan scope
+
+API sha256:91cc1fb9ac47b6af22bc0f0c4da578f8aa9111a97f5f7d01172c3bbc9fad0216. Baseline `2026-10-08-fbo-receipt-plan`; sourceParityVerified=false.
+Only `modules/tsd/fbo-fbs-reservations.js` changed from the fresh live base sha256:7536d590a09322e160611f23e81fbb7d5f8d9ea5969e69386dd76c02c37f97a4.
+Request 1813: 231 lines, full snapshot 6344 ms after publication (candidate 6584 ms); mandatory rollback, no business records changed. Existing client approval and FBS reservations preserved. Web/APK218/flags/sold WMS unchanged.
+3126 API tests passed, 141 skipped; dedicated KIZ integration suite excluded because an isolated database was unavailable. Scoped TypeScript passed.
+
 # Опубликовано PR505 / 08.10.2026 — серии печати и телефон
 
 [Сценарий и проверки](print-series-phone-layout.md), [запись выпуска](releases/print-phone-20261008.json).
