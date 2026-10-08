@@ -1,3 +1,10 @@
+# Published PR501 / 08.10.2026: FBO window controls
+
+[FBO window verification](fbo-window-controls-20261008.md). Web sha256:6b9bca6b3394eb7d5a4b387d267090834495249dd73764e699334ae3ed56b353.
+Minimize/restore, close during reads and persisted-operation reconciliation verified on published code with isolated API fixtures.
+395 web tests passed, 2 skipped; TypeScript and existing multi-window browser suite passed. API/APK218/flags/sold WMS unchanged.
+Baseline `2026-10-08-fbo-window-controls`; sourceParityVerified=false.
+
 # Published PR498 / 08.10.2026: single React runtime
 
 [Incident and review](single-react-incident-20261008.md). Web sha256:41b53ba7bea7475d139d8366e2a9b08064fde9904c64619b63fe5c4563bb5e6c.
