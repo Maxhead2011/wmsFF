@@ -173,3 +173,5 @@ Latest verified PR503: baseline2026-10-08-tsd-receipt-scoped; sourceParityVerifi
 Latest verified PR505: baseline `2026-10-08-print-phone`; series Windows printing and phone browser layout. WMS_PRINT_SERIES_ENABLED=true only on our WMS. Agent package update required; PR501/503 preserved, APK218/sold unchanged. Source parity false. See current-production.md.
 
 Latest verified PR509/510: baseline2026-10-08-receipt-stock-index. Persistent receipt identity, transactional triggers, empty FBO demand skip; WMS_RECEIPT_STOCK_INDEX_ENABLED=true only on our WMS. Web/APK/sold unchanged. Source parity false. See current-production.md.
+
+Latest verified PR512: baseline2026-10-08-fbo-compact-packing; LOGOFF APK219. WMS_FBO_COMPACT_PACKING_ENABLED=true only on our WMS. Two API modules and APK download files; sold/FBS/picking unchanged. Source parity false. See current-production.md.

@@ -1,13 +1,13 @@
-# Latest release: PR509/510 / Receipt stock index
+# Latest release: PR512 / Compact FBO packing, APK219
 
-See [published state](current-production.md) and [verification](releases/receipt-stock-index-20261008.json).
+See [published state](current-production.md) and [verification](releases/fbo-compact-packing-20261008.json).
 
 # Индекс нашей WMS
 
-Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR509/510**:
-[индекс доступности приёмок](receipt-stock-index.md).
+Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR512**:
+[компактная упаковка ФБО](fbo-compact-packing.md).
 API и web image ID сверены с действующими контейнерами 08.10.2026.
-LOGOFF ТСД218 сохранён. Проданная ВМС не обновляется.
+LOGOFF ТСД219 опубликован. Проданная ВМС не обновляется.
 
 ## С чего начать
 
@@ -15,7 +15,7 @@ LOGOFF ТСД218 сохранён. Проданная ВМС не обновля
 2. [Карта проекта](project-map.md) — точки входа и связи модулей.
 3. [Индекс проверок](test-index.md) — связанные сценарии и ограничения тестов.
 4. [Порядок выпуска](release-workflow.md) — свежая база, отдельная ветка, PR и проверка артефакта.
-5. [Запись PR509/510](releases/receipt-stock-index-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-receipt-stock-index/manifest.json).
+5. [Запись PR512](releases/fbo-compact-packing-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-fbo-compact-packing/manifest.json).
 
 Интеграционная ветка нашей WMS — `feature/wb-print-check`. Рабочие каталоги —
 `D:/WMSFF/_Kof` и его подпапки, продукт — `wms/` в репозитории.
