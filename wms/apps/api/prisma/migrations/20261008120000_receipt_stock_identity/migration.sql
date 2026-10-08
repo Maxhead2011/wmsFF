@@ -72,4 +72,19 @@ CREATE TRIGGER wms_receipt_identity_operation AFTER INSERT OR UPDATE OR DELETE O
   FOR EACH ROW EXECUTE FUNCTION wms_receipt_identity_operation_trigger();
 
 -- Initial backfill runs once under the migration transaction; read paths never rebuild it.
-SELECT wms_refresh_receipt_stock_identity(id) FROM "Box" ORDER BY id;
+-- FIX: aggregate history once, rather than execute two lookups for every historical box.
+WITH movements AS (
+  SELECT "boxId","clientId","warehouseId",MAX("createdAt") AS at
+  FROM "StockMovement" WHERE type='RECEIPT' AND quantity>0 AND "boxId" IS NOT NULL
+  GROUP BY "boxId","clientId","warehouseId"
+), openings AS (
+  SELECT payload->>'boxCode' AS code,payload->>'clientId' AS client,
+    payload->>'warehouseId' AS warehouse,MAX("createdAt") AS at
+  FROM "TsdOperation" WHERE "operationType" IN ('receipt_open_box','receipt_box_status')
+    AND status='ACCEPTED' AND jsonb_typeof(payload->'sourceDocument')='string'
+    AND payload->>'sourceDocument'<>'' GROUP BY 1,2,3
+)
+INSERT INTO "ReceiptStockIdentity"("boxId","receiptAt","movementAt")
+SELECT b.id,GREATEST(m.at,o.at),m.at FROM "Box" b
+LEFT JOIN movements m ON m."boxId"=b.id AND m."clientId"=b."clientId" AND m."warehouseId"=b."warehouseId"
+LEFT JOIN openings o ON o.code=b.code AND o.client=b."clientId" AND o.warehouse=b."warehouseId";
