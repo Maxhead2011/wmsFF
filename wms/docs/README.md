@@ -1,3 +1,7 @@
+# Latest release: PR507 / FBO plan approval scope
+
+See [published state](current-production.md) and [verification](releases/fbo-receipt-plan-20261008.json).
+
 # Индекс нашей WMS
 
 Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR505**:

@@ -1,0 +1,20 @@
+{
+  "published": true,
+  "at": 1791446785.6315541,
+  "pr": 507,
+  "apiImage": "sha256:91cc1fb9ac47b6af22bc0f0c4da578f8aa9111a97f5f7d01172c3bbc9fad0216",
+  "base": "sha256:7536d590a09322e160611f23e81fbb7d5f8d9ea5969e69386dd76c02c37f97a4",
+  "webApkFlagsUnchanged": true,
+  "businessRecordsChanged": false,
+  "smoke": {
+    "passed": true,
+    "rolledBack": true,
+    "durationMs": 6344,
+    "request": 1813,
+    "lines": 231,
+    "routeBoxes": 745,
+    "needed": 5244,
+    "picked": 225,
+    "packed": 0
+  }
+}
