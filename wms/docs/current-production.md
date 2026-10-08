@@ -1,3 +1,10 @@
+# Published PR503 / 08.10.2026: bounded TSD receipt approval
+
+[Change and checks](tsd-receipt-scoped-20261008.md). API sha256:100c581357a3e892a6aa021f7111b03338519ee094d67ea11edff7039c2c13dc.
+Per-box FBS/FBO checks preserve client approval and shared locks without reading unrelated receipt history.
+Published live checks: 38-101 ms; no business records changed. Web/APK218/flags/sold WMS unchanged.
+Baseline `2026-10-08-tsd-receipt-scoped`; sourceParityVerified=false.
+
 # Published PR501 / 08.10.2026: FBO window controls
 
 [FBO window verification](fbo-window-controls-20261008.md). Web sha256:6b9bca6b3394eb7d5a4b387d267090834495249dd73764e699334ae3ed56b353.

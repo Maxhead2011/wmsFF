@@ -167,3 +167,5 @@ Latest verified PR494: baseline 2026-10-07-receipt-approval, sourceParityVerifie
 Latest verified PR498: baseline2026-10-08-single-react; sourceParityVerified=false. Web navigation crash repaired. API/APK/flags unchanged. See current-production.md.
 
 Latest verified PR501: baseline2026-10-08-fbo-window-controls; sourceParityVerified=false. FBO minimize and nonblocking read controls. API/APK/flags/sold unchanged. See current-production.md.
+
+Latest verified PR503: baseline2026-10-08-tsd-receipt-scoped; sourceParityVerified=false. One API receipt-policy module; per-box approval checks. Web/APK/flags/sold unchanged. See current-production.md.
