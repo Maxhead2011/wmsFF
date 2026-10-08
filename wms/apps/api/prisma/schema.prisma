@@ -1241,6 +1241,7 @@ model Box {
   balances             StockBalance[]
   productMarks         ProductMark[]
   requestBoxSelections ClientRequestBoxSelection[]
+  receiptStockIdentity ReceiptStockIdentity?
   storagePlacement     StoragePalletBox?
 
   @@unique([clientId, code])
@@ -3720,4 +3721,15 @@ model OzonFbsPickState {
   assembly FbsTsdAssembly @relation(fields: [assemblyId], references: [id], onDelete: Cascade)
   data       Json
   updatedAt  DateTime @default(now()) @updatedAt
+}
+
+// FIX: durable receipt evidence; physical quantities and approval audit remain authoritative.
+model ReceiptStockIdentity {
+  boxId String @id
+  receiptAt DateTime?
+  movementAt DateTime?
+  updatedAt DateTime @default(now())
+  box Box @relation(fields: [boxId], references: [id], onDelete: Cascade)
+
+  @@index([receiptAt])
 }

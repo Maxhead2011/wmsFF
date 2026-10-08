@@ -91,7 +91,11 @@ export class FboTwoStageService {
         const demand: Record<string, number> = {};
         for (const l of lines)
             demand[l.skuId] = (demand[l.skuId] ?? 0) + l.remaining;
-        const boxes = assembly?.phase && assembly.phase !== 'PICKING' ? [] : await tx.box.findMany({
+        // FIX: completed demand and packing need progress only, never another stock route.
+        const indexedStock = process.env.WMS_RECEIPT_STOCK_INDEX_ENABLED === 'true';
+        const remainingSkuIds = Object.keys(demand).filter(k => demand[k] > 0);
+        const needsRoute = (!assembly?.phase || assembly.phase === 'PICKING') && remainingSkuIds.length > 0;
+        const boxes = (indexedStock ? !needsRoute : assembly?.phase && assembly.phase !== 'PICKING') ? [] : await tx.box.findMany({
             where: { clientId: r.clientId, warehouseId: r.warehouseId, status: 'active', balances: { some: {
                         skuId: { in: Object.keys(demand).filter(k => demand[k] > 0) }, status: 'AVAILABLE', quantity: { gt: 0 }
                     } } },
@@ -101,7 +105,8 @@ export class FboTwoStageService {
         const route = [];
         // FIX: PALLET_SORT stock is physically accepted but cannot be picked before placement.
         const requiresPlacement = wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT';
-        const availability = await loadFboFbsAvailability(tx, r, Object.keys(demand));
+        const availability = indexedStock && !needsRoute ? { free: () => 0, take: () => {} }
+            : await loadFboFbsAvailability(tx, r, indexedStock ? remainingSkuIds : Object.keys(demand));
         const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
         // FIX: historical stock may have real marks even when the SKU flag was never filled.
         for (const l of lines)
