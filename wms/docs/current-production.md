@@ -1,3 +1,17 @@
+# Опубликовано PR509/510 / 08.10.2026 — индекс доступности приёмок
+
+[Схема и проверки](receipt-stock-index.md), [запись выпуска](releases/receipt-stock-index-20261008.json).
+API `sha256:5725c2d33e7548b431b1e3fdaa8c004a951a04c17692d804d6f5079dee28d6e3`. Baseline `2026-10-08-receipt-stock-index`, sourceParityVerified=false.
+WMS_RECEIPT_STOCK_INDEX_ENABLED=true только на нашей ВМС. Добавлена таблица
+ReceiptStockIdentity и транзакционные триггеры; физические остатки не изменены.
+Web/APK218/остальные флаги/проданная ВМС сохранены.
+Сверка постоянного индекса: 319 недоступных коробов, 1421 правило, весь план ФБО
+совпали со старым расчётом. План 5339→1717 мс; проверки короба ФБС 29–77→4–6 мс.
+Это компоненты сервера, не время полного сканирования. API3149/web398 прошли;
+API141/web2 пропущены, отдельный KIZ DB suite исключён. Миграция и конкурентные
+записи проверены в отдельном PostgreSQL. Первая миграция откатилась по таймауту;
+исправленная групповая загрузка завершилась. Откат API: logoff-api:before-receipt-stock-index-20261008.
+
 # Published PR507 / 08.10.2026: FBO receipt approval plan scope
 
 API sha256:91cc1fb9ac47b6af22bc0f0c4da578f8aa9111a97f5f7d01172c3bbc9fad0216. Baseline `2026-10-08-fbo-receipt-plan`; sourceParityVerified=false.
