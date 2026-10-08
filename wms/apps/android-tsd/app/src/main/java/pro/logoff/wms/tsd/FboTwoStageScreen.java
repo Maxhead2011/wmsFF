@@ -180,10 +180,56 @@ final class FboTwoStageScreen {
         cartonList(root,"Отсканированные целые короба",progress.scanned,false);
     }
     private boolean ready(){return state.pending()==null&&!busy&&!routeStale;}
+    private LinearLayout compactRoot;
+    private TextView compactProgress,compactTarget,compactHint,compactMessage;
+    private Button compactSubmit,compactClose,compactCancel,compactManual,compactEmpty,compactModes,compactRefresh,compactRetry,compactBack;
+    private TextView compactLabel(){TextView v=new TsdUi.Label(activity);v.setTextSize(22);v.setPadding(0,12,0,12);compactRoot.addView(v);return v;}
+    private Button compactButton(String title,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setOnClickListener(v->action.run());compactRoot.addView(b);return b;}
+    // FIX: retain the actual scan field while only status labels and enabled states change.
+    private boolean renderCompactPacking(){
+        if(!packingChoices()||plan==null||!plan.compactPackingSupported||!"PACKING".equals(screenPhase())||
+            !(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)){compactRoot=null;return false;}
+        if(compactRoot==null){
+            compactRoot=new LinearLayout(activity);compactRoot.setOrientation(LinearLayout.VERTICAL);compactRoot.setPadding(24,20,24,24);
+            compactLabel().setText("Упаковка FBO · "+plan.title);
+            compactProgress=compactLabel();compactTarget=compactLabel();compactMessage=compactLabel();compactHint=compactLabel();
+            input=new EditText(activity);input.setSingleLine(true);input.setTextSize(24);compactRoot.addView(input);
+            input.setOnEditorActionListener((v,a,e)->{submit();return true;});
+            input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
+            compactSubmit=compactButton("Подтвердить скан",this::submit);
+            compactCancel=compactButton("Отменить скан",this::cancelPackingScan);
+            compactManual=compactButton("Добавить КИЗ вручную",this::manualPackingKiz);
+            compactClose=compactButton("Закрыть короб",()->{if(ready())send("CLOSE_BOX",null);});
+            compactEmpty=compactButton("Отложить пустой короб",()->{if(ready())send("CANCEL_EMPTY_BOX",null);});
+            compactModes=compactButton("К выбору упаковки",()->{if(ready()&&state.barcode.isEmpty())choosePackingMode(PackingMode.MENU);});
+            compactRetry=compactButton("Повторить отправку",()->{if(!busy&&state.pending()!=null)send(state.pending().get("action"),state.pending().get("kiz"));});
+            compactRefresh=compactButton("Обновить",this::refresh);
+            compactBack=compactButton("В меню",()->{if(!busy&&state.pending()==null){close();back.run();}});
+            ScrollView scroll=new ScrollView(activity);scroll.setFillViewport(true);scroll.addView(compactRoot);activity.setContentView(scroll);
+        }
+        TsdFboPlan.Box target=null;for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(state.target))target=b;
+        compactProgress.setText("Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" · Осталось вложить "+Math.max(0,plan.picked-plan.packed));
+        compactTarget.setText(state.target.isEmpty()?"Откройте короб":("Короб "+state.target+" · "+(target==null?0:target.quantity)+" шт."));
+        String hint=state.target.isEmpty()?"ШК короба для упаковки":state.barcode.isEmpty()?"ШК товара":"КИЗ товара";
+        compactHint.setText(hint);TsdUi.hint(input,hint);
+        compactMessage.setText(busy?"Сохраняю…":routeStale?"Нужна сверка. Нажмите «Обновить».":message);
+        compactRoot.setBackgroundColor(AssemblyScreenFeedback.background(true,retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor));
+        input.setEnabled(ready());compactSubmit.setEnabled(ready());
+        compactCancel.setVisibility(state.barcode.isEmpty()?android.view.View.GONE:android.view.View.VISIBLE);compactCancel.setEnabled(ready());
+        compactManual.setVisibility(plan.manualPackingEnabled&&!state.barcode.isEmpty()?android.view.View.VISIBLE:android.view.View.GONE);compactManual.setEnabled(ready());
+        compactClose.setEnabled(ready()&&target!=null&&!target.closed&&target.quantity>0&&state.barcode.isEmpty());
+        compactEmpty.setEnabled(ready()&&target!=null&&!target.closed&&target.quantity==0&&state.barcode.isEmpty());
+        compactModes.setEnabled(ready()&&state.barcode.isEmpty());compactRefresh.setEnabled(!busy&&state.pending()==null);compactBack.setEnabled(!busy&&state.pending()==null);
+        compactRetry.setVisibility(state.pending()==null?android.view.View.GONE:android.view.View.VISIBLE);compactRetry.setEnabled(!busy&&state.pending()!=null);
+        if(ready())input.requestFocus();packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
+        return true;
+    }
+
     private void render(){
         if(closed||activity.isDestroyed())return;
         if(pickingChoices())prefs.edit().putString(pendingKey+":picking-mode",pickingMode.name()).commit();
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
+        if(renderCompactPacking())return;
         LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);int screenColor=AssemblyScreenFeedback.background("logoff".equals(BuildConfig.FLAVOR),retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor);root.setBackgroundColor(screenColor);
         text(root,packing?"Упаковка FBO":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
         if("logoff".equals(BuildConfig.FLAVOR)&&retrySending&&busy&&state.pending()!=null)text(root,"Повторная отправка запроса");
@@ -360,7 +406,11 @@ final class FboTwoStageScreen {
             busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
         }
         state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
+        // FIX: compact absolute state enables the next scan without fetching the full route.
+        boolean compact=FboPackingReceipt.apply(plan,ack.packing,packing,BuildConfig.FLAVOR);
+        if(compact){routeStale=false;state.reconcile(plan,true);}
         message=FboFeedback.accepted(payload,plan);packingAccepted(payload);render();
+        if(compact)return;
         if("FINISH".equals(payload.get("action"))&&!packingChoices())download();refresh();
     }
     private void sendAcknowledged(Map<String,String> payload){

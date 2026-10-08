@@ -10,6 +10,7 @@ public class TsdFboPlan {
     public int pendingPlacementQuantity;
     public boolean compositionChanged, manualPackingEnabled, reusablePackingEnabled;
     public boolean fastAcknowledgementSupported;
+    public boolean compactPackingSupported;
     public List<Line> lines;
     public List<Route> route;
     public List<Box> boxes;
