@@ -101,7 +101,10 @@ export async function loadFboFbsAvailability(tx: Prisma.TransactionClient,
     (open.has(t.requestId) && !shippedOrders.has(`${t.connectionId}:${t.orderId}`)))
     .map(t => ({...t,itemCount:Math.max(1,t.itemCount)-Math.max(0,picked.get(t.id) ?? 0)}))
     .filter(t => t.itemCount > 0);
-  const rules=await receiptRules(tx,request.clientId,request.warehouseId);
+  // FIX: only available candidate boxes can contribute stock to this FBO plan.
+  // Keep approval reads in the same transaction without loading unrelated receipt history.
+  const receiptBoxIds = [...new Set(balances.flatMap(b => b.boxId ? [b.boxId] : []))];
+  const rules=await receiptRules(tx,request.clientId,request.warehouseId,receiptBoxIds);
   const missing=rules.size?await receiptUnassignedOrders(tx,request.clientId,request.warehouseId,new Set(tasks.map(receiptOrderKey))):[];
   return new FboFbsAvailability(balances, [...pending,...missing], rules);
 }
