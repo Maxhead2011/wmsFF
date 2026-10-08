@@ -1,7 +1,7 @@
 # Индекс нашей WMS
 
-Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR503**:
-[TSD: receipt approval checks limited to selected boxes](tsd-receipt-scoped-20261008.md).
+Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR505**:
+[серийная печать и браузер телефона](print-series-phone-layout.md).
 API и web image ID сверены с действующими контейнерами 08.10.2026.
 LOGOFF ТСД218 сохранён. Проданная ВМС не обновляется.
 
@@ -11,7 +11,7 @@ LOGOFF ТСД218 сохранён. Проданная ВМС не обновля
 2. [Карта проекта](project-map.md) — точки входа и связи модулей.
 3. [Индекс проверок](test-index.md) — связанные сценарии и ограничения тестов.
 4. [Порядок выпуска](release-workflow.md) — свежая база, отдельная ветка, PR и проверка артефакта.
-5. [Запись PR498](releases/single-react-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-single-react/manifest.json).
+5. [Запись PR505](releases/print-phone-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-print-phone/manifest.json).
 
 Интеграционная ветка нашей WMS — `feature/wb-print-check`. Рабочие каталоги —
 `D:/WMSFF/_Kof` и его подпапки, продукт — `wms/` в репозитории.

@@ -1,0 +1,91 @@
+{
+  "published": true,
+  "at": 1791444184.2243507,
+  "pr": 505,
+  "services": {
+    "api": {
+      "base": "sha256:100c581357a3e892a6aa021f7111b03338519ee094d67ea11edff7039c2c13dc",
+      "candidate": "sha256:7536d590a09322e160611f23e81fbb7d5f8d9ea5969e69386dd76c02c37f97a4"
+    },
+    "web": {
+      "base": "sha256:6b9bca6b3394eb7d5a4b387d267090834495249dd73764e699334ae3ed56b353",
+      "candidate": "sha256:2ba4b44a40bdf6051645f43449effdcb92ec240b7f5366a056e6b4a7e057b527"
+    }
+  },
+  "flag": "WMS_PRINT_SERIES_ENABLED=true",
+  "apkAndOtherContainersUnchanged": true,
+  "agentSha256": "a704377698a7c66b8faf860795cc4572bb0a0c21ef94c3c1d0cb38c4cbc39758",
+  "pullRequest": {
+    "number": 505,
+    "merged": true,
+    "head": "55426155f9e1428e666a2f13ae44a537e9da8312",
+    "mergeCommitSha": "a110736d72b55404ff186f612f5a19cd24a91a62",
+    "url": "https://github.com/Maxhead2011/wmsFF/pull/505",
+    "base": "feature/wb-print-check"
+  },
+  "changedFiles": {
+    "api": [
+      "modules/print/print-series.service.js",
+      "modules/print/print-series.controller.js",
+      "modules/print/print.module.js",
+      "modules/administration/administration-internal-api.service.js"
+    ],
+    "web": [
+      "index.html",
+      "assets/print-phone-20261008-14.js",
+      "assets/print-phone-20261008-15.js",
+      "assets/print-phone-20261008-0.js",
+      "assets/print-phone-20261008-23.js",
+      "assets/print-phone-20261008-6.js",
+      "assets/print-phone-20261008-7.js",
+      "assets/print-phone-20261008-8.js",
+      "assets/print-phone-20261008-9.js",
+      "assets/print-phone-20261008-10.js",
+      "assets/print-phone-20261008-11.js",
+      "assets/print-phone-20261008-13.js",
+      "assets/print-phone-20261008-1.js",
+      "assets/print-phone-20261008-4.js",
+      "assets/print-phone-20261008-16.js",
+      "assets/print-phone-20261008-17.js",
+      "assets/print-phone-20261008-18.js",
+      "assets/print-phone-20261008-19.js",
+      "assets/print-phone-20261008-20.js",
+      "assets/print-phone-20261008-21.js",
+      "assets/print-phone-20261008-22.js",
+      "assets/print-phone-20261008-12.js",
+      "assets/print-phone-20261008-24.js",
+      "assets/print-phone-20261008-25.js",
+      "assets/print-phone-20261008-26.js",
+      "assets/print-phone-20261008-27.js",
+      "assets/print-phone-20261008-28.js",
+      "assets/print-phone-20261008-29.js",
+      "assets/print-phone-20261008-2.js",
+      "assets/print-phone-20261008-3.js",
+      "assets/print-phone-20261008-5.js",
+      "assets/phone-layout-20261008.css",
+      "assets/print-phone-bridge-20261008.js",
+      "downloads/LOGOFF-FBS-Print-Agent.zip"
+    ],
+    "requiredFlag": "WMS_PRINT_SERIES_ENABLED=true",
+    "sourceParityVerified": false
+  },
+  "validation": {
+    "apiPassed": 3129,
+    "apiSkipped": 141,
+    "webPassed": 398,
+    "webSkipped": 2,
+    "runtimeApiPassed": 9,
+    "agentPassed": 8,
+    "packagePassed": 1,
+    "mobileCssScenarios": 40,
+    "publishedBrowserScenarios": 6,
+    "physicalPrinterVerified": false,
+    "physicalPhoneVerified": false
+  },
+  "rollback": {
+    "api": "logoff-api:before-print-phone-20261008",
+    "web": "logoff-web:before-print-phone-20261008",
+    "flag": "Restore previous WMS_PRINT_SERIES_ENABLED value (absent/false)."
+  },
+  "sourceParityVerified": false
+}
