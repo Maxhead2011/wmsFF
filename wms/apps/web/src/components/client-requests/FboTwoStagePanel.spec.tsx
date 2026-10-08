@@ -7,6 +7,12 @@ import type { FboPlan } from '../../lib/api';
 const base:FboPlan={requestId:'r',title:'1029',phase:'PACKING',needed:2,picked:2,packed:2,looseRemaining:0,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[{code:'FFL_1',quantity:2,wholeBox:false,closed:true,confirmed:false}]};
 const render=(plan:FboPlan)=>renderToStaticMarkup(<FboTwoStagePanel initial={plan} accessToken="test" userId="picker" canWrite onClose={()=>{}}/>);
 describe('FBO packing and final box control',()=>{
+  it('exposes the standard window header and close control for minimizing',()=>{
+    // TEST: FBO must participate in the same retained-window mechanism as FBS.
+    const html=render(base);
+    expect(html).toContain('class="online-execution-modal__header"');
+    expect(html).toContain('aria-label="Закрыть"');
+  });
   it('offers box sorting completion before final verification and keeps WB export unavailable',()=>{
     // TEST: closing parcels is not proof that all shipment boxes were scanned.
     const html=render(base);expect(html).toContain('Короба разобраны');expect(html).not.toContain('Скачать файл WB');
