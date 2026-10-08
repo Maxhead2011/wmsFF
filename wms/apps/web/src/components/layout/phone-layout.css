@@ -1,0 +1,91 @@
+/* FIX: phone overrides are opt-in for our WMS and never affect label print media. */
+.phone-menu-toggle { display: none; }
+@media screen and (max-width: 900px) {
+  :root[data-wms-phone-layout='true'],
+  :root[data-wms-phone-layout='true'] body,
+  :root[data-wms-phone-layout='true'] #root {
+    min-width: 0 !important;
+    width: 100%;
+    height: auto !important;
+    min-height: 100%;
+    touch-action: auto !important;
+  }
+  :root[data-wms-phone-layout='true'] :is(.app-layout,.workspace-shell,.workspace-content) {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    box-sizing: border-box;
+    touch-action: auto !important;
+  }
+  :root[data-wms-phone-layout='true'] .app-layout {
+    grid-template-columns: minmax(0,1fr) !important;
+    overflow: visible !important;
+  }
+  :root[data-wms-phone-layout='true'] .workspace-content { padding: 12px !important; overflow: visible !important; }
+  :root[data-wms-phone-layout='true'] body { overflow: auto !important; }
+  :root[data-wms-phone-layout='true'] :is(.workspace-shell,.app-sidebar) { grid-column: 1 !important; }
+  :root[data-wms-phone-layout='true'] .workspace-content > * { min-width: 0 !important; max-width: 100%; }
+  :root[data-wms-phone-layout='true'] .app-sidebar {
+    position: static !important; width: auto !important; height: auto !important;
+    display: block !important; max-height: 50dvh; overflow: auto; touch-action: auto;
+  }
+  :root[data-wms-phone-layout='true'] .app-sidebar:not([data-phone-menu-open='true']):has(.phone-menu-toggle) > :not(.phone-menu-toggle) { display: none !important; }
+  :root[data-wms-phone-layout='true'] .phone-menu-toggle { display: block; width: 100%; min-height: 44px; padding: 10px 16px; text-align: left; font: inherit; font-weight: 700; color: inherit; background: transparent; border: 0; }
+  :root[data-wms-phone-layout='true'] :is(.workspace-header,.workspace-header__meta,.space-topbar) {
+    min-width: 0 !important; width: 100%; max-width: 100%; box-sizing: border-box;
+    display: flex !important; flex-wrap: wrap; gap: 8px; padding: 12px;
+  }
+  :root[data-wms-phone-layout='true'] :is(.workspace-header__title,.workspace-header__meta > *, .workspace-user) { min-width: 0 !important; max-width: 100% !important; }
+  :root[data-wms-phone-layout='true'] .workspace-header__meta { display: grid !important; grid-template-columns: repeat(2,minmax(0,1fr)); padding: 0; }
+  :root[data-wms-phone-layout='true'] .workspace-header__meta > * { width: 100% !important; box-sizing: border-box; }
+  :root[data-wms-phone-layout='true'] .workspace-header__meta .workspace-user { grid-column: 1 / -1; }
+  :root[data-wms-phone-layout='true'] .workspace-header__meta :is(.workspace-global-search,.workspace-branch-select) { grid-column: 1 / -1; }
+  :root[data-wms-phone-layout='true'] :is(input,select,textarea) { min-width: 0; max-width: 100%; box-sizing: border-box; font-size: max(16px,1rem) !important; }
+  :root[data-wms-phone-layout='true'] :is(button,summary) { min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
+  :root[data-wms-phone-layout='true'] :is(.import-fields,.print-fields,.sticker-set__options,.workspace-summary,.workspace-tiles) { grid-template-columns: repeat(auto-fit,minmax(min(240px,100%),1fr)) !important; }
+  :root[data-wms-phone-layout='true'] :is(.table-wrapper,.table-container,.data-table-wrapper,.table-scroll) {
+    max-width: 100%; min-width: 0; overflow-x: auto !important; touch-action: auto !important;
+  }
+  :root[data-wms-phone-layout='true'] .workspace-content table { display: block; max-width: 100%; overflow-x: auto; touch-action: auto !important; }
+  :root[data-wms-phone-layout='true'] :is(.modal,.dialog,[role='dialog']) {
+    box-sizing: border-box; max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 16px) !important; overflow: auto; touch-action: auto !important;
+  }
+  :root[data-wms-phone-layout='true'] :is(.space-topbar__popover,.header-notification-popover) { position: fixed; left: 8px; right: 8px; width: auto; }
+  /* FIX: desktop 38px table-cell heights must never constrain stacked request cards. */
+  :root[data-wms-phone-layout='true'] :is(.client-requests-panel,.client-requests-panel__list,.client-request-table-wrap) {
+    width: 100% !important; min-width: 0 !important; max-width: 100% !important;
+    box-sizing: border-box; margin-inline: 0 !important; grid-column: 1 / -1;
+  }
+  :root[data-wms-phone-layout='true'] .client-requests-panel { padding: 8px !important; }
+  :root[data-wms-phone-layout='true'] .client-request-table-wrap { overflow: visible !important; }
+  :root[data-wms-phone-layout='true'] :is(.client-request-table,.client-request-table tbody) { display: block !important; width: 100% !important; min-width: 0 !important; padding: 0 !important; box-sizing: border-box; overflow: visible !important; }
+  :root[data-wms-phone-layout='true'] .client-request-table thead { display: none !important; }
+  :root[data-wms-phone-layout='true'] .client-request-table tbody tr {
+    display: grid !important; grid-template-columns: minmax(0,1fr) !important;
+    grid-template-rows: none !important; grid-auto-rows: auto !important;
+    width: 100% !important; height: auto !important; max-height: none !important;
+    gap: 12px; padding: 12px !important; margin: 0 0 12px !important; box-sizing: border-box;
+  }
+  :root[data-wms-phone-layout='true'] .client-request-table tbody tr > td {
+    grid-column: 1 / -1 !important; grid-row: auto !important;
+    width: 100% !important; min-width: 0 !important; height: auto !important;
+    min-height: 0 !important; max-height: none !important; padding: 0 !important;
+    white-space: normal !important; overflow-wrap: anywhere; box-sizing: border-box;
+  }
+  :root[data-wms-phone-layout='true'] .client-request-table__select-cell::before { display: none !important; }
+  :root[data-wms-phone-layout='true'] .client-request-table td:has(.client-request-actions)::before { content: 'Действия' !important; }
+  :root[data-wms-phone-layout='true'] .client-request-table td:has(.client-request-combined-process):not(:has(.client-request-actions))::before { content: 'Процесс' !important; }
+  :root[data-wms-phone-layout='true'] .client-request-identity { grid-template-columns: minmax(0,1fr) !important; gap: 8px; }
+  :root[data-wms-phone-layout='true'] :is(.client-request-title,.client-request-items-preview,.client-request-action-button span) {
+    height: auto !important; max-height: none !important; white-space: normal !important;
+    overflow: visible !important; -webkit-line-clamp: unset !important; overflow-wrap: anywhere;
+  }
+  :root[data-wms-phone-layout='true'] .client-request-sortbar { display: grid !important; grid-template-columns: minmax(0,1fr); width: 100%; box-sizing: border-box; }
+  :root[data-wms-phone-layout='true'] .client-request-sortbar :is(label,select) { width: 100%; min-width: 0; }
+  :root[data-wms-phone-layout='true'] :is(.client-request-actions,.client-request-actions--main) { width: 100%; max-width: 100%; grid-template-columns: minmax(0,1fr) !important; }
+  :root[data-wms-phone-layout='true'] .client-request-action-button { width: 100% !important; height: auto !important; min-height: 44px; }
+  :root[data-wms-phone-layout='true'] :is(.client-request-items-grid,.sticker-set__canvas-wrap,.online-execution-table-wrap) { max-width: 100%; overflow-x: auto !important; touch-action: auto !important; }
+}
