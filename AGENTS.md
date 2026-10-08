@@ -169,3 +169,5 @@ Latest verified PR498: baseline2026-10-08-single-react; sourceParityVerified=fal
 Latest verified PR501: baseline2026-10-08-fbo-window-controls; sourceParityVerified=false. FBO minimize and nonblocking read controls. API/APK/flags/sold unchanged. See current-production.md.
 
 Latest verified PR503: baseline2026-10-08-tsd-receipt-scoped; sourceParityVerified=false. One API receipt-policy module; per-box approval checks. Web/APK/flags/sold unchanged. See current-production.md.
+
+Latest verified PR505: baseline `2026-10-08-print-phone`; series Windows printing and phone browser layout. WMS_PRINT_SERIES_ENABLED=true only on our WMS. Agent package update required; PR501/503 preserved, APK218/sold unchanged. Source parity false. See current-production.md.

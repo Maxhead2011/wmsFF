@@ -11,6 +11,7 @@ web `BillingPeriodGenerationDialog.spec.tsx`; выключенный флаг, �
 
 | Изменяемая область | Проверки API (`apps/api/test/`) | Android / другие проверки |
 | --- | --- | --- |
+| Серия и телефон, PR505 | `print-series.spec.ts`, также на готовом runtime | `printSeries.spec.ts`, `print-series.test.cjs`, `phone-layout.browser-test.cjs`, `scripts/print-phone-runtime.browser-test.cjs`, `scripts/build-print-series-agent.test.py` |
 | FBS экран, capability, контроллер | `tsd-fbs-capability.spec.ts`, `fbs-tsd-sticker-number.spec.ts` — также на реальном runtime | `FbsAssemblyUiTest`, `OzonLabelSafetyTest` |
 | Переклейка и её печать | `tsd-relabel-print.spec.ts`, `tsd-relabel-label.spec.ts`, `fbs-physical-kiz-relabel.spec.ts`, `pick-instruction-relabel-barcode.spec.ts` + предыдущая строка | `FbsRelabelExternalPrintActivityTest`, `FbsRelabelPrintUiTest`, `RelabelPrintGateTest`, `FbsKizRelabelTest` |
 | Несколько единиц и последовательная сборка | `tsd-fbs-capability.spec.ts` с runtime-путями, `fbs-online-remaining-progress.spec.ts`, `fbs-box-scan-route-consistency.spec.ts` | `FbsSequentialPickTest`, восстановление после повторного ответа |

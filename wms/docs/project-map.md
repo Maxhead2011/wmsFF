@@ -1,8 +1,8 @@
 # Карта проекта
 
-Актуализировано 08.10.2026 по опубликованному PR498. Начинать с
+Актуализировано 08.10.2026 по опубликованному PR505. Начинать с
 [индекса](README.md), [паспорта](current-production.md) и
-[baseline 2026-10-08-single-react](../baselines/our-wms/2026-10-08-single-react/manifest.json).
+[baseline 2026-10-08-print-phone](../baselines/our-wms/2026-10-08-print-phone/manifest.json).
 `sourceParityVerified=false`; исходники и исполняемый runtime сверять отдельно.
 Пути ниже относительны `wms/`. Изменения публикуются только в нашей WMS.
 
@@ -10,6 +10,8 @@
 
 | Сценарий | Точки входа и поток | Границы поведения |
 | --- | --- | --- |
+| Серия Windows, PR505 | `lib/printSeries.ts` → `/print/series` → `PrintSeriesService` → `PrintSeries.ps1` | Один PrintJob/PrintDocument; UUID, права филиала/клиента; потеря ACK не печатает повторно. Нужен новый агент |
+| Телефон, PR505 | `lib/phoneLayout.ts`, `components/layout/phone-layout.css`; runtime bridge | До 900 px: карточки, меню, прокрутка и zoom; только наша ВМС |
 | Клиентский склад, PR496 | `apps/web/src/lib/workspaces.ts`: `canOpenWorkspace` → `components/warehouse/WarehouseOpsPanel.tsx` → `GoodsArrivalPanel.tsx`, `ShipmentHistoryPanel.tsx`, `ReceiptDirectionsPanel.tsx`; API `modules/warehouse/warehouse.controller.ts`: `shipmentHistoryList` | CLIENT видит ровно четыре раздела и свои данные. Онлайн-приёмка сохраняет `onlineReceiptVisibleToClient`. Флаги `WMS_CLIENT_WAREHOUSE_ENABLED` / `VITE_CLIENT_WAREHOUSE_ENABLED`; права записи склада не выдаются |
 | Подтверждение приёмки, PR494 | `apps/web/src/components/warehouse/ReceiptDirectionsPanel.tsx` → `apps/api/src/modules/warehouse/receipt-channels.controller.ts` → `receipt-channel-policy.ts`: `receiptApprovalEntries`, `changeReceiptApproval` | Клиент подтверждает свою приёмку; имя и время серверные. Отключение только ADMIN/OWNER без активного резерва. Флаг и scope клиента/склада, сейчас Лукин / ФФ Москва |
 | Доступность товара | `receipt-channel-policy.ts`: `pendingReceiptBoxIds`, `assertReceiptStockAvailable` → остатки, публикация WB, планирование и отбор ФБС/ФБО | Несогласованные короба недоступны для отбора и перемещения в обход проверки; физический учёт и хранение сохраняются. Направления ФБС/ФБО независимы от согласования |
