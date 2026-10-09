@@ -1,3 +1,5 @@
+LOGOFF223 / PR535: [found-KIZ route](kiz-found-tsd-route.md); `KizFoundRouteTest` verifies actual Retrofit paths for all five actions.
+
 Current verified base: **PR533**, `2026-10-09-ozon-multiple`. [Production](current-production.md).
 
 Current verified release: PR529, LOGOFF APK222, found KIZ without a box. [Scenario](kiz-found-review.md); [production](current-production.md). FFULHAB untouched.

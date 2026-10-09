@@ -1,0 +1,24 @@
+{
+  "published": true,
+  "at": 1791549032.1071775,
+  "pr": 535,
+  "api": "sha256:42a700c2b000e6f21663d0efd4846630f501a3ead5825db4726b61887948df82",
+  "web": "sha256:d35ba057effb4be38e410df657ed00ff9da30dfc31eeda61de7bae32592a99b3",
+  "webBase": "sha256:8e095a14a7a1d7109b52885def84952ba7862065cf1fc4bd8e59ae5524da44da",
+  "apk": {
+    "versionCode": 223,
+    "versionName": "0.1.223-kiz-found-route",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-kiz-route-223.apk",
+    "sha256": "a14254de136e0cc1fdb474ad9fc3c14144b10f5640ee642c0067e9ff6436462a",
+    "size": 5394839,
+    "releasedAt": "2026-10-09T12:29:33.394324+00:00",
+    "releaseNotes": "Исправлена отправка найденного КИЗа на разбор из ТСД."
+  },
+  "changed": [
+    "downloads/logoff-tsd-kiz-route-223.apk",
+    "downloads/logoff-tsd.apk",
+    "downloads/logoff-tsd.json"
+  ],
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false
+}
