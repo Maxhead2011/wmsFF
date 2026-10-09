@@ -1,3 +1,7 @@
+## ФБО Ozon / PR516
+
+Импорт: `ozon-fbo-import.service/controller.ts`; квоты: `ozon-fbo-directions.ts`; одна ClientRequest + OzonFboShipment, короба с direction. Web: OzonCustomerImport/FboTwoStagePanel; Android: FboTwoStageScreen/FboScanState. [Сценарий](ozon-fbo-customer-file.md).
+
 # Карта проекта
 
 Актуализировано 08.10.2026 по опубликованному PR514. Начинать с

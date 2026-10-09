@@ -1,3 +1,7 @@
+## ФБО Ozon / PR516
+
+`ozon-customer-import.spec.ts`, `ozon-customer-directions.spec.ts`, `fbo-two-stage.integration.spec.ts`; runtime: `scripts/tests/ozon-customer-runtime.cjs`, браузер: `scripts/tests/ozon-customer-browser.cjs`.
+
 # Индекс проверок
 
 Подготовленный режим [счёта по сданным заявкам](billing-done-requests.md):
