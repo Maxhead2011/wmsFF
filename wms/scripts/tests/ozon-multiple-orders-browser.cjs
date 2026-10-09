@@ -19,7 +19,7 @@ const panel=fs.readdirSync(path.join(root,'assets')).find(n=>fs.readFileSync(pat
    if(n==='api/v1/ozon-fbo-import/commit'){commits++;created=true;data={request:{id:'r',number:1234},existing:false};}
    if(n.startsWith('api/v1/ozon-fbo-import/requests/r/supply')){
     const action=n.split('/supply')[1];
-    if(action==='/bind'){supply.link={connectionId:'c',orderId:'123',orderNumber:'123',place:'Москва',date:'',state:'DATA_FILLING',mapping:{},supplies:[{id:'s',name:'Москва',items:[{quantity:1}]}],operations:{}};supply.differences=['Выберите направление'];}
+    if(action==='/bind'){const previous=supply.link; supply.link={connectionId:'c',orderId:'123',orderNumber:'123',place:'Москва',date:'',state:'DATA_FILLING',mapping:{},supplies:[{id:'s',name:'Москва',items:[{quantity:1}]}],operations:{}};const orderId=JSON.parse(route.request().postData()).orderId;supply.link.orderId=orderId;supply.link.orderNumber=orderId;supply.link.orders=[...(previous?.orders??[]),{...supply.link}];supply.differences=['Выберите направление'];}
     if(action==='/mapping'){supply.link.mapping={Москва:'s'};supply.differences=[];}
     if(action==='/upload'){uploads++;supply.link.frozenHash='frozen';supply.link.operations={s:{state:'SUCCESS'}};}
     if(action==='/labels')supply.link.operations.s.labelUrl='https://example.com/fixture.pdf';
@@ -48,7 +48,14 @@ const panel=fs.readdirSync(path.join(root,'assets')).find(n=>fs.readFileSync(pat
  await page.getByRole('button',{name:'Поставка и грузоместа Ozon',exact:true}).click();
  await page.getByLabel('Ссылка или ID заявки Ozon из адреса кабинета').fill('123');
  await page.getByRole('button',{name:'Добавить заявку Ozon',exact:true}).click();
- await page.getByText('Есть расхождения — отправка заблокирована').waitFor();
+ for(const id of ['124','125','126']){
+ await page.getByLabel('Ссылка или ID заявки Ozon из адреса кабинета').fill(id);
+ await page.getByRole('button',{name:'Добавить заявку Ozon',exact:true}).click();
+ await page.getByRole('link',{name:'Ozon №'+id,exact:true}).waitFor();
+}
+await page.getByText('Заявки Ozon общей сборки (4)',{exact:true}).waitFor();
+assert.equal(await page.getByRole('link',{name:/Ozon №/}).count(),4);
+await page.getByText('Есть расхождения — отправка заблокирована').waitFor();
  assert.ok(await page.getByRole('button',{name:'Передать короба в Ozon',exact:true}).isDisabled());
  await page.getByRole('group',{name:'Направления из файла → Ozon'}).getByRole('combobox').selectOption('s');
  await page.getByRole('button',{name:'Сохранить соответствия'}).click();
@@ -62,5 +69,5 @@ const panel=fs.readdirSync(path.join(root,'assets')).find(n=>fs.readFileSync(pat
  await page.getByRole('link',{name:'Открыть этикетки для печати'}).waitFor();
  await page.getByRole('button',{name:'План через API Ozon',exact:true}).click();
  await page.getByText('Разобрать распределение',{exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log('PASS actual bundled Ozon link: binding, mismatch guard, mapping, confirmation, frozen receipt, labels and legacy mode');
+ assert.deepEqual(errors,[]);console.log('PASS actual bundled multi-order Ozon link: binding, mismatch guard, mapping, confirmation, frozen receipt, labels and legacy mode');
  }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1});

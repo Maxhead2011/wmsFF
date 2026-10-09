@@ -4,11 +4,29 @@ import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 
 export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number }> };
 export type SupplyIntegration = {
+  orders?: SupplyOrderSnapshot[];
   connectionId: string; orderId: string; orderNumber: string; place: string; date: string; state: string;
   supplies: SupplySnapshot[]; mapping: Record<string, string>; checkedAt: string;
   operations: Record<string, { state: 'SENDING'|'UNKNOWN'|'ACCEPTED'|'SUCCESS'|'FAILED'; operationId?: string; error?: string; cargoes?: Array<{key:string;cargoId:string;barcode?:string}>; labelOperationId?: string; labelUrl?: string }>;
   frozenHash?: string;
 };
+
+export type SupplyOrderSnapshot = Pick<SupplyIntegration,'orderId'|'orderNumber'|'place'|'date'|'state'|'supplies'|'checkedAt'>;
+// FIX: legacy single-order bindings remain readable, while every supply keeps its order owner.
+export function supplyOrders(link: SupplyIntegration): SupplyOrderSnapshot[] {
+  return link.orders ?? [{orderId:link.orderId,orderNumber:link.orderNumber,place:link.place,date:link.date,state:link.state,supplies:link.supplies,checkedAt:link.checkedAt}];
+}
+export function mergeSupplyOrders(base: SupplyIntegration, orders: SupplyOrderSnapshot[]): SupplyIntegration {
+  if(!orders.length) throw new ConflictException('Нужна хотя бы одна заявка Ozon.');
+  const supplies=orders.flatMap(o=>o.supplies);
+  if(new Set(orders.map(o=>o.orderId)).size!==orders.length||new Set(supplies.map(s=>s.id)).size!==supplies.length)
+    throw new ConflictException('Повтор заявки или поставки Ozon.');
+  const first=orders[0];
+  return {...base,orderId:first.orderId,orderNumber:first.orderNumber,place:first.place,date:first.date,state:first.state,orders,supplies,checkedAt:new Date().toISOString()};
+}
+export function bindingIdentity(link: SupplyIntegration) {
+  return JSON.stringify([link.connectionId,supplyOrders(link).map(o=>o.orderId).sort()]);
+}
 
 // FIX: explicit mappings only; never silently change customer-file quantities.
 export function supplyDifferences(directions: OzonDirection[], link: SupplyIntegration) {

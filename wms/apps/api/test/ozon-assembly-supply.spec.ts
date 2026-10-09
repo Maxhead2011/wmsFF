@@ -19,4 +19,13 @@ describe('Ozon assembly delivery',()=>{
  it('requires confirmation and scoped branch',async()=>{const s=setup();await expect(s.svc.upload('r',false,s.user)).rejects.toThrow('Подтвердите');await expect(s.svc.view('r',{...s.user,activeWarehouseId:'other'})).rejects.toThrow('филиал');});
  it('blocks rebind and mapping after a delivery claim',async()=>{const s=setup();s.shipment.integration.frozenHash='hash';await expect(s.svc.bind('r',{connectionId:'c',orderId:'99'},s.user)).rejects.toThrow('заблокирована');await expect(s.svc.map('r',{},s.user)).rejects.toThrow('началась');});
  it('does not label unconfirmed cargoes',async()=>{const s=setup();await expect(s.svc.labels('r','42',s.user)).rejects.toThrow('подтверждения');expect(s.call).not.toHaveBeenCalled();});
+ // TEST: a completed remote order must not block another unsent order of the shared assembly.
+ it('continues remaining orders while preserving completed receipts',async()=>{
+  const s=setup(),l=s.shipment.integration;l.orders=[{orderId:'old',state:'COMPLETED',supplies:[{id:'old'}]},{orderId:'123',state:'DATA_FILLING',supplies:l.supplies}];l.operations.old={state:'SUCCESS'};
+  await s.svc.upload('r',true,s.user);expect(l.operations.old).toEqual({state:'SUCCESS'});expect(s.call.mock.calls.filter(c=>c[1]==='/v1/cargoes/create')).toHaveLength(1);
+ });
+ it('blocks unsent orders in an invalid remote state',async()=>{
+  const s=setup();s.shipment.integration.orders=[{orderId:'123',state:'CANCELLED',supplies:s.shipment.integration.supplies}];
+  await expect(s.svc.upload('r',true,s.user)).rejects.toThrow('заполнения');expect(s.call).not.toHaveBeenCalled();
+ });
 });

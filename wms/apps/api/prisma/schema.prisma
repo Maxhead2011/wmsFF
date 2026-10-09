@@ -3684,6 +3684,7 @@ model FboAssemblyBox {
 
 // FIX: one request owns all destination allocations; no duplicate stock demand.
 model OzonFboShipment {
+  orders OzonFboOrderBinding[]
   // FIX: durable external binding and per-direction delivery receipts.
   externalOrderKey String? @unique
   integration Json?
@@ -3692,6 +3693,15 @@ model OzonFboShipment {
   directions Json
   request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
   createdAt DateTime @default(now())
+}
+
+// FIX: every linked order is uniquely owned, including additional orders of one assembly.
+model OzonFboOrderBinding {
+  externalOrderKey String @id
+  requestId String
+  orderId String
+  shipment OzonFboShipment @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  @@index([requestId])
 }
 
 model FboAssemblyUnit {

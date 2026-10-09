@@ -7,6 +7,23 @@ const url=process.env.KIZ_DUPLICATE_TEST_DATABASE_URL;
 if(url&&!/^postgresql:\/\/codex_tests@127\.0\.0\.1:55469\/kiz_duplicate_tests/.test(url))throw Error('Dedicated local test DB only');
 // TEST: real row locks serialize two terminals and persist the external receipt.
 describe.skipIf(!url)('Ozon durable supply link',()=>{
+ // TEST: two assemblies racing for an additional order cannot both claim it.
+ it('serializes ownership of additional orders across assemblies',async()=>{
+  vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED','true');const db=new PrismaClient({datasources:{db:{url}}});
+  const [a,b,c,w,u]=Array.from({length:5},()=>randomUUID());
+  try{
+   await db.client.create({data:{id:c,code:c,name:'Ozon test'}});await db.warehouse.create({data:{id:w,code:w,name:'test'}});await db.user.create({data:{id:u,name:'test',email:u+'@invalid',passwordHash:'test'}});
+   for(const id of [a,b])await db.clientRequest.create({data:{id,clientId:c,warehouseId:w,type:'OUTBOUND',title:'test',ozonShipment:{create:{importKey:id,directions:[]}}}});
+   const service=new OzonAssemblySupplyService(db as any,{requireClientAccess(){}} as any),user:any={id:u,activeWarehouseId:w,permissionCodes:['system:admin']};
+   vi.spyOn(service as any,'connection').mockResolvedValue({id:'c',sellerId:c});
+   vi.spyOn(service as any,'snapshot').mockResolvedValue({connectionId:'c',orderId:'123',orderNumber:'123',place:'hub',date:'',state:'DATA_FILLING',checkedAt:'',supplies:[],mapping:{},operations:{}});
+   const result=await Promise.allSettled([service.bind(a,{connectionId:'c',orderId:'123'},user),service.bind(b,{connectionId:'c',orderId:'123'},user)]);
+   expect(result.filter(v=>v.status==='fulfilled'),JSON.stringify(result.map(v=>v.status==='rejected'?String(v.reason):v.status))).toHaveLength(1);
+   expect(await db.ozonFboOrderBinding.count({where:{externalOrderKey:c+':123'}})).toBe(1);
+  }finally{
+   await db.auditLog.deleteMany({where:{entityId:{in:[a,b]}}});await db.ozonFboOrderBinding.deleteMany({where:{requestId:{in:[a,b]}}});await db.ozonFboShipment.deleteMany({where:{requestId:{in:[a,b]}}});await db.clientRequest.deleteMany({where:{clientId:c}});await db.user.deleteMany({where:{id:u}});await db.warehouse.deleteMany({where:{id:w}});await db.client.deleteMany({where:{id:c}});await db.$disconnect();vi.restoreAllMocks();vi.unstubAllEnvs();
+  }
+ });
  it('sends once under concurrent upload and rejects a second assembly for the same order',async()=>{
   vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED','true');const db=new PrismaClient({datasources:{db:{url}}});
   const [id,c,w,u]=Array.from({length:4},()=>randomUUID());
