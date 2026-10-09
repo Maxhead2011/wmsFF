@@ -1,4 +1,4 @@
-# FIX: durable, station-scoped outcomes; never resubmit uncertain physical jobs.
+﻿# FIX: durable, station-scoped outcomes; never resubmit uncertain physical jobs.
 function Get-AgentHash([string]$value) {
   $hash = [Security.Cryptography.SHA256]::Create()
   try { return ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($value)))).Replace('-', '').ToLowerInvariant() }
@@ -20,6 +20,7 @@ function Initialize-PrintJournal($cfg, [string]$root) {
   [IO.Directory]::CreateDirectory($script:journalDirectory) | Out-Null
   $script:printRecords = @{}
   $script:pendingPrintRecords = @{}
+  $script:conflictRetryAt = @{}
   foreach ($file in Get-ChildItem -LiteralPath $script:journalDirectory -Filter '*.json') {
     $record = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not $record.id -or $record.queue -notin @('fbs','label','series') -or $record.state -notin @('started','result','acknowledged') -or -not $record.path) { throw 'Invalid print journal. Contact support; do not delete it or reprint blindly.' }
@@ -36,13 +37,25 @@ function Save-PrintRecord([string]$queue, [string]$id, $record) {
   else { $script:pendingPrintRecords[$key] = [pscustomobject]$value }
 }
 function Send-PrintResult([string]$queue, [string]$id) {
-  $record = $script:printRecords["$queue|$id"]
+  $key = "$queue|$id"
+  if ($script:conflictRetryAt.ContainsKey($key) -and [DateTime]::UtcNow -lt $script:conflictRetryAt[$key]) { return }
+  $record = $script:printRecords[$key]
   if ($record.state -eq 'started') {
     Save-PrintRecord $queue $id @{state='result';path=$record.path;result=@{success=$false;error='Printing interrupted; verify physical labels before reprinting.'}}
     $record = $script:printRecords["$queue|$id"]
   }
   # HTTP exceptions never replace a successful print outcome with failure.
-  Invoke-WmsApi Post $record.path $record.result | Out-Null
+  # FIX: a business conflict retains the durable outcome without starving other jobs.
+  try { Invoke-WmsApi Post $record.path $record.result | Out-Null }
+  catch {
+    if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 409) {
+      $script:conflictRetryAt[$key] = [DateTime]::UtcNow.AddMinutes(1)
+      if (Get-Command Write-AgentError -ErrorAction SilentlyContinue) { Write-AgentError "ack-conflict:$queue`:$id" $_ }
+      return
+    }
+    throw
+  }
+  $script:conflictRetryAt.Remove($key)
   if ($record.state -ne 'acknowledged') { Save-PrintRecord $queue $id @{state='acknowledged';path=$record.path;result=$record.result} }
 }
 function Sync-PrintResults([string]$queue) {

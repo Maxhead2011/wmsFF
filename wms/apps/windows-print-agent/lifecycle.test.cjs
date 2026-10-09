@@ -118,3 +118,30 @@ try {
  if($child.ExitCode -ne 0){throw 'Duplicate process allowed'}
 }finally{$script:agentMutex.ReleaseMutex();$script:agentMutex.Dispose()}
 `));
+
+// TEST: a business conflict must not starve subsequent jobs or lose the successful outcome.
+test('409 ACK conflict permits next FBS job, throttles retry and survives restart',()=>run(`
+. '${root.replace(/'/g,"''")}/LOGOFF-FBS-Print-Agent.ps1' -LibraryOnly
+$cfg=@{server='https://test.invalid';stationId='station';printerName='fake';labelWidthMm=58;labelHeightMm=40}
+Initialize-PrintJournal $cfg $testRoot
+$script:attempts=0;$script:physical=0;$script:conflict=$true
+function Write-AgentError {param($stage,$err)}
+function Print-OneLabel {$script:physical++}
+function Invoke-WmsApi {param($m,$p,$b)
+ if($p -eq '/blocked/result'){
+  $script:attempts++
+  if(-not $b.success){throw 'Lost successful outcome'}
+  if($script:conflict){$e=[Exception]::new('conflict');$e|Add-Member NoteProperty Response ([pscustomobject]@{StatusCode=409});throw $e}
+ }
+ if($p.EndsWith('/claim')){return @{id='next';source='TSD_FBS_ASSEMBLY';stickerBase64='AQID';sortingLabel=@{contentType='image/png';imageBase64='BAUG'}}}
+}
+Save-PrintRecord 'fbs' 'blocked' @{state='result';path='/blocked/result';result=@{success=$true}}
+Invoke-AgentQueueCycle $cfg
+Invoke-AgentQueueCycle $cfg
+if($script:physical -ne 2 -or $script:attempts -ne 1){throw 'Queue blocked, duplicate printing, or unthrottled retry'}
+if($script:printRecords['fbs|blocked'].state -ne 'result'){throw 'Conflict was discarded'}
+Initialize-PrintJournal $cfg $testRoot
+$script:conflict=$false
+Sync-PrintResults 'fbs'
+if($script:printRecords['fbs|blocked'].state -ne 'acknowledged' -or $script:physical -ne 2){throw 'Recovery lost'}
+`));
