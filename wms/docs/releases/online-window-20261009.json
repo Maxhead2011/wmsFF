@@ -339,5 +339,12 @@
   "rollback": {
     "api": "logoff-api:before-online-window-20261009",
     "web": "logoff-web:before-online-window-20261009"
+  },
+  "postPublication": {
+    "health": true,
+    "publishedHashes": true,
+    "planComparisonMatched": true,
+    "rolledBack": true,
+    "baselineGuardTests": 8
   }
 }
