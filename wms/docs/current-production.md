@@ -1,3 +1,15 @@
+# Published PR535 / 2026-10-09: LOGOFF APK223
+
+Corrected found-KIZ terminal API path. [Details](kiz-found-tsd-route.md).
+Baseline `2026-10-09-kiz-route`, sourceParityVerified=false.
+API `sha256:42a700c2b000e6f21663d0efd4846630f501a3ead5825db4726b61887948df82` unchanged; web `sha256:d35ba057effb4be38e410df657ed00ff9da30dfc31eeda61de7bae32592a99b3`.
+Only three LOGOFF download files changed. APK223 signed and public hashes verified.
+API/Ozon/printing/configuration/business records/sold WMS unchanged.
+Android243 per tested flavor, API3265/144 skipped, web412/2 skipped passed.
+Dedicated unconfigured KIZ DB suite excluded. Retrofit regression fails before fix.
+GitHub checks not reported. Physical test pending APK223 installation.
+Rollback: `logoff-web:before-kiz-route-223`.
+
 # Published PR533 / 2026-10-09 — multiple Ozon orders per assembly
 
 [Workflow](ozon-multiple-orders.md), [release record](releases/ozon-multiple-20261009.json).

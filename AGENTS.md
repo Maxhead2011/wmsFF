@@ -193,3 +193,5 @@ Latest verified release PR529 (2026-10-09): baseline 2026-10-09-kiz-found; API s
 Latest verified PR531: baseline2026-10-09-print-agent; only public Windows agent ZIP updated to2026.10.09.1. Web sha256:5ba62bbe07c2d30c0b5bf2399580ecd8233a86a04aae44ef4f452ffccac6f85c; API/APK222/configuration/sold WMS unchanged. 26 source/24 package tests, API3258/web412 passed,138/2 skipped. Physical printer installation pending; source parity false. See current-production.md.
 
 Latest verified PR533: baseline2026-10-09-ozon-multiple. Multiple Ozon orders per assembly; request1861 reconciled393/11. APK222 and PR531 print agent preserved. Source parity false. See current-production.md.
+
+Latest verified PR535: baseline2026-10-09-kiz-route; LOGOFF APK223 corrects found-KIZ API prefix. Three download files only; API/flags/Ozon/printing/sold unchanged. sourceParityVerified=false.

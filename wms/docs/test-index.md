@@ -1,3 +1,5 @@
+LOGOFF223 / PR535: [found-KIZ route](kiz-found-tsd-route.md); `KizFoundRouteTest` verifies actual Retrofit paths for all five actions.
+
 Found KIZ: `kiz-found-review.spec.ts`, `kiz-location.service.spec.ts`, `KizFoundPanel.test.tsx`, `KizFoundPolicyTest`; actual candidates: `scripts/tests/kiz-found-postgres.cjs`, `kiz-found-browser.cjs`, `kiz-found-runtime.cjs`. PostgreSQL uses only localhost:55469 and its own kiz_found_review schema.
 
 Ozon supply link: `ozon-supply-policy.spec.ts`, `ozon-assembly-supply.spec.ts`, `ozon-supply.integration.spec.ts`, `scripts/tests/ozon-supply-browser.cjs`.
