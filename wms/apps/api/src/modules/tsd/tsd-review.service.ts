@@ -8,6 +8,7 @@ import { StockOperationsService } from '../stock/stock-operations.service';
 import { ResolveTsdReviewDto } from './dto/resolve-tsd-review.dto';
 import { ListTsdOperationHistoryDto } from './dto/list-tsd-operation-history.dto';
 import { TsdPayloadParser } from './tsd-payload.parser';
+import { isBarcodeReview } from './receipt-barcode-policy';
 
 @Injectable()
 export class TsdReviewService {
@@ -411,6 +412,9 @@ export class TsdReviewService {
     if (!operation || operation.status !== TsdOperationStatus.NEEDS_REVIEW) {
       throw new NotFoundException('Операция ТСД на разборе не найдена.');
     }
+
+    // FIX: generic acceptance must not bypass the privileged barcode decision or duplicate a receipt.
+    if (isBarcodeReview(operation.payload)) throw new BadRequestException('Используйте «Администрирование → Проблемы приёмки → Подозрительные ШК».');
 
     if (dto.action === 'REJECT') {
       this.clientScopes.requireClientAccess(user, this.reviewClientId(operation.operationType, operation.payload), 'write');

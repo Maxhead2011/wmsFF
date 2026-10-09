@@ -262,6 +262,8 @@ public class MainActivity extends Activity {
     private String receiptClientId = "";
     private String receiptSourceDocument = "";
     private String receiptBoxCode = "";
+    private boolean receiptBarcodeLookupBusy;
+    private final ReceiptBarcodeRescan receiptBarcodeRescan = new ReceiptBarcodeRescan();
     private String pendingReceiptBarcode = "";
     private TsdSkuInfo pendingReceiptSku;
     private boolean pendingReceiptRequiresKiz;
@@ -3879,6 +3881,7 @@ public class MainActivity extends Activity {
                 });
                 root.addView(scanInput);
                 root.addView(primaryMenuButton("Принять товар", view -> handleReceiptBarcodeScan()));
+            if (receiptBarcodeRescan.waiting()) root.addView(secondaryButton("Отменить этот скан", view -> clearPendingReceiptProduct()));
                 root.addView(secondaryButton("Проверить принятые КИЗы", view -> startReceiptKizAudit()));
             }
             if (receiptAcceptedItems > 0 || pendingCount > 0) {
@@ -3976,6 +3979,7 @@ public class MainActivity extends Activity {
             });
             root.addView(scanInput);
             root.addView(primaryMenuButton("Принять товар", view -> handleReceiptBarcodeScan()));
+            if (receiptBarcodeRescan.waiting()) root.addView(secondaryButton("Отменить этот скан", view -> clearPendingReceiptProduct()));
             root.addView(secondaryButton("Проверить принятые КИЗы", view -> startReceiptKizAudit()));
         }
 
@@ -8442,7 +8446,7 @@ public class MainActivity extends Activity {
     }
 
     private void startReceiptKizAudit() {
-        if (!pendingReceiptBarcode.isEmpty()) {
+        if (!pendingReceiptBarcode.isEmpty() || receiptBarcodeRescan.waiting() || receiptBarcodeLookupBusy) {
             statusMessage = "Сначала завершите или отмените текущий товар.";
             renderReceiptScreen();
             return;
@@ -8636,6 +8640,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleReceiptBarcodeScan() {
+        if ("logoff".equals(BuildConfig.FLAVOR) && receiptBarcodeLookupBusy) return;
         if ("logoff".equals(BuildConfig.FLAVOR) && receiptCloseBatch != null) return;
         TsdSession session = safeSession();
         if (session == null) {
@@ -8656,14 +8661,27 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
+        // FIX: LOGOFF requires a matching rescan before adding a suspicious unit.
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptBarcodeRescan.scan(receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode, barcode)) {
+            statusMessage = receiptBarcodeRescan.message();
+            scanInput.setText("");
+            renderReceiptScreen();
+            return;
+        }
         receiptFeedbackColor = 0;
+        receiptBarcodeLookupBusy = "logoff".equals(BuildConfig.FLAVOR);
 
+        final String lookupClient = receiptClientId;
+        final String lookupScope = receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode;
         runBackground(() -> {
+            try {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
-            Response<TsdSkuInfo> response = api.findSkuByBarcode(session.authorizationHeader(), receiptClientId, barcode).execute();
+            Response<TsdSkuInfo> response = api.findSkuByBarcode(session.authorizationHeader(), lookupClient, barcode).execute();
             if (response.isSuccessful() && response.body() != null) {
                 TsdSkuInfo sku = response.body();
                 mainHandler.post(() -> {
+                    receiptBarcodeLookupBusy = false;
+                    if ("logoff".equals(BuildConfig.FLAVOR) && !lookupScope.equals(receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode)) return;
                     online = true;
                     if (sku.needsChestnyZnak && !sku.isUnmarked) {
                         pendingReceiptBarcode = barcode;
@@ -8679,12 +8697,20 @@ public class MainActivity extends Activity {
             }
             if (response.code() == 404) {
                 mainHandler.post(() -> {
+                    receiptBarcodeLookupBusy = false;
+                    if ("logoff".equals(BuildConfig.FLAVOR) && !lookupScope.equals(receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode)) return;
                     online = true;
-                    addReceiptItem(barcode, null, null, "Товар не найден. Создается черновик без обязательного КИЗ.");
+                    addReceiptItem(barcode, null, null, receiptBarcodeRescan.evidence().isEmpty()
+                        ? "Товар не найден. Создается черновик без обязательного КИЗ."
+                        : "ШК повторён. Позиция будет передана администратору в «Проблемы приёмки» при закрытии короба.");
                 });
                 return;
             }
             throw new IOException("Не удалось проверить товар: HTTP " + response.code());
+            } catch (Exception error) {
+                mainHandler.post(() -> receiptBarcodeLookupBusy = false);
+                throw error;
+            }
         });
     }
 
@@ -8774,7 +8800,9 @@ public class MainActivity extends Activity {
             enqueueUnboxedReceiptItem(barcode, kiz, sku, message);
             return;
         }
-        receiptCurrentItems.add(new ReceiptItem(barcode, kiz, sku == null ? null : sku.name));
+        ReceiptItem added = new ReceiptItem(barcode, kiz, sku == null ? null : sku.name);
+        added.secondBarcodeScan = receiptBarcodeRescan.evidence();
+        receiptCurrentItems.add(added);
         if (kiz != null && !kiz.trim().isEmpty()) {
             String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
             receiptKizValues.add(normalizedKiz);
@@ -8800,6 +8828,7 @@ public class MainActivity extends Activity {
             receiptKizValues.add(normalizedKiz);
             receiptKizBoxes.put(normalizedKiz, "Без короба");
         }
+        String secondBarcodeScan = receiptBarcodeRescan.evidence();
         clearPendingReceiptProductFields();
         String clientId = receiptClientId;
         String sourceDocument = receiptSourceDocument;
@@ -8818,7 +8847,8 @@ public class MainActivity extends Activity {
                 "AVAILABLE",
                 sourceDocument,
                 RECEIPT_MODE_STANDARD,
-                "Поштучная приемка ТСД без коробов"
+                "Поштучная приемка ТСД без коробов",
+                java.util.Collections.singletonMap("secondBarcodeScan", secondBarcodeScan)
             );
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
@@ -8848,6 +8878,7 @@ public class MainActivity extends Activity {
     }
 
     private void clearPendingReceiptProductFields() {
+        receiptBarcodeRescan.clear();
         pendingReceiptBarcode = "";
         pendingReceiptSku = null;
         pendingReceiptRequiresKiz = false;
@@ -8874,7 +8905,7 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
-        if (!pendingReceiptBarcode.isEmpty()) {
+        if (!pendingReceiptBarcode.isEmpty() || receiptBarcodeRescan.waiting() || receiptBarcodeLookupBusy) {
             statusMessage = "Сначала завершите скан товара и КИЗ или отмените этот товар.";
             renderReceiptScreen();
             return;
@@ -8946,6 +8977,7 @@ public class MainActivity extends Activity {
             for (ReceiptItem item : items) {
                 Map<String, String> payload = new LinkedHashMap<>();
                 payload.put("barcode", item.barcode);
+                payload.put("secondBarcodeScan", item.secondBarcodeScan);
                 payload.put("kiz", item.kiz);
                 payload.put("comment", "Приемка ТСД: короб " + closedBoxCode);
                 payloads.add(payload);
@@ -8972,6 +9004,12 @@ public class MainActivity extends Activity {
                     .syncReceiptBatch(session.authorizationHeader(), batch.closeKey);
                 PendingOperation close = outbox.findOperation(batch.closeKey);
                 boolean confirmed = batch.isConfirmed(close);
+                int acceptedScans = 0;
+                for (PendingOperation operation : batch.operations) {
+                    PendingOperation saved = outbox.findOperation(operation.operationKey);
+                    if ("receipt_scan".equals(operation.operationType) && saved != null && saved.status == pro.logoff.wms.tsd.data.OperationStatus.SYNCED) acceptedScans++;
+                }
+                final int acceptedQuantity = acceptedScans;
                 mainHandler.post(() -> {
                     if (!session.hasSameAccessToken(safeSession()) || receiptCloseBatch != batch) return;
                     receiptClosingBox = false;
@@ -8979,7 +9017,7 @@ public class MainActivity extends Activity {
                     online = summary.retried == 0;
                     if (confirmed) {
                         receiptClosedBoxes++;
-                        receiptAcceptedItems += items.size();
+                        receiptAcceptedItems += acceptedQuantity;
                     }
                     receiptSessionBoxes.add(normalizeBoxCode(closedBoxCode));
                     receiptBoxCode = "";
@@ -8987,7 +9025,7 @@ public class MainActivity extends Activity {
                     clearPendingReceiptProductFields();
                     receiptFeedbackColor = summary.rejected > 0 ? BOX_NOT_NEEDED_RED : 0;
                     statusMessage = confirmed
-                        ? "Короб закрыт в WMS и готов к постановке на паллетсорт: " + closedBoxCode
+                        ? (close.lastMessage == null ? "Короб закрыт в WMS: " + closedBoxCode : close.lastMessage)
                         : summary.rejected > 0
                             ? "Короб " + closedBoxCode + " ещё не закрыт. " + summary.message + ". Операции сохранены в очереди."
                             : "Короб " + closedBoxCode + " сохранён в очереди и ожидает подтверждения закрытия WMS.";
@@ -11174,6 +11212,7 @@ public class MainActivity extends Activity {
     }
 
     private static class ReceiptItem {
+        String secondBarcodeScan = "";
         final String barcode;
         final String kiz;
         final String name;

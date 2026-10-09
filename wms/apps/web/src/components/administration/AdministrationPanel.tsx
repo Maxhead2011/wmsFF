@@ -1,3 +1,4 @@
+import { OperationalProblemsPanel, canUseOperationalProblems } from './OperationalProblemsPanel';
 import {
   Activity,
   AlertTriangle,
@@ -31,6 +32,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   applyAdministrationAssistant,
+  fetchReceiptBarcodeSummary,
   fetchAdministrationAudit,
   fetchAdministrationDocumentation,
   fetchAdministrationOverview,
@@ -69,9 +71,10 @@ type AdministrationPanelProps = {
   onOpenWorkspace: (id: WorkspaceId) => void;
 };
 
-type TabId = 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
+type TabId = 'operational-problems' | 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
 
 const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
+  { id: 'operational-problems', label: 'Проблемы приёмки и ФБО', icon: AlertTriangle },
   { id: 'overview', label: 'Центр управления', icon: Crown },
   // ADDED: One entry point for diagnostics and verified repair actions.
   { id: 'technical-work', label: 'Тех. работы', icon: Wrench },
@@ -101,8 +104,21 @@ const metricLabels: Record<string, string> = {
 
 const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]));
 
-export function AdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
+export function AdministrationPanel(props: AdministrationPanelProps) {
+  if (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED === 'true' && canUseOperationalProblems(props.session) && !props.session.user.administrationEnabled) {
+    return <OperationalProblemsPanel session={props.session}/>;
+  }
+  return <OwnerAdministrationPanel {...props}/>;
+}
+function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
+  const [receiptProblemCount, setReceiptProblemCount] = useState<number|null>(null);
+  useEffect(() => {
+    if (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED !== 'true' || !canUseOperationalProblems(session)) return;
+    let active = true;
+    fetchReceiptBarcodeSummary(session.accessToken).then(value => {if (active) setReceiptProblemCount(value.pending);}).catch(() => {if (active) setReceiptProblemCount(null);});
+    return () => {active = false;};
+  }, [session.accessToken, session.user.activeWarehouseId, activeTab]);
   const [overview, setOverview] = useState<AdministrationOverview | null>(null);
   const [settings, setSettings] = useState<AdministrationSetting[]>([]);
   const [visibility, setVisibility] = useState<AdministrationWorkspaceVisibility | null>(null);
@@ -311,6 +327,7 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
 
       <nav className="admin-tabs" aria-label="Разделы администрирования">
         {tabs.map((tab) => {
+          if (tab.id === 'operational-problems' && (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED !== 'true' || !canUseOperationalProblems(session))) return null;
           if (tab.id === 'marketplace-stock-control' && !canManageMarketplaceStockControl(session)) return null;
           const Icon = tab.icon;
           return (
@@ -321,6 +338,7 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
               onClick={() => setActiveTab(tab.id)}
             >
               <Icon size={17} /><span>{tab.label}</span>
+              {tab.id === 'operational-problems' && receiptProblemCount !== null && receiptProblemCount > 0 ? <b className="admin-tabs__badge">{receiptProblemCount}</b> : null}
               {tab.id === 'phantom-stock' && phantomCount > 0 ? (
                 <b className="admin-tabs__badge">{phantomCount}</b>
               ) : null}
@@ -349,6 +367,7 @@ export function AdministrationPanel({ session, onOpenWorkspace }: Administration
           onOpenWorkspace={onOpenWorkspace}
         />
       ) : null}
+      {activeTab === 'operational-problems' ? <OperationalProblemsPanel session={session}/> : null}
       {activeTab === 'stock-check' ? <AdministrationStockCheck session={session} /> : null}
       {activeTab === 'marketplace-stock-control' ? <AdministrationMarketplaceStockControl session={session} /> : null}
       {activeTab === 'technical-work' ? <AdministrationTechnicalWork session={session} /> : null}

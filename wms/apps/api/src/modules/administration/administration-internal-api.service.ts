@@ -25,6 +25,14 @@ export type InternalApiDefinition = {
 // ADDED: Explicit registry documents every controller group loaded by AppModule.
 // Keeping it declarative avoids a global interceptor and therefore does not touch normal API traffic.
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
+  // FIX: scoped suspicious receipt barcode review endpoints.
+  {
+    id: 'receipt-barcode-review', name: 'Подозрительные ШК приёмки',
+    prefixes: ['/tsd/receipt-barcode-review'], routeCount: 3,
+    description: 'Очередь, счётчик и решение по необычным неизвестным ШК приёмки.',
+    logic: ['Только ADMIN/OWNER с правом изменения филиала и клиента.', 'До решения остаток не создаётся.', 'Приход и решение записываются одной транзакцией с аудитом.'],
+    dependencies: ['Основная БД', 'Права stock:write', 'WMS_RECEIPT_BARCODE_REVIEW_ENABLED'],
+  },
   // FIX: branch-scoped receipt channel controls, disabled by default.
   {
     id: 'receipt-channels', name: 'Направления приёмок',

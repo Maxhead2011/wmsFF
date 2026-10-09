@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 220 // FIX: compact confirmed FBO packing updates only for LOGOFF.
-            versionName = "0.1.220-ozon-directions"
+            versionCode = 221 // FIX: repeat suspicious receipt barcodes only for LOGOFF; retain Ozon directions.
+            versionName = "0.1.221-receipt-barcode-review"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

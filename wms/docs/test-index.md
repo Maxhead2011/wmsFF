@@ -161,3 +161,12 @@ PR492: API3109/141 skipped, web390/2 skipped, Android454; exact runtime tests и
 
 
 PR494: API3118/141 skipped, web391/2 skipped, runtime5, actual browser и PostgreSQL rollback; kiz-duplicate.integration требует отдельной тестовой БД.
+
+
+## Подозрительные ШК приёмки (09.10.2026, не опубликовано)
+
+[Поведение, влияние и ограничения](receipt-barcode-review.md).
+API: `receipt-barcode-review.spec.ts`, `receipt-barcode-workflow.spec.ts`, `receipt-barcode-legacy.spec.ts`, `receipt-barcode-box-reuse.spec.ts`, `tsd-receipt-close.spec.ts`.
+Web: `workspaces.admin-problems.spec.ts`, `test/receipt-barcode-browser.cjs` (mock HTTP, реальный headless Edge).
+Android: `ReceiptBarcodeRescanTest`, `ReceiptCloseSyncTest`, LOGOFF и ФФУЛЛ-ХАБ.
+Общий прогон: API 3204 passed / 141 skipped, web 408 passed / 2 skipped, Android по 238 passed в двух flavor. PostgreSQL integration не подтверждён: тестовая БД отсутствует; старый kiz-duplicate.integration.spec.ts исключён из повторного общего прогона из-за ошибки создания клиента без URL.

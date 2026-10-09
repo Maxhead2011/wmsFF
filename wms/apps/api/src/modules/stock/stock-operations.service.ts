@@ -2375,7 +2375,8 @@ export class StockOperationsService {
     }
   }
 
-  async receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser) {
+  // FIX: review decision and receipt commit together; ordinary callers keep their transaction.
+  async receiveIntoBox(dto: ReceiveIntoBoxInput, user: AuthUser, externalTx?: Prisma.TransactionClient, movementType: 'RECEIPT' | 'INVENTORY_ADJUSTMENT' = 'RECEIPT') {
     this.clientScopes.requireClientAccess(user, dto.clientId, 'write');
     await this.inventoryLock?.assertStockMovementsAllowed();
     const scopedWarehouseId = this.resolveWritableWarehouseId(user);
@@ -2387,7 +2388,7 @@ export class StockOperationsService {
     const operationWarehouseId =
       scopedWarehouseId ?? dto.warehouseId ?? user.activeWarehouseId ?? undefined;
 
-    return this.prisma.$transaction(async (tx) => {
+    const receive = async (tx: Prisma.TransactionClient) => {
       const existingMovement = await tx.stockMovement.findUnique({
         where: { idempotencyKey: dto.idempotencyKey },
       });
@@ -2452,7 +2453,7 @@ export class StockOperationsService {
           skuId: sku.id,
           boxId: box?.id ?? null,
           palletId: box?.palletId ?? null,
-          type: 'RECEIPT',
+          type: movementType,
           status,
           quantity: dto.quantity,
           sourceDocument: dto.sourceDocument,
@@ -2495,7 +2496,8 @@ export class StockOperationsService {
         quantity: dto.quantity,
         targetBalance,
       };
-    });
+    };
+    return externalTx ? receive(externalTx) : this.prisma.$transaction(receive);
   }
 
   async adjustInventoryToCounted(dto: AdjustInventoryInput, user: AuthUser) {
