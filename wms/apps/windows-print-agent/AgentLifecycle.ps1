@@ -1,5 +1,5 @@
-# FIX: explicit interactive user, stable installation and a single station process.
-$script:AgentVersion = '2026.10.09.1'
+﻿# FIX: explicit interactive user, stable installation and a single station process.
+$script:AgentVersion = '2026.10.09.2'
 $script:AgentTaskName = 'LOGOFF FBS Print Agent'
 function Get-AgentHome { return Join-Path $env:LOCALAPPDATA 'LOGOFF\PrintAgent' }
 function Assert-AgentInteractiveUser {
