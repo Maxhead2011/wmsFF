@@ -80,7 +80,7 @@ export function OzonFboPanel({ session }: Props) {
   return <><div role="group" aria-label="Режим FBO Ozon" style={{display:'flex',gap:12,marginBottom:16}}><button type="button" aria-pressed={!legacy} onClick={()=>setLegacy(false)}>Файл клиента — единая сборка</button><button type="button" aria-pressed={legacy} onClick={()=>setLegacy(true)}>План через API Ozon</button></div>{legacy?<LegacyOzonFboPanel session={session}/>:<OzonCustomerWorkspace session={session}/>}</>;
 }
 
-function LegacyOzonFboPanel({ session }: Props) {
+export function LegacyOzonFboPanel({ session }: Props) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [overview, setOverview] = useState<{ connections: any[]; plans: OzonFboPlanSummary[] }>({ connections: [], plans: [] });
@@ -412,7 +412,8 @@ function LegacyOzonFboPanel({ session }: Props) {
 
       <header className="ozfbo-hero">
         <div>
-          <span className="ozfbo-kicker"><Sparkles size={15} /> FFULLHAB WMS × OZON</span>
+          {/* FIX: keep the shared marketplace banner free of another operator's brand. */}
+          <span className="ozfbo-kicker"><Sparkles size={15} /> WMS × OZON</span>
           <h1>Поставки FBO без ручной рутины</h1>
           <p>От распределения по кластерам до полностью проверенных коробов и загрузки состава поставки в кабинет Ozon.</p>
         </div>
