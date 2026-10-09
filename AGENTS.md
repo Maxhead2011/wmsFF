@@ -179,3 +179,5 @@ Latest verified PR512: baseline2026-10-08-fbo-compact-packing; LOGOFF APK219. WM
 Latest verified PR514: baseline2026-10-09-menu-reads; WMS_MENU_READS_ENABLED=true only on our WMS. Receipt summary and online FBS/FBO read optimization. APK219/print agent/sold unchanged; source parity false. See current-production.md.
 
 Latest verified PR516: baseline 2026-10-09-ozon-customer, APK220. WMS_OZON_FBO_IMPORT_ENABLED=true only our WMS. One assembly, multiple destination quotas; additive schema. PR514 retained; source parity false.
+
+Latest verified PR520: baseline 2026-10-09-ozon-entry. Customer workbook mode is the default in FBO Ozon, with branch-scoped assembly list. PR518 retained; API/web delta only, APK220/schema/flags unchanged. Source parity false.
