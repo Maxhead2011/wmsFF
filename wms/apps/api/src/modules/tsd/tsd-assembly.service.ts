@@ -167,7 +167,9 @@ export class TsdAssemblyService {
     // FIX: the dedicated FBO terminal screen loads its own plan. Building the
     // legacy picking document first can exceed the terminal's network timeout.
     // Preserve the full response for web clients, FBS and other installations.
-    if (user.deviceId && this.fbo && fboTwoStageEnabled() && await this.fbo.eligible(requestId, user)) {
+    // FIX: browser FBO uses the same dedicated plan; internal action validation stays unchanged.
+    if ((user.deviceId || process.env.WMS_MENU_READS_ENABLED === 'true') && this.fbo && fboTwoStageEnabled() && await this.fbo.eligible(requestId, user)) {
+      if (!user.deviceId) await this.requirePlanRead(requestId, user);
       const fbo = await this.fbo.plan(requestId, user);
       return { id: fbo.requestId, title: fbo.title, assemblyMode: 'FBO_TWO_STAGE',
         storesWithoutBoxes: false, fbo };
@@ -175,7 +177,8 @@ export class TsdAssemblyService {
     return this.getRequestPlan(requestId, user);
   }
 
-  async getRequestPlan(requestId: string, user: AuthUser) {
+  // FIX: retain web balance-review and access guards before the direct FBO plan.
+  private async requirePlanRead(requestId: string, user: AuthUser) {
     const exists = await this.prisma.clientRequest.findUnique({
       where: { id: requestId },
       select: {
@@ -206,6 +209,11 @@ export class TsdAssemblyService {
         `Волна ${pendingWave.waveNumber} ожидает проверки балансов клиентом. Сборка еще не зафиксирована.`,
       );
     }
+    return exists;
+  }
+
+  async getRequestPlan(requestId: string, user: AuthUser) {
+    const exists = await this.requirePlanRead(requestId, user);
     const document = await this.getCachedInstruction(requestId, user);
     const plan = await this.toTsdPlan(document);
     const fbo = this.fbo && fboTwoStageEnabled() && await this.fbo.eligible(requestId, user)

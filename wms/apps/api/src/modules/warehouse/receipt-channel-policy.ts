@@ -1,4 +1,5 @@
 import { receiptStockIndexEnabled, readIndexedReceiptState } from './receipt-stock-index';
+import { receiptReportEvidence } from './receipt-report-evidence';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -15,14 +16,15 @@ export const receiptSeries = (code:string,at:Date) => `SERIES:${at.getUTCFullYea
 const idFor = (client: string, warehouse: string, document: string) => createHash('sha256').update(JSON.stringify([client,warehouse,document])).digest('hex').slice(0,32);
 
 // FIX: one client/branch/year/box series includes every TSD session and future boxes.
-export async function receiptDocuments(db: Db, clientId: string, warehouseId: string, since?: Date, boxIds?: string[]): Promise<Receipt[]> {
+export async function receiptDocuments(db: Db, clientId: string, warehouseId: string, since?: Date, boxIds?: string[], report = false): Promise<Receipt[]> {
   // FIX: write-path checks load only their physical boxes; reporting remains unfiltered.
   const scopedBoxes=boxIds?await db.box.findMany({where:{clientId,warehouseId,id:{in:boxIds}},select:{id:true,code:true,status:true}}):undefined;
   if(scopedBoxes&&!scopedBoxes.length)return [];
-  const movements = await db.stockMovement.findMany({where:{clientId,warehouseId,type:'RECEIPT',quantity:{gt:0},boxId:scopedBoxes?{in:scopedBoxes.map(b=>b.id)}:{not:null},
+  const evidence=report&&!boxIds&&process.env.WMS_MENU_READS_ENABLED==='true'?await receiptReportEvidence(db,clientId,warehouseId):undefined;
+  const movements = evidence?.movements??await db.stockMovement.findMany({where:{clientId,warehouseId,type:'RECEIPT',quantity:{gt:0},boxId:scopedBoxes?{in:scopedBoxes.map(b=>b.id)}:{not:null},
     },
     select:{boxId:true,sourceDocument:true,createdAt:true,quantity:true},orderBy:{createdAt:'desc'}});
-  const openings = await db.tsdOperation.findMany({where:{operationType:{in:['receipt_open_box','receipt_box_status']},status:'ACCEPTED',
+  const openings = evidence?.openings??await db.tsdOperation.findMany({where:{operationType:{in:['receipt_open_box','receipt_box_status']},status:'ACCEPTED',
     AND:[{payload:{path:['clientId'],equals:clientId}},{payload:{path:['warehouseId'],equals:warehouseId}},...(scopedBoxes?[{OR:scopedBoxes.map(b=>({payload:{path:['boxCode'],equals:b.code}}))}]:[])]},
     select:{payload:true,createdAt:true,operationType:true},orderBy:{createdAt:'desc'}});
   const boxes = scopedBoxes??await db.box.findMany({where:{clientId,warehouseId,OR:[{id:{in:[...new Set(movements.flatMap(m=>m.boxId?[m.boxId]:[]))]}},{code:{in:[...new Set(openings.map(o=>String((o.payload as any)?.boxCode||''))) ]}}]},select:{id:true,code:true,status:true}});

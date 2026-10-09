@@ -1,4 +1,5 @@
 import { pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
+import { menuReadsEnabled, leanInstructionCatalog } from './menu-read-catalog';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   ClientRequestEventType,
@@ -1185,13 +1186,15 @@ export class PickInstructionService {
         },
       },
       ...stockBalanceArgs,
+      // FIX: selection uses SKU fields/barcodes, never its marketplace media JSON.
+      ...(menuReadsEnabled() ? {include:{...stockBalanceArgs.include,sku:{...stockBalanceArgs.include.sku,omit:{marketplacePayload:true}}}} : {}),
       orderBy: [{ id: 'asc' }],
     });
 
     // The reference warehouse algorithm walks the 1C stock export in box-code
     // order. updatedAt is operational metadata and must not change which box is
     // selected for the same request after an unrelated edit.
-    return balances.sort(compareInstructionBalances);
+    return balances.map(b=>({...b,sku:{marketplacePayload:null,...b.sku}})).sort(compareInstructionBalances);
   }
 
   private async loadWarehouseAuxiliaryData(clientId: string, files: RequestForInstruction['files'] = []): Promise<WarehouseAuxiliaryData> {
@@ -1235,7 +1238,7 @@ export class PickInstructionService {
         where: { clientId },
         orderBy: [{ targetArticle: 'asc' }, { sourceArticle: 'asc' }],
       }),
-      this.prisma.sku.findMany({
+      menuReadsEnabled() ? leanInstructionCatalog(this.prisma,clientId) : this.prisma.sku.findMany({
         where: { clientId },
         ...skuCatalogArgs,
       }),

@@ -17,7 +17,7 @@ export class ReceiptChannelsController {
   private readonly logger = new Logger(ReceiptChannelsController.name);
   constructor(private readonly prisma:PrismaService,private readonly scopes:ClientScopeService,private readonly modules:ModuleRef){}
   @Get()
-  async list(@CurrentUser() user:AuthUser,@Query('clientId') clientId:string,@Query('from') from?:string,@Query('to') to?:string){
+  async list(@CurrentUser() user:AuthUser,@Query('clientId') clientId:string,@Query('from') from?:string,@Query('to') to?:string,@Query('summary') summary?:string,@Query('receiptId') receiptId?:string){
     if(typeof clientId!=='string'||!clientId.trim())throw new BadRequestException('Выберите клиента.');
     this.scopes.requireClientAccess(user,clientId,'read');
     const warehouseIds=await this.readWarehouses(user,clientId);
@@ -25,11 +25,11 @@ export class ReceiptChannelsController {
     const since=from&&/^\d{4}-\d{2}-\d{2}$/.test(from)?new Date(from+'T00:00:00+03:00'):new Date(Date.now()-30*86400000);
     const until=to&&/^\d{4}-\d{2}-\d{2}$/.test(to)?new Date(to+'T23:59:59+03:00'):new Date();
     if(!Number.isFinite(since.getTime())||!Number.isFinite(until.getTime())||since>until)throw new BadRequestException('Проверьте период приёмок.');
-    const [groups,saved]=await Promise.all([Promise.all(warehouseIds.map(w=>receiptDocuments(this.prisma,clientId,w,since))),this.prisma.systemSetting.findMany({where:{key:{startsWith:`receipt.channels.v1:${clientId}:`}},select:{value:true}})]);
+    const [groups,saved]=await Promise.all([Promise.all(warehouseIds.map(w=>receiptDocuments(this.prisma,clientId,w,since,undefined,true))),this.prisma.systemSetting.findMany({where:{key:{startsWith:`receipt.channels.v1:${clientId}:`}},select:{value:true}})]);
     const docs=groups.flat(), approvals=(await Promise.all(warehouseIds.map(w=>receiptApprovalEntries(this.prisma,clientId,w,docs)))).flat();
     const approvalById=new Map(approvals.map(a=>[a.doc.id,a.approval]));
     const rules=new Map(saved.map(s=>{const r=s.value as any;return [r.id,r] as const;}));
-    return {enabled:true,canManageDirections:user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r)),rows:docs.filter(d=>d.current||new Date(d.date)<=until).map(d=>({...d,approvalEnabled:approvalById.has(d.id),approval:approvalById.get(d.id)??{available:true,revision:0},fbs:rules.get(d.id)?.fbs??true,fbo:rules.get(d.id)?.fbo??true,revision:rules.get(d.id)?.revision??0}))};
+    return {enabled:true,canManageDirections:user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r)),rows:docs.filter(d=>(!receiptId||d.id===receiptId)&&(d.current||new Date(d.date)<=until)).map(d=>({...d,...(summary==='1'&&process.env.WMS_MENU_READS_ENABLED==='true'?{boxCount:d.boxes.length,boxes:[]}:{}),approvalEnabled:approvalById.has(d.id),approval:approvalById.get(d.id)??{available:true,revision:0},fbs:rules.get(d.id)?.fbs??true,fbo:rules.get(d.id)?.fbo??true,revision:rules.get(d.id)?.revision??0}))};
   }
   // FIX: the client can confirm only its own receipt; disabling remains an administrator action.
   @Post('approval')
@@ -68,7 +68,7 @@ export class ReceiptChannelsController {
     if(!clientId||!warehouseId||!id)throw new BadRequestException('Укажите приёмку.');
     this.scopes.requireClientAccess(user,clientId,'read');
     if(!(await this.readWarehouses(user,clientId)).includes(warehouseId))throw new ForbiddenException('Нет доступа к филиалу.');
-    const doc=(await receiptDocuments(this.prisma,clientId,warehouseId)).find(d=>d.id===id);if(!doc)throw new NotFoundException('Приёмка не найдена.');return doc;
+    const doc=(await receiptDocuments(this.prisma,clientId,warehouseId,undefined,undefined,true)).find(d=>d.id===id);if(!doc)throw new NotFoundException('Приёмка не найдена.');return doc;
   }
   @Post('assign-box')
   @RequirePermissions('warehouse:write')
