@@ -11,6 +11,7 @@ web `BillingPeriodGenerationDialog.spec.tsx`; выключенный флаг, �
 
 | Изменяемая область | Проверки API (`apps/api/test/`) | Android / другие проверки |
 | --- | --- | --- |
+| Меню и онлайн, PR514 | menu-read-performance.spec.ts, receipt-report-evidence.spec.ts, shared-read.spec.ts | menu-read-runtime.cjs, menu-read-browser.cjs; сравнение снимка с откатом |
 | Компактная упаковка, PR512 | fbo-packing-receipt.spec.ts, fbo-compact-packing-runtime.cjs | FboPackingReceiptTest, FboCompactPackingScreenTest; все6 Android variants по232 теста |
 | Индекс приёмок, PR509/510 | receipt-stock-index.spec.ts, fbo-remaining-plan.spec.ts | receipt-stock-index.sql, receipt-stock-index-runtime.cjs, test_receipt_index_backfill.py; отдельный PostgreSQL и сверка production с откатом |
 | Серия и телефон, PR505 | `print-series.spec.ts`, также на готовом runtime | `printSeries.spec.ts`, `print-series.test.cjs`, `phone-layout.browser-test.cjs`, `scripts/print-phone-runtime.browser-test.cjs`, `scripts/build-print-series-agent.test.py` |
