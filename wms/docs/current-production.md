@@ -1,3 +1,9 @@
+# Published PR523 / 2026-10-09 - administrator branch access
+
+Baseline `2026-10-09-receipt-admin`, sourceParityVerified=false. API `sha256:70cd3860dc154f4bdd0077df3c3a7cc576a8393c13cc8f6c455221109399f8ac`; web `sha256:fa6f4af3634f85e7156348573e166354e5286e589a4c78a43c9b4ddf43f40c10` remains PR522. LOGOFF APK221 and all flags unchanged. Administrators use only their persisted active warehouse with existing read/write grants. Sold FFULHAB is untouched. [Release record](releases/receipt-admin-20261009.json).
+
+API3228 passed/142 skipped; the unconfigured KIZ DB suite remains excluded. Runtime regression fails before and passes after. Actual six ADMIN/OWNER cards were verified in READ ONLY transactions after publication. Four receipt issues remain pending, available stock excluded, no duplicate receipt. Rollback API `logoff-api:before-receipt-admin-20261009`.
+
 # Опубликовано PR520 / 09.10.2026 — импорт на экране FBO Ozon
 
 [Запись выпуска](releases/ozon-entry-20261009.json). API `sha256:0d28742818119992b0139e661f5c8b2cde7344a6d072d8187679849944b2507c`; web `sha256:7408d8f2984fee6864d8c50ed4021464bdc0cc45ae385c9252e80f86742445bf`.

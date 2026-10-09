@@ -1,3 +1,5 @@
+Current verified release: PR523, `2026-10-09-receipt-admin`; LOGOFF APK221. [Production](current-production.md). Sold FFULHAB is out of scope.
+
 Актуальная база: **PR520**, `2026-10-09-ozon-entry`; импорт файла клиента доступен прямо в FBO Ozon. APK220 без изменений. [Паспорт](current-production.md).
 
 Актуальный выпуск: **PR516**, [ФБО Ozon](ozon-fbo-customer-file.md), APK220. Проверенная база: `2026-10-09-ozon-customer`; [паспорт](current-production.md).
