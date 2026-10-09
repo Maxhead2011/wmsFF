@@ -7,6 +7,13 @@ import type { FboPlan } from '../../lib/api';
 const base:FboPlan={requestId:'r',title:'1029',phase:'PACKING',needed:2,picked:2,packed:2,looseRemaining:0,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[{code:'FFL_1',quantity:2,wholeBox:false,closed:true,confirmed:false}]};
 const render=(plan:FboPlan)=>renderToStaticMarkup(<FboTwoStagePanel initial={plan} accessToken="test" userId="picker" canWrite onClose={()=>{}}/>);
 describe('FBO packing and final box control',()=>{
+  // TEST: one assembly displays destination quotas and never offers a WB export for Ozon.
+  it('shows Ozon directions inside the same assembly',()=>{
+    const plan={...base,marketplace:'OZON',directions:[{name:'Уфа',needed:2,packed:1,items:[{skuId:'s',barcode:'1',quantity:2,packed:1}]}]};
+    const html=render(plan);
+    expect(html).toContain('Единая сборка');expect(html).toContain('Уфа: упаковано 1 из 2');expect(html).toContain('Направление короба');
+    expect(render({...plan,phase:'COMPLETED'})).not.toContain('Скачать файл WB');
+  });
   it('exposes the standard window header and close control for minimizing',()=>{
     // TEST: FBO must participate in the same retained-window mechanism as FBS.
     const html=render(base);

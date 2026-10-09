@@ -82,6 +82,7 @@ import { ClientRequestCreateForm } from './ClientRequestCreateForm';
 import { ClientRequestDocumentPreview } from './ClientRequestDocumentPreview';
 import { ClientRequestEditModal } from './ClientRequestEditModal';
 import { ClientRequestXlsxImportForm } from './ClientRequestXlsxImportForm';
+import { OzonCustomerImport } from './OzonCustomerImport';
 import './client-requests.css';
 import { ClientRequestsTable, canEditRequest, canCancelRequest } from './ClientRequestsTable';
 import { FboTwoStagePanel } from './FboTwoStagePanel';
@@ -2018,9 +2019,9 @@ export function ClientRequestsPanel({
       ) : null}
 
       {!showArchive && canWrite && clients.status === 'ready' ? (
-        <details className="client-request-excel-collapse"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
+        <><OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/><details className="client-request-excel-collapse"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
           <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} outboundOnly={fboOnly} />
-        </details>
+        </details></>
       ) : null}
 
       {error ? <p className="form-error">{error}</p> : null}

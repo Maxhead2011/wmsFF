@@ -1,5 +1,9 @@
 import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 export class FboActionDto {
+    @IsOptional()
+    @IsString()
+    @MaxLength(200)
+    direction?: string;
     @IsIn(['START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
     action!: string;
     @IsString()
