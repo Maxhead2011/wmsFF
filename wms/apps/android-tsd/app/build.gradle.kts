@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 219 // FIX: compact confirmed FBO packing updates only for LOGOFF.
-            versionName = "0.1.219-fbo-compact-packing"
+            versionCode = 220 // FIX: compact confirmed FBO packing updates only for LOGOFF.
+            versionName = "0.1.220-ozon-directions"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

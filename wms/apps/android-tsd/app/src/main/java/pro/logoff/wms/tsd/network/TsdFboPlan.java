@@ -2,6 +2,9 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFboPlan {
+    public String marketplace;
+    public List<Direction> directions;
+    public static class Direction { public String name; public int needed, packed; }
     public boolean parallelPackingSupported;
     public boolean localRouteEnabled;
     public String requestId, title, phase;
@@ -31,5 +34,5 @@ public class TsdFboPlan {
         public int quantity; public boolean requiresKiz;
         public String displayLabel(String fallback) { return productDisplayText == null ? fallback : productDisplayText; }
     }
-    public static class Box { public String code; public boolean wholeBox, closed, confirmed; public int quantity; }
+    public static class Box { public String code, direction; public boolean wholeBox, closed, confirmed; public int quantity; }
 }

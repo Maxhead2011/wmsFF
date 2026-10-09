@@ -8754,6 +8754,11 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
   );
 }
 
+export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
+export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
+export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',outboundRequestXlsxForm(payload),accessToken);}
+export function createOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/commit',outboundRequestXlsxForm(payload),accessToken);}
+
 export async function commitOutboundRequestXlsx(accessToken: string, payload: OutboundRequestXlsxPayload) {
   return requestMultipart<CommitOutboundRequestXlsxResult>(
     '/client-requests/outbound-xlsx/commit',
@@ -11092,6 +11097,8 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 }
 
 export type FboPlan = {
+  marketplace?:string;
+  directions?:Array<{name:string;needed:number;packed:number;items:Array<{skuId:string;barcode:string;quantity:number;packed:number}>}>;
   pendingPlacementQuantity?:number;
   number?:number; observedAt?:string;
   pickedUnits?:Array<{id:string;requestItemId:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;wholeBox:boolean;state:string;pickedAt:string;packedAt:string|null;pickedBy:string|null;packedBy:string|null}>;
@@ -11099,9 +11106,9 @@ export type FboPlan = {
   compositionChanged:boolean; wholeBoxes:string[];
   lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number;pendingPlacementQuantity?:number}>;
   route:Array<{boxCode:string;pallet:string;zone:string;wholeBox:boolean;recount:boolean;tasks:Array<{skuId:string;barcode:string;name:string;quantity:number;requiresKiz:boolean}>}>;
-  boxes:Array<{code:string;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
+  boxes:Array<{code:string;direction?:string|null;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
 };
-export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string};
+export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string;direction?:string};
 export async function fetchFboPlan(accessToken:string,id:string) { const load=()=>request<FboPlan>(`/tsd/requests/${id}/fbo`,{accessToken});return import.meta.env.VITE_MENU_READS_ENABLED==='true'?sharedRead(JSON.stringify([accessToken,id,'fbo']),load):load(); }
 export async function actFbo(accessToken:string,id:string,body:FboAction) {
   const response=await fetch(`${API_BASE_URL}/tsd/requests/${id}/fbo/actions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${accessToken}`},body:JSON.stringify(body)});

@@ -1798,6 +1798,7 @@ model InventoryBoxRescanRequest {
 }
 
 model ClientRequest {
+  ozonShipment                 OzonFboShipment?
   id                           String                     @id @default(uuid())
   number                       Int                        @unique @default(autoincrement())
   clientId                     String
@@ -3666,6 +3667,7 @@ model FboAssembly {
 }
 
 model FboAssemblyBox {
+  direction String?
   id String @id @default(uuid())
   requestId String
   boxId String
@@ -3678,6 +3680,15 @@ model FboAssemblyBox {
   assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
   @@unique([requestId, boxCode])
   @@index([boxId])
+}
+
+// FIX: one request owns all destination allocations; no duplicate stock demand.
+model OzonFboShipment {
+  requestId String @id
+  importKey String @unique
+  directions Json
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
 }
 
 model FboAssemblyUnit {

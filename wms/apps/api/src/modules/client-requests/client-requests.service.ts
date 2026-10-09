@@ -466,6 +466,10 @@ export class ClientRequestsService {
   }
 
   async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
+    // FIX: allocation and total demand must not diverge through the generic item editor.
+    if (dto.items !== undefined && process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' &&
+        await this.prisma.ozonFboShipment.findUnique({ where: { requestId: id } }))
+      throw new BadRequestException('Состав этой сборки задан файлом распределения Ozon. Изменение отдельных строк недоступно.');
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
       select: { id: true, clientId: true, warehouseId: true, type: true, status: true },

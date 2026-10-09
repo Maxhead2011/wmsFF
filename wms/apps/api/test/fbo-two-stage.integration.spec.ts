@@ -58,6 +58,7 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await p.fboAssembly.deleteMany({ where: { requestId: request } });
         await p.billingCharge.deleteMany({ where: { requestId: request } });
         await p.clientBillingService.deleteMany({ where: { clientId: client } });
+        await p.ozonFboShipment.deleteMany({ where: { requestId: request } });
         await p.clientRequest.deleteMany({ where: { id: request } });
         await p.productMark.deleteMany({ where: { clientId: client } });
         await p.stockMovement.deleteMany({ where: { clientId: client } });
@@ -72,6 +73,29 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         vi.unstubAllEnvs();
     });
     afterAll(() => p.$disconnect());
+    // TEST: one Ozon pick pool feeds separate destination quotas; surplus stays available.
+    it('packs one Ozon assembly into two destinations without consuming surplus', async () => {
+        vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED', 'true');
+        await p.ozonFboShipment.create({data:{requestId:request,importKey:randomUUID(),directions:
+            ['Москва','Казань'].map(name=>({name,items:[{skuId:sku,barcode:'2051234567890',quantity:2}]}))}});
+        await act('START');
+        for (let i=0;i<4;i++) await act('PICK_UNIT',{sourceBoxCode:'FFL_'+(i<2?whole:partial),barcode:'2051234567890',kiz:marks[i].value});
+        await act('FINISH_PICK');
+        const codes=['FFL_'+target,'FFL_'+randomUUID()];
+        for (let d=0;d<2;d++) {
+            await act('OPEN_BOX',{targetBoxCode:codes[d],direction:['Москва','Казань'][d]});
+            for (let i=d*2;i<d*2+2;i++) await act('PACK_UNIT',{targetBoxCode:codes[d],barcode:'2051234567890',kiz:marks[i].value});
+            if(d===0) await expect(act('PACK_UNIT',{targetBoxCode:codes[d],barcode:'2051234567890',kiz:marks[2].value})).rejects.toThrow();
+            await act('CLOSE_BOX',{targetBoxCode:codes[d]});
+        }
+        await act('SORTED');
+        for(const targetBoxCode of codes) await act('CONFIRM_BOX',{targetBoxCode});
+        const result=await act('FINISH');
+        expect(result.directions.map(d=>d.packed)).toEqual([2,2]);
+        expect(await p.fboAssembly.count({where:{requestId:request}})).toBe(1);
+        expect((await p.stockBalance.aggregate({where:{clientId:client,skuId:sku,status:'AVAILABLE'},_sum:{quantity:true}}))._sum.quantity).toBe(1);
+        expect((await p.stockBalance.aggregate({where:{clientId:client,skuId:other,status:'AVAILABLE'},_sum:{quantity:true}}))._sum.quantity).toBe(1);
+    });
     async function receiptFixture(){
       vi.stubEnv('WMS_RECEIPT_CHANNELS_ENABLED','true');
       await p.stockMovement.create({data:{clientId:client,warehouseId:wh,boxId:whole,skuId:sku,type:'RECEIPT',status:'AVAILABLE',quantity:2,sourceDocument:'receipt-session'}});
