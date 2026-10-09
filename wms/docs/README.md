@@ -1,3 +1,5 @@
+Current verified release: PR529, LOGOFF APK222, found KIZ without a box. [Scenario](kiz-found-review.md); [production](current-production.md). FFULHAB untouched.
+
 Current verified base: **PR527**, `2026-10-09-ozon-supply`. APK221 unchanged. [Production](current-production.md).
 
 # Индекс нашей WMS
