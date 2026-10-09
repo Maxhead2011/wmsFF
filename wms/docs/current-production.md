@@ -1,3 +1,21 @@
+# Published PR533 / 2026-10-09 — multiple Ozon orders per assembly
+
+[Workflow](ozon-multiple-orders.md), [release record](releases/ozon-multiple-20261009.json).
+API `sha256:42a700c2b000e6f21663d0efd4846630f501a3ead5825db4726b61887948df82`; web `sha256:8e095a14a7a1d7109b52885def84952ba7862065cf1fc4bd8e59ae5524da44da`.
+Baseline `2026-10-09-ozon-multiple`; sourceParityVerified=false.
+Two Ozon API runtime modules and web graph changed; additive OzonFboOrderBinding table.
+Existing flags, APK222, PR529 found-KIZ fixes and PR531 print-agent download preserved.
+One WMS assembly owns multiple Ozon orders with unique ownership and per-supply receipts.
+Request1861 linked to four verified orders:393 units/11 directions, zero barcode/quantity differences.
+Demand/picking unchanged. No external cargo submission or physical print performed.
+API3265/web412 passed,144/2 skipped; unconfigured dedicated KIZ suite excluded.
+Separately42 PostgreSQL tests, TypeScript and actual candidate browser graph passed.
+Old implementation fails new regression. GitHub checks not reported for PR533.
+Health, public hashes and live API snapshot verified; other containers/configuration preserved.
+Rollback: before-ozon-multi-20261009 images; retain additive table. Old UI supports only first order,
+so suspend cargo operations until multi-order code is restored after rollback.
+Sold WMS untouched. Customer Excel template deferred for separate agreement.
+
 # Опубликовано PR531 / 09.10.2026 — постоянная станция печати
 
 Агент **2026.10.09.1** доступен в downloads/LOGOFF-FBS-Print-Agent.zip.
