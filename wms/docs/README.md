@@ -1,3 +1,5 @@
+Актуальный выпуск: **PR516**, [ФБО Ozon](ozon-fbo-customer-file.md), APK220. Проверенная база: `2026-10-09-ozon-customer`; [паспорт](current-production.md).
+
 # Latest release: PR514 / Receipt and online reads
 
 See [published state](current-production.md) and [verification](releases/menu-reads-20261009.json).
