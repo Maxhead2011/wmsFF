@@ -1,0 +1,19 @@
+{
+  "verified": true,
+  "apiImage": "sha256:eae88e3014252c672e4d0564ae08580dd1e86ebe314dee6a4a004cae64cc7f45",
+  "webImage": "sha256:1a5e6d8847002aae15640e22052cc6c1682ff9f4c7c6e742d5438f4b7dac53d1",
+  "archiveSha256": "382279e2358a3f5fc2e7066bc2dc5e835d9c100a2feb7a46721bda1964c4142e",
+  "sourceParityVerified": false,
+  "databaseBackupIncluded": false,
+  "runtimeFiles": 569,
+  "runtimeExact": true,
+  "publicHealth": true,
+  "readOnlyReviewReplayPassed": true,
+  "runtimeTestsPassed": 63,
+  "fullSuiteExistingFailures": 45,
+  "ownerApprovedExistingFailures": true,
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/479",
+  "sourceCommit": "e1bc27a10282e39dbd2b3cf2296144483300fa67",
+  "rollback": "logoff-api:before-kiz-inventory-review-20261004",
+  "newFlag": "WMS_KIZ_INVENTORY_ADMIN_REUSE_ENABLED=true"
+}
