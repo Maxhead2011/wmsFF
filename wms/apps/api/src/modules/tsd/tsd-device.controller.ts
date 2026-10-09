@@ -1,3 +1,4 @@
+import { onlinePlanView } from './online-plan-view';
 import { Body, Controller, Delete, Get, Param, Post, Query, Res, ServiceUnavailableException, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
@@ -425,9 +426,9 @@ export class TsdDeviceController {
   @Get('requests/:id')
   @ApiBearerAuth()
   @RequirePermissions('stock:read')
-  getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+  async getAssemblyRequest(@Param('id') id: string, @CurrentUser() user: AuthUser, @Query('view') view?:string) {
     // FIX: avoid building the legacy instruction when opening FBO on a terminal.
-    return this.assembly.getDeviceRequestPlan(id, user);
+    return onlinePlanView(await this.assembly.getDeviceRequestPlan(id, user),view);
   }
 
   @Post('requests/:id/fbs-kiz-conflicts/:taskId/resolve')
