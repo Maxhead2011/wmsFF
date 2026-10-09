@@ -175,3 +175,5 @@ Latest verified PR505: baseline `2026-10-08-print-phone`; series Windows printin
 Latest verified PR509/510: baseline2026-10-08-receipt-stock-index. Persistent receipt identity, transactional triggers, empty FBO demand skip; WMS_RECEIPT_STOCK_INDEX_ENABLED=true only on our WMS. Web/APK/sold unchanged. Source parity false. See current-production.md.
 
 Latest verified PR512: baseline2026-10-08-fbo-compact-packing; LOGOFF APK219. WMS_FBO_COMPACT_PACKING_ENABLED=true only on our WMS. Two API modules and APK download files; sold/FBS/picking unchanged. Source parity false. See current-production.md.
+
+Latest verified PR514: baseline2026-10-09-menu-reads; WMS_MENU_READS_ENABLED=true only on our WMS. Receipt summary and online FBS/FBO read optimization. APK219/print agent/sold unchanged; source parity false. See current-production.md.

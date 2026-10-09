@@ -1,12 +1,12 @@
-# Latest release: PR512 / Compact FBO packing, APK219
+# Latest release: PR514 / Receipt and online reads
 
-See [published state](current-production.md) and [verification](releases/fbo-compact-packing-20261008.json).
+See [published state](current-production.md) and [verification](releases/menu-reads-20261009.json).
 
 # Индекс нашей WMS
 
-Актуализировано 08.10.2026. Последний опубликованный выпуск — **PR512**:
-[компактная упаковка ФБО](fbo-compact-packing.md).
-API и web image ID сверены с действующими контейнерами 08.10.2026.
+Актуализировано 09.10.2026. Последний опубликованный выпуск — **PR514**:
+[приёмки и онлайн-выполнение](menu-read-performance.md).
+API и web image ID сверены с действующими контейнерами 09.10.2026.
 LOGOFF ТСД219 опубликован. Проданная ВМС не обновляется.
 
 ## С чего начать
@@ -15,7 +15,7 @@ LOGOFF ТСД219 опубликован. Проданная ВМС не обно
 2. [Карта проекта](project-map.md) — точки входа и связи модулей.
 3. [Индекс проверок](test-index.md) — связанные сценарии и ограничения тестов.
 4. [Порядок выпуска](release-workflow.md) — свежая база, отдельная ветка, PR и проверка артефакта.
-5. [Запись PR512](releases/fbo-compact-packing-20261008.json) и [актуальный baseline](../baselines/our-wms/2026-10-08-fbo-compact-packing/manifest.json).
+5. [Запись PR514](releases/menu-reads-20261009.json) и [актуальный baseline](../baselines/our-wms/2026-10-09-menu-reads/manifest.json).
 
 Интеграционная ветка нашей WMS — `feature/wb-print-check`. Рабочие каталоги —
 `D:/WMSFF/_Kof` и его подпапки, продукт — `wms/` в репозитории.
