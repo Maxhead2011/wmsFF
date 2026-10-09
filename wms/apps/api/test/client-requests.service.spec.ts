@@ -7,6 +7,16 @@ import { ClientRequestsService } from '../src/modules/client-requests/client-req
 
 // TEST: archive and active list both account for all terminal request statuses.
 describe('ClientRequestsService', () => {
+  // TEST: identify Ozon by its relation, including custom titles such as "Cross-docking".
+  it('includes the Ozon shipment identity when the Ozon feature is enabled', async () => {
+    const old=process.env.WMS_OZON_FBO_IMPORT_ENABLED;
+    process.env.WMS_OZON_FBO_IMPORT_ENABLED='true';
+    try {
+      const prisma={clientRequest:{findMany:vi.fn().mockResolvedValue([])}};
+      await new ClientRequestsService(prisma as never,new ClientScopeService(),stockOperations() as never).list({},user({clientIds:['client-1']}));
+      expect(prisma.clientRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({include:expect.objectContaining({ozonShipment:{select:{requestId:true}}})}));
+    } finally { if(old===undefined)delete process.env.WMS_OZON_FBO_IMPORT_ENABLED;else process.env.WMS_OZON_FBO_IMPORT_ENABLED=old; }
+  });
   // TEST: keep explicit status filters and access scopes when viewing terminal requests.
   it.each([ClientRequestStatus.CANCELLED, ClientRequestStatus.REJECTED])('retains explicit %s status', async status => {
     const prisma = { clientRequest: { findMany: vi.fn().mockResolvedValue([]) } };
