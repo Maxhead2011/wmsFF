@@ -39,6 +39,7 @@ final class KizLocationScreen {
     private final Button check;
     private final LinearLayout decisions;
     private TsdKizLocationResponse lastResponse;
+    private Map<String,Object> foundCase;
     private AlertDialog decisionDialog;
     private boolean closed, busy;
     private final Runnable autoSubmit = this::submit;
@@ -81,7 +82,7 @@ final class KizLocationScreen {
         String scan = input.getText().toString().trim();
         if (scan.isEmpty()) { result.setText("Отсканируйте КИЗ."); return; }
         busy = true; check.setEnabled(false); input.setEnabled(false); result.setText("Проверяю КИЗ…");
-        lastResponse=null; decisions.removeAllViews();
+        lastResponse=null; foundCase=null; decisions.removeAllViews();
         executor.execute(() -> {
             String message;
             TsdKizLocationResponse body=null;
@@ -109,6 +110,7 @@ final class KizLocationScreen {
     }
     private void renderDecisions() {
         decisions.removeAllViews();
+        if(lastResponse!=null&&lastResponse.foundCandidate!=null){renderFound();return;}
         if(lastResponse==null||lastResponse.reviews==null)return;
         if(lastResponse.reviews.isEmpty()&&lastResponse.found){
             TextView hint=new TsdUi.Label(activity);hint.setText("Для решения нужна одна однозначно найденная единица в выбранном филиале. Проверьте размещение и дубли КИЗа.");decisions.addView(hint);
@@ -127,6 +129,42 @@ final class KizLocationScreen {
                 button.setOnClickListener(v->confirmDecision(row,mode));decisions.addView(button);
             }
         }
+    }
+    // FIX: a found shipment needs no box to open a case or authorize its KIZ.
+    private void renderFound(){
+        TextView info=new TsdUi.Label(activity);info.setText("Товар найден после отгрузки. Разрешение не увеличивает остаток. Короб нужен при возврате на склад.");decisions.addView(info);
+        String[] actions=foundCase==null?new String[]{"OPEN"}:new String[]{"REUSE","RELABEL","RETURN","REJECT"};
+        Map<?,?> snapshot=foundCase!=null&&foundCase.get("snapshot") instanceof Map?(Map<?,?>)foundCase.get("snapshot"):Collections.emptyMap();
+        for(String action:actions){
+            Button button=new TsdUi.Button(activity);button.setText(KizFoundPolicy.caption(action));
+            button.setEnabled(!busy&&KizFoundPolicy.canAct(BuildConfig.FLAVOR,session,action,foundCase));
+            button.setOnClickListener(v->confirmFound(action));decisions.addView(button);
+        }
+        if(foundCase!=null){TextView state=new TsdUi.Label(activity);state.setText((Boolean.TRUE.equals(snapshot.get("returned"))?"Возврат учтён в короб "+snapshot.get("boxCode"):"Возврат ещё не учтён")+(foundCase.get("resolution")==null?"":"\nРешение: "+KizFoundPolicy.caption(String.valueOf(foundCase.get("resolution")))));decisions.addView(state);}
+    }
+    private void confirmFound(String action){
+        if(closed||busy||!KizFoundPolicy.canAct(BuildConfig.FLAVOR,session,action,foundCase))return;
+        handler.removeCallbacks(autoSubmit);input.setEnabled(false);check.setEnabled(false);
+        LinearLayout form=new LinearLayout(activity);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(24,12,24,12);
+        TextView code=new TsdUi.Label(activity);code.setText(lastResponse.foundCandidate.identity);form.addView(code);
+        EditText reason=new EditText(activity);TsdUi.hint(reason,"Основание (5–1000 символов)");form.addView(reason);
+        EditText box=new EditText(activity);TsdUi.hint(box,"Отсканируйте короб возврата");if("RETURN".equals(action))form.addView(box);
+        CheckBox confirmed=new CheckBox(activity);confirmed.setText("Подтверждаю физическое наличие и действие"+("REUSE".equals(action)?". КИЗ проверен и не погашен.":"."));form.addView(confirmed);
+        CheckBox release=new CheckBox(activity);release.setText("Разрешаю освободить прежние привязки после возврата с сохранением истории. Действующая сборка требует отдельного возврата.");if(!"OPEN".equals(action)&&!"REJECT".equals(action))form.addView(release);
+        TextView error=new TsdUi.Label(activity);form.addView(error);
+        AlertDialog dialog=new AlertDialog.Builder(activity).setTitle(KizFoundPolicy.caption(action)).setView(form).setPositiveButton("Подтвердить",null).setNegativeButton("Отмена",null).create();decisionDialog=dialog;
+        dialog.setOnDismissListener(d->{decisionDialog=null;if(!closed&&!busy){input.setEnabled(true);check.setEnabled(true);}});
+        dialog.setOnShowListener(d->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(busy)return;String why=reason.getText().toString().trim(),target=box.getText().toString().trim();
+            if(!confirmed.isChecked()||why.length()<5||why.length()>1000||("RETURN".equals(action)&&target.isEmpty())){error.setText("Укажите основание, подтверждение и короб для возврата.");return;}
+            Map<String,Object> payload=new HashMap<>();payload.put("action",action);payload.put("markId",lastResponse.foundCandidate.markId);if(foundCase!=null)payload.put("id",foundCase.get("id"));payload.put("reason",why);payload.put("confirmed",true);payload.put("boxCode",target);payload.put("releaseBindings",release.isChecked());
+            busy=true;renderDecisions();dialog.setCancelable(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(false);
+            executor.execute(()->{String problem=null;Map<String,Object> saved=null;
+                try{Response<Map<String,Object>> response=api.foundKizAction(session.authorizationHeader(),payload).execute();if(response.isSuccessful()&&response.body()!=null)saved=response.body();else{problem="Действие не подтверждено. Повторите отправку.";if(response.errorBody()!=null){Object detail=new JSONObject(response.errorBody().string()).opt("message");if(detail instanceof String)problem=(String)detail;}}}catch(Exception e){problem="Подтверждение не получено. Повторите отправку этой кнопкой.";}
+                String failure=problem;Map<String,Object> received=saved;
+                handler.post(()->{if(closed||activity.isDestroyed())return;busy=false;dialog.setCancelable(true);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setEnabled(true);if(failure==null){foundCase=received;dialog.dismiss();result.setText("Решение сохранено. Обращение доступно в ВМС → Проверка КИЗов.");}else error.setText(failure);renderDecisions();});
+            });
+        }));dialog.show();
     }
     private void confirmDecision(TsdKizLocationResponse.Review row,String mode) {
         if(closed||busy||!KizReviewPolicy.canDecide(BuildConfig.FLAVOR,session,row,mode))return;

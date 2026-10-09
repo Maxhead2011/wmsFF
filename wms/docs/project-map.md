@@ -4,6 +4,8 @@ Ozon supply link: `ozon-assembly-supply.service/controller.ts`, `ozon-supply-pol
 
 `online-plan-view.ts` — компактная проекция и страницы истории; `FboHistory.tsx` — загрузка по раскрытию; `visiblePolling.ts` — видимость конкретного окна; `menu-read-catalog.ts` — параллельные независимые чтения. Направления Ozon и права сохранены. База `2026-10-09-online-window`, sourceParityVerified=false.
 
+Found KIZ: [scenario](kiz-found-review.md). `inventory/kiz-found-review.ts` owns independent FOUND cases, separate physical return and UNIT permission. KizLocationScreen/KizFoundPanel expose it without a box. LOGOFF opt-in; no sold release.
+
 Receipt review: ADMIN/OWNER operational panel, server hold before receipt, transactional decision. FBO access uses persisted selected writable branch in `administration/fbo-problems-warehouse.ts`; runtime wrapper preserves existing recovery actions. LOGOFF only.
 
 PR520: вход `OzonFboPanel` выбирает `OzonCustomerWorkspace` или прежний API-режим. `GET /ozon-fbo-import/requests` возвращает сборки клиента активного филиала.

@@ -12502,7 +12502,9 @@ export function decideKizReview(accessToken:string,id:string,resolution:'REUSE'|
   return request<{id:string;status:string;resolution:string}>('/inventory/kiz-location/reviews/'+encodeURIComponent(id)+'/decision',
     {accessToken,method:'POST',body:{resolution,reason,confirmed}});
 }
-export type KizCheckResult = { found: boolean; ambiguous: boolean; identity: string; reviews?:KizReviewCase[]; matches: Array<{
+export function fetchFoundKiz(accessToken:string){return request<any[]>('/inventory/kiz-found',{accessToken});}
+export function foundKizAction(accessToken:string,body:unknown){return request<any>('/inventory/kiz-found',{accessToken,method:'POST',body});}
+export type KizCheckResult = { found: boolean; ambiguous: boolean; identity: string; foundCandidate?:{markId:string;identity:string}; reviews?:KizReviewCase[]; matches: Array<{
   id: string; client: string; status: string; boxCode: string | null; palletCode: string | null;
   room: string | null; warehouse: string | null; locationWarning: string | null;
   product: { name: string; article: string | null; size: string | null; color: string | null };

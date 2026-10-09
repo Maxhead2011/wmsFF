@@ -42,6 +42,8 @@ public interface WmsApi {
     Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);
     @POST("api/v1/inventory/kiz-location/reviews/{id}/decision")
     Call<Map<String,Object>> decideKizReview(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String,Object> request);
+    @POST("inventory/kiz-found")
+    Call<Map<String,Object>> foundKizAction(@Header("Authorization") String authorization, @Body Map<String,Object> request);
     // ADDED: independent administrator sorting; ordinary transfer APIs are unchanged.
     @GET("api/v1/pallet-sorting")
     Call<List<Map<String, Object>>> listPalletSortings(@Header("Authorization") String authorization);

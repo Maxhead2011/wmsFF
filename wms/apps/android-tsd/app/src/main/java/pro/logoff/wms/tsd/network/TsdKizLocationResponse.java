@@ -8,6 +8,8 @@ public class TsdKizLocationResponse {
     public String identity;
     public List<Match> matches;
     public List<Review> reviews;
+    public FoundCandidate foundCandidate;
+    public static class FoundCandidate { public String markId, identity; }
     public static class Review {
         public String id, kizIdentity, status, decision, resolution, reason, decidedByName, scope;
         public boolean active;

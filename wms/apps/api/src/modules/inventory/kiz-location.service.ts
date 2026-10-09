@@ -70,6 +70,9 @@ export class KizLocationService {
         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
       };
     });
-    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches };
+    // FIX: lookup remains read-only; explicit physical confirmation opens the case.
+    const foundCandidate = process.env.WMS_KIZ_FOUND_REVIEW_ENABLED === 'true' && matches.length === 1 &&
+      matches[0].status === 'SHIPPING' && !matches[0].boxCode ? {markId: matches[0].id, identity} : undefined;
+    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches, foundCandidate };
   }
 }
