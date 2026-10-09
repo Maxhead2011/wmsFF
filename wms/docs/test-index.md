@@ -180,3 +180,7 @@ Android: `ReceiptBarcodeRescanTest`, `ReceiptCloseSyncTest`, LOGOFF и ФФУЛ�
 Общий прогон: API 3204 passed / 141 skipped, web 408 passed / 2 skipped, Android по 238 passed в двух flavor. PostgreSQL integration не подтверждён: тестовая БД отсутствует; старый kiz-duplicate.integration.spec.ts исключён из повторного общего прогона из-за ошибки создания клиента без URL.
 Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; scoped administrator FBO access `fbo-problems-admin-access.spec.ts`; actual runtime/browser tests `scripts/tests/receipt-*.cjs`. Live role checks run in a READ ONLY transaction (`releases/receipt-barcode-20261009/smoke-admin.cjs`).
 
+
+## Агент Windows 2026.10.09.1
+
+`apps/windows-print-agent/ack-regression.test.cjs`, `lifecycle.test.cjs`, `agent.test.cjs`, `print-series.test.cjs`: реальный PowerShell5, имитация HTTP/spooler, потеря ACK, перезапуск, mutex, сохранение ID и task settings. Запуск с AGENT_TEST_ROOT на распакованном архиве; AGENT_OLD_SOURCE воспроизводит старую ошибку. [Ограничения](print-agent-lifecycle.md).

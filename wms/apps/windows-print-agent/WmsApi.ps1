@@ -3,8 +3,9 @@ function Read-Config {
   if ($null -ne $script:setupConfig) { return $script:setupConfig }
   Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 }
-function Invoke-WmsJson($method, $uri, $body, $headers = @{}) {
-  $request = @{ Method = $method; Uri = $uri; Headers = $headers; ContentType = 'application/json; charset=utf-8'; TimeoutSec = 30 }
+function Invoke-WmsJson($method, $uri, $body, $headers = @{}, [ValidateRange(1,30)][int]$TimeoutSeconds = 30) {
+  # FIX: bound both login and job requests; a dead connection cannot stop polling forever.
+  $request = @{ Method = $method; Uri = $uri; Headers = $headers; ContentType = 'application/json; charset=utf-8'; TimeoutSec = $TimeoutSeconds }
   if ($null -ne $body) { $request.Body = [Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Depth 10)) }
   Invoke-RestMethod @request
 }

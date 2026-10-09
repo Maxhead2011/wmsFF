@@ -2,11 +2,15 @@ param([switch]$SelfTest)
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'WmsApi.ps1')
+. (Join-Path $PSScriptRoot 'JobJournal.ps1')
+. (Join-Path $PSScriptRoot 'AgentLifecycle.ps1')
 
 try {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
 
+  if (-not $SelfTest) { Assert-AgentInteractiveUser }
+  $script:savedConfig = if ($SelfTest) { $null } else { Get-SavedAgentConfig $PSScriptRoot }
   $form = New-Object System.Windows.Forms.Form
   $form.Text = 'LOGOFF - FBS Print Station Setup'
   $form.Width = 560
@@ -79,6 +83,19 @@ try {
 
   $form.Controls.AddRange(@($title, $hint, $printerLabel, $printer, $modelLabel, $model, $nameLabel, $name, $button, $status))
 
+  # FIX: an existing station is reused by ID, never re-registered under today's name.
+  if ($script:savedConfig) {
+    $login.Text = $script:savedConfig.login
+    $password.Text = $script:savedConfig.password
+    $name.Text = $script:savedConfig.stationName
+    $name.ReadOnly = $true
+    $printer.SelectedItem = $script:savedConfig.printerName
+    $printer.Enabled = $false
+    $model.Enabled = $false
+    $hint.Text = 'Saved station: ' + $script:savedConfig.stationName + '. Windows user: ' + [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $button.Text = 'START / UPDATE SAVED STATION'
+  }
+
   $button.Add_Click({
     try {
       if (-not $login.Text.Trim() -or -not $password.Text -or -not $printer.SelectedItem) {
@@ -88,31 +105,40 @@ try {
       $status.Text = 'Connecting to WMS...'
       [System.Windows.Forms.Application]::DoEvents()
 
-      $server = 'https://wms.logoff.pro'
-      # FIX: share the background agent's UTF-8 login path for Cyrillic accounts such as Sklad.
-      $script:setupConfig = @{ server = $server; login = $login.Text.Trim(); password = $password.Text }
+      $server = if ($script:savedConfig) { $script:savedConfig.server } else { 'https://wms.logoff.pro' }
+      $script:setupConfig = @{server=$server;login=$login.Text.Trim();password=$password.Text}
       $script:token = $null
-      $isNiimbot = $model.SelectedItem -eq 'NIIMBOT B1'
-      $width = if ($isNiimbot) { 50 } else { 58 }
-      $height = if ($isNiimbot) { 30 } else { 40 }
-      $stationBody = @{
-        name = $name.Text.Trim(); printerName = [string]$printer.SelectedItem
-        printerModel = [string]$model.SelectedItem; labelWidthMm = $width; labelHeightMm = $height
+      if ($script:savedConfig) {
+        $cfg = $script:savedConfig
+        $cfg.login = $login.Text.Trim()
+        $cfg.password = $password.Text
+      } else {
+        $isNiimbot = $model.SelectedItem -eq 'NIIMBOT B1'
+        $width = if ($isNiimbot) { 50 } else { 58 }
+        $height = if ($isNiimbot) { 30 } else { 40 }
+        $station = Invoke-WmsApi Post '/marketplace-connections/fbs/print-stations' @{
+          name=$name.Text.Trim();printerName=[string]$printer.SelectedItem
+          printerModel=[string]$model.SelectedItem;labelWidthMm=$width;labelHeightMm=$height
+        }
+        $cfg = [pscustomobject]@{server=$server;login=$login.Text.Trim();password=$password.Text;stationId=$station.id;stationName=$station.name;printerName=$station.printerName;labelWidthMm=$width;labelHeightMm=$height}
+        # Keep the returned ID even if local installation fails and the operator retries.
+        $script:savedConfig = $cfg
+        $name.ReadOnly = $true
       }
-      $station = Invoke-WmsApi Post '/marketplace-connections/fbs/print-stations' $stationBody
-
-      @{
-        server = $server; login = $login.Text.Trim(); password = $password.Text
-        stationId = $station.id; stationName = $station.name; printerName = $station.printerName
-        labelWidthMm = $width; labelHeightMm = $height
-      } | ConvertTo-Json | Set-Content -LiteralPath "$PSScriptRoot\config.json" -Encoding UTF8
-
-      $agentPath = Join-Path $PSScriptRoot 'LOGOFF-FBS-Print-Agent.ps1'
-      $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$agentPath`""
-      $trigger = New-ScheduledTaskTrigger -AtLogOn
-      $settings = New-ScheduledTaskSettingsSet -RestartCount 100 -RestartInterval (New-TimeSpan -Minutes 1)
-      Register-ScheduledTask -TaskName 'LOGOFF FBS Print Agent' -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
-      Start-ScheduledTask -TaskName 'LOGOFF FBS Print Agent'
+      $agentHome = Install-AgentFiles $PSScriptRoot $cfg
+      $status.Text = 'Agent started. Checking WMS connection...'
+      [System.Windows.Forms.Application]::DoEvents()
+      $online = $false
+      for ($i=0; $i -lt 15; $i++) {
+        $statePath = Join-Path $agentHome 'status.json'
+        if (Test-Path -LiteralPath $statePath) {
+          $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($state.stage -eq 'connected' -and ([DateTime]::UtcNow - [DateTime]::Parse($state.updatedAt)).TotalSeconds -lt 35) { $online = $true; break }
+        }
+        Start-Sleep -Seconds 1
+        [System.Windows.Forms.Application]::DoEvents()
+      }
+      if (-not $online) { throw "Agent installed and will retry automatically. Check connection and printer. Diagnostics: $agentHome\status.json and agent.log. Do not create a new station." }
 
       $status.Text = 'Ready. The print station is connected.'
       $button.Text = 'READY'
