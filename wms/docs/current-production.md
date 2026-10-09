@@ -1,3 +1,18 @@
+# Published PR527 / 2026-10-09 - unified Ozon supply binding
+
+[Workflow](ozon-assembly-supply-link.md), [release record](releases/ozon-supply-20261009.json).
+API `sha256:ac9b9eafc1e7885df9feab152486b9e8854664a5d9436c8cb0d8aaae3f37d3af`; web `sha256:857127eee62fb1c3b187751bd12d38d00d528eae8339ab43bcf97934d2fc4636`.
+Baseline `2026-10-09-ozon-supply`; sourceParityVerified=false.
+Existing Ozon order binding, destination/barcode reconciliation, verified physical cargo submission,
+durable per-supply delivery claims and frozen packing. Unknown outcomes never auto-retry.
+Two nullable OzonFboShipment columns and unique externalOrderKey. Existing flags, APK221 and print agent preserved.
+API3240/web411 passed; 143/2 skipped, dedicated KIZ DB suite excluded. Separately 41 PostgreSQL tests passed.
+TypeScript, actual bundled-browser workflow, runtime allowlist, live health/hashes and read-only assembly view passed.
+Real Ozon read-only check: order133455152 has 239 units/8 destinations vs customer file393/11.
+No actual cargo write or label printing was performed. Reconcile quantities before the first real send.
+Sold WMS and warehouse business records unchanged. GitHub checks were not reported for PR527.
+Rollback: logoff-api:before-ozon-supply-20261009, logoff-web:before-ozon-supply-20261009; retain additive fields.
+
 # Опубликовано PR525 / 09.10.2026 — быстрые окна онлайн-выполнения
 
 [Сценарий](online-window-performance.md), [запись выпуска](releases/online-window-20261009.json).

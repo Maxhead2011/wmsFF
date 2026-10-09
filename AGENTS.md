@@ -185,3 +185,5 @@ Latest verified PR520: baseline 2026-10-09-ozon-entry. Customer workbook mode is
 Latest verified PR523: baseline2026-10-09-receipt-admin; receipt barcode review APK221 and scoped multi-warehouse administrator FBO access. Only our LOGOFF deployment; sold FFULHAB server/config/APK never touched. Source parity false. See current-production.md.
 
 Latest verified PR525: baseline2026-10-09-online-window; compact browser FBO history, visible-window polling, parallel FBS catalogue. Existing flags, APK221, Ozon directions, printing and sold WMS preserved; source parity false. See current-production.md.
+
+Latest verified PR527: baseline 2026-10-09-ozon-supply. Unified Ozon order binding and verified cargo delivery; additive shipment fields. PR525 retained; APK221/flags/print agent/sold WMS unchanged. Source parity false.
