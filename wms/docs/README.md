@@ -1,3 +1,5 @@
+Current verified release: PR537, print agent **2026.10.09.2**. [Production](current-production.md), [evidence](releases/print-agent-ack-conflict-20261009.json). Only agent download changed.
+
 LOGOFF223 / PR535: [found-KIZ route](kiz-found-tsd-route.md); `KizFoundRouteTest` verifies actual Retrofit paths for all five actions.
 
 Current verified base: **PR533**, `2026-10-09-ozon-multiple`. [Production](current-production.md).
