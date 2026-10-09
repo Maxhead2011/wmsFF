@@ -2021,7 +2021,7 @@ export function ClientRequestsPanel({
       ) : null}
 
       {!showArchive && canWrite && clients.status === 'ready' ? (
-        <><OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/><details className="client-request-excel-collapse"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
+        <>{!fboOnly && <OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/>}<details className="client-request-excel-collapse"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
           <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} outboundOnly={fboOnly} />
         </details></>
       ) : null}

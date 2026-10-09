@@ -1486,6 +1486,8 @@ export type ClientRequestTimeline = {
 };
 
 export type ClientRequestSummary = {
+  // FIX: marketplace identity for WB/Ozon list separation, including custom request titles.
+  ozonShipment?: { requestId: string } | null;
   id: string;
   number: number;
   clientId: string;

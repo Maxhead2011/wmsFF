@@ -102,7 +102,10 @@ export class ClientRequestsService {
 
     const requests = await this.prisma.clientRequest.findMany({
       where,
-      include: clientRequestInclude,
+      // FIX: expose the persisted marketplace relation without loading Ozon directions or orders.
+      include: { ...clientRequestInclude,
+        ...(process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? { ozonShipment: { select: { requestId: true } } } : {}),
+      },
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
     });
