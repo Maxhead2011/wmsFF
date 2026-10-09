@@ -55,6 +55,8 @@ import {
 import './ozon-fbo.css';
 import './ozon-fbo-actions.css';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import { ozonCustomerImportEnabled } from '../../lib/api';
+import { OzonCustomerWorkspace } from './OzonCustomerWorkspace';
 
 type Props = { session: AuthSession };
 type Notice = { type: 'success' | 'error'; text: string } | null;
@@ -71,6 +73,14 @@ const steps = [
 ];
 
 export function OzonFboPanel({ session }: Props) {
+  const [enabled,setEnabled]=useState<boolean|null>(null),[legacy,setLegacy]=useState(false);
+  useEffect(()=>{let live=true;void ozonCustomerImportEnabled(session.accessToken).then(r=>{if(live)setEnabled(r.enabled);}).catch(()=>{if(live)setEnabled(false);});return()=>{live=false;};},[session.accessToken]);
+  if(enabled===null)return <p role="status">Загружаю режимы FBO Ozon…</p>;
+  if(!enabled)return <LegacyOzonFboPanel session={session}/>;
+  return <><div role="group" aria-label="Режим FBO Ozon" style={{display:'flex',gap:12,marginBottom:16}}><button type="button" aria-pressed={!legacy} onClick={()=>setLegacy(false)}>Файл клиента — единая сборка</button><button type="button" aria-pressed={legacy} onClick={()=>setLegacy(true)}>План через API Ozon</button></div>{legacy?<LegacyOzonFboPanel session={session}/>:<OzonCustomerWorkspace session={session}/>}</>;
+}
+
+export function LegacyOzonFboPanel({ session }: Props) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [overview, setOverview] = useState<{ connections: any[]; plans: OzonFboPlanSummary[] }>({ connections: [], plans: [] });

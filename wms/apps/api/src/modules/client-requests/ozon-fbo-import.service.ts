@@ -12,6 +12,19 @@ import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 @Injectable()
 export class OzonFboImportService {
   constructor(private readonly db: PrismaService, private readonly scopes: ClientScopeService) {}
+  // FIX: the Ozon screen lists the same assemblies it creates, within client and branch scope.
+  async list(clientId: string, user: AuthUser) {
+    if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
+    if (!clientId?.trim()) throw new BadRequestException('Выберите клиента.');
+    this.scopes.requireClientAccess(user, clientId, 'read');
+    const warehouseId = effectiveWarehouseId(user, 'read') ?? user.activeWarehouseId;
+    if (!warehouseId) throw new BadRequestException('Выберите филиал.');
+    const rows = await this.db.clientRequest.findMany({where:{clientId,warehouseId,ozonShipment:{isNot:null}},
+      orderBy:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
+        items:{select:{quantity:true}},ozonShipment:{select:{directions:true}},fboAssembly:{select:{phase:true}}}});
+    return rows.map(r=>({id:r.id,number:r.number,title:r.title,status:r.status,desiredDate:r.desiredDate,destinationCity:r.destinationCity,
+      quantity:r.items.reduce((s,i)=>s+i.quantity,0),directions:(r.ozonShipment!.directions as unknown[]).length,phase:r.fboAssembly?.phase??'NOT_STARTED'}));
+  }
   async preview(file: Express.Multer.File, dto: ImportOutboundRequestXlsxDto, user: AuthUser) {
     if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
     this.scopes.requireClientAccess(user, dto.clientId, 'write');

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -10,6 +10,7 @@ import { OzonFboImportService } from './ozon-fbo-import.service';
 export class OzonFboImportController {
   constructor(private readonly service: OzonFboImportService) {}
   @Get('capability') capability() { return { enabled: process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' }; }
+  @Get('requests') list(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.service.list(clientId,user); }
   @Post('preview') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   preview(@UploadedFile() file: Express.Multer.File, @Body() dto: ImportOutboundRequestXlsxDto, @CurrentUser() user: AuthUser) { return this.service.preview(file, dto, user); }
   @Post('commit') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
