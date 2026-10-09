@@ -957,3 +957,9 @@ baseline guard 8. Подпись APK совпадает с 212, health и пуб
 поведенческие тесты внутри намеренно изменяемого файла.
 
 Проданная WMS не обследовалась и не обновлялась. У неё отдельная база и конфигурация.
+# Published PR522 / 2026-10-09 — suspicious receipt barcode review
+
+Baseline `2026-10-09-receipt-review`, sourceParityVerified=false. API `sha256:4c503cd55442b51467dc23038d0ff7568c9f921875ca478ecf9fa918b98a9b72`; web `sha256:fa6f4af3634f85e7156348573e166354e5286e589a4c78a43c9b4ddf43f40c10`. LOGOFF APK221, WMS_RECEIPT_BARCODE_REVIEW_ENABLED=true only on our WMS. Prior Ozon release, other flags and sold WMS retained. Four reported 0610 scans were atomically held for review after a successful rollback dry-run; no duplicate receipt created. [Release record](releases/receipt-barcode-20261009.json).
+
+Validation: API3218/web411, Android239 per LOGOFF/FFULHAB, actual receipt runtime39, browser tests and public artifact hashes. API142/web2 skipped; dedicated unconfigured KIZ DB test excluded. Physical scanner test remains after installing APK221.
+
