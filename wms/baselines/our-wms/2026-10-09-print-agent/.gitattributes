@@ -1,0 +1,3 @@
+*.tar.gz -text -filter
+*.prisma -text
+*.zip -text -filter

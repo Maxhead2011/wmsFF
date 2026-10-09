@@ -50,4 +50,4 @@ production. Перед следующим выпуском повторно св
 Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, LOGOFF APK221. See [production](current-production.md) and [receipt review](receipt-barcode-review.md).
 
 
-Подготовлено обновление [постоянной станции печати](print-agent-lifecycle.md): 2026.10.09.1, только архив агента; сервер PR529 сохраняется.
+Опубликован PR531: [постоянная станция печати](print-agent-lifecycle.md), версия 2026.10.09.1. Актуальный baseline `2026-10-09-print-agent`; сервер PR529 и APK222 сохранены.

@@ -1,0 +1,47 @@
+{
+  "published": true,
+  "at": 1791542139.658508,
+  "pr": 531,
+  "web": "sha256:5ba62bbe07c2d30c0b5bf2399580ecd8233a86a04aae44ef4f452ffccac6f85c",
+  "webBase": "sha256:85ad285a25fb94d2874e229b54c274f8b41e13a49f0d8b2c0bd09565aa616078",
+  "api": "sha256:d2b82098fe83c40e6dd170150631b5962ef102139140b4cb241c1ec8a84dc195",
+  "packageSha256": "7320cf0156ea327885ce4343db7bab89c0ae90919cd9345f7e1781d1efe88489",
+  "changed": [
+    "downloads/LOGOFF-FBS-Print-Agent.zip"
+  ],
+  "apiAndOtherContainersUnchanged": true,
+  "apkAndConfigurationUnchanged": true,
+  "installedOnPrintingComputer": false,
+  "version": "2026.10.09.1",
+  "tests": {
+    "passed": true,
+    "agentPackage": 24,
+    "api": 3258,
+    "web": 412,
+    "apiSkipped": 138,
+    "webSkipped": 2,
+    "kizIntegrationExcluded": true,
+    "packageSha256": "7320cf0156ea327885ce4343db7bab89c0ae90919cd9345f7e1781d1efe88489",
+    "physicalPrinterTested": false,
+    "benchmark": {
+      "old": {
+        "p95Ms": 2.0955,
+        "medianMs": 1.2422,
+        "requests": 330,
+        "jobs": 110
+      },
+      "new": {
+        "p95Ms": 50.6954,
+        "medianMs": 39.902100000000004,
+        "requests": 330,
+        "jobs": 110
+      }
+    },
+    "sourceAgent": 26
+  },
+  "sourceParityVerified": false,
+  "rollbackWeb": "logoff-web:before-print-agent-lifecycle-20261009",
+  "physicalPrinterTested": false,
+  "serverTokenTtlHours": 8,
+  "sourceHead": "46e6fc898760770743ba8dbd537e9ca736b5ee22"
+}
