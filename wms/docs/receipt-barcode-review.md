@@ -6,7 +6,9 @@ Based on PR521 (Ozon customer entry): API `0d28742818119992b0139e661f5c8b2cde734
 
 Release scripts: `receipt-barcode-api-runtime.cjs`, `receipt-barcode-web-runtime.cjs`, `releases/receipt-barcode-20261009/{stage,publish}.py`. Verify exact hashes, APK certificate, previous flags and other containers. The new flag activates with the verified API, then web/APK follow under release locks. Failed publication restores API/web/flag. This supersedes the preliminary publication order below. Historical records require a separate rollback dry-run before application.
 
-Статус: реализация в `fix/receipt-suspicious-barcode-review`, для PR в `feature/wb-print-check`. Не опубликовано. Production-флаги и остатки этой работой не изменены.
+Статус: опубликовано PR522. LOGOFF APK221, флаг включён только нашей WMS. Четыре исторические позиции перенесены в разбор после успешного dry-run с откатом.
+
+Проверка действующих карточек выявила дополнительное ограничение ФБО для администраторов с несколькими складами. Исправление `fbo-problems-warehouse.ts` разрешает только сохранённый активный филиал с существующими правами чтения и записи. Другие филиалы, неактивные/демо-пользователи и обычные сотрудники отклоняются. При выключенном флаге действует прежнее правило одного склада. Тест на прежнем runtime падает, на кандидате проходит; read-only проверка карточек Сони, Элькапоне, Дмитрия и собственников успешна.
 
 ## Поведение
 

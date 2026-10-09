@@ -54,3 +54,5 @@ production. Перед следующим выпуском повторно св
 
 Операционные расхождения сохранённых инструкций, маршрутов ТСД и остатков WB
 проверяются отдельно: обновление документации не изменяет остатки и заявки.
+Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, LOGOFF APK221. See [production](current-production.md) and [receipt review](receipt-barcode-review.md).
+

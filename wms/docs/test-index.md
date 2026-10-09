@@ -170,3 +170,5 @@ API: `receipt-barcode-review.spec.ts`, `receipt-barcode-workflow.spec.ts`, `rece
 Web: `workspaces.admin-problems.spec.ts`, `test/receipt-barcode-browser.cjs` (mock HTTP, реальный headless Edge).
 Android: `ReceiptBarcodeRescanTest`, `ReceiptCloseSyncTest`, LOGOFF и ФФУЛЛ-ХАБ.
 Общий прогон: API 3204 passed / 141 skipped, web 408 passed / 2 skipped, Android по 238 passed в двух flavor. PostgreSQL integration не подтверждён: тестовая БД отсутствует; старый kiz-duplicate.integration.spec.ts исключён из повторного общего прогона из-за ошибки создания клиента без URL.
+Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; scoped administrator FBO access `fbo-problems-admin-access.spec.ts`; actual runtime/browser tests `scripts/tests/receipt-*.cjs`. Live role checks run in a READ ONLY transaction (`releases/receipt-barcode-20261009/smoke-admin.cjs`).
+
