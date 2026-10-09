@@ -1,3 +1,25 @@
+export type ReceiptBarcodeProblem = {
+ id:string;deviceId:string;status:string;createdAt:string;reviewedAt:string|null;
+ payload:Record<string,string>;client:{id:string;name:string;code:string}|null;
+ reviewedBy:{name:string}|null;resolutionMessage:string|null;reviewComment:string|null;
+};
+export const fetchReceiptBarcodeSummary=(token:string)=>request<{pending:number}>('/tsd/receipt-barcode-review/summary',{accessToken:token});
+export const fetchReceiptBarcodeProblems=(token:string)=>request<{pending:number;items:ReceiptBarcodeProblem[]}>('/tsd/receipt-barcode-review',{accessToken:token});
+export const resolveReceiptBarcodeProblem=(token:string,id:string,body:{action:'CONFIRM'|'CORRECT'|'REJECT';barcode?:string;comment:string})=>request<{message:string}>(`/tsd/receipt-barcode-review/${id}/resolve`,{accessToken:token,method:'POST',body});
+export type FboRecoveryInput = { action: 'CLOSE_PICK'|'ADD_BOXES'|'PACK_UNITS'|'SPLIT_BOXES'|'CONFIRM_BOXES'|'FINISH'|'REVERSE_WRITEOFF'; reason:string; physicalConfirmed:boolean; boxCodes?:string[]; unitIds?:string[]; targetBoxCode?:string; movementId?:string };
+export type FboRecoveryRequest = { id:string; number:number; title:string; status:string; warehouse?:{name:string} };
+export type FboRecoveryDetails = { request:FboRecoveryRequest; phase:string; pendingWhole:string[]; units:{id:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;state:string;wholeBox:boolean}[]; boxes:{boxCode:string;wholeBox:boolean;quantity:number;closedAt:string|null;confirmedAt:string|null;mismatches:string[]}[]; movements:{id:string;boxId:string|null;skuId:string;createdAt:string;comment:string|null}[] };
+export type FboRecoveryPreview = {token:string;summary:{phase:string;action:string;affectedBoxes:string[];units:{id:string;barcode:string;kiz:string|null;source:string;target:string|null}[];picked:number;packed:number;availableStockChange:number;packingStockChange:number;warning:string|null}};
+export type FboPickReportRow = {box:string;pallet:string;worker:string;at:string;mode:string;quantity:number;state:string;target:string};
+export type FboPickReportFilter = {worker?:string;pallet?:string;from?:string;to?:string;state?:string};
+export const fetchFboRecoveryRequests=(token:string,search:string)=>request<FboRecoveryRequest[]>(withQuery('/administration/fbo-problems',{search}),{accessToken:token});
+export const fetchFboRecoveryCapabilities=(token:string)=>request<{enabled:boolean}>('/administration/fbo-problems/capabilities',{accessToken:token});
+export const fetchFboRecoveryDetails=(token:string,id:string)=>request<FboRecoveryDetails>(`/administration/fbo-problems/${id}`,{accessToken:token});
+export const previewFboRecovery=(token:string,id:string,body:FboRecoveryInput)=>request<FboRecoveryPreview>(`/administration/fbo-problems/${id}/preview`,{accessToken:token,method:'POST',body});
+export const applyFboRecovery=(token:string,id:string,previewToken:string)=>request<{applied:boolean}>(`/administration/fbo-problems/${id}/apply`,{accessToken:token,method:'POST',body:{token:previewToken}});
+export const fetchFboPickReport=(token:string,id:string,filter:FboPickReportFilter)=>request<FboPickReportRow[]>(withQuery(`/administration/fbo-problems/${id}/report`,filter),{accessToken:token});
+export const downloadFboPickReport=(token:string,id:string,filter:FboPickReportFilter)=>requestBlob(withQuery(`/administration/fbo-problems/${id}/report.xlsx`,filter),token);
+export const downloadFboRecoveryDocument=(token:string,id:string,kind:'products'|'packages')=>requestBlob(`/administration/fbo-problems/${id}/files/${kind}`,token);
 import {sharedRead} from './shared-read';
 export type AuthUser = {
   id: string;
@@ -8754,6 +8776,13 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
   );
 }
 
+export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
+export type OzonCustomerRequest={id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export function fetchOzonCustomerRequests(accessToken:string,clientId:string){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId),{accessToken});}
+export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
+export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',outboundRequestXlsxForm(payload),accessToken);}
+export function createOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/commit',outboundRequestXlsxForm(payload),accessToken);}
+
 export async function commitOutboundRequestXlsx(accessToken: string, payload: OutboundRequestXlsxPayload) {
   return requestMultipart<CommitOutboundRequestXlsxResult>(
     '/client-requests/outbound-xlsx/commit',
@@ -11093,6 +11122,8 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 
 export type FboPlan = {
   pickedUnitsCount?:number;
+  marketplace?:string;
+  directions?:Array<{name:string;needed:number;packed:number;items:Array<{skuId:string;barcode:string;quantity:number;packed:number}>}>;
   pendingPlacementQuantity?:number;
   number?:number; observedAt?:string;
   pickedUnits?:Array<{id:string;requestItemId:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;wholeBox:boolean;state:string;pickedAt:string;packedAt:string|null;pickedBy:string|null;packedBy:string|null}>;
@@ -11100,10 +11131,10 @@ export type FboPlan = {
   compositionChanged:boolean; wholeBoxes:string[];
   lines:Array<{id:string;skuId:string;barcode:string;name:string;article:string|null;size:string|null;requiresKiz:boolean;needed:number;picked:number;packed:number;remaining:number;pendingPlacementQuantity?:number}>;
   route:Array<{boxCode:string;pallet:string;zone:string;wholeBox:boolean;recount:boolean;tasks:Array<{skuId:string;barcode:string;name:string;quantity:number;requiresKiz:boolean}>}>;
-  boxes:Array<{code:string;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
+  boxes:Array<{code:string;direction?:string|null;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
 };
 export async function fetchFboHistory(accessToken:string,id:string,offset:number) {return request<{pickedUnits:NonNullable<FboPlan['pickedUnits']>;total:number;offset:number}>(`/tsd/requests/${id}/fbo?view=history&offset=${offset}`,{accessToken});}
-export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string};
+export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string;direction?:string};
 export async function fetchFboPlan(accessToken:string,id:string) { const load=()=>request<FboPlan>(`/tsd/requests/${id}/fbo${import.meta.env.VITE_MENU_READS_ENABLED==='true'?'?view=summary':''}`,{accessToken});return import.meta.env.VITE_MENU_READS_ENABLED==='true'?sharedRead(JSON.stringify([accessToken,id,'fbo']),load):load(); }
 export async function actFbo(accessToken:string,id:string,body:FboAction) {
   const response=await fetch(`${API_BASE_URL}/tsd/requests/${id}/fbo/actions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${accessToken}`},body:JSON.stringify(body)});

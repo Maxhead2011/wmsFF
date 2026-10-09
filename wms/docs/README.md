@@ -1,3 +1,9 @@
+Current verified release: PR523, `2026-10-09-receipt-admin`; LOGOFF APK221. [Production](current-production.md). Sold FFULHAB is out of scope.
+
+Актуальная база: **PR520**, `2026-10-09-ozon-entry`; импорт файла клиента доступен прямо в FBO Ozon. APK220 без изменений. [Паспорт](current-production.md).
+
+Актуальный выпуск: **PR516**, [ФБО Ozon](ozon-fbo-customer-file.md), APK220. Проверенная база: `2026-10-09-ozon-customer`; [паспорт](current-production.md).
+
 # Latest release: PR514 / Receipt and online reads
 
 See [published state](current-production.md) and [verification](releases/menu-reads-20261009.json).
@@ -23,6 +29,10 @@ LOGOFF ТСД219 опубликован. Проданная ВМС не обно
 production. Перед следующим выпуском повторно сверить живые image ID;
 не заменять действующий runtime полной сборкой исходников.
 
+## Подготовлено к проверке
+
+- [Подозрительные ШК приёмки и доступ ADMIN к проблемам ФБО](receipt-barcode-review.md) — реализовано, ещё не опубликовано.
+
 ## Последние изменения и рабочие сценарии
 
 | Область | Документ | Что учитывать |
@@ -46,3 +56,5 @@ production. Перед следующим выпуском повторно св
 
 Операционные расхождения сохранённых инструкций, маршрутов ТСД и остатков WB
 проверяются отдельно: обновление документации не изменяет остатки и заявки.
+Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, LOGOFF APK221. See [production](current-production.md) and [receipt review](receipt-barcode-review.md).
+

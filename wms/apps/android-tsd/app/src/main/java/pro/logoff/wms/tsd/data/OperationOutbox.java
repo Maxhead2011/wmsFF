@@ -59,7 +59,13 @@ public class OperationOutbox {
         String receiptMode,
         String comment
     ) {
+        return enqueueReceipt(clientId, barcode, kiz, boxCode, quantity, status, sourceDocument, receiptMode, comment, java.util.Collections.emptyMap());
+    }
+
+    public PendingOperation enqueueReceipt(String clientId, String barcode, String kiz, String boxCode, int quantity,
+        String status, String sourceDocument, String receiptMode, String comment, Map<String, String> evidence) {
         Map<String, String> payload = compactPayload();
+        put(payload, "secondBarcodeScan", evidence.get("secondBarcodeScan"));
         put(payload, "clientId", clientId);
         put(payload, "barcode", barcode);
         put(payload, "kiz", kiz);

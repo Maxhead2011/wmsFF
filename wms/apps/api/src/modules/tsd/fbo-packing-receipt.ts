@@ -17,6 +17,8 @@ export async function withPackingReceipt(service:any, ack:any, user:any) {
 // FIX: absolute state from one snapshot, never client-side increments or a route rebuild.
 export async function packingReceipt(db: Prisma.TransactionClient, request: any, action: string) {
   if (process.env.WMS_FBO_COMPACT_PACKING_ENABLED !== 'true' || !actions.has(action)) return undefined;
+  // FIX: older compact receipts omit direction quotas; refresh the authoritative Ozon plan instead.
+  if (process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' && await db.ozonFboShipment.findUnique({where:{requestId:request.id}})) return undefined;
   const id = request.id;
   const [assembly] = await db.$queryRaw<any[]>(Prisma.sql`SELECT * FROM "FboAssembly" WHERE "requestId"=${id}`);
   if (!assembly || !['PICKING', 'PACKING'].includes(assembly.phase)) return undefined;

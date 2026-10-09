@@ -8,7 +8,7 @@ function build(input,output){
  function replace(s,a,b){if(s.split(a).length!==2)throw Error('unique anchor '+a.slice(0,100));return s.replace(a,b);}
  let main=files['assets/'+entry];main=replace(main,'z(`/tsd/requests/${n}`,{accessToken:t})','z(`/tsd/requests/${n}?view=summary`,{accessToken:t})');main=replace(main,'z(`/tsd/requests/${n}/fbo`,{accessToken:t})','z(`/tsd/requests/${n}/fbo?view=summary`,{accessToken:t})');
  main+='\nexport function __onlineHistory(t,id,offset){return z(`/tsd/requests/${id}/fbo?view=history&offset=${offset}`,{accessToken:t});}\n';cache['assets/'+entry]=main;
- const chunk='assets/menu-reads-20261009-29.js';let s=files[chunk];if(!s)throw Error('pinned request chunk absent');
+ const chunk='assets/'+fs.readdirSync(path.join(input,'assets')).find(n=>files['assets/'+n]?.includes('function LegacyWbBi({initial:s,accessToken:t,userId:d')); let s=files[chunk];if(!s)throw Error('pinned request chunk absent');
  const ast=ts.createSourceFile('runtime.js',s,ts.ScriptTarget.Latest,true);const progress=ast.statements.find(n=>ts.isFunctionDeclaration(n)&&n.name?.text==='Ii');let history;
  function visit(n){if(ts.isCallExpression(n)&&n.arguments[0]?.text==='details'&&n.getText(ast).includes('fbo-progress-history'))history=n.getText(ast);ts.forEachChild(n,visit);}visit(progress);if(!history)throw Error('history anchor');
  s=replace(s,history,'e.jsx(__OnlineWindow.FboHistory,{plan:s,accessToken:$historyToken})');
@@ -23,6 +23,11 @@ function build(input,output){
  const historySource=fs.readFileSync(path.join(__dirname,'../apps/web/src/components/client-requests/FboHistory.tsx'),'utf8').replace(/^import .*;\r?\n/gm,'');
  const polling=fs.readFileSync(path.join(__dirname,'../apps/web/src/lib/visiblePolling.ts'),'utf8');
  s+='\nimport {__onlineHistory as fetchFboHistory} from "./'+entry+'";\n'+esbuild.buildSync({stdin:{contents:'const React=o;const {useEffect,useState}=o;\n'+historySource+'\n'+polling,loader:'tsx'},define:{'import.meta.env.VITE_MENU_READS_ENABLED':'"true"'},bundle:true,write:false,format:'iife',globalName:'__OnlineWindow',minify:true,jsxFactory:'React.createElement',jsxFragment:'React.Fragment'}).outputFiles[0].text;
+ // FIX: keep Ozon directions/import intact; rebuild only its source-backed panel.
+ const read=n=>fs.readFileSync(path.join(__dirname,'../apps/web/src/',n),'utf8').replace(/^import .*;\r?\n/gm,'');
+ const ozonCode='const React=o;const {useState,useEffect,useRef}=o;const FboProgress=Ii,startFboPolling=Ci,fetchFboPlan=$a,actFbo=Oa,downloadFboWbFile=Ma,startVisiblePolling=__OnlineWindow.startVisiblePolling;\n'+read('lib/assemblyProductDisplay.ts')+read('components/client-requests/FboTwoStagePanel.tsx');
+ s+='\n'+esbuild.buildSync({stdin:{contents:ozonCode,loader:'tsx'},define:{'import.meta.env.VITE_MENU_READS_ENABLED':'"true"'},bundle:true,write:false,format:'iife',globalName:'__OnlinePanel',minify:true,jsxFactory:'React.createElement',jsxFragment:'React.Fragment'}).outputFiles[0].text;
+ s=replace(s,'__Ozon.FboTwoStagePanel:LegacyWbBi','__OnlinePanel.FboTwoStagePanel:LegacyWbBi');
  cache[chunk]=s;
  const result=repair(files,entry,entry,'online-window-20261009');for(const[n,data]of Object.entries(result)){const p=path.join(output,n);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,data);}return Object.keys(result);
 }

@@ -14,6 +14,8 @@ import { TsdReceiptService } from './tsd-receipt.service';
 import { TsdReviewService } from './tsd-review.service';
 import { TsdSyncController } from './tsd-sync.controller';
 import { TsdSyncService } from './tsd-sync.service';
+import { ReceiptBarcodeReviewService } from './receipt-barcode-review.service';
+import { ReceiptBarcodeReviewController } from './receipt-barcode-review.controller';
 import { TsdAuditInterceptor } from './tsd-audit.interceptor';
 import { FboTwoStageService } from './fbo-two-stage.service';
 import { FboTwoStageController } from './fbo-two-stage.controller';
@@ -21,8 +23,9 @@ import { ClientRequestMarketplaceFilesService } from '../client-requests/client-
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule, InventoryModule],
-  controllers: [TsdDeviceController, TsdSyncController, FboTwoStageController],
+  controllers: [TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
   providers: [
+    ReceiptBarcodeReviewService,
     FboTwoStageService,
     ClientRequestMarketplaceFilesService,
     TsdAssemblyService,

@@ -2,7 +2,7 @@
 const fs=require('fs'),path=require('path'),assert=require('assert/strict');
 const {chromium}=require('C:/Users/La_pa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
 const root=process.argv[2],entry=/src="\/assets\/([^"/]+\.js)"/.exec(fs.readFileSync(path.join(root,'index.html'),'utf8'))[1];
-const chunk=fs.readdirSync(path.join(root,'assets')).find(n=>{const s=fs.readFileSync(path.join(root,'assets',n),'utf8');return s.includes('function Bi({initial:s,accessToken:t,userId:d')});
+const chunk=fs.readdirSync(path.join(root,'assets')).find(n=>{const s=fs.readFileSync(path.join(root,'assets',n),'utf8');return s.includes('function LegacyWbBi({initial:s,accessToken:t,userId:d')||s.includes('function Bi({initial:s,accessToken:t,userId:d')});
 const plan={requestId:'r',title:'Fixture',phase:'PACKING',needed:251,picked:251,packed:0,looseRemaining:251,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[],observedAt:'2026-10-09T07:00:00Z',pickedUnits:Array.from({length:251},(_,i)=>({id:String(i),requestItemId:'item',barcode:'fixture',sourceBoxCode:'source',pickedAt:'2026-10-09T07:00:00Z',state:'PICKED'}))};
 const summary={...plan,pickedUnits:[],pickedUnitsCount:251};
 (async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{const page=await browser.newPage();const errors=[];let reads=0,histories=0,failHistory=false;page.on('pageerror',e=>errors.push(e.message));

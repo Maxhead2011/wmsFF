@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { assertDirectionCapacity, directionProgress, type OzonDirection } from './ozon-fbo-directions';
 import { createHash, randomUUID } from 'node:crypto';
 import { FbsTsdAssembly, Prisma, StockStatus } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -80,6 +81,7 @@ export class FboTwoStageService {
             throw new ConflictException('Сначала завершите проверку балансов волны.');
     }
     private async snapshot(tx: Prisma.TransactionClient, r: Request) {
+        const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
         // FIX: expose persisted physical progress to the web monitor, including who scanned each unit.
@@ -141,6 +143,8 @@ export class FboTwoStageService {
             if (!tasks.length)
                 continue;
             const decision = wholeBoxDecision(box.balances, Object.fromEntries(tasks.map(t => [t.skuId, t.quantity])), box.productMarks.map(m => ({ ...m, identity: identity(m.value) })), tasks.some(t => t.requiresKiz));
+            // FIX: cross-dock loose units can be split across destinations during packing.
+            if (shipment) decision.allowed = false;
             route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
                 zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount });
         }
@@ -158,6 +162,8 @@ export class FboTwoStageService {
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
+            marketplace: shipment ? 'OZON' : 'WILDBERRIES',
+            directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             lines: lines.map(l => { const pending = Math.min(l.remaining, waitingBySku.get(l.skuId) ?? 0); waitingBySku.set(l.skuId, (waitingBySku.get(l.skuId) ?? 0) - pending); return { ...l, pendingPlacementQuantity: pending }; }),
             route, pendingPlacementQuantity,
             observedAt: new Date().toISOString(),
@@ -168,7 +174,7 @@ export class FboTwoStageService {
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
-            boxes: (assembly?.boxes ?? []).map(b => ({ code: b.boxCode, wholeBox: b.wholeBox, closed: !!b.closedAt, confirmed: !!b.confirmedAt,
+            boxes: (assembly?.boxes ?? []).map(b => ({ code: b.boxCode, direction: b.direction, wholeBox: b.wholeBox, closed: !!b.closedAt, confirmed: !!b.confirmedAt,
                 quantity: units.filter(u => u.targetBoxId === b.boxId && u.state === 'PACKED').length })),
             shortage: Object.values(demand).reduce((s, n) => s + n, 0), compositionChanged: !!assembly && assembly.compositionHash !== composition(r) };
     }
@@ -182,8 +188,11 @@ export class FboTwoStageService {
             const r = await this.load(tx, id, user, 'write');
             this.requireFbo(r);
             // FIX: persisted JSON can change property order after a terminal restart.
+            const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: id } }) : null;
+            const directions = shipment?.directions as OzonDirection[] | undefined;
             const key = `${id}:${dto.operationId}`, payloadHash = hash([
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
+                ...(directions ? [dto.direction ?? null] : []),
             ]);
             const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
             if (previous) {
@@ -207,10 +216,14 @@ export class FboTwoStageService {
             if (a.compositionHash !== composition(r))
                 throw new ConflictException('Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.');
             const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
+            const directionBoxes = directions ? await tx.fboAssemblyBox.findMany({ where: { requestId: id } }) : [];
+            if (directions && ['SORTED', 'FINISH'].includes(dto.action) && directionProgress(directions, directionBoxes, units).some(d => d.items.some(i => i.packed !== i.quantity)))
+                throw new ConflictException('Не все направления упакованы в количестве из файла клиента.');
             const lines = remainingFboLines(r.items, units);
             const requirePhase = (phase: string) => { if (a!.phase !== phase)
                 throw new ConflictException('Этап изменился. Обновите заявку.'); };
             if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
+                if (directions && dto.action === 'PICK_BOX') throw new ConflictException('Для распределения по направлениям отбирайте товар поштучно.');
                 requirePhase('PICKING');
                 const source = await this.box(tx, r, dto.sourceBoxCode);
                 await this.requireIdleBox(tx, source.id, id, true);
@@ -286,10 +299,12 @@ export class FboTwoStageService {
             }
             else if (dto.action === 'OPEN_BOX') {
                 requirePhase('PACKING');
+                if (directions) assertDirectionCapacity(directions, directionBoxes, units, dto.direction, []);
                 const target = await this.target(tx, r, dto.targetBoxCode);
                 await this.requireIdleBox(tx, target.id, id);
                 const previousBox = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (previousBox) {
+                    if (directions && previousBox.direction !== dto.direction) throw new ConflictException('Короб уже закреплён за другим направлением.');
                     if (previousBox.requestId !== id || previousBox.closedAt || previousBox.wholeBox)
                         throw new ConflictException('Короб уже закрыт или принадлежит другой сборке.');
                 }
@@ -298,7 +313,7 @@ export class FboTwoStageService {
                         throw new ConflictException('Для упаковки нужен пустой короб.');
                     if (!units.some(u => !u.wholeBox && u.state === 'PICKED'))
                         throw new ConflictException('Все отдельные единицы уже вложены.');
-                    await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code } });
+                    await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code, ...(directions ? { direction: dto.direction } : {}) } });
                 }
             }
             else if (dto.action === 'PACK_UNIT') {
@@ -311,6 +326,7 @@ export class FboTwoStageService {
                 const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && u.barcode === dto.barcode && (mark ? u.markId === mark.id : !u.markId));
                 if (!unit)
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
+                if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);
                 const holding = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${id}` } });
                 const movement = await this.move(tx, r, unit.skuId, holding.id, target.id, 'PACKING', 'PACKING', 1, key, user);
                 if (mark) {
@@ -326,7 +342,8 @@ export class FboTwoStageService {
                 const picked = units.filter(u => u.wholeBox && u.sourceBoxId === box.id && u.state === 'PICKED');
                 if (!picked.length)
                     throw new ConflictException('Этот короб не отобран целиком или уже добавлен.');
-                await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: box.id, activeBoxId: box.id, boxCode: box.code, wholeBox: true, closedAt: new Date() } });
+                if (directions) assertDirectionCapacity(directions, directionBoxes, units, dto.direction, picked);
+                await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: box.id, activeBoxId: box.id, boxCode: box.code, wholeBox: true, closedAt: new Date(), ...(directions ? { direction: dto.direction } : {}) } });
                 await tx.fboAssemblyUnit.updateMany({ where: { id: { in: picked.map(u => u.id) } }, data: { state: 'PACKED', targetBoxId: box.id, targetBoxCode: box.code, packedAt: new Date(), packedByUserId: user.id } });
             }
             else if (dto.action === 'CANCEL_EMPTY_BOX') {
@@ -486,6 +503,7 @@ export class FboTwoStageService {
     }
     async wbFile(id: string, user: AuthUser) {
         const plan = await this.plan(id, user);
+        if (plan.marketplace === 'OZON') throw new BadRequestException('Это поставка Ozon. Файл WB для неё не формируется.');
         if (plan.phase !== 'COMPLETED')
             throw new ConflictException('Сначала подтвердите все короба поставки.');
         return this.files.getWbPackagingTemplate(id, user);

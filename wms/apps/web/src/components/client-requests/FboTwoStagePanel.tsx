@@ -17,6 +17,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   const panel=useRef<HTMLDivElement>(null);
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
   const [pallet,setPallet]=useState('');
+  const [direction,setDirection]=useState('');
   const [scanMode,setScanMode]=useState(false);
   const [refreshing,setRefreshing]=useState(false);
   const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
@@ -32,13 +33,13 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   const title=plan.phase==='CONTROL'?'Проверка всех коробов поставки':plan.phase==='PACKING'?'2. Упаковка поставки':'1. Отбор товара';
   async function command(action:string,extra:Partial<FboAction>={}) {
     if(inFlight.current || !canWrite) return;
-    const dto=pending??{action,operationId:crypto.randomUUID(),palletCode:pallet,...extra};inFlight.current=true;setBusy(true);setError('');setPending(dto);
+    const dto=pending??{action,operationId:crypto.randomUUID(),palletCode:pallet,direction:direction||undefined,...extra};inFlight.current=true;setBusy(true);setError('');setPending(dto);
     try {localStorage.setItem(storageKey,JSON.stringify(dto));const next=await actFbo(accessToken,plan.requestId,dto);setPlan(next);localStorage.removeItem(storageKey);setPending(null);setBarcode('');setCode('');
       if(!next.route.some(r=>r.boxCode===source))setSource('');
       if(!next.route.some(r=>r.pallet===pallet))setPallet('');
       if(!next.boxes.some(b=>b.code===target&&!b.closed) || next.phase!=='PACKING')setTarget('');
       if(dto.action==='OPEN_BOX')setTarget(dto.targetBoxCode??'');
-      if(dto.action==='FINISH')void download();
+      if(dto.action==='FINISH'&&next.marketplace!=='OZON')void download();
     }catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить операцию.');if((e as {rejected?:boolean}).rejected){localStorage.removeItem(storageKey);setPending(null);}}
     finally{inFlight.current=false;setBusy(false);setTimeout(()=>field.current?.focus(),0);}
   }
@@ -59,10 +60,12 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   return <div ref={panel} className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     {/* FIX: standard header enables retained la_panthera windows; reads never trap the user. */}
     <header className="online-execution-modal__header" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
-    <h2>FBO WB {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
+    <h2>FBO {plan.marketplace==='OZON'?'Ozon':'WB'} {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
     <div className="online-execution-modal__actions"><button type="button" className="icon-button" aria-label="Закрыть" title="Закрыть" disabled={busy&&!refreshing} onClick={onClose}>×</button></div>
     </header>
     <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>
+    {!!plan.directions?.length&&<section aria-label="Направления сборки"><h3>Единая сборка · направления</h3>{plan.directions.map(d=><details key={d.name}><summary>{d.name}: упаковано {d.packed} из {d.needed}</summary><ul>{d.items.map(i=><li key={i.skuId}>{plan.lines.find(l=>l.skuId===i.skuId)?.name} · {i.barcode}: {i.packed} из {i.quantity}</li>)}</ul></details>)}
+    {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     {/* FIX: accepted stock must not be presented as physically missing. */}
@@ -85,9 +88,9 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       {!!target&&plan.boxes.some(b=>b.code===target&&!b.quantity&&!b.closed)&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('CANCEL_EMPTY_BOX',{targetBoxCode:target})}>Отложить пустой короб</button>}
       {plan.wholeBoxes.length>0&&<p>Целые короба к добавлению: {plan.wholeBoxes.join(', ')}</p>}
       <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.packed!==plan.needed||plan.boxes.some(b=>!b.closed)||!canWrite} onClick={()=>void command('SORTED')}>Короба разобраны</button></>}
-    {['PACKING','CONTROL','COMPLETED'].includes(plan.phase)&&<ul>{plan.boxes.map(b=><li key={b.code}>{b.code} · {b.quantity} ед. · {b.confirmed?'Подтверждён':b.closed?'Закрыт':'Открыт'}</li>)}</ul>}
-    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.boxes.some(b=>!b.confirmed)||!canWrite} onClick={()=>void command('FINISH')}>Завершить проверку и сформировать файл WB</button></>}
-    {plan.phase==='COMPLETED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
+    {['PACKING','CONTROL','COMPLETED'].includes(plan.phase)&&<ul>{plan.boxes.map(b=><li key={b.code}>{b.code} {b.direction ? `· ${b.direction}` : ''} · {b.quantity} ед. · {b.confirmed?'Подтверждён':b.closed?'Закрыт':'Открыт'}</li>)}</ul>}
+    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.boxes.some(b=>!b.confirmed)||!canWrite} onClick={()=>void command('FINISH')}>{plan.marketplace==='OZON'?'Завершить проверку направлений':'Завершить проверку и сформировать файл WB'}</button></>}
+    {plan.phase==='COMPLETED'&&plan.marketplace!=='OZON'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
     <p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy} onClick={()=>void refresh()}>Обновить</button> <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy&&!refreshing} onClick={onClose}>Закрыть</button></p>
   </section></div>;
 }

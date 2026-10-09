@@ -25,14 +25,15 @@ final class FboScanState {
         return packing ? "PACKING".equals(phase)||"CONTROL".equals(phase)||"COMPLETED".equals(phase)
             : "NOT_STARTED".equals(phase)||"PICKING".equals(phase);
     }
+    String direction = "";
     String pallet = "", source = "", target = "", barcode = "";
     // FIX: navigation survives reopening; pending stock commands are stored independently.
     Map<String,String> checkpoint() {
         Map<String,String> p=new LinkedHashMap<>();p.put("palletCode",pallet);p.put("sourceBoxCode",source);
-        p.put("targetBoxCode",target);p.put("barcode",barcode);return p;
+        p.put("targetBoxCode",target);p.put("barcode",barcode);p.put("direction",direction);return p;
     }
     void restoreCheckpoint(Map<String,String> value) {
-        if(value==null)return;pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
+        if(value==null)return;direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
         target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");
     }
     private Map<String,String> pending;
@@ -41,6 +42,7 @@ final class FboScanState {
     Map<String,String> prepare(String action, String kiz, Integer confirmedQuantity) {
         if (pending != null) return new LinkedHashMap<>(pending);
         Map<String,String> p = new LinkedHashMap<>(); p.put("action",action); p.put("operationId",UUID.randomUUID().toString());
+        if (!direction.isEmpty()) p.put("direction",direction);
         if (!pallet.isEmpty()) p.put("palletCode",pallet);
         if (!source.isEmpty()) p.put("sourceBoxCode",source);
         if (!target.isEmpty()) p.put("targetBoxCode",target);
@@ -51,7 +53,7 @@ final class FboScanState {
     }
     void restore(Map<String,String> value) {
         pending = value == null ? null : new LinkedHashMap<>(value);
-        if(value!=null){pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");}
+        if(value!=null){direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");}
     }
     boolean scanLocation(TsdFboPlan plan,String code) {
         return scanLocation(plan.route,code);

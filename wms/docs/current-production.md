@@ -1,3 +1,46 @@
+# Published PR523 / 2026-10-09 - administrator branch access
+
+Baseline `2026-10-09-receipt-admin`, sourceParityVerified=false. API `sha256:70cd3860dc154f4bdd0077df3c3a7cc576a8393c13cc8f6c455221109399f8ac`; web `sha256:fa6f4af3634f85e7156348573e166354e5286e589a4c78a43c9b4ddf43f40c10` remains PR522. LOGOFF APK221 and all flags unchanged. Administrators use only their persisted active warehouse with existing read/write grants. Sold FFULHAB is untouched. [Release record](releases/receipt-admin-20261009.json).
+
+API3228 passed/142 skipped; the unconfigured KIZ DB suite remains excluded. Runtime regression fails before and passes after. Actual six ADMIN/OWNER cards were verified in READ ONLY transactions after publication. Four receipt issues remain pending, available stock excluded, no duplicate receipt. Rollback API `logoff-api:before-receipt-admin-20261009`.
+
+# Опубликовано PR520 / 09.10.2026 — импорт на экране FBO Ozon
+
+[Запись выпуска](releases/ozon-entry-20261009.json). API `sha256:0d28742818119992b0139e661f5c8b2cde7344a6d072d8187679849944b2507c`; web `sha256:7408d8f2984fee6864d8c50ed4021464bdc0cc45ae385c9252e80f86742445bf`.
+Baseline `2026-10-09-ozon-entry`, sourceParityVerified=false.
+FBO Ozon открывает «Файл клиента — единая сборка»: выбранный клиент, проверка файла,
+создание и список сборок с открытием выполнения. Старый формат остался в режиме
+«План через API Ozon». PR518 с нейтральным баннером сохранён.
+3177 API / 403 web теста прошли; 142/2 пропущены. TypeScript и браузер готового
+графа прошли: файл клиента, preview 393/11, создание/список, прежний режим.
+Серверная проверка списка read-only. Health и хеши проверены. GitHub checks
+для PR520 не запускались. APK220, конфигурация, схема и рабочие остатки не менялись.
+Откат: logoff-api:before-ozon-entry-20261009, logoff-web:before-ozon-entry-20261009.
+
+# Опубликовано PR518 / 09.10.2026 — нейтральный баннер FBO Ozon
+
+FFULLHAB WMS × OZON заменено на WMS × OZON. Web `sha256:e74c0dd9e1b91f5b8a78c18a89201a9df54bab8a19932bf92bb59b07dbc00f25`.
+Изменение поверх baseline 2026-10-09-ozon-customer: новая версия JS-графа,
+ровно одна замена текста; обратное преобразование ссылок подтвердило неизменность логики.
+API, APK220, конфигурация и другие контейнеры не изменены. Health и публичные хеши проверены.
+402 web-теста прошли, 2 пропущены. Откат: logoff-web:before-ozon-brand-20261009.
+[Точный состав выпуска](releases/ozon-brand-20261009.json). Source parity false;
+при следующем выпуске учитывать этот delta, не перезаписывать web старой сборкой.
+
+# Опубликовано PR516 / 09.10.2026 — ФБО Ozon по файлу клиента, APK220
+
+[Структура](ozon-fbo-customer-file.md), [запись выпуска](releases/ozon-customer-20261009.json).
+API `sha256:dc42c71e014a7e7e41b44070cb7caa4396e19af849c6d790b2514bfc38ea0935`; web `sha256:bac9c1dc69f9089e85bca922469bce5ab443d26f4df382799be8405a5c37db00`.
+Baseline `2026-10-09-ozon-customer`, sourceParityVerified=false.
+Одна сборка, общий поштучный отбор, квоты и короба по направлениям. Флаг
+WMS_OZON_FBO_IMPORT_ENABLED=true только нашей WMS; сохранены PR514 и прежние флаги.
+Добавлены OzonFboShipment и FboAssemblyBox.direction; серверная Prisma-схема сохранена
+в снимке. 3176 API / 401 web / 40 отдельных DB-проверок и Android прошли.
+Проверка реального файла в откатываемой транзакции: 393 единицы, 18 SKU,
+11 направлений, повторный импорт без дубля. Рабочая заявка не создавалась.
+Health, хеши и подпись APK220 проверены; физическая проверка на ТСД ещё необходима.
+Проданная WMS и физические остатки не изменялись. Установить APK220 поверх текущего.
+
 # Опубликовано PR514 / 09.10.2026 — приёмки и онлайн-выполнение
 
 [Изменения и ограничения](menu-read-performance.md), [запись выпуска](releases/menu-reads-20261009.json).
@@ -920,3 +963,9 @@ baseline guard 8. Подпись APK совпадает с 212, health и пуб
 поведенческие тесты внутри намеренно изменяемого файла.
 
 Проданная WMS не обследовалась и не обновлялась. У неё отдельная база и конфигурация.
+# Published PR522 / 2026-10-09 — suspicious receipt barcode review
+
+Baseline `2026-10-09-receipt-review`, sourceParityVerified=false. API `sha256:4c503cd55442b51467dc23038d0ff7568c9f921875ca478ecf9fa918b98a9b72`; web `sha256:fa6f4af3634f85e7156348573e166354e5286e589a4c78a43c9b4ddf43f40c10`. LOGOFF APK221, WMS_RECEIPT_BARCODE_REVIEW_ENABLED=true only on our WMS. Prior Ozon release, other flags and sold WMS retained. Four reported 0610 scans were atomically held for review after a successful rollback dry-run; no duplicate receipt created. [Release record](releases/receipt-barcode-20261009.json).
+
+Validation: API3218/web411, Android239 per LOGOFF/FFULHAB, actual receipt runtime39, browser tests and public artifact hashes. API142/web2 skipped; dedicated unconfigured KIZ DB test excluded. Physical scanner test remains after installing APK221.
+

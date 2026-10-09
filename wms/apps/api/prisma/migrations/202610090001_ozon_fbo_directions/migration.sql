@@ -1,0 +1,7 @@
+ALTER TABLE "FboAssemblyBox" ADD COLUMN "direction" TEXT;
+CREATE TABLE "OzonFboShipment" (
+  "requestId" TEXT PRIMARY KEY REFERENCES "ClientRequest"("id") ON DELETE RESTRICT,
+  "importKey" TEXT NOT NULL UNIQUE,
+  "directions" JSONB NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

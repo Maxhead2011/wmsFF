@@ -177,3 +177,9 @@ Latest verified PR509/510: baseline2026-10-08-receipt-stock-index. Persistent re
 Latest verified PR512: baseline2026-10-08-fbo-compact-packing; LOGOFF APK219. WMS_FBO_COMPACT_PACKING_ENABLED=true only on our WMS. Two API modules and APK download files; sold/FBS/picking unchanged. Source parity false. See current-production.md.
 
 Latest verified PR514: baseline2026-10-09-menu-reads; WMS_MENU_READS_ENABLED=true only on our WMS. Receipt summary and online FBS/FBO read optimization. APK219/print agent/sold unchanged; source parity false. See current-production.md.
+
+Latest verified PR516: baseline 2026-10-09-ozon-customer, APK220. WMS_OZON_FBO_IMPORT_ENABLED=true only our WMS. One assembly, multiple destination quotas; additive schema. PR514 retained; source parity false.
+
+Latest verified PR520: baseline 2026-10-09-ozon-entry. Customer workbook mode is the default in FBO Ozon, with branch-scoped assembly list. PR518 retained; API/web delta only, APK220/schema/flags unchanged. Source parity false.
+
+Latest verified PR523: baseline2026-10-09-receipt-admin; receipt barcode review APK221 and scoped multi-warehouse administrator FBO access. Only our LOGOFF deployment; sold FFULHAB server/config/APK never touched. Source parity false. See current-production.md.
