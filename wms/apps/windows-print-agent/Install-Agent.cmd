@@ -1,5 +1,6 @@
 @echo off
 chcp 65001 >nul
+rem FIX: setup reuses the saved station and installs a persistent per-user background task.
 powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0Setup-Agent.ps1"
 if errorlevel 1 (
   echo.

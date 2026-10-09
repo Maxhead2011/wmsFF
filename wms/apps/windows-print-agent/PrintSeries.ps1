@@ -48,18 +48,10 @@ function Print-LabelSeries($job, [string]$printer) {
 function Invoke-PrintSeriesCycle($cfg) {
   $prefix = "/print/series/stations/$($cfg.stationId)"
   Invoke-WmsApi Post "$prefix/heartbeat" @{} | Out-Null
-  # FIX: retry only the acknowledgement after a network failure, never the physical print.
-  if ($script:seriesResult) {
-    Invoke-WmsApi Post "$prefix/jobs/$($script:seriesResult.id)/result" $script:seriesResult.result | Out-Null
-    $script:seriesResult = $null
-  }
+  # FIX: recover pending results even after a process/Windows restart.
+  Sync-PrintResults 'series'
   $job = Invoke-WmsApi Post "$prefix/claim" @{}
   if (-not $job) { return $false }
-  $result = @{ success = $false; error = 'Printing interrupted; verify physical labels before reprinting.' }
-  try { Print-LabelSeries $job $cfg.printerName; $result = @{ success = $true } }
-  catch { $result.error = $_.Exception.Message }
-  $script:seriesResult = @{ id = $job.id; result = $result }
-  Invoke-WmsApi Post "$prefix/jobs/$($job.id)/result" $result | Out-Null
-  $script:seriesResult = $null
+  Invoke-DurablePrint $cfg 'series' $job.id { Print-LabelSeries $job $cfg.printerName }
   return $true
 }

@@ -1,10 +1,13 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),{spawnSync}=require('node:child_process'),path=require('node:path');
 // TEST: real GDI page rendering through a fake spooler; never touches a physical printer.
 test('series produces one spool document with ordered pages; ACK retry never reprints',()=> {
- const module=path.join(__dirname,'PrintSeries.ps1').replace(/'/g,"''");
+ const module=path.join(process.env.AGENT_TEST_ROOT||__dirname,'PrintSeries.ps1').replace(/'/g,"''");
  const ps=`$ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing
 . '${module}'
+. '${path.join(process.env.AGENT_TEST_ROOT||__dirname,'JobJournal.ps1').replace(/'/g,"''")}'
+$journal=Join-Path ([IO.Path]::GetTempPath()) ('logoff-series-test-'+[guid]::NewGuid().ToString('N'))
+Initialize-PrintJournal @{server='https://test.invalid';stationId='station'} $journal
 $script:prints=0; $script:pages=0
 function New-SeriesPrintDocument {
  $d=[pscustomobject]@{DocumentName='';PrinterSettings=[pscustomobject]@{PrinterName='';IsValid=$true;Copies=0};PrintController=$null;OriginAtMargins=$false;DefaultPageSettings=[Drawing.Printing.PageSettings]::new();Handler=$null}

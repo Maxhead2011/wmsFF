@@ -160,3 +160,7 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 `openclaw-candidate-smoke.cjs`; тесты рядом и `scripts/tests/test_deploy_openclaw.py`.
 Правило firewall ограничено внутренней сетью нашей WMS. При неизвестном результате
 задание не повторяется автоматически. В проданном окружении флаг не включать.
+
+## Постоянная станция Windows
+
+Setup-Agent → AgentLifecycle (сохранённый stationId, задача пользователя) → основной агент → JobJournal → существующие FBS/generic/series API. Рендер этикеток и PrintDocument серии сохранены. [Проверки и установка](print-agent-lifecycle.md).
