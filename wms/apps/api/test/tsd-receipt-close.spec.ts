@@ -222,3 +222,17 @@ describe('ТСД: серверное закрытие конкретного п�
     expect(f.recorded.size).toBe(0); expect(log.recordResult).not.toHaveBeenCalled();
   });
 });
+
+// TEST: a quarantined barcode is not a missing receipt and does not block subsequent boxes.
+it('closes a box with held barcode evidence without inventing a movement', async () => {
+  vi.stubEnv('WMS_RECEIPT_BARCODE_REVIEW_ENABLED', 'true');
+  try {
+    const f = fixture();
+    f.scans[1].status = 'NEEDS_REVIEW';
+    (f.scans[1].payload as any).barcodeReview = 'PENDING';
+    f.movements.pop();
+    expect(await f.close()).toMatchObject({ status: 'APPLIED' });
+    expect(f.tx.stockMovement.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { idempotencyKey: { in: ['scan-1'] } } }));
+    expect(f.movements).toHaveLength(1);
+  } finally { vi.unstubAllEnvs(); }
+});

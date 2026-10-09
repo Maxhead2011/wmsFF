@@ -82,6 +82,21 @@ public class ReceiptCloseSyncTest {
         assertFalse(batch.isConfirmed(outbox.findOperation(batch.closeKey)));
     }
 
+    // TEST: held scans leave the queue, but must not prevent the close on the next page.
+    @Test public void pendingReviewDoesNotStopNextReceiptPage() {
+        ReceiptCloseBatch batch = batch(70);
+        FakeOutbox outbox = new FakeOutbox(batch);
+        List<String> sent = new ArrayList<>();
+        new TsdSyncRunner(outbox, api(sent, "HOLD_SCANS", false), "device").syncReceiptBatch("auth", batch.closeKey);
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            assertTrue(batch.isConfirmed(outbox.findOperation(batch.closeKey)));
+            assertEquals(71, sent.size());
+        } else {
+            assertFalse(batch.isConfirmed(outbox.findOperation(batch.closeKey)));
+            assertEquals(50, sent.size());
+        }
+    }
+
     private WmsApi api(List<String> sent, String closeStatus, boolean offline) {
         return (WmsApi) Proxy.newProxyInstance(WmsApi.class.getClassLoader(), new Class<?>[]{WmsApi.class},
             (proxy, method, args) -> {
@@ -97,7 +112,7 @@ public class ReceiptCloseSyncTest {
                             if (close && closeStatus == null) continue;
                             TsdOperationResponse response = new TsdOperationResponse();
                             response.operationKey = operation.operationKey;
-                            response.status = close ? closeStatus : "APPLIED";
+                            response.status = "HOLD_SCANS".equals(closeStatus) ? (close ? "APPLIED" : "NEEDS_REVIEW") : close ? closeStatus : "APPLIED";
                             if (close && "REJECTED".equals(closeStatus)) response.message = "Короб относится к другому филиалу.";
                             replies.add(response);
                         }

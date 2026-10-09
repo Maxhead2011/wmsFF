@@ -6,6 +6,7 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import { TsdDeviceService } from './tsd-device.service';
 import { ScanOperationDto } from './dto/scan-operation.dto';
 import { TsdOperationResult } from './tsd-operation.types';
+import { isBarcodeReview, receiptBarcodeReviewEnabled } from './receipt-barcode-policy';
 
 @Injectable()
 export class TsdReceiptService {
@@ -110,7 +111,10 @@ export class TsdReceiptService {
           throw new BadRequestException('Закрытие содержит скан другого устройства, клиента, короба или приемки.');
         }
       }
-      if (scans.length !== keys.length || scans.some((scan) => scan.status !== 'ACCEPTED')) {
+      // FIX: quarantined barcode evidence is durable, but is not accepted stock.
+      const held = (scan: typeof scans[number]) => receiptBarcodeReviewEnabled() && isBarcodeReview(scan.payload)
+        && ['NEEDS_REVIEW', 'REJECTED'].includes(scan.status);
+      if (scans.length !== keys.length || scans.some((scan) => scan.status !== 'ACCEPTED' && !held(scan))) {
         return reply('RETRY', `Короб ${boxCode} ожидает подтверждения своих сканов. Не сканируйте товар повторно; проверьте очередь приемки.`);
       }
       // FIX: accepted historical scans are not proof for a later reuse of the
@@ -142,9 +146,10 @@ export class TsdReceiptService {
       if (scans.some((scan) => scan.createdAt < generation.createdAt)) {
         throw new BadRequestException('Сканы относятся к предыдущему заполнению короба. Старое закрытие не применено.');
       }
-      const quantities = new Map(scans.map((scan) => [scan.operationKey, Number(receiptJsonObject(scan.payload).quantity)]));
+      const acceptedKeys = scans.filter(scan => !held(scan)).map(scan => scan.operationKey);
+      const quantities = new Map(scans.filter(scan => !held(scan)).map((scan) => [scan.operationKey, Number(receiptJsonObject(scan.payload).quantity)]));
       const movements = await tx.stockMovement.findMany({
-        where: { idempotencyKey: { in: keys } },
+        where: { idempotencyKey: { in: acceptedKeys } },
         select: { idempotencyKey: true, clientId: true, warehouseId: true, boxId: true, sourceDocument: true, type: true, quantity: true },
       });
       for (const movement of movements) {
@@ -154,7 +159,7 @@ export class TsdReceiptService {
           throw new BadRequestException('Движение по скану не соответствует закрываемому коробу и филиалу.');
         }
       }
-      if (movements.length !== keys.length) {
+      if (movements.length !== acceptedKeys.length) {
         return reply('RETRY', `Приход короба ${boxCode} ещё не подтверждён полностью. Закрытие будет повторено без повторного прихода.`);
       }
       const updated = await tx.box.updateMany({ where: { id: box.id, status: 'receiving' }, data: { status: 'active' } });
@@ -163,7 +168,8 @@ export class TsdReceiptService {
         clientId, warehouseId, boxCode, sourceDocument,
         receiptOperationKeys: JSON.stringify(keys), status: 'active', actorUserId: user.id,
       };
-      const message = `Короб ${boxCode} закрыт и готов к размещению.`;
+      const heldCount = scans.filter(held).length;
+      const message = `Короб ${boxCode} закрыт и готов к размещению.` + (heldCount ? ` Позиций на разборе или отклонено: ${heldCount}; они не включены в принятый остаток.` : '');
       await tx.tsdOperation.create({ data: {
         deviceId: operation.deviceId, operationKey: operation.operationKey, operationType: 'receipt_close',
         payload: closedPayload, status: 'ACCEPTED', serverMessage: message,
@@ -219,6 +225,14 @@ export class TsdReceiptService {
       throw new ForbiddenException(
         `Короб ${boxCode} относится к другому филиалу или не имеет безопасной привязки.`,
       );
+    }
+    // FIX: a box with pending physical units is not empty enough to reuse.
+    if (existingBox && existingBox.status !== 'receiving' && receiptBarcodeReviewEnabled()) {
+      const pending = await this.prisma.tsdOperation.findFirst({where: {operationType: 'receipt_scan', status: 'NEEDS_REVIEW', AND: [
+        {payload: {path: ['boxCode'], equals: boxCode}}, {payload: {path: ['barcodeReview'], equals: 'PENDING'}},
+        {payload: {path: ['warehouseId'], equals: warehouseId}},
+      ]}, select: {id: true}});
+      if (pending) throw new BadRequestException('В коробе есть товар на проверке ШК. Сначала разберите «Проблемы приёмки».');
     }
     const reopenReceivingBox = existingBox?.status === 'receiving';
     const reuseEmptyBox = Boolean(

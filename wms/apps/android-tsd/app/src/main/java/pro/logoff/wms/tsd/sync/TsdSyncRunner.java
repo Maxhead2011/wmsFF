@@ -43,7 +43,9 @@ public class TsdSyncRunner {
             rejected += part.rejected;
             retried += part.retried;
             message = part.message;
-            if (part.rejected > 0 || part.retried > 0 || part.applied == 0) break;
+            // FIX: rejected/held scans leave the outbox; let the server decide if their box can close.
+            if (part.retried > 0 || (part.applied == 0 && part.rejected == 0)
+                || (!"logoff".equals(pro.logoff.wms.tsd.BuildConfig.FLAVOR) && part.rejected > 0)) break;
         }
         return new TsdSyncSummary(sent, applied, rejected, retried, message);
     }

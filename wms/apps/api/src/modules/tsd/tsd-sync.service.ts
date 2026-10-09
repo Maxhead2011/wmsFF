@@ -11,6 +11,8 @@ import { TsdOperationLogService } from './tsd-operation-log.service';
 import { TsdOperationResult } from './tsd-operation.types';
 import { TsdPayloadParser } from './tsd-payload.parser';
 import { TsdReceiptService } from './tsd-receipt.service';
+import { ReceiptBarcodeReviewService } from './receipt-barcode-review.service';
+import { receiptBarcodeReviewEnabled } from './receipt-barcode-policy';
 
 @Injectable()
 export class TsdSyncService {
@@ -25,6 +27,7 @@ export class TsdSyncService {
     private readonly operationLog: TsdOperationLogService,
     @Optional() private readonly assembly?: TsdAssemblyService,
     @Optional() private readonly receipts?: TsdReceiptService,
+    @Optional() private readonly barcodeReview?: ReceiptBarcodeReviewService,
   ) {}
 
   async acceptOperation(operation: ScanOperationDto, user: AuthUser) {
@@ -182,6 +185,13 @@ export class TsdSyncService {
       const receiptUsesBoxes = payload.receiptMode === 'BOXES' || !client.storesWithoutBoxes;
       if (receiptUsesBoxes && !payload.boxCode) {
         throw new BadRequestException('Для этого клиента приемка выполняется с коробами. Сначала отсканируйте номер короба.');
+      }
+
+      // FIX: short/invalid unknown scans cannot silently create stock, including old APKs.
+      if (receiptBarcodeReviewEnabled()) {
+        if (!this.barcodeReview) throw new Error('Проверка подозрительного ШК временно недоступна.');
+        const held = await this.barcodeReview.capture(operation, user);
+        if (held) return held;
       }
 
       const receipt = await this.stockOperations.receiveIntoBox(

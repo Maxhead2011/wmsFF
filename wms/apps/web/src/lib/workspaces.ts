@@ -490,6 +490,9 @@ export function buildFboNavigation(items: WorkspaceNavItem[], enabled: boolean) 
 export const workspaceNav=buildFboNavigation(workspaceDefinitions,import.meta.env.VITE_FBO_WORKSPACE_ENABLED==='true');
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  // FIX: grants only the operational problems panel, not owner-only administration APIs.
+  if (item.id === 'administration' && import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED === 'true'
+    && !user.isDemo && user.roleCodes.some(r => r === 'ADMIN' || r === 'OWNER') && user.permissionCodes.includes('stock:write')) return true;
   // FIX: preserve statistics scope alongside the deployed admin monitoring opt-in.
   if (item.id === 'operations-statistics' && user.isDemo) return false;
   // FIX: monitoring is available to ADMIN on opted-in installations, including

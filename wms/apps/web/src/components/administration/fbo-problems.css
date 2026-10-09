@@ -1,0 +1,14 @@
+.fbo-problems fieldset { display: grid; gap: 16px; min-width: 0; }
+.fbo-problems form, .fbo-problems nav { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+.fbo-problems label { line-height: 1.6; overflow-wrap: anywhere; }
+.fbo-problems input:not([type="checkbox"]), .fbo-problems select, .fbo-problems textarea {
+  border: 1px solid #cbd8cf; border-radius: 8px; padding: 10px; max-width: 100%; background: #fff; color: #183626;
+}
+.fbo-problems textarea { display: block; width: min(100%, 700px); min-height: 80px; }
+.fbo-problems button { border: 1px solid #cbd8cf; border-radius: 10px; padding: 10px 16px; background: #eff6f0; color: #193c2a; cursor: pointer; justify-self: start; }
+.fbo-problems button:disabled { opacity: .5; cursor: default; }
+.fbo-problems input[type="checkbox"] { margin-right: 10px; }
+.fbo-problems table { border-collapse: collapse; width: 100%; }
+.fbo-problems td, .fbo-problems th { border-bottom: 1px solid #dce7e0; padding: 10px; text-align: left; }
+.fbo-problems th { background: #f4f7f5; }
+.fbo-problems [aria-label="Предпросмотр"] { padding: 16px; border: 1px solid #d8b85d; background: #fffcf0; border-radius: 12px; overflow-wrap: anywhere; }
