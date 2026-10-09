@@ -3,7 +3,7 @@ import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
 import {assertWarehouseAccess} from './client-request-warehouse-scope';
-import {cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration} from './ozon-supply-policy';
+import {bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
 
 @Injectable()
@@ -54,7 +54,7 @@ export class OzonAssemblySupplyService {
  }
  private async save(tx:any,id:string,link:SupplyIntegration,user:AuthUser,action:string){
   await tx.ozonFboShipment.update({where:{requestId:id},data:{integration:link}});
-  await tx.auditLog.create({data:{userId:user.id,action,entity:'ClientRequest',entityId:id,payload:{orderId:link.orderId,operations:link.operations}}});
+  await tx.auditLog.create({data:{userId:user.id,action,entity:'ClientRequest',entityId:id,payload:{orderIds:supplyOrders(link).map(o=>o.orderId),mapping:link.mapping,operations:link.operations}}});
  }
  async view(id:string,user:AuthUser){
   const s=await this.load(id,user),link=s.integration as SupplyIntegration|null;
@@ -64,14 +64,24 @@ export class OzonAssemblySupplyService {
  }
  async bind(id:string,body:{connectionId:string;orderId:string},user:AuthUser){
   const s=await this.load(id,user,'write');if(s.integration?.frozenHash)throw new ConflictException('Состав уже отправляется. Привязка заблокирована.');
-  const c=await this.connection(body.connectionId,s.request.clientId),link=await this.snapshot(c,String(body.orderId).trim());
+  const value=String(body.orderId).trim();
+  const orderId=value.match(/^https:\/\/seller\.ozon\.ru\/app\/supply\/orders\/(\d+)(?:[?#].*)?$/)?.[1]??value;
+  const c=await this.connection(body.connectionId,s.request.clientId),link=await this.snapshot(c,orderId);
   if(await this.db.ozonFboPlan.findFirst({where:{connectionId:c.id,ozonOrderId:link.orderId}}))throw new ConflictException('Эта поставка уже используется в прежнем плане Ozon. Нужен перенос плана, а не вторая сборка.');
-  // Exact names may be suggested; the user sees and explicitly saves all mappings.
-  for(const d of s.directions as OzonDirection[]){const matches=link.supplies.filter(v=>v.name.trim().toLocaleLowerCase()===d.name.trim().toLocaleLowerCase());if(matches.length===1)link.mapping[d.name]=matches[0].id;}
   await this.locked(id,user,async(current,tx)=>{
    if(current.integration?.frozenHash)throw new ConflictException('Отправка уже началась.');
+   const old=current.integration as SupplyIntegration|null;
+   if(old&&old.connectionId!==c.id)throw new ConflictException('Все заявки одной сборки должны принадлежать одному кабинету Ozon.');
    const key=`${c.sellerId}:${link.orderId}`;const other=await tx.ozonFboShipment.findUnique({where:{externalOrderKey:key}});if(other&&other.requestId!==id)throw new ConflictException('Поставка Ozon уже привязана к другой сборке.');
-   await tx.ozonFboShipment.update({where:{requestId:id},data:{externalOrderKey:key}});await this.save(tx,id,link,user,'OZON_SUPPLY_BOUND');
+   // FIX: serialize ownership across different assemblies as well as concurrent additions to this one.
+   await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))::text`;
+   const owner=await tx.ozonFboOrderBinding.findUnique({where:{externalOrderKey:key}});
+   if(owner&&owner.requestId!==id)throw new ConflictException('Поставка Ozon уже привязана к другой сборке.');
+   if(!owner)await tx.ozonFboOrderBinding.create({data:{externalOrderKey:key,requestId:id,orderId:link.orderId}});
+   const orders=old?supplyOrders(old):[];
+   const merged=mergeSupplyOrders(old??link,[...orders.filter(o=>o.orderId!==link.orderId),...supplyOrders(link)]);
+   for(const d of current.directions as OzonDirection[]){if(merged.mapping[d.name])continue;const matches=merged.supplies.filter(v=>v.name.trim().toLocaleLowerCase()===d.name.trim().toLocaleLowerCase());if(matches.length===1)merged.mapping[d.name]=matches[0].id;}
+   await tx.ozonFboShipment.update({where:{requestId:id},data:{externalOrderKey:current.externalOrderKey??key}});await this.save(tx,id,merged,user,'OZON_SUPPLY_BOUND');
   });return this.view(id,user);
  }
  async map(id:string,mapping:Record<string,string>,user:AuthUser){
@@ -82,15 +92,16 @@ export class OzonAssemblySupplyService {
  }
  async refresh(id:string,user:AuthUser){
   const s=await this.load(id,user,'write'),old=s.integration as SupplyIntegration;if(!old)throw new ConflictException('Сначала привяжите поставку.');
-  const c=await this.connection(old.connectionId,s.request.clientId),fresh=await this.snapshot(c,old.orderId);
-  await this.locked(id,user,async(cur,tx)=>{const l=cur.integration as SupplyIntegration;if(l?.orderId!==old.orderId||l.connectionId!==old.connectionId)throw new ConflictException('Привязка изменилась. Обновите экран.');await this.save(tx,id,{...fresh,mapping:l.mapping,operations:l.operations,frozenHash:l.frozenHash},user,'OZON_SUPPLY_REFRESH');});
+  const c=await this.connection(old.connectionId,s.request.clientId),orders:SupplyOrderSnapshot[]=[];
+  for(const order of supplyOrders(old))orders.push(...supplyOrders(await this.snapshot(c,order.orderId)));
+  await this.locked(id,user,async(cur,tx)=>{const l=cur.integration as SupplyIntegration;if(!l||bindingIdentity(l)!==bindingIdentity(old))throw new ConflictException('Привязка изменилась. Обновите экран.');await this.save(tx,id,mergeSupplyOrders(l,orders),user,'OZON_SUPPLY_REFRESH');});
   return this.view(id,user);
  }
  async upload(id:string,confirm:boolean,user:AuthUser){
   if(confirm!==true)throw new BadRequestException('Подтвердите передачу проверенных коробов.');
   await this.refresh(id,user);
   const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration,c=await this.connection(l.connectionId,s.request.clientId);
-  if(l.state!=='DATA_FILLING')throw new ConflictException('Поставка Ozon не в статусе заполнения данных.');
+  if(supplyOrders(l).some(o=>o.state!=='DATA_FILLING'&&o.supplies.some(s=>!l.operations[s.id])))throw new ConflictException('Не все неотправленные заявки Ozon в статусе заполнения данных.');
   const cargoes=packedCargoes(s.directions,l,s.request.fboAssembly);
   for(const supplyId of Object.keys(cargoes)){
    if(l.operations[supplyId])continue;
@@ -99,7 +110,7 @@ export class OzonAssemblySupplyService {
    if(!remote||remote.transport_cargoes?.length||remote.cargoes_without_transport_cargoes?.length)throw new ConflictException('В Ozon уже есть грузоместа или их состав не подтверждён. Автоматическая замена запрещена.');
    const claimed=await this.locked(id,user,async(cur,tx)=>{
     const link=cur.integration as SupplyIntegration;if(link.operations[supplyId])return false;
-    if(link.orderId!==l.orderId||link.connectionId!==l.connectionId)throw new ConflictException('Привязка изменилась.');
+    if(bindingIdentity(link)!==bindingIdentity(l))throw new ConflictException('Привязка изменилась.');
     const now=packedCargoes(cur.directions,link,cur.request.fboAssembly),hash=cargoHash(now);
     if(hash!==cargoHash(cargoes)||(link.frozenHash&&link.frozenHash!==hash))throw new ConflictException('Состав изменился. Повторите сверку.');
     link.frozenHash=hash;link.operations[supplyId]={state:'SENDING'};await this.save(tx,id,link,user,'OZON_CARGO_SENDING');return true;

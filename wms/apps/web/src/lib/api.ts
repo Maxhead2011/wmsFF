@@ -12521,7 +12521,7 @@ export type OzonSupplyView = {
  requestId:string;connections:Array<{id:string;accountName:string|null;sellerId:string|null}>;
  directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>;
  differences:string[];packingError:string;
- link:null|{connectionId:string;orderId:string;orderNumber:string;place:string;date:string;state:string;frozenHash?:string;mapping:Record<string,string>;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>;operations:Record<string,{state:string;error?:string;labelOperationId?:string;labelUrl?:string}>};
+ link:null|{orders?:Array<{orderId:string;orderNumber:string;place:string;date:string;state:string;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>}>;connectionId:string;orderId:string;orderNumber:string;place:string;date:string;state:string;frozenHash?:string;mapping:Record<string,string>;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>;operations:Record<string,{state:string;error?:string;labelOperationId?:string;labelUrl?:string}>};
 };
 export function ozonAssemblySupply(accessToken:string,id:string,action?:string,body:unknown={}){
  return request<OzonSupplyView>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});
