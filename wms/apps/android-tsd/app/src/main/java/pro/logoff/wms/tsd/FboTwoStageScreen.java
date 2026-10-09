@@ -72,7 +72,8 @@ final class FboTwoStageScreen {
         if(!hasPallet)state.pallet="";
         if(!hasSource){state.source="";state.barcode="";}
     }
-    private boolean packingChoices(){return packing&&"logoff".equals(BuildConfig.FLAVOR);}
+    private boolean ozon(){return plan!=null&&"OZON".equals(plan.marketplace);}
+    private boolean packingChoices(){return !ozon()&&packing&&"logoff".equals(BuildConfig.FLAVOR);}
     private void choosePackingMode(PackingMode mode){
         if(!ready()||!state.target.isEmpty()||!state.barcode.isEmpty())return;
         handler.removeCallbacks(automatic);state.source="";packingMode=mode;prefs.edit().putString(pendingKey+":mode",mode.name()).commit();message="";feedbackColor=Color.TRANSPARENT;render();
@@ -231,13 +232,22 @@ final class FboTwoStageScreen {
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
         if(renderCompactPacking())return;
         LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);int screenColor=AssemblyScreenFeedback.background("logoff".equals(BuildConfig.FLAVOR),retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor);root.setBackgroundColor(screenColor);
-        text(root,packing?"Упаковка FBO":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
+        text(root,packing?"Упаковка FBO":ozon()?"FBO Ozon":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
         if("logoff".equals(BuildConfig.FLAVOR)&&retrySending&&busy&&state.pending()!=null)text(root,"Повторная отправка запроса");
         input=null;
         if(packingChoices()&&packingMode==PackingMode.MENU&&!state.target.isEmpty())packingMode=PackingMode.NEW_BOXES;
         if(plan!=null){text(root,plan.title);text(root,"Этап: "+FboFeedback.phase(screenPhase()));
             text(root,"Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" из "+plan.needed);
             text(root,"Проверено коробов "+FboFeedback.confirmed(plan)+" из "+plan.boxes.size());
+            if(ozon()&&plan.directions!=null){
+                text(root,"Одна сборка · "+plan.directions.size()+" направлений");
+                for(TsdFboPlan.Direction d:plan.directions){
+                    String label=d.name+" · упаковано "+d.packed+" из "+d.needed;
+                    if("PACKING".equals(screenPhase())&&state.target.isEmpty())button(root,label,ready(),()->{state.direction=d.name;render();});
+                    else text(root,label);
+                }
+                text(root,"Направление короба: "+state.direction);
+            }
             if(plan.parallelPackingSupported)text(root,"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438: "+Math.max(0,plan.picked-plan.packed));
             if(packingChoices()&&("PACKING".equals(plan.phase)||"PICKING".equals(plan.phase)))wholeCartonProgress(root);
             if(plan.compositionChanged)text(root,"Состав заявки изменился. Нужна сверка.");
@@ -248,7 +258,7 @@ final class FboTwoStageScreen {
             else if("NOT_STARTED".equals(screenPhase()))button(root,"Начать отбор",ready(),()->send("START",null));
             else if("COMPLETED".equals(screenPhase())){text(root,"Все короба поставки подтверждены");
                 // FIX: both confirmed-shipment templates remain downloadable from the request.
-                if(packingChoices()){
+                if(ozon()){text(root,"Все направления собраны");}else if(packingChoices()){
                     button(root,"Скачать состав для WB",ready(),()->download("products"));
                     button(root,"Скачать распределение по коробам для WB",ready(),()->download("packages"));
                 }else button(root,"Скачать файл WB",ready(),this::download);
@@ -267,7 +277,7 @@ final class FboTwoStageScreen {
                 button(root,"Отсканировать целые короба",ready(),()->choosePackingMode(PackingMode.WHOLE_BOXES));
                 if(plan.manualPackingEnabled)button(root,"Добавить товар вручную",ready(),()->choosePackingMode(PackingMode.MANUAL));
                 packingCompleteButton(root);
-                for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
+                for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+(b.direction==null?"":" · "+b.direction)+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
             }
             else {
                 String hint="ШК товара";
@@ -324,9 +334,9 @@ final class FboTwoStageScreen {
                     int count=0;for(TsdFboPlan.Box b:plan.boxes)if(b.confirmed)count++;
                     text(root,"Подтверждено коробов "+count+" из "+plan.boxes.size());
                     if(packingChoices())text(root,"Осталось отсканировать: "+String.join(", ",unconfirmedBoxes()));
-                    button(root,packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
+                    button(root,ozon()?"Завершить проверку направлений":packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
                 }
-                for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
+                for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+(b.direction==null?"":" · "+b.direction)+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
             }
         }
         if(state.pending()!=null){
@@ -360,6 +370,7 @@ final class FboTwoStageScreen {
             message="Подтвердите отбор целого короба кнопкой ниже.";render();return;
         }
         if("PACKING".equals(screenPhase())&&state.target.isEmpty()){
+            if(ozon()&&state.direction.isEmpty()){message="Выберите направление короба";render();return;}
             // FIX: mode selection is navigation only; never convert a wrong scan into the other action.
             if(FboScanState.alreadyPackedBox(plan,value,packingMode==PackingMode.MANUAL)){
                 message="Данный короб уже упакован в поставку";packingErrorSpeech=true;render();return;
@@ -486,6 +497,6 @@ final class FboTwoStageScreen {
     // FIX: an explicit list makes omitted boxes visible without changing confirmation counts.
     private List<String> unconfirmedBoxes(){List<String> result=new ArrayList<>();for(TsdFboPlan.Box b:plan.boxes)if(!b.confirmed)result.add(b.code);return result;}
     private void download(){download("packages");}
-    private void download(String kind){try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-"+kind+".xlsx";
+    private void download(String kind){if(ozon())return;try{DownloadManager manager=(DownloadManager)activity.getSystemService(Context.DOWNLOAD_SERVICE);String url=baseUrl.replaceAll("/+$","")+"/api/v1/tsd/requests/"+id+"/fbo/wb-"+kind+".xlsx";
         DownloadManager.Request req=new DownloadManager.Request(Uri.parse(url));req.addRequestHeader("Authorization",session.authorizationHeader());req.setTitle("products".equals(kind)?"Состав ФБО для WB":"Короба ФБО для WB");req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);req.setDestinationInExternalFilesDir(activity,Environment.DIRECTORY_DOWNLOADS,"wb-"+kind+"-"+id+"-"+System.currentTimeMillis()+".xlsx");manager.enqueue(req);message="Файл загружается. Откройте его из уведомления.";render();}catch(Exception e){message="Не удалось скачать файл: "+e.getMessage();render();}}
 }

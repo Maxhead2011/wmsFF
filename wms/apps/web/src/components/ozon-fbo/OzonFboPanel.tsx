@@ -402,7 +402,8 @@ export function OzonFboPanel({ session }: Props) {
 
       <header className="ozfbo-hero">
         <div>
-          <span className="ozfbo-kicker"><Sparkles size={15} /> FFULLHAB WMS × OZON</span>
+          {/* FIX: keep the shared marketplace banner free of another operator's brand. */}
+          <span className="ozfbo-kicker"><Sparkles size={15} /> WMS × OZON</span>
           <h1>Поставки FBO без ручной рутины</h1>
           <p>От распределения по кластерам до полностью проверенных коробов и загрузки состава поставки в кабинет Ozon.</p>
         </div>

@@ -7,6 +7,16 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: a retry after restart cannot silently change the destination of the same operation.
+    @Test public void directionSurvivesRestartAndPendingRetry(){
+        FboScanState s=new FboScanState();s.direction="Уфа";s.target="box";
+        Map<String,String> pending=s.prepare("OPEN_BOX",null);
+        FboScanState restored=new FboScanState();restored.restore(pending);
+        restored.direction="Москва";
+        assertEquals("Уфа",restored.prepare("OPEN_BOX",null).get("direction"));
+        FboScanState position=new FboScanState();position.restoreCheckpoint(s.checkpoint());
+        assertEquals("Уфа",position.direction);
+    }
     // TEST: packing retains the open box while collection continues; the collector keeps picking.
     @Test public void parallelPackingKeepsTargetAndBarcodeWithoutChangingPhase(){
         TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";p.parallelPackingSupported=true;p.picked=1;

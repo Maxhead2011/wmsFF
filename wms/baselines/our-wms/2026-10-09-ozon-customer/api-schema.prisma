@@ -1,202 +1,48 @@
-// FIX: payroll records are separate from operational picking and printer state.
-model PayrollEmployee {
-  id             String   @id @default(uuid())
-  warehouseId    String
-  userId         String?  @unique
-  name           String
-  isActive       Boolean  @default(true)
-  isDemo         Boolean  @default(false)
-  picker         Boolean  @default(true)
-  loader         Boolean  @default(false)
-  paymentMethod  String   @default("CASH")
-  paymentPhone   String?
-  paymentBank    String?
-  payrollPrimaryId String?
-  payrollPrimary PayrollEmployee? @relation("PayrollIdentity", fields: [payrollPrimaryId], references: [id], onDelete: Restrict)
-  payrollAliases PayrollEmployee[] @relation("PayrollIdentity")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  rates          PayrollCondition[]
-  shifts         PayrollShift[]
-  workDays       PayrollWorkDay[]
-  handlingShares PayrollHandlingShare[]
-  @@index([warehouseId, isDemo, isActive])
-  @@index([payrollPrimaryId])
-}
-
-model PayrollCondition {
-  id           String   @id @default(uuid())
-  employeeId   String
-  kind         String
-  rateKopecks  Int
-  startsAt     DateTime
-  endsAt       DateTime?
-  temporary    Boolean @default(false)
-  reason       String
-  createdById  String
-  createdAt    DateTime @default(now())
-  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  @@index([employeeId, kind, startsAt])
-}
-
-model PayrollShift {
-  id           String   @id @default(uuid())
-  employeeId   String
-  startsAt     DateTime
-  endsAt       DateTime?
-  workDate     String
-  source       String
-  startPhoto   String?
-  endPhoto     String?
-  cancelledAt  DateTime? // FIX: retained for audited cancellations.
-  createdById  String
-  reason       String?
-  version      Int @default(1)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  breaks       PayrollBreak[]
-  @@index([employeeId, workDate])
-}
-
-// FIX: actual tablet lunch intervals, retained with their shift.
-model PayrollBreak {
-  id String @id
-  shiftId String
-  startsAt DateTime
-  endsAt DateTime?
-  shift PayrollShift @relation(fields: [shiftId], references: [id], onDelete: Restrict)
-  @@index([shiftId, startsAt])
-}
-
-// FIX: lunch belongs to the whole start-date group, not to an individual visit.
-model PayrollWorkDay {
-  employeeId   String
-  workDate     String
-  lunchMinutes Int?
-  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  @@id([employeeId, workDate])
-}
-
-model PayrollHandling {
-  id           String @id @default(uuid())
-  warehouseId  String
-  startsAt     DateTime
-  operation    String
-  palletCount  Decimal @db.Decimal(12, 4)
-  boxCount     Int @default(0)
-  bagCount     Int @default(0)
-  rollCount    Int @default(0)
-  unitRateKopecks Int?
-  status       String @default("REVIEW")
-  createdById  String
-  confirmedById String?
-  confirmedAt  DateTime?
-  reason       String?
-  createdAt    DateTime @default(now())
-  shares       PayrollHandlingShare[]
-  @@index([warehouseId, startsAt])
-}
-
-model PayrollHandlingShare {
-  operationId String
-  employeeId  String
-  amountKopecks Int?
-  operation PayrollHandling @relation(fields: [operationId], references: [id], onDelete: Restrict)
-  employee PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
-  @@id([operationId, employeeId])
-}
-
-model PayrollAudit {
-  id String @id @default(uuid())
-  warehouseId String
-  actorId String
-  entityId String
-  action String
-  details Json
-  createdAt DateTime @default(now())
-  @@index([warehouseId, entityId, createdAt])
-}
-
-model PayrollSettlement {
-  key String @id
-  employeeId String
-  warehouseId String
-  workDate String
-  status String
-  snapshot Json
-  comment String
-  paidAt DateTime?
-  updatedById String
-  updatedAt DateTime @updatedAt
-  @@index([employeeId, workDate])
-}
-
-model PayrollHistorical {
-  key String @id
-  employeeId String
-  warehouseId String
-  workDate String
-  amountKopecks Int
-  status String
-  data Json
-  sourceHash String
-  createdById String
-  createdAt DateTime @default(now())
-  @@index([employeeId, workDate])
-}
-
-model AttendanceDevice {
-  id String @id
-  warehouseId String
-  isDemo Boolean @default(false)
-  name String
-  tokenHash String @unique
-  createdById String
-  createdAt DateTime @default(now())
-  lastSeenAt DateTime?
-  revokedAt DateTime?
-}
-model AttendanceCode {
-  hash String @id
-  warehouseId String
-  isDemo Boolean @default(false)
-  createdById String
-  expiresAt DateTime
-  usedAt DateTime?
-}
-model AttendanceEvent {
-  id String @id
-  deviceId String
-  employeeId String
-  warehouseId String
-  isDemo Boolean @default(false)
-  kind String
-  fingerprint String
-  data Json
-  effectiveAt DateTime
-  receivedAt DateTime @default(now())
-  status String
-  reason String
-  result Json
-  acknowledged Boolean @default(false)
-  @@index([deviceId, acknowledged])
-  @@index([warehouseId, receivedAt])
-}
-model AttendancePhotoRequest {
-  id String @id
-  eventId String @unique
-  deviceId String
-  requestedById String
-  requestedAt DateTime @default(now())
-  expiresAt DateTime
-  status String @default("PENDING")
-  photo Bytes?
-  @@index([deviceId, status])
-}
-
 generator client {
   provider = "prisma-client-js"
+
+  output = "/app/node_modules/.pnpm/@prisma+client@6.19.3_prisma@6.19.3_typescript@5.9.3__typescript@5.9.3/node_modules/.prisma/client"
+}
+
+// FIX: outbound acknowledgement is distinct from a verified marketplace quantity.
+model WbStockPublicationCheck {
+  id               String    @id @default(uuid())
+  runId            String
+  clientId         String
+  connectionId     String
+  warehouseId      String
+  skuId            String?
+  chrtId           BigInt
+  phase            String
+  calculatedAmount Int
+  sentAmount       Int?
+  observedAmount   Int?
+  status           String    @default("PLANNED")
+  sentAt           DateTime?
+  checkedAt        DateTime?
+  error            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([connectionId, warehouseId, chrtId])
+  @@index([clientId, connectionId, createdAt])
+  @@index([runId])
+}
+
+// FIX: hourly bit masks distinguish unknown time from observed zero stock.
+model WbStockAvailabilityDay {
+  id           String   @id @default(uuid())
+  clientId     String
+  connectionId String
+  warehouseId  String
+  skuId        String
+  day          String
+  observedMask Int      @default(0)
+  positiveMask Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([connectionId, warehouseId, skuId, day])
+  @@index([clientId, connectionId, day])
 }
 
 datasource db {
@@ -593,8 +439,6 @@ model User {
   createdBillingCharges          BillingCharge[]                @relation("BillingChargeCreatedBy")
   approvedBillingCharges         BillingCharge[]                @relation("BillingChargeApprovedBy")
   createdBillingInvoices         BillingInvoice[]               @relation("BillingInvoiceCreatedBy")
-  closedBillingPeriods           BillingPeriodClose[]
-  billingCorrections             BillingInvoiceCorrection[]
   createdBillingPayments         BillingPayment[]               @relation("BillingPaymentCreatedBy")
   updatedClientBillingServices   ClientBillingService[]         @relation("ClientBillingServiceUpdatedBy")
   createdDeliveries              LogisticsDeliveryRequest[]     @relation("LogisticsDeliveryCreatedBy")
@@ -614,7 +458,6 @@ model User {
   updatedReferralClients         UserReferralClient[]           @relation("UserReferralUpdatedBy")
   systemSettings                 SystemSetting[]
   auditLogs                      AuditLog[]
-  fboProcessingTariffs            ClientFboProcessingTariff[]
   createdWmsApiCredentials       WmsApiCredential[]             @relation("WmsApiCredentialCreatedBy")
   createdExpenseEntries          ExpenseEntry[]                 @relation("ExpenseEntryCreatedBy")
   cancelledExpenseEntries        ExpenseEntry[]                 @relation("ExpenseEntryCancelledBy")
@@ -829,11 +672,9 @@ model Client {
   requests                     ClientRequest[]
   billingCharges               BillingCharge[]
   billingInvoices              BillingInvoice[]
-  closedBillingPeriods         BillingPeriodClose[]
   billingPayments              BillingPayment[]
   billingServicePrices         ClientBillingService[]
   fbsBillingSettings           ClientFbsBillingSettings?
-  fboProcessingTariff          ClientFboProcessingTariff?
   deliveryRequests             LogisticsDeliveryRequest[]
   requestFiles                 ClientRequestFile[]
   requestPackages              ClientRequestPackage[]
@@ -1002,14 +843,13 @@ model Warehouse {
   stockMovements          StockMovement[]
   stockBalances           StockBalance[]
   billingInvoices         BillingInvoice[]
-  closedBillingPeriods    BillingPeriodClose[]
   inventorySessions       InventorySession[]            @relation("InventorySessionWarehouse")
   pickWaves               PickWave[]
-  inventoryRescanRequests InventoryBoxRescanRequest[]    @relation("InventoryRescanWarehouse")
-  boxIntegrityChecks      WarehouseBoxCheck[]            @relation("WarehouseBoxIntegrityChecks")
-  boxIntegrityRows        WarehouseBoxCheckRow[]         @relation("WarehouseBoxIntegrityRows")
-  shippedKizHistory       ShippedKizHistory[]            @relation("WarehouseShippedKizHistory")
-  logisticsDeliveries     LogisticsDeliveryRequest[]     @relation("WarehouseLogisticsDeliveries")
+  inventoryRescanRequests InventoryBoxRescanRequest[]   @relation("InventoryRescanWarehouse")
+  boxIntegrityChecks      WarehouseBoxCheck[]           @relation("WarehouseBoxIntegrityChecks")
+  boxIntegrityRows        WarehouseBoxCheckRow[]        @relation("WarehouseBoxIntegrityRows")
+  shippedKizHistory       ShippedKizHistory[]           @relation("WarehouseShippedKizHistory")
+  logisticsDeliveries     LogisticsDeliveryRequest[]    @relation("WarehouseLogisticsDeliveries")
   fbsExecutionConnections ClientMarketplaceConnection[] @relation("FbsExecutionWarehouse")
   fbsDropoffConnections   ClientMarketplaceConnection[] @relation("FbsDropoffWarehouse")
   fbsRouteExecutions      FbsWarehouseRoutingRule[]     @relation("FbsRouteExecutionWarehouse")
@@ -1146,48 +986,48 @@ model Zone {
 }
 
 model Sku {
-  id                   String                      @id @default(uuid())
-  clientId             String
-  internalSku          String
-  clientSku            String?
-  article              String?
-  name                 String
-  brand                String?
-  category             String?
-  color                String?
-  size                 String?
-  weightGrams          Int?
-  lengthCm             Decimal?                    @db.Decimal(10, 2)
-  widthCm              Decimal?                    @db.Decimal(10, 2)
-  heightCm             Decimal?                    @db.Decimal(10, 2)
-  volumeLiters         Decimal?                    @db.Decimal(12, 3)
-  volumeSource         VolumeSource                @default(CALCULATED)
-  shelfLifeUntil       DateTime?
-  needsChestnyZnak     Boolean                     @default(false)
-  isUnmarked           Boolean                     @default(false)
-  needsLabel           Boolean                     @default(false)
-  needsRelabel         Boolean                     @default(false)
-  isDraft              Boolean                     @default(false)
-  draftSource          String?
-  marketplace          MarketplaceType?
-  marketplaceProductId String?
-  marketplaceOfferId   String?
-  marketplacePayload   Json?
-  marketplaceSyncedAt  DateTime?
-  client               Client                      @relation(fields: [clientId], references: [id])
-  barcodes             Barcode[]
-  movements            StockMovement[]
-  balances             StockBalance[]
-  clientRequestItems   ClientRequestItem[]
-  requestBoxSelections ClientRequestBoxSelection[]
-  packageItems         ClientRequestPackageItem[]
-  productMarks         ProductMark[]
+  id                          String                       @id @default(uuid())
+  clientId                    String
+  internalSku                 String
+  clientSku                   String?
+  article                     String?
+  name                        String
+  brand                       String?
+  category                    String?
+  color                       String?
+  size                        String?
+  weightGrams                 Int?
+  lengthCm                    Decimal?                     @db.Decimal(10, 2)
+  widthCm                     Decimal?                     @db.Decimal(10, 2)
+  heightCm                    Decimal?                     @db.Decimal(10, 2)
+  volumeLiters                Decimal?                     @db.Decimal(12, 3)
+  volumeSource                VolumeSource                 @default(CALCULATED)
+  shelfLifeUntil              DateTime?
+  needsChestnyZnak            Boolean                      @default(false)
+  isUnmarked                  Boolean                      @default(false)
+  needsLabel                  Boolean                      @default(false)
+  needsRelabel                Boolean                      @default(false)
+  isDraft                     Boolean                      @default(false)
+  draftSource                 String?
+  marketplace                 MarketplaceType?
+  marketplaceProductId        String?
+  marketplaceOfferId          String?
+  marketplacePayload          Json?
+  marketplaceSyncedAt         DateTime?
+  client                      Client                       @relation(fields: [clientId], references: [id])
+  barcodes                    Barcode[]
+  movements                   StockMovement[]
+  balances                    StockBalance[]
+  clientRequestItems          ClientRequestItem[]
+  requestBoxSelections        ClientRequestBoxSelection[]
+  packageItems                ClientRequestPackageItem[]
+  productMarks                ProductMark[]
   fbsStockPublications        FbsStockPublication[]
   fbsStockAllocationOverrides FbsStockAllocationOverride[]
-  ozonFboPlanItems     OzonFboPlanItem[]
-  factoryShipmentItems FactoryShipmentItem[]
-  createdAt            DateTime                    @default(now())
-  updatedAt            DateTime                    @updatedAt
+  ozonFboPlanItems            OzonFboPlanItem[]
+  factoryShipmentItems        FactoryShipmentItem[]
+  createdAt                   DateTime                     @default(now())
+  updatedAt                   DateTime                     @updatedAt
 
   @@unique([clientId, internalSku])
   @@index([clientId, isDraft])
@@ -1241,7 +1081,6 @@ model Box {
   balances             StockBalance[]
   productMarks         ProductMark[]
   requestBoxSelections ClientRequestBoxSelection[]
-  receiptStockIdentity ReceiptStockIdentity?
   storagePlacement     StoragePalletBox?
 
   @@unique([clientId, code])
@@ -1366,30 +1205,30 @@ enum FactoryShipmentStatus {
 }
 
 model FactoryShipment {
-  id              String                @id @default(uuid())
-  number          Int                   @unique @default(autoincrement())
-  clientId        String
-  title           String
-  factoryName     String                @default("Бишкек")
-  status          FactoryShipmentStatus @default(DRAFT)
-  comment         String?
+  id               String                @id @default(uuid())
+  number           Int                   @unique @default(autoincrement())
+  clientId         String
+  title            String
+  factoryName      String                @default("Бишкек")
+  status           FactoryShipmentStatus @default(DRAFT)
+  comment          String?
   receiptRequestId String?
-  createdByUserId String?
-  startedAt       DateTime?
-  shippedAt       DateTime?
-  receivedAt      DateTime?
-  createdAt       DateTime              @default(now())
-  updatedAt       DateTime              @updatedAt
-  client          Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  items           FactoryShipmentItem[]
-  scans           FactoryShipmentScan[]
+  createdByUserId  String?
+  startedAt        DateTime?
+  shippedAt        DateTime?
+  receivedAt       DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  client           Client                @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  items            FactoryShipmentItem[]
+  scans            FactoryShipmentScan[]
 
   @@index([clientId, status, createdAt])
   @@index([receiptRequestId])
 }
 
 model FactoryShipmentItem {
-  id          String   @id @default(uuid())
+  id          String                @id @default(uuid())
   shipmentId  String
   skuId       String
   barcode     String?
@@ -1397,12 +1236,12 @@ model FactoryShipmentItem {
   article     String?
   size        String?
   plannedQty  Int
-  scannedQty  Int      @default(0)
-  receivedQty Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  shipment    FactoryShipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-  sku         Sku             @relation(fields: [skuId], references: [id])
+  scannedQty  Int                   @default(0)
+  receivedQty Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  shipment    FactoryShipment       @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  sku         Sku                   @relation(fields: [skuId], references: [id])
   scans       FactoryShipmentScan[]
 
   @@unique([shipmentId, skuId])
@@ -1410,15 +1249,15 @@ model FactoryShipmentItem {
 }
 
 model FactoryShipmentScan {
-  id          String   @id @default(uuid())
+  id          String              @id @default(uuid())
   shipmentId  String
   itemId      String
   barcode     String
-  quantity    Int      @default(1)
+  quantity    Int                 @default(1)
   deviceId    String?
   scannedById String?
   scannedBy   String?
-  scannedAt   DateTime @default(now())
+  scannedAt   DateTime            @default(now())
   shipment    FactoryShipment     @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
   item        FactoryShipmentItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
@@ -1435,16 +1274,16 @@ model KizDuplicatePrinter {
 }
 
 model KizDuplicateJob {
-  id            String   @id
+  id            String    @id
   fingerprint   String
   stationId     String
   warehouseId   String
   clientId      String
   skuId         String
-  kiz           String   @db.Text
+  kiz           String    @db.Text
   product       Json
-  imageBase64   String   @db.Text
-  status        String   @default("QUEUED")
+  imageBase64   String    @db.Text
+  status        String    @default("QUEUED")
   requestedById String
   requestedBy   String
   deviceCode    String
@@ -1453,8 +1292,8 @@ model KizDuplicateJob {
   printedAt     DateTime?
   verifiedAt    DateTime?
   errorMessage  String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([stationId, status, createdAt])
   @@index([clientId, createdAt])
@@ -1484,20 +1323,20 @@ model ProductMark {
 }
 
 model StockBalance {
-  id         String      @id @default(uuid())
-  balanceKey String      @unique
+  id          String      @id @default(uuid())
+  balanceKey  String      @unique
   warehouseId String?
-  clientId   String
-  skuId      String
-  boxId      String?
-  palletId   String?
-  status     StockStatus
-  quantity   Int
-  warehouse  Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
-  sku        Sku         @relation(fields: [skuId], references: [id])
-  box        Box?        @relation(fields: [boxId], references: [id])
-  pallet     Pallet?     @relation(fields: [palletId], references: [id])
-  updatedAt  DateTime    @updatedAt
+  clientId    String
+  skuId       String
+  boxId       String?
+  palletId    String?
+  status      StockStatus
+  quantity    Int
+  warehouse   Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  sku         Sku         @relation(fields: [skuId], references: [id])
+  box         Box?        @relation(fields: [boxId], references: [id])
+  pallet      Pallet?     @relation(fields: [palletId], references: [id])
+  updatedAt   DateTime    @updatedAt
 
   @@index([clientId, skuId, status])
   @@index([warehouseId, clientId, skuId, status])
@@ -1570,8 +1409,8 @@ model WarehouseBoxCheckRow {
 }
 
 model ShippedKizHistory {
-  id            String    @id @default(uuid())
-  assemblyId    String    @unique
+  id            String     @id @default(uuid())
+  assemblyId    String     @unique
   clientId      String
   warehouseId   String?
   clientName    String
@@ -1591,7 +1430,7 @@ model ShippedKizHistory {
   sourceBoxCode String?
   arrivalAt     DateTime?
   shippedAt     DateTime
-  createdAt     DateTime  @default(now())
+  createdAt     DateTime   @default(now())
   warehouse     Warehouse? @relation("WarehouseShippedKizHistory", fields: [warehouseId], references: [id], onDelete: SetNull)
 
   @@index([clientId, shippedAt])
@@ -1685,15 +1524,15 @@ model KizCirculationItem {
 
 // ADDED: independent admin sorting sessions; no FBS request or stock reservation.
 model PalletSortingSession {
-  id              String   @id
+  id              String    @id
   warehouseId     String
   clientId        String
   createdByUserId String
   state           Json
-  version         Int      @default(1)
+  version         Int       @default(1)
   completedAt     DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([warehouseId, completedAt])
   @@index([clientId])
@@ -1772,7 +1611,7 @@ model InventoryAuditLine {
 }
 
 model InventoryBoxRescanRequest {
-  id                String    @id @default(uuid())
+  id                String     @id @default(uuid())
   boxId             String
   boxCode           String
   clientId          String
@@ -1782,13 +1621,13 @@ model InventoryBoxRescanRequest {
   sessionTitle      String
   requestedByUserId String
   requestedByName   String
-  status            String    @default("PENDING")
+  status            String     @default("PENDING")
   approvedByUserId  String?
   approvedByName    String?
   approvedAt        DateTime?
   consumedAt        DateTime?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
   warehouse         Warehouse? @relation("InventoryRescanWarehouse", fields: [warehouseId], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt])
@@ -1798,8 +1637,14 @@ model InventoryBoxRescanRequest {
 }
 
 model ClientRequest {
-  ozonShipment                 OzonFboShipment?
+  ozonShipment OzonFboShipment?
   id                           String                     @id @default(uuid())
+  // FIX: a remainder request retains its direct parent for incremental FBO fulfillment.
+  parentRequestId              String?
+  fboRequestCode               String?                    @unique
+  fboRemainderSequence         Int                        @default(0)
+  parentRequest                ClientRequest?             @relation("FboRemainderRequests", fields: [parentRequestId], references: [id], onDelete: Restrict)
+  childRequests                ClientRequest[]            @relation("FboRemainderRequests")
   number                       Int                        @unique @default(autoincrement())
   clientId                     String
   warehouseId                  String?
@@ -1837,8 +1682,8 @@ model ClientRequest {
   fbsOrderLinks                FbsOrderRequestLink[]
   expenseEntries               ExpenseEntry[]
   expenseMaterialMovements     ExpenseMaterialMovement[]
-  skuCollectionSources         SkuCollectionSource[]       @relation("SkuCollectionRequestSources")
-  skuCollectionScans           SkuCollectionScan[]         @relation("SkuCollectionRequestScans")
+  skuCollectionSources         SkuCollectionSource[]      @relation("SkuCollectionRequestSources")
+  skuCollectionScans           SkuCollectionScan[]        @relation("SkuCollectionRequestScans")
   createdAt                    DateTime                   @default(now())
   updatedAt                    DateTime                   @updatedAt
 
@@ -1847,23 +1692,24 @@ model ClientRequest {
   @@index([type, status])
   @@index([createdByUserId])
   @@index([assignedToUserId])
+  @@index([parentRequestId])
 }
 
 model SkuCollectionSource {
-  id              String              @id @default(uuid())
-  requestId       String
-  clientId        String
-  warehouseId     String
-  skuId           String
-  sourceBoxId     String
-  sourceBoxCode   String
-  plannedQuantity Int
-  pickedQuantity  Int                 @default(0)
-  receivedQuantity Int                @default(0)
-  request         ClientRequest       @relation("SkuCollectionRequestSources", fields: [requestId], references: [id], onDelete: Cascade)
-  scans           SkuCollectionScan[]
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  id               String              @id @default(uuid())
+  requestId        String
+  clientId         String
+  warehouseId      String
+  skuId            String
+  sourceBoxId      String
+  sourceBoxCode    String
+  plannedQuantity  Int
+  pickedQuantity   Int                 @default(0)
+  receivedQuantity Int                 @default(0)
+  request          ClientRequest       @relation("SkuCollectionRequestSources", fields: [requestId], references: [id], onDelete: Cascade)
+  scans            SkuCollectionScan[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 
   @@unique([requestId, sourceBoxId, skuId])
   @@index([warehouseId, clientId, skuId])
@@ -1871,27 +1717,27 @@ model SkuCollectionSource {
 }
 
 model SkuCollectionScan {
-  id              String                  @id @default(uuid())
-  requestId       String
-  sourceId        String
-  skuId           String
-  barcode         String
-  kiz             String
-  sourceBoxId     String
-  sourceBoxCode   String
-  targetBoxId     String?
-  targetBoxCode   String?
-  status          SkuCollectionScanStatus @default(PICKED)
-  pickedByUserId  String?
-  pickedByName    String?
-  pickedAt        DateTime                @default(now())
+  id               String                  @id @default(uuid())
+  requestId        String
+  sourceId         String
+  skuId            String
+  barcode          String
+  kiz              String
+  sourceBoxId      String
+  sourceBoxCode    String
+  targetBoxId      String?
+  targetBoxCode    String?
+  status           SkuCollectionScanStatus @default(PICKED)
+  pickedByUserId   String?
+  pickedByName     String?
+  pickedAt         DateTime                @default(now())
   receivedByUserId String?
-  receivedByName  String?
-  receivedAt      DateTime?
-  request         ClientRequest           @relation("SkuCollectionRequestScans", fields: [requestId], references: [id], onDelete: Cascade)
-  source          SkuCollectionSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
+  receivedByName   String?
+  receivedAt       DateTime?
+  request          ClientRequest           @relation("SkuCollectionRequestScans", fields: [requestId], references: [id], onDelete: Cascade)
+  source           SkuCollectionSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
 
   @@unique([requestId, kiz])
   @@index([requestId, status])
@@ -1920,30 +1766,30 @@ model OperationsStatisticsFact {
 }
 
 model FbsOrderRequestLink {
-  id                 String          @id @default(uuid())
-  clientId           String
-  marketplace        MarketplaceType
-  connectionId       String
-  orderId            String
-  requestId          String
-  createdByUserId    String?
-  syncStatus         String          @default("ACTIVE")
-  syncIssue          String?
-  lastCategory       String?
-  lastSupplierStatus String?
-  lastWbStatus       String?
-  lastSupplyId       String?
-  lastSkuId          String?
-  lastItemCount      Int?
-  lastSeenAt         DateTime?
+  id                  String          @id @default(uuid())
+  clientId            String
+  marketplace         MarketplaceType
+  connectionId        String
+  orderId             String
+  requestId           String
+  createdByUserId     String?
+  syncStatus          String          @default("ACTIVE")
+  syncIssue           String?
+  lastCategory        String?
+  lastSupplierStatus  String?
+  lastWbStatus        String?
+  lastSupplyId        String?
+  lastSkuId           String?
+  lastItemCount       Int?
+  lastSeenAt          DateTime?
   // FIX: marketplace timestamps, not WMS import/assembly timestamps.
-  orderPlacedAt      DateTime?
-  handedOverAt       DateTime?
-  sellerWarehouseId  String?
+  orderPlacedAt       DateTime?
+  handedOverAt        DateTime?
+  sellerWarehouseId   String?
   sellerWarehouseName String?
-  request            ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  request             ClientRequest   @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   @@unique([marketplace, connectionId, orderId])
   @@index([clientId, requestId])
@@ -2247,19 +2093,6 @@ model ClientBillingService {
   @@index([updatedByUserId])
 }
 
-// FIX: new FBO compositions are separate immutable snapshots; existing client/FBS prices are never migrated.
-model ClientFboProcessingTariff {
-  id              String   @id @default(uuid())
-  clientId        String   @unique
-  operationKey    String   @unique
-  definition      Json
-  definitionHash  String
-  createdByUserId String
-  createdAt       DateTime @default(now())
-  client          Client   @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  createdBy       User     @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
-}
-
 model ClientFbsBillingSettings {
   id                             String                       @id @default(uuid())
   clientId                       String                       @unique
@@ -2384,17 +2217,17 @@ model FbsStockPublication {
 // ADDED: per-cabinet rules keep stock monitoring configurable without placing
 // credentials or operational settings in source code.
 model FbsStockMonitorConfig {
-  id                    String   @id @default(uuid())
-  clientId              String
-  connectionId          String   @unique
-  enabled               Boolean  @default(true)
-  allowedDelaySeconds   Int      @default(300)
-  retryIntervalSeconds  Int      @default(30)
-  maxAttempts           Int      @default(10)
-  wbRule                String   @default("ORDER_AND_STOCK_DELTA")
-  wmsRule               String   @default("ORDER_RESERVATION_OR_SELLABLE_DELTA")
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  id                   String   @id @default(uuid())
+  clientId             String
+  connectionId         String   @unique
+  enabled              Boolean  @default(true)
+  allowedDelaySeconds  Int      @default(300)
+  retryIntervalSeconds Int      @default(30)
+  maxAttempts          Int      @default(10)
+  wbRule               String   @default("ORDER_AND_STOCK_DELTA")
+  wmsRule              String   @default("ORDER_RESERVATION_OR_SELLABLE_DELTA")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
   @@index([clientId, enabled])
 }
@@ -2402,55 +2235,55 @@ model FbsStockMonitorConfig {
 // ADDED: immutable product/order snapshots make every detected sale auditable
 // even when the SKU card or marketplace connection changes later.
 model FbsStockMonitorEvent {
-  id                         String          @id @default(uuid())
-  eventKey                   String          @unique
-  clientId                   String
-  connectionId               String
-  marketplace                MarketplaceType @default(WILDBERRIES)
-  marketplaceWarehouseId     String?
-  marketplaceWarehouseName   String?
-  executionWarehouseId       String?
-  orderId                    String
-  orderUid                   String?
-  eventType                  String          @default("SALE")
-  sourceFingerprint          String?
-  sourceIds                  Json?
-  skuId                      String
-  productName                String
-  article                    String?
-  nmId                       String?
-  chrtId                     Int?
-  barcode                    String?
-  size                       String?
-  color                      String?
-  quantity                   Int             @default(1)
-  saleAt                     DateTime
-  detectedAt                 DateTime        @default(now())
-  deadlineAt                 DateTime
-  wbBeforeAmount             Int?
-  wbExpectedAfterAmount      Int?
-  wbAfterAmount              Int?
-  wbCurrentAmount            Int?
-  wbStatus                   String          @default("PENDING")
-  wbAttempts                 Int             @default(0)
-  wbMessage                  String?
-  wmsBeforeAmount            Int?
-  wmsExpectedAfterAmount     Int?
-  wmsAfterAmount             Int?
-  wmsCurrentAmount           Int?
-  wmsReservedAmount          Int?
-  wmsStatus                  String          @default("PENDING")
-  wmsAttempts                Int             @default(0)
-  wmsMessage                 String?
-  overallStatus              String          @default("PENDING")
-  statusRank                 Int             @default(1)
-  nextCheckAt                DateTime?
-  lastCheckedAt              DateTime?
-  processingAt               DateTime?
-  processingBy               String?
-  histories                  FbsStockMonitorHistory[]
-  createdAt                  DateTime        @default(now())
-  updatedAt                  DateTime        @updatedAt
+  id                       String                   @id @default(uuid())
+  eventKey                 String                   @unique
+  clientId                 String
+  connectionId             String
+  marketplace              MarketplaceType          @default(WILDBERRIES)
+  marketplaceWarehouseId   String?
+  marketplaceWarehouseName String?
+  executionWarehouseId     String?
+  orderId                  String
+  orderUid                 String?
+  eventType                String                   @default("SALE")
+  sourceFingerprint        String?
+  sourceIds                Json?
+  skuId                    String
+  productName              String
+  article                  String?
+  nmId                     String?
+  chrtId                   BigInt?
+  barcode                  String?
+  size                     String?
+  color                    String?
+  quantity                 Int                      @default(1)
+  saleAt                   DateTime
+  detectedAt               DateTime                 @default(now())
+  deadlineAt               DateTime
+  wbBeforeAmount           Int?
+  wbExpectedAfterAmount    Int?
+  wbAfterAmount            Int?
+  wbCurrentAmount          Int?
+  wbStatus                 String                   @default("PENDING")
+  wbAttempts               Int                      @default(0)
+  wbMessage                String?
+  wmsBeforeAmount          Int?
+  wmsExpectedAfterAmount   Int?
+  wmsAfterAmount           Int?
+  wmsCurrentAmount         Int?
+  wmsReservedAmount        Int?
+  wmsStatus                String                   @default("PENDING")
+  wmsAttempts              Int                      @default(0)
+  wmsMessage               String?
+  overallStatus            String                   @default("PENDING")
+  statusRank               Int                      @default(1)
+  nextCheckAt              DateTime?
+  lastCheckedAt            DateTime?
+  processingAt             DateTime?
+  processingBy             String?
+  histories                FbsStockMonitorHistory[]
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
 
   @@index([clientId, saleAt])
   @@index([connectionId, marketplaceWarehouseId, skuId, saleAt])
@@ -2484,19 +2317,19 @@ model FbsStockMonitorHistory {
 }
 
 model FbsStockMonitorRun {
-  id             String   @id @default(uuid())
-  startedAt      DateTime @default(now())
-  completedAt    DateTime?
-  durationMs     Int?
-  ingested       Int      @default(0)
-  checked        Int      @default(0)
-  succeeded      Int      @default(0)
-  pending        Int      @default(0)
-  failed         Int      @default(0)
-  unavailable    Int      @default(0)
-  wbErrors       Int      @default(0)
-  wmsErrors      Int      @default(0)
-  errorMessage   String?
+  id           String    @id @default(uuid())
+  startedAt    DateTime  @default(now())
+  completedAt  DateTime?
+  durationMs   Int?
+  ingested     Int       @default(0)
+  checked      Int       @default(0)
+  succeeded    Int       @default(0)
+  pending      Int       @default(0)
+  failed       Int       @default(0)
+  unavailable  Int       @default(0)
+  wbErrors     Int       @default(0)
+  wmsErrors    Int       @default(0)
+  errorMessage String?
 
   @@index([startedAt])
   @@index([completedAt])
@@ -2772,61 +2605,62 @@ model OzonFboEvent {
 }
 
 model FbsTsdAssembly {
-  ozonPickState OzonFbsPickState?
-  id                  String                @id @default(uuid())
-  clientId            String
-  marketplace         MarketplaceType       @default(WILDBERRIES)
-  connectionId        String
-  orderId             String
-  supplyId            String?
-  requestId           String
-  requestItemId       String
-  skuId               String
-  sourceSkuId         String?
+  id                          String                @id @default(uuid())
+  clientId                    String
+  marketplace                 MarketplaceType       @default(WILDBERRIES)
+  connectionId                String
+  orderId                     String
+  supplyId                    String?
+  requestId                   String
+  requestItemId               String
+  skuId                       String
+  sourceSkuId                 String?
   // FIX: reservation branch is durable even before a WMS request/box exists.
-  stockWarehouseId    String?
-  productName         String
-  article             String?
-  sourceProductName   String?
-  sourceArticle       String?
-  barcodes            Json
-  sourceBarcodes      Json?
-  storageBoxes        Json
-  itemCount           Int                   @default(1)
-  requiresKiz         Boolean               @default(false)
-  status              String                @default("IN_PROGRESS")
-  deviceCode          String
-  workerUserId        String?
-  workerName          String?
-  startedAt           DateTime?
-  reservedBoxId       String?
-  reservedBoxCode     String?
-  reservedAt          DateTime?
-  boxId               String?
-  boxCode             String?
-  sourceBoxPending    Boolean               @default(false)
-  sourceBarcode       String?
-  barcode             String?
-  relabelRequired     Boolean               @default(false)
-  relabelConfirmedAt  DateTime?
-  kiz                 String?
-  wbMetaStatus        String                @default("NOT_REQUIRED")
-  stickerPartA        String?
-  stickerPartB        String?
-  stickerBarcode      String?
-  marketplaceSubmittedAt DateTime?
-  marketplaceLabelBase64 String?
+  stockWarehouseId            String?
+  productName                 String
+  article                     String?
+  sourceProductName           String?
+  sourceArticle               String?
+  barcodes                    Json
+  sourceBarcodes              Json?
+  storageBoxes                Json
+  itemCount                   Int                   @default(1)
+  // FIX: count confirmed physical Ozon units; a barcode alone proves only one.
+  scannedItemCount            Int                   @default(0)
+  requiresKiz                 Boolean               @default(false)
+  status                      String                @default("IN_PROGRESS")
+  deviceCode                  String
+  workerUserId                String?
+  workerName                  String?
+  startedAt                   DateTime?
+  reservedBoxId               String?
+  reservedBoxCode             String?
+  reservedAt                  DateTime?
+  boxId                       String?
+  boxCode                     String?
+  sourceBoxPending            Boolean               @default(false)
+  sourceBarcode               String?
+  barcode                     String?
+  relabelRequired             Boolean               @default(false)
+  relabelConfirmedAt          DateTime?
+  kiz                         String?
+  wbMetaStatus                String                @default("NOT_REQUIRED")
+  stickerPartA                String?
+  stickerPartB                String?
+  stickerBarcode              String?
+  marketplaceSubmittedAt      DateTime?
+  marketplaceLabelBase64      String?
   marketplaceLabelContentType String?
-  marketplaceSubmitError String?
-  cargoPackingId      String?
-  cargoPackedAt       DateTime?
-  cargoPackedByUserId String?
-  cargoPackedByName   String?
-  errorMessage        String?
-  completedAt         DateTime?
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
-  cargoPacking        FbsCargoPlacePacking? @relation(fields: [cargoPackingId], references: [id], onDelete: SetNull)
+  marketplaceSubmitError      String?
+  cargoPackingId              String?
+  cargoPackedAt               DateTime?
+  cargoPackedByUserId         String?
+  cargoPackedByName           String?
+  errorMessage                String?
+  completedAt                 DateTime?
+  createdAt                   DateTime              @default(now())
+  updatedAt                   DateTime              @updatedAt
+  cargoPacking                FbsCargoPlacePacking? @relation(fields: [cargoPackingId], references: [id], onDelete: SetNull)
 
   @@unique([marketplace, connectionId, orderId])
   @@unique([clientId, kiz])
@@ -2844,10 +2678,10 @@ model FbsTsdAssembly {
 // FIX: immutable local shipment evidence, independent of later WB statuses.
 // FIX: durable, coalesced billing work from successful print acknowledgements.
 model FbsPrintBillingOutbox {
-  clientId      String   @id
-  revision      Int      @default(1)
-  attempts      Int      @default(0)
-  nextAttemptAt DateTime @default(now())
+  clientId      String    @id
+  revision      Int       @default(1)
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
   leaseToken    String?
   leaseUntil    DateTime?
   lastError     String?
@@ -2856,20 +2690,20 @@ model FbsPrintBillingOutbox {
 }
 
 model WbOrderShipment {
-  id                String   @id @default(uuid())
-  clientId          String
-  connectionId      String
-  orderId           String
-  assemblyId        String   @unique
-  requestId         String
-  warehouseId       String
-  skuId             String
-  quantity          Int
-  kiz               String?
-  source            String
-  shippedAt         DateTime @default(now())
-  orderSnapshot     Json
-  assemblySnapshot  Json     @default("{}")
+  id               String   @id @default(uuid())
+  clientId         String
+  connectionId     String
+  orderId          String
+  assemblyId       String   @unique
+  requestId        String
+  warehouseId      String
+  skuId            String
+  quantity         Int
+  kiz              String?
+  source           String
+  shippedAt        DateTime @default(now())
+  orderSnapshot    Json
+  assemblySnapshot Json     @default("{}")
 
   @@index([clientId, connectionId, orderId])
   @@index([clientId, warehouseId, shippedAt])
@@ -2878,19 +2712,19 @@ model WbOrderShipment {
 
 // FIX: immutable evidence of the completed physical attempt before a repeat.
 model FbsAssemblyAttemptHistory {
-  id                 String   @id
-  clientId           String
-  requestId          String
-  orderId            String
-  workerUserId       String?
-  completedAt        DateTime
-  successorId        String   @unique
-  repeatRunId        String
-  taskSnapshot       Json
-  kiz                String?
-  linkSnapshot       Json
-  archivedByUserId   String
-  archivedAt         DateTime @default(now())
+  id               String   @id
+  clientId         String
+  requestId        String
+  orderId          String
+  workerUserId     String?
+  completedAt      DateTime
+  successorId      String   @unique
+  repeatRunId      String
+  taskSnapshot     Json
+  kiz              String?
+  linkSnapshot     Json
+  archivedByUserId String
+  archivedAt       DateTime @default(now())
 
   @@index([requestId])
   @@index([clientId, completedAt])
@@ -2900,39 +2734,39 @@ model FbsAssemblyAttemptHistory {
 }
 
 model FbsRepeatAssemblyRun {
-  id               String   @id @default(uuid())
-  fingerprint      String   @unique
-  clientId         String
-  warehouseId      String
-  requestId        String   @unique
-  createdByUserId  String
-  createdAt        DateTime @default(now())
+  id              String   @id @default(uuid())
+  fingerprint     String   @unique
+  clientId        String
+  warehouseId     String
+  requestId       String   @unique
+  createdByUserId String
+  createdAt       DateTime @default(now())
 }
 
 // FIX: durable saga before any WB mutation. Original physical attempts remain
 // immutable JSON evidence; SAME_ITEM does not duplicate their analytics rows.
 model FbsReshipmentRun {
-  id              String   @id @default(uuid())
-  fingerprint     String   @unique
-  previewToken    String
-  clientId        String
-  warehouseId     String
-  connectionId    String
-  mode            String
-  status          String   @default("PENDING")
-  phase           String   @default("PLANNED")
-  supplyName      String   @unique
-  supplyId        String?
-  requestId       String?  @unique
-  sourceRequestIds String[] @default([])
-  snapshot        Json
-  errorMessage    String?
-  leaseToken      String?
-  leaseUntil      DateTime?
+  id               String               @id @default(uuid())
+  fingerprint      String               @unique
+  previewToken     String
+  clientId         String
+  warehouseId      String
+  connectionId     String
+  mode             String
+  status           String               @default("PENDING")
+  phase            String               @default("PLANNED")
+  supplyName       String               @unique
+  supplyId         String?
+  requestId        String?              @unique
+  sourceRequestIds String[]             @default([])
+  snapshot         Json
+  errorMessage     String?
+  leaseToken       String?
+  leaseUntil       DateTime?
   createdByUserId  String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  claims          FbsReshipmentClaim[]
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  claims           FbsReshipmentClaim[]
 
   @@index([clientId, warehouseId, createdAt])
   @@index([sourceRequestIds], type: Gin)
@@ -2940,7 +2774,7 @@ model FbsReshipmentRun {
 
 // FIX: overlapping selections and different modes cannot own the same cycle.
 model FbsReshipmentClaim {
-  id           String @id @default(uuid())
+  id           String           @id @default(uuid())
   runId        String
   connectionId String
   orderId      String
@@ -2953,7 +2787,7 @@ model FbsReshipmentClaim {
 
 model FbsWebKizStickerPrint {
   id          String   @id @default(uuid())
-  kiz         String
+  kiz         String   @unique
   orderId     String
   assemblyId  String
   clientId    String
@@ -2964,7 +2798,6 @@ model FbsWebKizStickerPrint {
   printedAt   DateTime @default(now())
 
   @@unique([orderId, assemblyId])
-  @@index([kiz])
   @@index([clientId, printedAt])
   @@index([requestId, printedAt])
 }
@@ -2978,50 +2811,50 @@ enum FbsPrintJobStatus {
 }
 
 model FbsPrintStation {
-  id              String   @id @default(uuid())
-  name            String   @unique
-  agentKey        String   @unique
-  printerName     String
-  printerModel    String
-  labelWidthMm    Int      @default(58)
-  labelHeightMm   Int      @default(40)
-  enabled         Boolean  @default(true)
-  lastSeenAt      DateTime?
-  lastError       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  jobs            FbsPrintJob[]
+  id            String        @id @default(uuid())
+  name          String        @unique
+  agentKey      String        @unique
+  printerName   String
+  printerModel  String
+  labelWidthMm  Int           @default(58)
+  labelHeightMm Int           @default(40)
+  enabled       Boolean       @default(true)
+  lastSeenAt    DateTime?
+  lastError     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  jobs          FbsPrintJob[]
 
   @@index([enabled, lastSeenAt])
 }
 
 model FbsPrintJob {
-  id              String            @id @default(uuid())
-  stationId       String
-  station         FbsPrintStation   @relation(fields: [stationId], references: [id], onDelete: Cascade)
-  historyId       String            @unique
-  assemblyId      String
-  requestId       String
-  requestNumber   Int?
-  orderId         String
-  kiz             String
-  warehouseName   String
-  productName     String?
-  stickerCode     String?
-  stickerMime     String            @default("image/png")
-  stickerBase64   String
-  status          FbsPrintJobStatus @default(QUEUED)
-  attempts        Int               @default(0)
-  source          String            @default("TSD_FBS_ASSEMBLY")
-  requestedById   String
-  requestedBy     String
-  deviceCode      String?
-  claimedAt       DateTime?
-  printedAt       DateTime?
-  failedAt        DateTime?
-  errorMessage    String?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  id            String            @id @default(uuid())
+  stationId     String
+  station       FbsPrintStation   @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  historyId     String            @unique
+  assemblyId    String
+  requestId     String
+  requestNumber Int?
+  orderId       String
+  kiz           String
+  warehouseName String
+  productName   String?
+  stickerCode   String?
+  stickerMime   String            @default("image/png")
+  stickerBase64 String
+  status        FbsPrintJobStatus @default(QUEUED)
+  attempts      Int               @default(0)
+  source        String            @default("TSD_FBS_ASSEMBLY")
+  requestedById String
+  requestedBy   String
+  deviceCode    String?
+  claimedAt     DateTime?
+  printedAt     DateTime?
+  failedAt      DateTime?
+  errorMessage  String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
 
   @@index([stationId, status, createdAt])
   @@index([requestId, createdAt])
@@ -3090,12 +2923,11 @@ model BillingInvoice {
   paymentCorrespondentAccount String?
   createdByUserId             String?
   client                      Client               @relation(fields: [clientId], references: [id])
-  warehouse                   Warehouse?            @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  warehouse                   Warehouse?           @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
   request                     ClientRequest?       @relation(fields: [requestId], references: [id])
   createdBy                   User?                @relation("BillingInvoiceCreatedBy", fields: [createdByUserId], references: [id])
   items                       BillingInvoiceItem[]
   payments                    BillingPayment[]
-  corrections                 BillingInvoiceCorrection[]
   createdAt                   DateTime             @default(now())
   updatedAt                   DateTime             @updatedAt
 
@@ -3106,40 +2938,6 @@ model BillingInvoice {
   @@index([source, periodFrom])
   @@index([createdByUserId])
   @@index([paymentBankAccountId])
-}
-
-// FIX: permanent close snapshots and signed amendments are separate from original documents and actual receipts.
-model BillingPeriodClose {
-  id              String   @id @default(uuid())
-  clientId        String
-  warehouseId     String
-  periodFrom      DateTime
-  periodTo        DateTime
-  invoiceIds      String[]
-  snapshot        Json
-  previewHash     String
-  reason          String
-  createdByUserId String
-  createdAt       DateTime @default(now())
-  client          Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  warehouse       Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
-  createdBy       User @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
-  @@index([clientId, warehouseId, periodFrom, periodTo])
-  @@index([invoiceIds], type: Gin)
-}
-
-model BillingInvoiceCorrection {
-  id              String @id @default(uuid())
-  invoiceId       String
-  amountRub       Decimal @db.Decimal(14, 2)
-  kind            String @default("ADJUSTMENT")
-  reason          String
-  operationKey    String @unique
-  createdByUserId String
-  createdAt       DateTime @default(now())
-  invoice         BillingInvoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
-  createdBy       User @relation(fields: [createdByUserId], references: [id], onDelete: Restrict)
-  @@index([invoiceId, createdAt])
 }
 
 model BillingInvoiceItem {
@@ -3500,25 +3298,25 @@ model LogisticsDeliveryRequest {
 }
 
 model TsdOperation {
-  id                String             @id @default(uuid())
-  deviceId          String
-  operationKey      String             @unique
-  operationType     String
-  payload           Json
-  status            TsdOperationStatus @default(ACCEPTED)
-  serverMessage     String?
-  reviewReason      TsdReviewReason?
-  resolutionMessage String?
-  reviewAction      TsdReviewAction?
-  reviewComment     String?
-  reviewedByUserId  String?
-  reviewedBy        User?              @relation("TsdOperationReviewedBy", fields: [reviewedByUserId], references: [id])
-  reviewedAt        DateTime?
+  id                   String             @id @default(uuid())
+  deviceId             String
+  operationKey         String             @unique
+  operationType        String
+  payload              Json
+  status               TsdOperationStatus @default(ACCEPTED)
+  serverMessage        String?
+  reviewReason         TsdReviewReason?
+  resolutionMessage    String?
+  reviewAction         TsdReviewAction?
+  reviewComment        String?
+  reviewedByUserId     String?
+  reviewedBy           User?              @relation("TsdOperationReviewedBy", fields: [reviewedByUserId], references: [id])
+  reviewedAt           DateTime?
   screenshotData       Bytes?
   screenshotMimeType   String?
   screenshotCapturedAt DateTime?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
 
   @@index([status, createdAt])
   @@index([deviceId])
@@ -3616,6 +3414,35 @@ model LabelTemplateVersion {
   @@index([templateId, createdAt])
 }
 
+// FIX: durable administrator queue; snapshots survive changes to the original picking task.
+model KizReviewCase {
+  id            String    @id @default(uuid())
+  clientId      String
+  warehouseId   String
+  taskId        String
+  requestId     String
+  kizIdentity   String
+  kiz           String    @db.Text
+  context       String
+  status        String    @default("OPEN")
+  decision      String
+  resolution    String?
+  reason        String?
+  decidedById   String?
+  decidedByName String?
+  decidedAt     DateTime?
+  usedAt        DateTime?
+  snapshot      Json
+  evidence      Json
+  attempts      Int       @default(1)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([taskId, kizIdentity])
+  @@index([warehouseId, status, createdAt])
+  @@index([clientId, warehouseId, status])
+}
+
 model AuditLog {
   id        String   @id @default(uuid())
   userId    String?
@@ -3653,94 +3480,307 @@ model WmsApiCredential {
   @@index([createdByUserId])
 }
 
+// FIX: immutable operational events with independent per-administrator receipts.
+model AdminNotification {
+  id          Int                        @id @default(autoincrement())
+  type        String
+  dedupeKey   String                     @unique
+  title       String
+  body        String
+  clientId    String
+  warehouseId String?
+  actorId     String
+  actorName   String
+  isDemo      Boolean                    @default(false)
+  sessionId   String?
+  auditBoxId  String?
+  requestId   String?
+  createdAt   DateTime                   @default(now())
+  receipts    AdminNotificationReceipt[]
+
+  @@index([clientId, id])
+  @@index([warehouseId, id])
+}
+
+model AdminNotificationReceipt {
+  notificationId Int
+  userId         String
+  readAt         DateTime?
+  popupShownAt   DateTime?
+  notification   AdminNotification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
+  @@index([userId, readAt])
+}
+
 // FIX: durable FBO ownership survives TSD disconnects and separates pick from pack.
 model FboAssembly {
-  requestId String @id
-  phase String @default("PICKING")
+  requestId       String              @id
+  phase           String              @default("PICKING")
   compositionHash String
-  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  units FboAssemblyUnit[]
-  actions FboAssemblyAction[]
-  boxes FboAssemblyBox[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  // FIX: immutable actual picking target; original request quantities remain unchanged.
+  pickClosure     Json?
+  request         ClientRequest       @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  units           FboAssemblyUnit[]
+  actions         FboAssemblyAction[]
+  boxes           FboAssemblyBox[]
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 }
 
 model FboAssemblyBox {
   direction String?
-  id String @id @default(uuid())
-  requestId String
-  boxId String
-  activeBoxId String? @unique
-  boxCode String
-  wholeBox Boolean @default(false)
-  closedAt DateTime?
-  confirmedAt DateTime?
+  id                String      @id @default(uuid())
+  requestId         String
+  boxId             String
+  activeBoxId       String?     @unique
+  boxCode           String
+  wholeBox          Boolean     @default(false)
+  closedAt          DateTime?
+  confirmedAt       DateTime?
   confirmedByUserId String?
-  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  assembly          FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+
   @@unique([requestId, boxCode])
   @@index([boxId])
 }
 
-// FIX: one request owns all destination allocations; no duplicate stock demand.
-model OzonFboShipment {
-  requestId String @id
-  importKey String @unique
-  directions Json
-  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
-  createdAt DateTime @default(now())
-}
-
 model FboAssemblyUnit {
-  id String @id @default(uuid())
-  requestId String
-  requestItemId String
-  skuId String
-  barcode String
-  markId String?
-  activeMarkId String? @unique
-  kiz String?
-  sourceBoxId String
-  sourceBoxCode String
-  wholeBox Boolean @default(false)
-  state String @default("PICKED")
-  targetBoxId String?
-  targetBoxCode String?
+  id             String      @id @default(uuid())
+  requestId      String
+  requestItemId  String
+  skuId          String
+  barcode        String
+  markId         String?
+  activeMarkId   String?     @unique
+  kiz            String?
+  sourceBoxId    String
+  sourceBoxCode  String
+  wholeBox       Boolean     @default(false)
+  state          String      @default("PICKED")
+  targetBoxId    String?
+  targetBoxCode  String?
   pickedByUserId String
   packedByUserId String?
-  pickedAt DateTime @default(now())
-  packedAt DateTime?
-  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  pickedAt       DateTime    @default(now())
+  packedAt       DateTime?
+  assembly       FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+
   @@index([requestId, state])
   @@index([sourceBoxId, state])
   @@index([targetBoxId, state])
 }
 
 model FboAssemblyAction {
-  id String @id
-  requestId String
+  id          String      @id
+  requestId   String
   payloadHash String
-  actorId String
-  assembly FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
-  createdAt DateTime @default(now())
+  actorId     String
+  assembly    FboAssembly @relation(fields: [requestId], references: [requestId], onDelete: Restrict)
+  createdAt   DateTime    @default(now())
+
   @@index([requestId, createdAt])
 }
 
-// FIX: per-product scan evidence for multi-line Ozon postings, accessed transactionally.
-model OzonFbsPickState {
-  assemblyId String @id
-  assembly FbsTsdAssembly @relation(fields: [assemblyId], references: [id], onDelete: Cascade)
-  data       Json
-  updatedAt  DateTime @default(now()) @updatedAt
+// FIX: durable WB stock changes; partial pending index and triggers are defined in the migration.
+model WbStockSyncQueue {
+  clientId          String    @id
+  revision          BigInt    @default(1)
+  completedRevision BigInt    @default(0)
+  requestedAt       DateTime  @default(now()) @db.Timestamptz(6)
+  nextAttemptAt     DateTime  @default(now()) @db.Timestamptz(6)
+  attempts          Int       @default(0)
+  skuIds            String[]  @default([])
+  allSkus           Boolean   @default(false)
+  leaseToken        String?
+  leaseUntil        DateTime? @db.Timestamptz(6)
+  lastError         String?
 }
 
-// FIX: durable receipt evidence; physical quantities and approval audit remain authoritative.
-model ReceiptStockIdentity {
-  boxId String @id
-  receiptAt DateTime?
-  movementAt DateTime?
-  updatedAt DateTime @default(now())
-  box Box @relation(fields: [boxId], references: [id], onDelete: Cascade)
+// FIX: independent committed events avoid a shared write lock on warehouse operations.
+model WbStockSyncEvent {
+  id          BigInt    @id @default(autoincrement())
+  clientId    String
+  skuIds      String[]
+  allSkus     Boolean
+  txid        BigInt    @default(dbgenerated("txid_current()"))
+  createdAt   DateTime  @default(now()) @db.Timestamptz(6)
+  processedAt DateTime? @db.Timestamptz(6)
 
-  @@index([receiptAt])
+  @@index([clientId, txid], map: "WbStockSyncEvent_revision_idx")
+}
+
+model FbsSizeSubstitution {
+  taskId           String   @id
+  clientId         String
+  warehouseId      String
+  requestId        String   @unique
+  sourceSkuId      String
+  targetSkuId      String
+  approvedByUserId String
+  createdAt        DateTime @default(now())
+}
+
+// FIX: payroll records are separate from operational picking and printer state.
+model PayrollEmployee {
+  id             String                 @id @default(uuid())
+  warehouseId    String
+  userId         String?                @unique
+  name           String
+  isActive       Boolean                @default(true)
+  isDemo         Boolean                @default(false)
+  picker         Boolean                @default(true)
+  loader         Boolean                @default(false)
+  paymentMethod  String                 @default("CASH")
+  paymentPhone   String?
+  paymentBank    String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  rates          PayrollCondition[]
+  shifts         PayrollShift[]
+  handlingShares PayrollHandlingShare[]
+  workDays       PayrollWorkDay[]
+
+  @@index([warehouseId, isDemo, isActive])
+  payrollPrimaryId String?
+  payrollPrimary PayrollEmployee? @relation("PayrollIdentity", fields: [payrollPrimaryId], references: [id], onDelete: Restrict)
+  payrollAliases PayrollEmployee[] @relation("PayrollIdentity")
+  @@index([payrollPrimaryId])
+}
+
+model PayrollCondition {
+  id          String          @id @default(uuid())
+  employeeId  String
+  kind        String
+  rateKopecks Int
+  startsAt    DateTime
+  endsAt      DateTime?
+  temporary   Boolean         @default(false)
+  reason      String
+  createdById String
+  createdAt   DateTime        @default(now())
+  employee    PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@index([employeeId, kind, startsAt])
+}
+
+model PayrollShift {
+  id          String          @id @default(uuid())
+  employeeId  String
+  startsAt    DateTime
+  endsAt      DateTime?
+  workDate    String
+  source      String
+  startPhoto  String?
+  endPhoto    String?
+  createdById String
+  reason      String?
+  version     Int             @default(1)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  employee    PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  cancelledAt DateTime?
+  breaks      PayrollBreak[]
+
+  @@index([employeeId, workDate])
+}
+
+model PayrollHandling {
+  id              String                 @id @default(uuid())
+  warehouseId     String
+  startsAt        DateTime
+  operation       String
+  palletCount     Decimal                @db.Decimal(12, 4)
+  status          String                 @default("REVIEW")
+  createdById     String
+  confirmedById   String?
+  confirmedAt     DateTime?
+  reason          String?
+  createdAt       DateTime               @default(now())
+  shares          PayrollHandlingShare[]
+  boxCount        Int                    @default(0)
+  bagCount        Int                    @default(0)
+  rollCount       Int                    @default(0)
+  unitRateKopecks Int?
+
+  @@index([warehouseId, startsAt])
+}
+
+model PayrollHandlingShare {
+  operationId   String
+  employeeId    String
+  amountKopecks Int?
+  operation     PayrollHandling @relation(fields: [operationId], references: [id], onDelete: Restrict)
+  employee      PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@id([operationId, employeeId])
+}
+
+model PayrollAudit {
+  id          String   @id @default(uuid())
+  warehouseId String
+  actorId     String
+  entityId    String
+  action      String
+  details     Json
+  createdAt   DateTime @default(now())
+
+  @@index([warehouseId, entityId, createdAt])
+}
+
+model PayrollSettlement {
+  key         String    @id
+  employeeId  String
+  warehouseId String
+  workDate    String
+  status      String
+  snapshot    Json
+  comment     String
+  paidAt      DateTime?
+  updatedById String
+  updatedAt   DateTime  @updatedAt
+
+  @@index([employeeId, workDate])
+}
+
+model PayrollHistorical {
+  key           String   @id
+  employeeId    String
+  warehouseId   String
+  workDate      String
+  amountKopecks Int
+  status        String
+  data          Json
+  sourceHash    String
+  createdById   String
+  createdAt     DateTime @default(now())
+
+  @@index([employeeId, workDate])
+}
+
+model PayrollWorkDay {
+  employeeId   String
+  workDate     String
+  lunchMinutes Int?
+  employee     PayrollEmployee @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  @@id([employeeId, workDate])
+}
+
+model PayrollBreak {
+  id       String       @id
+  shiftId  String
+  startsAt DateTime
+  endsAt   DateTime?
+  shift    PayrollShift @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+
+  @@index([shiftId, startsAt])
+}
+
+model OzonFboShipment {
+ requestId String @id
+ importKey String @unique
+ directions Json
+ request ClientRequest @relation(fields:[requestId],references:[id],onDelete:Restrict)
+ createdAt DateTime @default(now())
 }

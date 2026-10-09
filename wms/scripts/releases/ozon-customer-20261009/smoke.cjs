@@ -1,0 +1,21 @@
+require('reflect-metadata');const assert=require('assert/strict'),fs=require('fs'),{PrismaClient}=require('@prisma/client');
+const {OzonFboImportService}=require('/app/apps/api/dist/modules/client-requests/ozon-fbo-import.service');
+const {ClientScopeService}=require('/app/apps/api/dist/modules/auth/client-scope.service');
+const db=new PrismaClient();
+(async()=>{const clientId='c401202c-be57-4310-9939-2ea36767da37';
+ const link=await db.warehouseClient.findFirstOrThrow({where:{clientId,status:'ACTIVE',warehouse:{isActive:true}},orderBy:{warehouseId:'asc'}});
+ const owner=await db.user.findFirstOrThrow({where:{status:'ACTIVE'}});
+ const user={id:owner.id,permissionCodes:['system:admin'],roleCodes:['OWNER'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:link.warehouseId};
+ const file={buffer:fs.readFileSync('/test/customer.xlsx'),originalname:'Поставка Яна, Полузамок.xlsx',mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'};
+ const dto={clientId,destinationCity:'Проверка выпуска — откат',desiredDate:'2026-10-11',title:'Проверка — откат'};
+ const before=await db.ozonFboShipment.count();let proof;
+ try{await db.$transaction(async tx=>{const proxy=new Proxy(tx,{get:(t,k)=>k==='$transaction'?fn=>fn(tx):t[k]});
+  const svc=new OzonFboImportService(proxy,new ClientScopeService());const preview=await svc.preview(file,dto,user);
+  assert.equal(preview.totalQuantity,393);assert.equal(preview.items.length,18);assert.equal(preview.directions.length,11);
+  const created=await svc.commit(file,dto,user),again=await svc.commit(file,dto,user);assert.equal(created.request.id,again.request.id);assert.equal(again.existing,true);
+  const request=await tx.clientRequest.findUniqueOrThrow({where:{id:created.request.id},include:{items:true,ozonShipment:true}});
+  assert.equal(request.items.reduce((s,i)=>s+i.quantity,0),393);assert.equal(request.ozonShipment.directions.length,11);
+  proof={total:393,skus:18,directions:11,duplicatePrevented:true,rolledBack:true};throw Error('ROLLBACK_VERIFIED');
+ },{timeout:30000});}catch(e){if(e.message!=='ROLLBACK_VERIFIED')throw e;}
+ assert.equal(await db.ozonFboShipment.count(),before);console.log(JSON.stringify(proof));
+})().finally(()=>db.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});
