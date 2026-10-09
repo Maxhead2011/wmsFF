@@ -1,3 +1,5 @@
+PR520: вход `OzonFboPanel` выбирает `OzonCustomerWorkspace` или прежний API-режим. `GET /ozon-fbo-import/requests` возвращает сборки клиента активного филиала.
+
 ## ФБО Ozon / PR516
 
 Импорт: `ozon-fbo-import.service/controller.ts`; квоты: `ozon-fbo-directions.ts`; одна ClientRequest + OzonFboShipment, короба с direction. Web: OzonCustomerImport/FboTwoStagePanel; Android: FboTwoStageScreen/FboScanState. [Сценарий](ozon-fbo-customer-file.md).
