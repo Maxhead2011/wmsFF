@@ -1,3 +1,5 @@
+PR539 marketplace isolation: `fboRequestScope.spec.ts`, `client-requests.service.spec.ts`; actual runtime `scripts/tests/fbo-marketplace-runtime.cjs` and read-only `scripts/releases/fbo-marketplace-20261009/smoke.cjs`. API3266/web414 passed, 144/2 skipped; runtime2 passed.
+
 LOGOFF223 / PR535: [found-KIZ route](kiz-found-tsd-route.md); `KizFoundRouteTest` verifies actual Retrofit paths for all five actions.
 
 Found KIZ: `kiz-found-review.spec.ts`, `kiz-location.service.spec.ts`, `KizFoundPanel.test.tsx`, `KizFoundPolicyTest`; actual candidates: `scripts/tests/kiz-found-postgres.cjs`, `kiz-found-browser.cjs`, `kiz-found-runtime.cjs`. PostgreSQL uses only localhost:55469 and its own kiz_found_review schema.

@@ -1,3 +1,5 @@
+Published PR539 (2026-10-09): WB/Ozon FBO lists separated by persisted Ozon shipment relation. API sha256:fe92f300071c6b51a2a8e5452bfef661910711c4e5b629f9e40d2c191aeb9f24, web sha256:302d0ae012e1317cad9b55b07080adc59472a48ca0367a85b21a4ea3af861dfd. Baseline `2026-10-09-fbo-marketplace`; sourceParityVerified=false. APK223, flags and business records unchanged. API3266/web414, runtime2 and read-only live list handler passed; 144/2 skipped, dedicated KIZ DB integration excluded. Rollback tags: logoff-api:before-fbo-marketplace-20261009 and logoff-web:before-fbo-marketplace-20261009.
+
 Current verified release: PR537, print agent **2026.10.09.2**. [Production](current-production.md), [evidence](releases/print-agent-ack-conflict-20261009.json). Only agent download changed.
 
 LOGOFF223 / PR535: [found-KIZ route](kiz-found-tsd-route.md); `KizFoundRouteTest` verifies actual Retrofit paths for all five actions.
