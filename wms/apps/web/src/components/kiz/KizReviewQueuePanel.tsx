@@ -1,6 +1,7 @@
 import {KizReviewCard} from './KizReviewCard';
 export {KizReviewCard} from './KizReviewCard';
 import {reviewWeek} from './reviewWeek';
+import {KizFoundPanel} from './KizFoundPanel';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {decideKizReview,fetchKizReviewQueue,type AuthSession,type KizReviewCase} from '../../lib/api';
 
@@ -22,6 +23,7 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
   useEffect(()=>{live.current=true;void load();return()=>{live.current=false;generation.current++;};},[load]);
   useEffect(()=>{if(selected)return;const timer=window.setInterval(()=>{if(!document.hidden&&!lock.current)void load();},30000);return()=>window.clearInterval(timer);},[load,selected]);
   return <section className="kiz-queue">
+    {import.meta.env.VITE_KIZ_FOUND_REVIEW_ENABLED==='true'&&<KizFoundPanel session={session}/>}
     <h3>Обращения сборщиков</h3>
     <p>Обращения за последние 7 дней. Проблемные КИЗы поступают сюда автоматически. Решение действует только для указанного задания.</p>
     <button type="button" disabled={saving} onClick={()=>void load()}>Обновить обращения</button>

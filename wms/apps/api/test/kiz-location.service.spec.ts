@@ -23,6 +23,14 @@ beforeEach(() => vi.stubEnv('WMS_KIZ_LOCATION_CHECK_ENABLED', 'true'));
 afterEach(() => vi.unstubAllEnvs());
 
 describe('administrator KIZ location check (read only)', () => {
+  it('offers a physical-found review for a shipped mark without a box, without restoring stock', async () => {
+    // TEST: a historical shipment must not lose all actions merely because boxId is null.
+    vi.stubEnv('WMS_KIZ_FOUND_REVIEW_ENABLED', 'true');
+    const {service,db}=setup([{...mark(),box:null,boxId:null,status:'SHIPPING',stockMovement:{warehouseId:'wh'}}],[]);
+    const response=await service.lookup(full,user);
+    expect((response as any).foundCandidate).toEqual({markId:'mark',identity:code});
+    expect(Object.keys(db)).toEqual(['productMark','storagePalletBox']);
+  });
   it('validates input and delegates the authenticated user through the controller', async () => {
     // TEST: API validates scanner input and passes scope rather than trusting client-supplied placement.
     const { service } = setup(); const controller = new KizLocationController(service);

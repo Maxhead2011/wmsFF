@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { checkKizHistory, type AuthSession, type KizCheckResult } from '../../lib/api';
 import { KizReviewQueuePanel } from './KizReviewQueuePanel';
+import { KizFoundPanel } from './KizFoundPanel';
 
 // FIX: a dedicated read-only scanner view, with explicit evidence instead of inferred relabeling.
 export function KizCheckPanel({ session }: { session: AuthSession }) {
@@ -31,6 +32,7 @@ export function KizCheckPanel({ session }: { session: AuthSession }) {
     {error && <p role="alert">{error}</p>}
     {result && !result.found && <p>КИЗ не найден в выбранном филиале.</p>}
     {result?.ambiguous && <p role="alert">Найдено несколько записей. Нужна проверка привязок.</p>}
+    {result?.foundCandidate&&import.meta.env.VITE_KIZ_FOUND_REVIEW_ENABLED==='true'&&<KizFoundPanel session={session} candidate={result.foundCandidate}/>}
     {result?.matches.map(m => <article key={m.id} className="kiz-queue">
       <h3>{m.product.name} · {m.product.size}</h3>
       <p>{m.client} · {m.product.article} · {m.product.color}</p>
