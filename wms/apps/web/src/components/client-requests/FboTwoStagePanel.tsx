@@ -1,3 +1,4 @@
+import { startVisiblePolling } from '../../lib/visiblePolling';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { startFboPolling } from './fboLivePolling';
 import { FboProgress } from './FboProgress';
@@ -13,6 +14,7 @@ export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:st
 }
 
 export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void}) {
+  const panel=useRef<HTMLDivElement>(null);
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
   const [pallet,setPallet]=useState('');
   const [direction,setDirection]=useState('');
@@ -26,7 +28,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   const active=useRef(true),refreshRef=useRef<()=>void>(()=>{});
   // FIX: refresh the panel's own plan, rather than ignoring updated parent props.
   refreshRef.current=()=>{if(!scanMode&&!code&&!barcode)void refresh();};
-  useEffect(()=>{active.current=true;const stop=startFboPolling(()=>refreshRef.current(),()=>document.visibilityState==='visible');return()=>{active.current=false;stop();};},[]);
+  useEffect(()=>{active.current=true;const stop=import.meta.env.VITE_MENU_READS_ENABLED==='true'?startVisiblePolling(()=>refreshRef.current(),()=>panel.current):startFboPolling(()=>refreshRef.current(),()=>document.visibilityState==='visible');return()=>{active.current=false;stop();};},[]);
   const sourceTask=plan.route.find(b=>b.boxCode===source);
   const title=plan.phase==='CONTROL'?'Проверка всех коробов поставки':plan.phase==='PACKING'?'2. Упаковка поставки':'1. Отбор товара';
   async function command(action:string,extra:Partial<FboAction>={}) {
@@ -55,13 +57,13 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   async function refresh(){if(inFlight.current)return;inFlight.current=true;setRefreshing(true);setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);if(!active.current)return;setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){if(active.current)setError(`Не удалось обновить статистику: ${String(e)}`);}finally{inFlight.current=false;if(active.current){setBusy(false);setRefreshing(false);}}}
   async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
   const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
-  return <div className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
+  return <div ref={panel} className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     {/* FIX: standard header enables retained la_panthera windows; reads never trap the user. */}
     <header className="online-execution-modal__header" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
     <h2>FBO {plan.marketplace==='OZON'?'Ozon':'WB'} {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
     <div className="online-execution-modal__actions"><button type="button" className="icon-button" aria-label="Закрыть" title="Закрыть" disabled={busy&&!refreshing} onClick={onClose}>×</button></div>
     </header>
-    <FboProgress plan={plan} paused={scanMode||!!pending}/>
+    <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>
     {!!plan.directions?.length&&<section aria-label="Направления сборки"><h3>Единая сборка · направления</h3>{plan.directions.map(d=><details key={d.name}><summary>{d.name}: упаковано {d.packed} из {d.needed}</summary><ul>{d.items.map(i=><li key={i.skuId}>{plan.lines.find(l=>l.skuId===i.skuId)?.name} · {i.barcode}: {i.packed} из {i.quantity}</li>)}</ul></details>)}
     {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}

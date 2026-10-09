@@ -1,3 +1,4 @@
+import { FboHistory } from './FboHistory';
 import { assemblyProductLabel, hasAssemblyProductDisplay } from '../../lib/assemblyProductDisplay';
 import { useState } from 'react';
 import type { FboPlan } from '../../lib/api';
@@ -5,7 +6,7 @@ import './fbo.css';
 
 const time = (value?:string|null) => value ? new Date(value).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}) : '—';
 // FIX: FBO uses durable picked/packed units, never inferred stock reductions, for online statistics.
-export function FboProgress({plan,paused=false}:{plan:FboPlan;paused?:boolean}) {
+export function FboProgress({plan,paused=false,accessToken}:{plan:FboPlan;paused?:boolean;accessToken?:string}) {
   const [search,setSearch]=useState(''),[tab,setTab]=useState('all');
   const q=search.trim().toLocaleLowerCase('ru-RU');
   const lines=plan.lines.filter(l=>(`${l.name} ${l.article??''} ${l.size??''} ${l.barcode}`).toLocaleLowerCase('ru-RU').includes(q))
@@ -27,6 +28,6 @@ export function FboProgress({plan,paused=false}:{plan:FboPlan;paused?:boolean}) 
       {lines.map(l=><tr key={l.id}><td><strong>{assemblyProductLabel(l, l.name)}</strong>{!hasAssemblyProductDisplay(l)&&<><br/>{l.article} · {l.size}</>}</td><td>{hasAssemblyProductDisplay(l) ? '—' : l.barcode}</td><td>{l.needed}</td><td>{l.picked}</td><td>{l.packed}</td><td>{l.remaining}</td><td>{l.remaining>0 ? plan.route.filter(r=>r.tasks.some(t=>t.skuId===l.skuId)).map(r=><div key={r.boxCode}>{r.boxCode} · {r.pallet||'Без паллета'} · {r.tasks.filter(t=>t.skuId===l.skuId).reduce((s,t)=>s+t.quantity,0)} шт.</div>) : 'Отбор завершён'}{(l.pendingPlacementQuantity??0)>0&&<div>Принято, ожидает размещения: {l.pendingPlacementQuantity} шт.</div>}{l.remaining>0&&!(l.pendingPlacementQuantity??0)&&!plan.route.some(r=>r.tasks.some(t=>t.skuId===l.skuId))?'Доступный короб не найден':null}</td></tr>)}
       {!lines.length&&<tr><td colSpan={7}>Нет позиций по выбранному фильтру.</td></tr>}
     </tbody></table></div>
-    <details className="fbo-progress-history"><summary>История отбора · {(plan.pickedUnits??[]).length} единиц</summary><div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Товар / ШК</th><th>КИЗ</th><th>Исходный короб</th><th>Отобрал / время МСК</th><th>Упаковка / время МСК</th></tr></thead><tbody>{(plan.pickedUnits??[]).map(u=><tr key={u.id}><td>{plan.lines.find(l=>l.id===u.requestItemId)?.name}<br/>{u.barcode}</td><td className="fbo-kiz">{u.kiz||'Без КИЗ'}</td><td>{u.sourceBoxCode}{u.wholeBox?' · целиком':''}</td><td>{u.pickedBy||'—'}<br/>{time(u.pickedAt)}</td><td>{u.targetBoxCode||'Не упаковано'}<br/>{u.packedBy} {time(u.packedAt)}</td></tr>)}</tbody></table></div></details>
+    <FboHistory plan={plan} accessToken={accessToken}/>
   </section>;
 }

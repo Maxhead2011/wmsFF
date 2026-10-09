@@ -11116,11 +11116,12 @@ export async function fetchTsdDevices(accessToken: string) {
 }
 
 export async function fetchTsdAssemblyPlan(accessToken: string, requestId: string) {
-  const load=()=>request<TsdAssemblyPlan>(`/tsd/requests/${requestId}`, {accessToken});
+  const load=()=>request<TsdAssemblyPlan>(`/tsd/requests/${requestId}${import.meta.env.VITE_MENU_READS_ENABLED==='true'?'?view=summary':''}`, {accessToken});
   return import.meta.env.VITE_MENU_READS_ENABLED==='true' ? sharedRead(JSON.stringify([accessToken,requestId,'assembly']),load) : load();
 }
 
 export type FboPlan = {
+  pickedUnitsCount?:number;
   marketplace?:string;
   directions?:Array<{name:string;needed:number;packed:number;items:Array<{skuId:string;barcode:string;quantity:number;packed:number}>}>;
   pendingPlacementQuantity?:number;
@@ -11132,8 +11133,9 @@ export type FboPlan = {
   route:Array<{boxCode:string;pallet:string;zone:string;wholeBox:boolean;recount:boolean;tasks:Array<{skuId:string;barcode:string;name:string;quantity:number;requiresKiz:boolean}>}>;
   boxes:Array<{code:string;direction?:string|null;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
 };
+export async function fetchFboHistory(accessToken:string,id:string,offset:number) {return request<{pickedUnits:NonNullable<FboPlan['pickedUnits']>;total:number;offset:number}>(`/tsd/requests/${id}/fbo?view=history&offset=${offset}`,{accessToken});}
 export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string;direction?:string};
-export async function fetchFboPlan(accessToken:string,id:string) { const load=()=>request<FboPlan>(`/tsd/requests/${id}/fbo`,{accessToken});return import.meta.env.VITE_MENU_READS_ENABLED==='true'?sharedRead(JSON.stringify([accessToken,id,'fbo']),load):load(); }
+export async function fetchFboPlan(accessToken:string,id:string) { const load=()=>request<FboPlan>(`/tsd/requests/${id}/fbo${import.meta.env.VITE_MENU_READS_ENABLED==='true'?'?view=summary':''}`,{accessToken});return import.meta.env.VITE_MENU_READS_ENABLED==='true'?sharedRead(JSON.stringify([accessToken,id,'fbo']),load):load(); }
 export async function actFbo(accessToken:string,id:string,body:FboAction) {
   const response=await fetch(`${API_BASE_URL}/tsd/requests/${id}/fbo/actions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${accessToken}`},body:JSON.stringify(body)});
   if(!response.ok) throw Object.assign(new Error(await responseError(response)),{rejected:response.status>=400&&response.status<500&&response.status!==408});

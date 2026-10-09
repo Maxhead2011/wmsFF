@@ -6,13 +6,14 @@ export const instructionPayloadKeys = ['barcode','barCode','sku','offerBarcode',
   'brand','brandName','ip','seller','sellerName','supplierName','color','colour','colorName','size','techSize','russianSize'];
 
 export async function leanInstructionCatalog(db: Prisma.TransactionClient, clientId:string) {
-  const rows = await db.sku.findMany({where:{clientId},omit:{marketplacePayload:true},include:{barcodes:{select:{value:true,isPrimary:true}}}});
-  if(!rows.length)return [];
-  const payloads = await db.$queryRaw<Array<{id:string;payload:Prisma.JsonValue}>>(Prisma.sql`
+  const rowsRead = db.sku.findMany({where:{clientId},omit:{marketplacePayload:true},include:{barcodes:{select:{value:true,isPrimary:true}}}});
+  // FIX: independent projections overlap; no completed stock response is cached.
+  const payloadRead = db.$queryRaw<Array<{id:string;payload:Prisma.JsonValue}>>(Prisma.sql`
     SELECT id, COALESCE((SELECT jsonb_object_agg(key,value)
       FROM jsonb_each(CASE WHEN jsonb_typeof("marketplacePayload")='object' THEN "marketplacePayload" ELSE '{}'::jsonb END)
       WHERE key IN (${Prisma.join(instructionPayloadKeys)})), '{}'::jsonb) AS payload
-    FROM "Sku" WHERE "clientId"=${clientId} AND id IN (${Prisma.join(rows.map(r=>r.id))})`);
+    FROM "Sku" WHERE "clientId"=${clientId}`);
+  const [rows,payloads]=await Promise.all([rowsRead,payloadRead]);
   const byId=new Map(payloads.map(r=>[r.id,r.payload]));
   return rows.map(r=>({...r,marketplacePayload:byId.get(r.id)??null}));
 }

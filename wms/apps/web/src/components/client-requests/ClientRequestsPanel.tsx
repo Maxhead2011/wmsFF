@@ -1,3 +1,4 @@
+import { startVisiblePolling } from '../../lib/visiblePolling';
 import { onlineRequestToolbar } from './onlineRequestToolbar';
 import { isSkuCollectionRequest } from './skuCollectionRow';
 import './request-action-menus.css'; // FIX: scoped modern request disclosures.
@@ -425,6 +426,7 @@ export function ClientRequestsPanel({
     };
   }, [canRead, focusRequestId, session.accessToken]);
 
+  const onlineRoot=useRef<HTMLElement>(null);
   useEffect(() => {
     const requestId = onlinePreview?.request.id;
     if (!requestId || onlinePreview?.plan?.fbo) {
@@ -460,13 +462,13 @@ export function ClientRequestsPanel({
       }
     };
 
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 5000);
+    const stop=import.meta.env.VITE_MENU_READS_ENABLED==='true'
+      ?startVisiblePolling(()=>void refresh(),()=>onlineRoot.current?.querySelector('.online-execution-modal')??null)
+      :(()=>{const timer=window.setInterval(()=>void refresh(),5000);return()=>window.clearInterval(timer);})();
 
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      stop();
     };
   }, [onlinePreview?.request.id, !!onlinePreview?.plan?.fbo, session.accessToken]);
 
@@ -1938,7 +1940,7 @@ export function ClientRequestsPanel({
   }
 
   return (
-    <section className="client-requests-panel" aria-label="Клиентские заявки">
+    <section ref={onlineRoot} className="client-requests-panel" aria-label="Клиентские заявки">
       {returnReceipt ? <FbsReturnReceiptDialog key={returnReceipt.assemblyId}
         orderId={returnReceipt.orderId} productName={returnReceipt.productName} requiresKiz={returnReceipt.requiresKiz}
         busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}

@@ -5,7 +5,8 @@ function fixture(){
  process.env.WMS_FBO_COMPACT_PACKING_ENABLED='true';let committed=false,writes=0;
  const svc=Object.create(FboTwoStageService.prototype),dto={action:'OPEN_BOX',operationId:'operation',targetBoxCode:'FFL_BOX'},user={id:'u'};
  const request={id:'r',items:[{id:'l',skuId:'s',barcode:'123',quantity:2,sku:{}}]};
- const tx={$queryRaw:async()=>[{phase:'PACKING',compositionHash:createHash('sha256').update(JSON.stringify([['l','s','123',2]])).digest('hex')}],
+ // TEST: the WB fixture has no Ozon shipment even when the production Ozon flag is enabled.
+ const tx={ozonFboShipment:{findUnique:async()=>null},$queryRaw:async()=>[{phase:'PACKING',compositionHash:createHash('sha256').update(JSON.stringify([['l','s','123',2]])).digest('hex')}],
  fboAssemblyUnit:{groupBy:async({by})=>by.includes('requestItemId')?[{requestItemId:'l',state:'PICKED',wholeBox:false,_count:{_all:2}}]:[]},
  fboAssemblyBox:{findMany:async()=>[{boxId:'b',boxCode:'FFL_BOX',wholeBox:false,closedAt:null,confirmedAt:null}]}};
  svc.prisma={fboAssemblyAction:{findUnique:async()=>committed?{actorId:'u',payloadHash:svc.actionHash(dto)}:null},$transaction:async fn=>fn(tx)};

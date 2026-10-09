@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Param, Post, Res, StreamableFile, UseInterceptors } from '@nestjs/common';
+import { FboRouteDto } from './dto/fbo-route.dto';
+import { onlinePlanView } from './online-plan-view';
+import { Body, Query, Controller, Get, Param, Post, Res, StreamableFile, UseInterceptors } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -16,8 +18,8 @@ export class FboTwoStageController {
 
   @Get()
   @RequirePermissions('stock:read')
-  plan(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.fbo.plan(id, user);
+  async plan(@Param('id') id: string, @CurrentUser() user: AuthUser, @Query() route:FboRouteDto = {}) {
+    return onlinePlanView(await this.fbo.plan(id, user, route as Record<string, unknown>),route.view,route.offset);
   }
 
   @Post('actions')
