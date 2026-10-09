@@ -1,3 +1,4 @@
+import { assertSupplyMutable } from '../client-requests/ozon-supply-policy';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { assertDirectionCapacity, directionProgress, type OzonDirection } from './ozon-fbo-directions';
 import { createHash, randomUUID } from 'node:crypto';
@@ -200,6 +201,8 @@ export class FboTwoStageService {
                     throw new ConflictException('Номер операции уже использован с другими данными.');
                 return;
             }
+            // FIX: preserve idempotent replay above, freeze changes after an Ozon send.
+            assertSupplyMutable(shipment?.integration, dto.action);
             if (!['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(r.status))
                 throw new ConflictException('Заявка недоступна для сборки.');
             let a = await tx.fboAssembly.findUnique({ where: { requestId: id } });

@@ -1,3 +1,5 @@
+Ozon supply link: `ozon-assembly-supply.service/controller.ts`, `ozon-supply-policy.ts`, `OzonAssemblySupply.tsx`. See [workflow](ozon-assembly-supply-link.md).
+
 ## Онлайн-выполнение / PR525
 
 `online-plan-view.ts` — компактная проекция и страницы истории; `FboHistory.tsx` — загрузка по раскрытию; `visiblePolling.ts` — видимость конкретного окна; `menu-read-catalog.ts` — параллельные независимые чтения. Направления Ozon и права сохранены. База `2026-10-09-online-window`, sourceParityVerified=false.
