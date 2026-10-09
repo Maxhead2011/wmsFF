@@ -3684,6 +3684,9 @@ model FboAssemblyBox {
 
 // FIX: one request owns all destination allocations; no duplicate stock demand.
 model OzonFboShipment {
+  // FIX: durable external binding and per-direction delivery receipts.
+  externalOrderKey String? @unique
+  integration Json?
   requestId String @id
   importKey String @unique
   directions Json

@@ -1,3 +1,5 @@
+import { OzonAssemblySupplyController } from './ozon-assembly-supply.controller';
+import { OzonAssemblySupplyService } from './ozon-assembly-supply.service';
 import { Module } from '@nestjs/common';
 import { OzonFboImportController } from './ozon-fbo-import.controller';
 import { OzonFboImportService } from './ozon-fbo-import.service';
@@ -19,9 +21,10 @@ import { ClientRequestsService } from './client-requests.service';
 
 @Module({
   imports: [AuthModule, CommonModule, ClientNotificationsModule, StockModule, LogisticsModule, MarketplaceConnectionsModule],
-  controllers: [ClientRequestsController, OzonFboImportController],
+  controllers: [OzonAssemblySupplyController, ClientRequestsController, OzonFboImportController],
   providers: [
     OzonFboImportService,
+    OzonAssemblySupplyService,
     ClientRequestsService,
     ClientRequestDocumentService,
     ClientRequestEmergencyService,

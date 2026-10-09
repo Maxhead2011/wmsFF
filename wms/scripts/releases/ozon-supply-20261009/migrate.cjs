@@ -1,0 +1,2 @@
+const fs=require('fs'),{PrismaClient}=require('@prisma/client');const p=new PrismaClient();
+(async()=>{await p.$transaction(async tx=>{await tx.$executeRawUnsafe("SET LOCAL lock_timeout='5s'");for(const sql of fs.readFileSync('/test/migration.sql','utf8').split(';').map(s=>s.trim()).filter(Boolean))await tx.$executeRawUnsafe(sql);});console.log('ADDITIVE MIGRATION OK');})().finally(()=>p.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});

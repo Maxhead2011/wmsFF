@@ -90,6 +90,9 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         }
         await act('SORTED');
         for(const targetBoxCode of codes) await act('CONFIRM_BOX',{targetBoxCode});
+        // TEST: a persisted Ozon send freezes packing but allows final completion.
+        await p.ozonFboShipment.update({where:{requestId:request},data:{integration:{frozenHash:'external-send'}}});
+        await expect(act('OPEN_BOX',{targetBoxCode:codes[0],direction:'Москва'})).rejects.toThrow('зафиксирован');
         const result=await act('FINISH');
         expect(result.directions.map(d=>d.packed)).toEqual([2,2]);
         expect(await p.fboAssembly.count({where:{requestId:request}})).toBe(1);
