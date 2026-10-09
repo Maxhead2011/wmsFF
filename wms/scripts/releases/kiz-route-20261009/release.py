@@ -22,6 +22,9 @@ if sys.argv[1]=='stage':
  assert re.search(r'Signer #1 certificate SHA-256 digest: (\w+)',cert).group(1)=='52916d7797ade50cc1c50bba8787b9d2307b1e5dfd4ea725bd7c3be0e64f989b'
  with zipfile.ZipFile(r/'unsigned.apk') as a,zipfile.ZipFile(dest/name) as b:
   for n in a.namelist():assert a.read(n)==b.read(n)
+ # FIX: the signer may emit an incremental-install sidecar; it is not a public download.
+ sidecar=dest/(name+'.idsig')
+ if sidecar.exists():sidecar.unlink()
  data=(dest/name).read_bytes();(dest/'logoff-tsd.apk').write_bytes(data)
  meta={'versionCode':223,'versionName':'0.1.223-kiz-found-route','apkUrl':'https://wms.logoff.pro/downloads/'+name,'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'releasedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'releaseNotes':'Исправлена отправка найденного КИЗа на разбор из ТСД.'}
  (dest/'logoff-tsd.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n')
