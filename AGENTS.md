@@ -183,3 +183,5 @@ Latest verified PR516: baseline 2026-10-09-ozon-customer, APK220. WMS_OZON_FBO_I
 Latest verified PR520: baseline 2026-10-09-ozon-entry. Customer workbook mode is the default in FBO Ozon, with branch-scoped assembly list. PR518 retained; API/web delta only, APK220/schema/flags unchanged. Source parity false.
 
 Latest verified PR523: baseline2026-10-09-receipt-admin; receipt barcode review APK221 and scoped multi-warehouse administrator FBO access. Only our LOGOFF deployment; sold FFULHAB server/config/APK never touched. Source parity false. See current-production.md.
+
+Latest verified PR525: baseline2026-10-09-online-window; compact browser FBO history, visible-window polling, parallel FBS catalogue. Existing flags, APK221, Ozon directions, printing and sold WMS preserved; source parity false. See current-production.md.

@@ -1,3 +1,21 @@
+# Опубликовано PR525 / 09.10.2026 — быстрые окна онлайн-выполнения
+
+[Сценарий](online-window-performance.md), [запись выпуска](releases/online-window-20261009.json).
+API `sha256:2cb306003ed72669d57c6a948130c6675c44668cf8b373e92c403b4804750b8e`; web `sha256:4e86185feedabdb76f2ba0c27a7b039e353db976a90a284ee91d659932c5e0b7`.
+Baseline `2026-10-09-online-window`, sourceParityVerified=false.
+Существующий WMS_MENU_READS_ENABLED; настройки и схема не изменены.
+История ФБО по раскрытию, страницы по100; компактный ответ 1467254→92731 байт.
+Скрытые окна приостанавливают запросы, восстановление сразу обновляет план.
+Каталог ФБС читает независимые проекции параллельно (577–584→328–332мс).
+Локальный браузер: построение блока ФБО 456–471→4–8мс, обновление около2мс.
+Это не замер полного ответа через сеть планшета; полная история пока вычисляется сервером.
+3230 API /411 web прошли,142/2 пропущены; отдельный KIZ DB integration исключён.
+TypeScript,8 runtime-проверок, пагинация/повтор/сворачивание и Ozon-импорт/направления прошли.
+Рабочий снимок сверён с обязательным откатом; складские данные не менялись.
+PR523/522 сохранены, APK221/печать/проданная ВМС/прочие контейнеры не изменены.
+Health, публичный index и хеши проверены. Откат: logoff-api:before-online-window-20261009,
+logoff-web:before-online-window-20261009.
+
 # Published PR523 / 2026-10-09 - administrator branch access
 
 Baseline `2026-10-09-receipt-admin`, sourceParityVerified=false. API `sha256:70cd3860dc154f4bdd0077df3c3a7cc576a8393c13cc8f6c455221109399f8ac`; web `sha256:fa6f4af3634f85e7156348573e166354e5286e589a4c78a43c9b4ddf43f40c10` remains PR522. LOGOFF APK221 and all flags unchanged. Administrators use only their persisted active warehouse with existing read/write grants. Sold FFULHAB is untouched. [Release record](releases/receipt-admin-20261009.json).

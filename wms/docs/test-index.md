@@ -1,3 +1,7 @@
+## Онлайн-выполнение / PR525
+
+`online-plan-view.spec.ts`, `menu-read-catalog-parallel.spec.ts`; готовый API: `online-window-runtime.cjs`; браузер: `online-window-browser.cjs`, `ozon-customer-browser.cjs`, `ozon-entry-browser.cjs`. Старый граф воспроизводит 251 строку закрытой истории; новый проверяет 100-строчные страницы, ошибку/повтор, сворачивание и восстановление. API3230/web411,142/2 пропущены; KIZ integration требует отдельной БД.
+
 PR520: `OzonCustomerWorkspace.spec.tsx`, проверка scope в `ozon-customer-import.spec.ts`, готовый браузерный граф `scripts/tests/ozon-entry-browser.cjs`.
 
 ## ФБО Ozon / PR516
