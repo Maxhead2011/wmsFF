@@ -1,0 +1,36 @@
+{
+  "published": true,
+  "at": 1791562975.4585738,
+  "pr": 537,
+  "web": "sha256:a5dd34da44073508e60812b12cfc3bb4584d0986b3d564bb7545c9eaf3c1fae2",
+  "webBase": "sha256:d35ba057effb4be38e410df657ed00ff9da30dfc31eeda61de7bae32592a99b3",
+  "api": "sha256:42a700c2b000e6f21663d0efd4846630f501a3ead5825db4726b61887948df82",
+  "packageSha256": "1a0168c77096b2fcd5431478a800a2e218e60bc41e5a3f70d47def0a1375e1e7",
+  "changed": [
+    "downloads/LOGOFF-FBS-Print-Agent.zip"
+  ],
+  "apiAndOtherContainersUnchanged": true,
+  "apkAndConfigurationUnchanged": true,
+  "installedOnPrintingComputer": false,
+  "tests": {
+    "passed": true,
+    "sourceAgent": 27,
+    "agentPackage": 24,
+    "api": 3258,
+    "web": 412,
+    "apiSkipped": 138,
+    "webSkipped": 2,
+    "kizIntegrationExcluded": true,
+    "physicalPrinterTested": false,
+    "packageSha256": "1a0168c77096b2fcd5431478a800a2e218e60bc41e5a3f70d47def0a1375e1e7"
+  },
+  "pullRequest": {
+    "number": 537,
+    "url": "https://github.com/Maxhead2011/wmsFF/pull/537",
+    "merged": true,
+    "head": "a690a11dae0ad89715c7d8777483e75cbb178fb4",
+    "mergeSha": "efc899f7029dbb4d4be06ceefecb11bdb6684500",
+    "checks": []
+  },
+  "rollback": "logoff-web:before-print-agent-ack-conflict-20261009"
+}
