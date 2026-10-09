@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 222 // FIX: found KIZ review without a box, LOGOFF only.
-            versionName = "0.1.222-kiz-found-review"
+            versionCode = 223 // FIX: correct found-KIZ API route, LOGOFF only.
+            versionName = "0.1.223-kiz-found-route"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
