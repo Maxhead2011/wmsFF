@@ -1,3 +1,22 @@
+# Published PR529 / 2026-10-09 — found KIZ without a box
+
+[Scenario](kiz-found-review.md). Baseline `2026-10-09-kiz-found`, sourceParityVerified=false.
+API `sha256:d2b82098fe83c40e6dd170150631b5962ef102139140b4cb241c1ec8a84dc195`;
+web `sha256:85ad285a25fb94d2874e229b54c274f8b41e13a49f0d8b2c0bd09565aa616078`.
+LOGOFF APK222, `WMS_KIZ_FOUND_REVIEW_ENABLED=true` only on our WMS.
+Independent FOUND cases, explicit permission without stock, separate atomic return,
+one-use UNIT permission. Active assemblies still require their stock return.
+No production business records changed; no schema migration; FFULHAB untouched.
+
+Validation: API3258 passed /143 skipped, web412 /2 skipped, Android242 per tested
+LOGOFF/FFULHAB flavor; TypeScript, candidate runtime17, actual bundled browser,
+isolated PostgreSQL concurrent OPEN/RETURN, rollback and one-use consumption.
+Dedicated KIZ DB suite excluded without its configuration. No GitHub checks were reported.
+Live read-only check on the reported mark: SHIPPING, box=null, found action offered.
+Public hashes, signed APK certificate, health and unchanged other containers verified.
+Physical scanner confirmation remains after installing APK222.
+Rollback: `logoff-api:before-kiz-found-20261009`, `logoff-web:before-kiz-found-20261009`.
+
 # Published PR527 / 2026-10-09 - unified Ozon supply binding
 
 [Workflow](ozon-assembly-supply-link.md), [release record](releases/ozon-supply-20261009.json).
