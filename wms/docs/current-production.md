@@ -1,3 +1,11 @@
+# Published PR537 / 2026-10-09: print agent 2026.10.09.2
+
+A 409 result acknowledgement is retained and retried once per minute without blocking subsequent jobs. No automatic reprint or change to shipment accounting. One-time installation on the printing PC is required.
+Only downloads/LOGOFF-FBS-Print-Agent.zip changed; API, APK223, flags, stock and sold WMS preserved.
+Baseline `2026-10-09-print-agent-ack`, sourceParityVerified=false.
+27 source agent and 24 packaged tests passed; API3258/web412 passed, 138/2 skipped. Dedicated KIZ integration excluded. Physical printer unavailable locally.
+[Release evidence](releases/print-agent-ack-conflict-20261009.json). Rollback: `logoff-web:before-print-agent-ack-conflict-20261009`.
+
 # Published PR535 / 2026-10-09: LOGOFF APK223
 
 Corrected found-KIZ terminal API path. [Details](kiz-found-tsd-route.md).
