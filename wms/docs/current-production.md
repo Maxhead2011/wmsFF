@@ -1,3 +1,18 @@
+# Опубликовано PR531 / 09.10.2026 — постоянная станция печати
+
+Агент **2026.10.09.1** доступен в downloads/LOGOFF-FBS-Print-Agent.zip.
+[Установка и границы проверок](print-agent-lifecycle.md), [запись выпуска](releases/print-agent-lifecycle-20261009.json).
+Web `sha256:5ba62bbe07c2d30c0b5bf2399580ecd8233a86a04aae44ef4f452ffccac6f85c`; API `sha256:d2b82098fe83c40e6dd170150631b5962ef102139140b4cb241c1ec8a84dc195` сохранён.
+Baseline `2026-10-09-print-agent`, sourceParityVerified=false.
+Ровно один изменённый файл загрузки; весь веб-граф PR529, API, APK222, БД и настройки сохранены.
+Сохранённый stationId, автозапуск при входе пользователя Windows, ограниченный HTTP/повторный вход,
+журнал результата без автоматической перепечатки. Серия остаётся одним документом Windows.
+26 тестов исходников агента, 24 готового пакета; API3258/web412 прошли,138/2 skipped;
+отдельные KIZ integration исключены. Старый ACK-баг воспроизведён; публичный SHA проверен.
+Печать на реальном TSC и установка на станции пока не выполнены. Однократное обновление требуется.
+Медиана накладных расходов журнала ~39мс на задание; это не замер физического принтера.
+Проданная ВМС не затронута. Откат web: `logoff-web:before-print-agent-lifecycle-20261009`.
+
 # Published PR529 / 2026-10-09 — found KIZ without a box
 
 [Scenario](kiz-found-review.md). Baseline `2026-10-09-kiz-found`, sourceParityVerified=false.
