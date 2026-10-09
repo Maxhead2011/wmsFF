@@ -1,3 +1,5 @@
+Current verified base: **PR527**, `2026-10-09-ozon-supply`. APK221 unchanged. [Production](current-production.md).
+
 # Индекс нашей WMS
 
 Актуализировано 09.10.2026. Последний выпуск **PR525**: [онлайн-выполнение](online-window-performance.md). База `2026-10-09-online-window`; LOGOFF APK221 сохранён. Проданная ВМС вне выпуска.
