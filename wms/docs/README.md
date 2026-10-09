@@ -1,19 +1,6 @@
-Current verified release: PR523, `2026-10-09-receipt-admin`; LOGOFF APK221. [Production](current-production.md). Sold FFULHAB is out of scope.
-
-Актуальная база: **PR520**, `2026-10-09-ozon-entry`; импорт файла клиента доступен прямо в FBO Ozon. APK220 без изменений. [Паспорт](current-production.md).
-
-Актуальный выпуск: **PR516**, [ФБО Ozon](ozon-fbo-customer-file.md), APK220. Проверенная база: `2026-10-09-ozon-customer`; [паспорт](current-production.md).
-
-# Latest release: PR514 / Receipt and online reads
-
-See [published state](current-production.md) and [verification](releases/menu-reads-20261009.json).
-
 # Индекс нашей WMS
 
-Актуализировано 09.10.2026. Последний опубликованный выпуск — **PR514**:
-[приёмки и онлайн-выполнение](menu-read-performance.md).
-API и web image ID сверены с действующими контейнерами 09.10.2026.
-LOGOFF ТСД219 опубликован. Проданная ВМС не обновляется.
+Актуализировано 09.10.2026. Последний выпуск **PR525**: [онлайн-выполнение](online-window-performance.md). База `2026-10-09-online-window`; LOGOFF APK221 сохранён. Проданная ВМС вне выпуска.
 
 ## С чего начать
 
@@ -21,7 +8,7 @@ LOGOFF ТСД219 опубликован. Проданная ВМС не обно
 2. [Карта проекта](project-map.md) — точки входа и связи модулей.
 3. [Индекс проверок](test-index.md) — связанные сценарии и ограничения тестов.
 4. [Порядок выпуска](release-workflow.md) — свежая база, отдельная ветка, PR и проверка артефакта.
-5. [Запись PR514](releases/menu-reads-20261009.json) и [актуальный baseline](../baselines/our-wms/2026-10-09-menu-reads/manifest.json).
+5. [Запись PR525](releases/online-window-20261009.json) и [актуальный baseline](../baselines/our-wms/2026-10-09-online-window/manifest.json).
 
 Интеграционная ветка нашей WMS — `feature/wb-print-check`. Рабочие каталоги —
 `D:/WMSFF/_Kof` и его подпапки, продукт — `wms/` в репозитории.
