@@ -1,5 +1,11 @@
 # Подозрительные ШК приёмки
 
+## Publication candidate 2026-10-09
+
+Based on PR521 (Ozon customer entry): API `0d28742818119992b0139e661f5c8b2cde7344a6d072d8187679849944b2507c`, web `7408d8f2984fee6864d8c50ed4021464bdc0cc45ae385c9252e80f86742445bf`. Exact 11-file API delta, no schema migration; current Ozon and FBO runtime retained. Web retains its single React owner and existing FBO recovery component. LOGOFF APK221 retains Ozon220; 239 LOGOFF and 239 FFULHAB tests passed. Sold APK is not published.
+
+Release scripts: `receipt-barcode-api-runtime.cjs`, `receipt-barcode-web-runtime.cjs`, `releases/receipt-barcode-20261009/{stage,publish}.py`. Verify exact hashes, APK certificate, previous flags and other containers. The new flag activates with the verified API, then web/APK follow under release locks. Failed publication restores API/web/flag. This supersedes the preliminary publication order below. Historical records require a separate rollback dry-run before application.
+
 Статус: реализация в `fix/receipt-suspicious-barcode-review`, для PR в `feature/wb-print-check`. Не опубликовано. Production-флаги и остатки этой работой не изменены.
 
 ## Поведение

@@ -1,8 +1,9 @@
 import {useEffect,useState} from 'react';
 import {ozonCustomerImportEnabled,previewOzonCustomerFile,createOzonCustomerFile,type AuthSession,type ClientSummary,type OzonCustomerPreview} from '../../lib/api';
 // FIX: a single request is created from the complete customer allocation, never a filtered availability subset.
-export function OzonCustomerImport({session,clients,onCreated}:{session:AuthSession;clients:ClientSummary[];onCreated:()=>void}) {
-  const [enabled,setEnabled]=useState(false),[clientId,setClient]=useState(''),[destinationCity,setDestination]=useState(''),[desiredDate,setDate]=useState(''),[title,setTitle]=useState('');
+export function OzonCustomerImport({session,clients,onCreated,fixedClientId,embedded=false}:{session:AuthSession;clients:ClientSummary[];onCreated:()=>void;fixedClientId?:string;embedded?:boolean}) {
+  const [enabled,setEnabled]=useState(false),[selectedClient,setClient]=useState(''),[destinationCity,setDestination]=useState(''),[desiredDate,setDate]=useState(''),[title,setTitle]=useState('');
+  const clientId=fixedClientId??selectedClient;
   const [file,setFile]=useState<File|null>(null),[preview,setPreview]=useState<OzonCustomerPreview|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
   useEffect(()=>{let active=true;void ozonCustomerImportEnabled(session.accessToken).then(r=>{if(active)setEnabled(r.enabled);}).catch(()=>{});return()=>{active=false;};},[session.accessToken]);
   if(!enabled)return null;
@@ -12,8 +13,8 @@ export function OzonCustomerImport({session,clients,onCreated}:{session:AuthSess
     if(commit){const r=await createOzonCustomerFile(session.accessToken,payload);setMessage(`Сборка №${r.request.number} ${r.existing?'уже существует':'создана'}. Все направления внутри одной заявки.`);setPreview(null);onCreated();}
     else setPreview(await previewOzonCustomerFile(session.accessToken,payload));
   }catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
-  return <details className="client-request-excel-collapse"><summary>ФБО Ozon — файл клиента по направлениям</summary>
-    <fieldset disabled={busy}><label>Клиент<select value={clientId} onChange={e=>change(()=>setClient(e.target.value))}><option value="">Выберите клиента</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+  return <details open={embedded||undefined} className="client-request-excel-collapse"><summary>ФБО Ozon — файл клиента по направлениям</summary>
+    <fieldset disabled={busy}>{!fixedClientId&&<label>Клиент<select value={clientId} onChange={e=>change(()=>setClient(e.target.value))}><option value="">Выберите клиента</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
     <label>Название общей сборки<input value={title} onChange={e=>change(()=>setTitle(e.target.value))}/></label>
     <label>Место общей отгрузки<input value={destinationCity} onChange={e=>change(()=>setDestination(e.target.value))}/></label>
     <label>Дата отгрузки<input type="date" value={desiredDate} onChange={e=>change(()=>setDate(e.target.value))}/></label>

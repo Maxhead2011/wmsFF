@@ -1,5 +1,5 @@
 from pathlib import Path
-import json,subprocess,re,hashlib,datetime,zipfile
+import json,subprocess,re,hashlib,datetime,zipfile,shutil
 r=Path('/opt/logoff-wms/wms/work/receipt-barcode-20261009');app=Path('/opt/logoff-wms/wms')
 def d(*a):return subprocess.check_output(['docker',*a],text=True).strip()
 def hashes(image,root):return {l.split(maxsplit=1)[1].removeprefix(root+'/'):l.split()[0] for l in d('run','--rm','--network','none','--entrypoint','sh',image,'-c','find '+root+' -type f -exec sha256sum {} +').splitlines()}
@@ -21,8 +21,11 @@ data=(dest/name).read_bytes();(dest/'logoff-tsd.apk').write_bytes(data)
 meta={'versionCode':221,'versionName':'0.1.221-receipt-barcode-review','apkUrl':'https://wms.logoff.pro/downloads/'+name,'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'releasedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'releaseNotes':'Приёмка: повторное сканирование подозрительных ШК и разбор администратором. Изменения Ozon сохранены.'}
 (dest/'logoff-tsd.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n')
 webNames=json.loads((r/'web-changes.json').read_text())+['downloads/'+n for n in [name,'logoff-tsd.apk','logoff-tsd.json']]
-(r/'web/Dockerfile').write_text('FROM '+web+'\n'+''.join('COPY '+n+' /usr/share/nginx/html/'+n+'\n' for n in webNames))
-subprocess.run(['docker','build','--network','none','-t','logoff-web:receipt-barcode-20261009',str(r/'web')],check=True)
+context=r/'web-image';overlay=context/'overlay';overlay.mkdir(parents=True,exist_ok=True)
+for n in webNames:
+ target=overlay/n;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(r/'web'/n,target)
+(context/'Dockerfile').write_text('FROM '+web+'\nCOPY overlay/ /usr/share/nginx/html/\n')
+subprocess.run(['docker','build','--network','none','-t','logoff-web:receipt-barcode-20261009',str(context)],check=True)
 webImage=d('image','inspect','logoff-web:receipt-barcode-20261009','--format','{{.Id}}');wh=hashes(webImage,'/usr/share/nginx/html');old=hashes(web,'/usr/share/nginx/html')
 assert set(old)<=set(wh) and {n for n in wh if old.get(n)!=wh[n]}==set(webNames)
 v={'passed':True,'base':base,'candidate':image,'changed':names,'hashes':actual,'runtimeTestsPassed':True,'web':{'base':web,'candidate':webImage,'changed':webNames,'hashes':wh},'apk':meta}

@@ -8777,6 +8777,8 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 }
 
 export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
+export type OzonCustomerRequest={id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export function fetchOzonCustomerRequests(accessToken:string,clientId:string){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId),{accessToken});}
 export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
 export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',outboundRequestXlsxForm(payload),accessToken);}
 export function createOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/commit',outboundRequestXlsxForm(payload),accessToken);}

@@ -1,3 +1,5 @@
+Актуальная база: **PR520**, `2026-10-09-ozon-entry`; импорт файла клиента доступен прямо в FBO Ozon. APK220 без изменений. [Паспорт](current-production.md).
+
 Актуальный выпуск: **PR516**, [ФБО Ozon](ozon-fbo-customer-file.md), APK220. Проверенная база: `2026-10-09-ozon-customer`; [паспорт](current-production.md).
 
 # Latest release: PR514 / Receipt and online reads

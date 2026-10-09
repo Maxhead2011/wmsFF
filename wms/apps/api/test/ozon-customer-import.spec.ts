@@ -41,4 +41,16 @@ describe('Ozon customer import',()=>{
     await expect(s.service.commit(s.file,dto,user)).rejects.toThrow('denied');
     vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED','false');await expect(s.service.preview(s.file,dto,user)).rejects.toThrow('выключен');
   });
+  // TEST: Ozon home must show only this client's assemblies in the selected branch.
+  it('lists unified assemblies with direction counts without leaking another branch',async()=>{
+    const s=setup();const findMany=vi.fn().mockResolvedValue([{id:'r',number:1,title:'Кубрин',status:'SUBMITTED',items:[{quantity:5}],ozonShipment:{directions:[{},{}]},fboAssembly:null}]);
+    Object.assign(s.db,{clientRequest:{findMany}});
+    expect((await s.service.list('client',user))[0]).toMatchObject({quantity:5,directions:2,phase:'NOT_STARTED'});
+    expect(findMany.mock.calls[0][0].where).toEqual({clientId:'client',warehouseId:'warehouse',ozonShipment:{isNot:null}});
+    expect(s.scopes.requireClientAccess).toHaveBeenCalledWith(user,'client','read');
+    await expect(s.service.list('client',{...user,activeWarehouseId:null})).rejects.toThrow('филиал');
+    s.scopes.requireClientAccess.mockImplementation(()=>{throw Error('denied');});
+    await expect(s.service.list('other',user)).rejects.toThrow('denied');
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
 });

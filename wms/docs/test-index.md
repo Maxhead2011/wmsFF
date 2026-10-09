@@ -1,3 +1,5 @@
+PR520: `OzonCustomerWorkspace.spec.tsx`, проверка scope в `ozon-customer-import.spec.ts`, готовый браузерный граф `scripts/tests/ozon-entry-browser.cjs`.
+
 ## ФБО Ozon / PR516
 
 `ozon-customer-import.spec.ts`, `ozon-customer-directions.spec.ts`, `fbo-two-stage.integration.spec.ts`; runtime: `scripts/tests/ozon-customer-runtime.cjs`, браузер: `scripts/tests/ozon-customer-browser.cjs`.
