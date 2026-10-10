@@ -1,0 +1,96 @@
+{
+  "published": true,
+  "at": 1791630505.56384,
+  "pr": 553,
+  "api": "sha256:86507fac72559b74a63b39a706ca15004286cd9d1e94f0868907dae15b3132a4",
+  "web": "sha256:713de0c036bf3f11c496df4ba14d59341de7821a1543734c28b7711020d655ff",
+  "base": "sha256:9595665aed25ac223866eecb88fc88f79893e5bed2e69902c4f1d88c19a920bd",
+  "webBase": "sha256:8338bf45c5ebda763f4557c52ffba1a7c6cbea8b003f9378999a432e069bf950",
+  "apk": {
+    "versionCode": 227,
+    "versionName": "0.1.227-packing-undo",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-packing-undo-227.apk",
+    "sha256": "83190760303f911a614a72268be71d311d2c7d885aca31a7eb395859f9c995da",
+    "size": 5398935,
+    "releasedAt": "2026-10-10T10:35:10.562024+00:00",
+    "releaseNotes": "Отмена последней упакованной единицы. Проверка потребности направления сразу на скане ШК."
+  },
+  "newFlags": {
+    "WMS_MARKETPLACE_PRODUCT_LINKS_ENABLED": "true",
+    "WMS_MARKETPLACE_PRODUCT_LINK_CLIENTS": "c401202c-be57-4310-9939-2ea36767da37"
+  },
+  "initialization": {
+    "products": 1442,
+    "linked": 1438,
+    "review": 4,
+    "ozon": 1713,
+    "publications": 0
+  },
+  "smoke": {
+    "passed": true,
+    "links": 3155,
+    "sharedSku": 1376,
+    "readOnly": true
+  },
+  "otherContainersUnchanged": true,
+  "stockPublicationSettingsUnchanged": true,
+  "changedApiFiles": [
+    "modules/administration/administration-internal-api.service.js",
+    "modules/marketplace-connections/dto/confirm-product-link.dto.js",
+    "modules/marketplace-connections/marketplace-connections.controller.js",
+    "modules/marketplace-connections/marketplace-connections.service.js",
+    "modules/marketplace-connections/marketplace-product-links.js",
+    "modules/marketplace-connections/ozon-fbs-pick-workflow.js",
+    "modules/ozon-fbo/ozon-fbo.service.js"
+  ],
+  "changedWebFiles": [
+    "index.html",
+    "assets/marketplace-links-20261010-16.js",
+    "assets/marketplace-links-20261010-17.js",
+    "assets/marketplace-links-20261010-19.js",
+    "assets/marketplace-links-20261010-0.js",
+    "assets/marketplace-links-20261010-27.js",
+    "assets/marketplace-links-20261010-7.js",
+    "assets/marketplace-links-20261010-8.js",
+    "assets/marketplace-links-20261010-13.js",
+    "assets/marketplace-links-20261010-18.js",
+    "assets/marketplace-links-20261010-14.js",
+    "assets/marketplace-links-20261010-15.js",
+    "assets/marketplace-links-20261010-11.js",
+    "assets/marketplace-links-20261010-1.js",
+    "assets/marketplace-links-20261010-9.js",
+    "assets/marketplace-links-20261010-20.js",
+    "assets/marketplace-links-20261010-24.js",
+    "assets/marketplace-links-20261010-25.js",
+    "assets/marketplace-links-20261010-21.js",
+    "assets/marketplace-links-20261010-22.js",
+    "assets/marketplace-links-20261010-23.js",
+    "assets/marketplace-links-20261010-26.js",
+    "assets/marketplace-links-20261010-2.js",
+    "assets/marketplace-links-20261010-30.js",
+    "assets/marketplace-links-20261010-4.js",
+    "assets/marketplace-links-20261010-28.js",
+    "assets/marketplace-links-20261010-29.js",
+    "assets/marketplace-links-20261010-3.js",
+    "assets/marketplace-links-20261010-5.js",
+    "assets/marketplace-links-20261010-10.js",
+    "assets/marketplace-links-20261010-6.js",
+    "assets/marketplace-links-20261010-12.js"
+  ],
+  "validation": {
+    "apiPassed": 3298,
+    "apiSkipped": 144,
+    "webPassed": 416,
+    "webSkipped": 2,
+    "postgresPassed": 6,
+    "runtimeSafeguardsPassed": 14,
+    "browserGraphPassed": true,
+    "typescriptPassed": true
+  },
+  "sourceParityVerified": false,
+  "rollback": {
+    "api": "logoff-api:before-marketplace-links-20261010",
+    "web": "logoff-web:before-marketplace-links-20261010",
+    "note": "Pause client stock publication before disabling links. Retain additive table and audit."
+  }
+}

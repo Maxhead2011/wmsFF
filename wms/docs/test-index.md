@@ -1,3 +1,5 @@
+PR553: `marketplace-product-links.spec.ts`, `marketplace-product-links.integration.spec.ts`, `api.product-links.spec.ts`, `marketplace-product-links-runtime.cjs`, `marketplace-links-browser.cjs`.
+
 PR539 marketplace isolation: `fboRequestScope.spec.ts`, `client-requests.service.spec.ts`; actual runtime `scripts/tests/fbo-marketplace-runtime.cjs` and read-only `scripts/releases/fbo-marketplace-20261009/smoke.cjs`. API3266/web414 passed, 144/2 skipped; runtime2 passed.
 
 LOGOFF223 / PR535: [found-KIZ route](kiz-found-tsd-route.md); `KizFoundRouteTest` verifies actual Retrofit paths for all five actions.
