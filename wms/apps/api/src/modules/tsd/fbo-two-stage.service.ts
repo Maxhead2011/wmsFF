@@ -164,6 +164,8 @@ export class FboTwoStageService {
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: shipment ? 'OZON' : 'WILDBERRIES',
+            // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
+            parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             lines: lines.map(l => { const pending = Math.min(l.remaining, waitingBySku.get(l.skuId) ?? 0); waitingBySku.set(l.skuId, (waitingBySku.get(l.skuId) ?? 0) - pending); return { ...l, pendingPlacementQuantity: pending }; }),
             route, pendingPlacementQuantity,
