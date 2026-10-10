@@ -1,3 +1,5 @@
+Published PR557 / 2026-10-10: Windows print agent2026.10.10.1 restores duplicate KIZ station heartbeat/polling and includes KizDuplicate.ps1 in package/installation. Only agent download changed. API/APK227/configuration/sold WMS unchanged; physical printer update required. 31 source and31 packaged agent tests, API3303/web416 passed;145/2 skipped, dedicated KIZ DB suites excluded. Baseline `2026-10-10-kiz-agent`, sourceParityVerified=false. [Details](kiz-duplicate-agent-station.md).
+
 Current release **PR555**: [WB barcode identity](wb-barcode-identity.md). Baseline `2026-10-10-wb-barcode`; APK227 unchanged.
 
 Current release **PR553**: [WB/Ozon product links](marketplace-product-links.md). Baseline `2026-10-10-marketplace-links`, APK227 preserved.

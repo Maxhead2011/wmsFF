@@ -1,3 +1,5 @@
+Published PR557 / 2026-10-10: Windows print agent2026.10.10.1 restores duplicate KIZ station heartbeat/polling and includes KizDuplicate.ps1 in package/installation. Only agent download changed. API/APK227/configuration/sold WMS unchanged; physical printer update required. 31 source and31 packaged agent tests, API3303/web416 passed;145/2 skipped, dedicated KIZ DB suites excluded. Baseline `2026-10-10-kiz-agent`, sourceParityVerified=false. [Details](kiz-duplicate-agent-station.md).
+
 PR555: `wb-barcode-identity.ts` indexes account/client barcode uniqueness and grants scoped description updates; runtime integration uses `build-wb-barcode-identity.cjs`.
 
 PR553: `marketplace-product-links.ts` owns account identity matching; `MarketplaceProductLinks.tsx` owns catalog review. Client allowlist isolates the feature. Shared SKU reservations remain authoritative.
