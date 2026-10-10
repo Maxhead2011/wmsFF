@@ -31,3 +31,15 @@ it('keeps default/sold behavior until the scoped feature is enabled',async()=>{
   const f=fixture();vi.stubEnv('WMS_RECEIPT_STOCK_INDEX_ENABLED','false');await f.service.snapshot(f.tx,f.request);
   expect(vi.mocked(loadFboFbsAvailability).mock.calls[0][2]).toEqual(['s1','s2']);
 });
+
+// TEST: Ozon advertises the existing parallel packer before the remaining item is picked.
+it.each([true,false])('Ozon parallel capability follows the scoped flag: %s',async enabled=>{
+  const f=fixture();vi.stubEnv('WMS_FBO_PARALLEL_PACKING_ENABLED',String(enabled));
+  vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED','true');
+  f.tx.ozonFboShipment={findUnique:async()=>({directions:[{name:'Ozon destination',items:[{skuId:'s1',barcode:'code1',quantity:1},{skuId:'s2',barcode:'code2',quantity:1}]}]})};
+  const plan=await f.service.snapshot(f.tx,f.request);
+  expect(plan.parallelPackingSupported).toBe(enabled);
+  expect(plan.marketplace).toBe('OZON');expect(plan.phase).toBe('PICKING');
+  expect(plan.picked).toBe(1);expect(plan.needed).toBe(2);expect(plan.packed).toBe(0);
+  expect(plan.directions[0].needed).toBe(2);
+});
