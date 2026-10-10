@@ -1,0 +1,32 @@
+{
+  "published": true,
+  "at": 1791617833.3768632,
+  "pr": 543,
+  "api": "sha256:b0c8253a69d659c8c86f133a835eda6b34370c3d302d229b319d761e28d56ad8",
+  "base": "sha256:c15b366379daf1b57949e52fe979f121ad2490a8c0c4cfc09dba47456a099edb",
+  "web": "sha256:f6cef1fbafa1b014ee668bda42b0a67ebb367d7961ab476e4e91b702fcfb733f",
+  "proof": {
+    "passed": true,
+    "readOnly": true,
+    "routeExcluded": true,
+    "request": 1861,
+    "picked": 202,
+    "packed": 0,
+    "needed": 393,
+    "phase": "PICKING",
+    "parallelPackingSupported": true
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "tests": {
+    "passed": true,
+    "api": 3272,
+    "apiSkipped": 139,
+    "web": 414,
+    "webSkipped": 2,
+    "runtime": 2,
+    "kizIntegrationExcluded": true,
+    "physicalTerminalTested": false
+  },
+  "rollback": "logoff-api:before-ozon-parallel-packing-20261010"
+}
