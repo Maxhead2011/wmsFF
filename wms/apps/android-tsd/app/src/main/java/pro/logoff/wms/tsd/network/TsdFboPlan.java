@@ -4,7 +4,9 @@ import java.util.List;
 public class TsdFboPlan {
     public String marketplace;
     public List<Direction> directions;
-    public static class Direction { public String name; public int needed, packed; }
+    // FIX: retain the server's per-destination quotas and physical packing counts.
+    public static class Direction { public String name; public int needed, packed; public List<DirectionItem> items; }
+    public static class DirectionItem { public String skuId, barcode; public int quantity, packed; }
     public boolean parallelPackingSupported;
     public boolean localRouteEnabled;
     public String requestId, title, phase;

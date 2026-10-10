@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 224 // FIX: separate WB/Ozon picking and packing, LOGOFF only.
-            versionName = "0.1.224-fbo-marketplace"
+            versionCode = 225 // FIX: show Ozon destination packing items, LOGOFF only.
+            versionName = "0.1.225-ozon-packing-items"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
