@@ -128,6 +128,26 @@ final class FboTwoStageScreen {
             packingCompleteButton(root);
         }
     }
+    // FIX: unknown results must be resolved before cancelling either a scan or an accepted unit.
+    private boolean undoAvailable(){return packing&&plan!=null&&plan.packingUndoSupported&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(screenPhase());}
+    private boolean undoReady(){
+        if(!undoAvailable()||!ready())return false;
+        if(!state.barcode.isEmpty())return true;
+        for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(state.lastPackingBox)&&!b.closed&&!b.wholeBox&&b.quantity>0)return !state.lastPackingOperation.isEmpty();
+        return false;
+    }
+    private void undoLastUnit(){
+        if(!undoReady())return;
+        handler.removeCallbacks(automatic);
+        if(!state.barcode.isEmpty()){
+            state.barcode="";state.productReady=false;state.productKiz="";manualPackingScan=false;
+            message="Скан отменён. Товар не вложен.";render();return;
+        }
+        String expectedOperation=state.lastPackingOperation;
+        new AlertDialog.Builder(activity).setTitle("Отменить последнюю единицу?")
+            .setMessage("Достаньте 1 шт. товара "+state.lastPackingBarcode+" из короба "+state.lastPackingBox+" и верните к отобранному товару.")
+            .setNegativeButton("Назад",null).setPositiveButton("Подтвердить отмену",(d,w)->{if(undoReady()&&state.barcode.isEmpty()&&expectedOperation.equals(state.lastPackingOperation))send("UNDO_PACK_UNIT",null);}).show();
+    }
     private boolean packingChoices(){return !ozon()&&packing&&"logoff".equals(BuildConfig.FLAVOR);}
     private void choosePackingMode(PackingMode mode){
         if(!ready()||!state.target.isEmpty()||!state.barcode.isEmpty())return;
@@ -238,7 +258,7 @@ final class FboTwoStageScreen {
     private boolean ready(){return state.pending()==null&&!busy&&!routeStale;}
     private LinearLayout compactRoot;
     private TextView compactProgress,compactTarget,compactHint,compactMessage;
-    private Button compactSubmit,compactClose,compactCancel,compactManual,compactEmpty,compactModes,compactRefresh,compactRetry,compactBack;
+    private Button compactUndo,compactSubmit,compactClose,compactCancel,compactManual,compactEmpty,compactModes,compactRefresh,compactRetry,compactBack;
     private TextView compactLabel(){TextView v=new TsdUi.Label(activity);v.setTextSize(22);v.setPadding(0,12,0,12);compactRoot.addView(v);return v;}
     private Button compactButton(String title,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setOnClickListener(v->action.run());compactRoot.addView(b);return b;}
     // FIX: retain the actual scan field while only status labels and enabled states change.
@@ -253,6 +273,7 @@ final class FboTwoStageScreen {
             input.setOnEditorActionListener((v,a,e)->{submit();return true;});
             input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
             compactSubmit=compactButton("Подтвердить скан",this::submit);
+            compactUndo=compactButton("Отменить последнюю единицу",this::undoLastUnit);
             compactCancel=compactButton("Отменить скан",this::cancelPackingScan);
             compactManual=compactButton("Добавить КИЗ вручную",this::manualPackingKiz);
             compactClose=compactButton("Закрыть короб",()->{if(ready())send("CLOSE_BOX",null);});
@@ -271,6 +292,7 @@ final class FboTwoStageScreen {
         compactMessage.setText(busy?"Сохраняю…":routeStale?"Нужна сверка. Нажмите «Обновить».":message);
         compactRoot.setBackgroundColor(AssemblyScreenFeedback.background(true,retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor));
         input.setEnabled(ready());compactSubmit.setEnabled(ready());
+        compactUndo.setVisibility(undoAvailable()?android.view.View.VISIBLE:android.view.View.GONE);compactUndo.setEnabled(undoReady());
         compactCancel.setVisibility(state.barcode.isEmpty()?android.view.View.GONE:android.view.View.VISIBLE);compactCancel.setEnabled(ready());
         compactManual.setVisibility(plan.manualPackingEnabled&&!state.barcode.isEmpty()?android.view.View.VISIBLE:android.view.View.GONE);compactManual.setEnabled(ready());
         compactClose.setEnabled(ready()&&target!=null&&!target.closed&&target.quantity>0&&state.barcode.isEmpty());
@@ -381,6 +403,7 @@ final class FboTwoStageScreen {
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
                 input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
                 button(root,"Подтвердить скан",ready(),this::submit);
+                if(undoAvailable())button(root,"Отменить последнюю единицу",undoReady(),this::undoLastUnit);
                 if(productActive()){productInstructions(root);}
                 else if(packingScanRecovery()){
                     button(root,"Отменить скан",ready(),this::cancelPackingScan);
@@ -491,6 +514,11 @@ final class FboTwoStageScreen {
             return;
         }
         if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
+        // FIX: reject a wrong/completed destination at barcode scan, before KIZ or mutation.
+        if(packing&&ozon()&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(screenPhase())){
+            String rejected=FboScanState.packingDirectionError(plan,state.target,state.barcode.isEmpty()?value:state.barcode);
+            if(rejected!=null){state.barcode="";message=rejected;packingErrorSpeech=true;speakScan(false);render();return;}
+        }
         if(!state.barcode.isEmpty()){send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",value);return;}
         TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(screenPhase())?l.remaining>0:l.picked>l.packed)){line=l;break;}
         if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";packingErrorSpeech=true;render();return;}
@@ -505,7 +533,7 @@ final class FboTwoStageScreen {
         &&payload.get("operationId").equals(ack.operationId)&&payload.get("action").equals(ack.action);}
     private void acceptReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){
         if(closed||!validReceipt(ack,payload))return;
-        Map<String,String> position=state.checkpoint();position.put("barcode","");
+        Map<String,String> position=state.confirmedPosition(payload);
         if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))position.put("targetBoxCode",payload.get("targetBoxCode"));
         if(!prefs.edit().remove(pendingKey).remove(pendingKey+":fast").putString(pendingKey+":position",new JSONObject(position).toString()).commit()){
             busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
@@ -514,7 +542,7 @@ final class FboTwoStageScreen {
         // FIX: compact absolute state enables the next scan without fetching the full route.
         boolean compact=FboPackingReceipt.apply(plan,ack.packing,packing,BuildConfig.FLAVOR);
         if(compact){routeStale=false;state.reconcile(plan,true);}
-        message=FboFeedback.accepted(payload,plan);
+        message="UNDO_PACK_UNIT".equals(payload.get("action"))?"Последняя единица отменена. Возвращена в отобранные.":FboFeedback.accepted(payload,plan);
                 if("PACK_PRODUCT".equals(payload.get("action")))message="Упаковано: 1 шт. · "+payload.get("direction")+" · "+payload.get("targetBoxCode");packingAccepted(payload);render();
         if(compact)return;
         if("FINISH".equals(payload.get("action"))&&!packingChoices())download();refresh();
@@ -550,7 +578,7 @@ final class FboTwoStageScreen {
     private void send(String action,String kiz){send(action,kiz,null);}
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;retrySending=state.pending()!=null;feedbackColor=Color.TRANSPARENT;Map<String,String> payload=state.prepare(action,kiz,quantity);
         // FIX: persist before sending, so a restart can retry the identical operation.
-        boolean fast=!"PACK_PRODUCT".equals(payload.get("action"))&&fastConfirmation();
+        boolean fast=!"PACK_PRODUCT".equals(payload.get("action"))&&!"UNDO_PACK_UNIT".equals(payload.get("action"))&&fastConfirmation();
         if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).putBoolean(pendingKey+":fast",fast).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";packingErrorSpeech=true;render();return;}
         if(fast){sendAcknowledged(payload);return;}
         busy=true;message="";render();executor.execute(()->{try{
@@ -561,12 +589,10 @@ final class FboTwoStageScreen {
             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
                 // FIX: clear the held product and durable command in one preferences commit.
                 SharedPreferences.Editor confirmation=prefs.edit().remove(pendingKey);
-                if("PACK_PRODUCT".equals(payload.get("action"))){
-                    Map<String,String> position=state.checkpoint();position.put("barcode","");position.put("productKiz","");position.put("productReady","false");
-                    confirmation.putString(pendingKey+":position",new JSONObject(position).toString());
-                }
+                Map<String,String> position=state.confirmedPosition(payload);
+                confirmation.putString(pendingKey+":position",new JSONObject(position).toString());
                 if(!confirmation.commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
-                state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message=FboFeedback.accepted(payload,plan);
+                state.accepted();state.restoreCheckpoint(position);if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message="UNDO_PACK_UNIT".equals(payload.get("action"))?"Последняя единица отменена. Возвращена в отобранные.":FboFeedback.accepted(payload,plan);
                 if("PACK_PRODUCT".equals(payload.get("action")))message="Упаковано: 1 шт. · "+payload.get("direction")+" · "+payload.get("targetBoxCode");
                 if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);reconcilePickingMode();packingAccepted(payload);
                 // FIX: preserve confirmed state persistence before announcing closure.

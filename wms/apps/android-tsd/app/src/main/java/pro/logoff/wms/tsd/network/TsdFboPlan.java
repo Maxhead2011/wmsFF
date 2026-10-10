@@ -9,6 +9,7 @@ public class TsdFboPlan {
     public static class DirectionItem { public String skuId, barcode; public int quantity, packed; }
     // FIX: absent capability keeps older servers and sold clients on the existing workflow.
     public boolean packingByProductSupported;
+    public boolean packingUndoSupported;
     public List<PackingSuggestion> packingSuggestions;
     public static class PackingSuggestion { public String skuId, barcode, direction, targetBoxCode; }
     public boolean parallelPackingSupported;
