@@ -1,0 +1,31 @@
+{
+  "published": true,
+  "at": 1791621836.6363425,
+  "pr": 545,
+  "api": "sha256:1f04bd8cf7e722d809a3420b87b7787dc6c41e0b86f0fa52cec10dda42d2219f",
+  "base": "sha256:b0c8253a69d659c8c86f133a835eda6b34370c3d302d229b319d761e28d56ad8",
+  "web": "sha256:f6cef1fbafa1b014ee668bda42b0a67ebb367d7961ab476e4e91b702fcfb733f",
+  "proof": {
+    "passed": true,
+    "readOnly": true,
+    "routeExcluded": true,
+    "request": 1861,
+    "picked": 391,
+    "packed": 0,
+    "needed": 393,
+    "phase": "PICKING",
+    "parallelPackingSupported": true
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "tests": {
+    "passed": true,
+    "api": 3276,
+    "web": 414,
+    "apiSkipped": 139,
+    "webSkipped": 2,
+    "runtime": 4,
+    "physicalTerminalTested": false
+  },
+  "rollback": "logoff-api:before-ozon-packing-command-20261010"
+}

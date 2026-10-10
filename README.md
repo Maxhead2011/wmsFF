@@ -1,3 +1,5 @@
+Published PR545 / 2026-10-10: Ozon packing command now counts loaded units for unoptimized progress. Existing parallel-packing flag required; final phase and direction guards preserved. API3276/web414 and four runtime guard tests passed; API139/web2 skipped, dedicated KIZ integration excluded. Tests stop before physical mutation; production snapshot is read-only and excludes route allocation. APK224, web, sold WMS and business records unchanged. Baseline `2026-10-10-ozon-packing-command`, sourceParityVerified=false.
+
 # LOGOff Фулфилмент
 
 Проект очищен под новую WMS. Сейчас оставлена только статическая заглушка с красным логотипом и названием компании.
