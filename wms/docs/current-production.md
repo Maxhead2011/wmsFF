@@ -1,3 +1,11 @@
+# Published PR543 / 2026-10-10 — Ozon parallel packing
+
+Removed only the Ozon exclusion from parallelPackingSupported. Existing APK224 can pack already picked units before FINISH_PICK. Direction quotas, physical picked-unit checks and final control guards are unchanged. Existing parallel-packing flag required.
+Only one API runtime module changed; APK224, web, configuration, stock and sold WMS untouched.
+Baseline `2026-10-10-ozon-parallel-packing`, sourceParityVerified=false.
+API3272/web414/runtime2 passed; 139/2 skipped, dedicated KIZ integration excluded. Read-only production snapshot confirmed request1861 PICKING, 202/393 picked, packing available; route allocation omitted from this capability proof. Physical terminal scan pending.
+[Evidence and rollback](releases/ozon-parallel-packing-20261010.json).
+
 # Published PR541 / 2026-10-10 — LOGOFF APK224
 
 Picking and packing each expose WB/Ozon lists. The API filters persisted ozonShipment identity before pagination; legacy requests remain unchanged. APK224 installation required. Progress and stock untouched; sold WMS not deployed.

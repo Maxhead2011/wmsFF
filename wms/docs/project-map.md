@@ -1,3 +1,5 @@
+Current verified release: PR543, Ozon parallel packing capability; APK224 unchanged. [Production](current-production.md).
+
 Current verified release: PR541, LOGOFF APK224; WB/Ozon selection in both picking and packing, optional marketplace query in TSD lists. [Production](current-production.md). Sold WMS unchanged.
 
 PR539: `ClientRequestsService.list` selects `ozonShipment.requestId` behind the existing Ozon import flag; `isWbFboRequest` excludes this relation. General requests remain combined, dedicated WB active/archive lists exclude Ozon. Ozon import is hidden in WB.
