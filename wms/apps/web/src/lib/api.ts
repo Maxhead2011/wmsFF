@@ -12539,3 +12539,5 @@ export type OzonSupplyView = {
 export function ozonAssemblySupply(accessToken:string,id:string,action?:string,body:unknown={}){
  return request<OzonSupplyView>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});
 }
+// FIX: authenticated download uses stored Ozon receipts, with no new shipment operation.
+export function downloadOzonCargoMapping(accessToken:string,id:string){return requestBlob(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/cargo-mapping.xlsx`,accessToken);}
