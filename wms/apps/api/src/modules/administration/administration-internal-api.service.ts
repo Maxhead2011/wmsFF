@@ -130,7 +130,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'client-requests',
     name: 'Заявки клиентов',
     prefixes: ['/client-requests', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
-    routeCount: 49,
+    routeCount: 50, // FIX: authenticated Ozon box/cargo workbook download.
     description: 'Онлайн-заявки, документы, маршруты сборки и управление заказами FBS.',
     logic: ['Создаёт и изменяет заявки.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
     dependencies: ['Основная БД', 'Склад', 'Подключения маркетплейсов'],

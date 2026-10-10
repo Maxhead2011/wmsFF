@@ -5,10 +5,16 @@ import type {AuthUser} from '../auth/auth.types';
 import {assertWarehouseAccess} from './client-request-warehouse-scope';
 import {bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
+import {cargoMappingWorkbook} from './ozon-cargo-export';
 
 @Injectable()
 export class OzonAssemblySupplyService {
  constructor(private readonly db:PrismaService,private readonly scopes:ClientScopeService){}
+ // FIX: scoped read-only export remains available after reopening a completed assembly.
+ async cargoMappingFile(id:string,user:AuthUser){
+  const s=await this.load(id,user);
+  return {fileName:`ozon-boxes-${s.request.number}.xlsx`,buffer:await cargoMappingWorkbook(s.request.fboAssembly?.boxes??[],s.integration as SupplyIntegration|null)};
+ }
  private async load(id:string,user:AuthUser,mode:'read'|'write'='read',db:any=this.db){
   if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true')throw new NotFoundException('Связь Ozon выключена.');
   const s=await db.ozonFboShipment.findUnique({where:{requestId:id},include:{request:{include:{fboAssembly:{include:{boxes:true,units:true}}}}}});
