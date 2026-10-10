@@ -248,3 +248,22 @@ describe('TsdAssemblyService: факт сборки FBS', () => {
     });
   });
 });
+
+// TEST: both FBO stages filter the persisted marketplace before pagination.
+describe('FBO marketplace queues', () => {
+  it.each(['fbo-pick', 'fbo-pack'])('separates WB/Ozon for %s', async workflow => {
+    vi.stubEnv('WMS_FBO_TWO_STAGE_ENABLED', 'true');
+    try {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const service = new TsdAssemblyService({ clientRequest: { findMany } } as never,
+        { resolveClientFilter: () => 'client-1' } as never, {} as never, {} as never);
+      for (const marketplace of ['WB', 'OZON']) {
+        await service.listActiveRequests({ id: 'worker' } as never, workflow, marketplace);
+        expect(findMany.mock.lastCall![0].where.ozonShipment).toEqual(marketplace === 'OZON' ? { isNot: null } : { is: null });
+      }
+      await service.listActiveRequests({ id: 'worker' } as never, workflow);
+      expect(findMany.mock.lastCall![0].where).not.toHaveProperty('ozonShipment');
+      await expect(service.listActiveRequests({ id: 'worker' } as never, workflow, 'invalid')).rejects.toThrow();
+    } finally { vi.unstubAllEnvs(); }
+  });
+});
