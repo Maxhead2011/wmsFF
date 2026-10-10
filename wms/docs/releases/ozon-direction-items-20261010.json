@@ -1,0 +1,49 @@
+{
+  "published": true,
+  "at": 1791623049.8706524,
+  "pr": 547,
+  "api": "sha256:1f04bd8cf7e722d809a3420b87b7787dc6c41e0b86f0fa52cec10dda42d2219f",
+  "web": "sha256:b92edd50798a29b15e4c1e17d7bf1fec00d6cb1f4e4491c78b8f728f5cf1e9f6",
+  "webBase": "sha256:f6cef1fbafa1b014ee668bda42b0a67ebb367d7961ab476e4e91b702fcfb733f",
+  "apk": {
+    "versionCode": 225,
+    "versionName": "0.1.225-ozon-packing-items",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-ozon-packing-items-225.apk",
+    "sha256": "37c2366bac2d0980cd3523d64534413cd3eb5b120ae82f58112455b8348c21ba",
+    "size": 5394839,
+    "releasedAt": "2026-10-10T09:03:21.920957+00:00",
+    "releaseNotes": "\u0421\u043e\u0441\u0442\u0430\u0432 \u043d\u0430\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f Ozon: \u0428\u041a, \u0442\u043e\u0432\u0430\u0440, \u0440\u0430\u0437\u043c\u0435\u0440, \u043a\u043e\u043b\u0438\u0447\u0435\u0441\u0442\u0432\u043e \u0438 \u043f\u0440\u043e\u0433\u0440\u0435\u0441\u0441 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438."
+  },
+  "changed": [
+    "downloads/logoff-tsd-ozon-packing-items-225.apk",
+    "downloads/logoff-tsd.apk",
+    "downloads/logoff-tsd.json"
+  ],
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "tests": {
+    "passed": true,
+    "android": {
+      "Logoff": {
+        "tests": 245,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "Ffullhab": {
+        "tests": 245,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "Platform": {
+        "tests": 245,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    "apk225Contents": true
+  },
+  "rollback": "logoff-web:before-ozon-packing-items-225"
+}
