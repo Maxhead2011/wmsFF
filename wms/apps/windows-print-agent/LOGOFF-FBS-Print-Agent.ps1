@@ -5,6 +5,11 @@ Add-Type -AssemblyName System.Drawing
 . (Join-Path $PSScriptRoot 'JobJournal.ps1')
 . (Join-Path $PSScriptRoot 'AgentLifecycle.ps1')
 . (Join-Path $PSScriptRoot 'PrintSeries.ps1')
+. (Join-Path $PSScriptRoot 'KizDuplicate.ps1')
+# FIX: advertise and process duplicates independently of the working FBS queue.
+function Invoke-AgentKizDuplicateCycle($cfg) {
+  try { Invoke-KizDuplicateCycle $cfg } catch { Write-AgentError 'kiz-duplicate' $_ }
+}
 # FIX: errors before the first heartbeat were previously invisible to the operator.
 function Write-AgentError([string]$stage, $errorRecord) {
   try {
@@ -103,6 +108,7 @@ try {
       Write-AgentState 'retrying' $_.Exception.Message
       $script:connectionFailures++
     }
+    Invoke-AgentKizDuplicateCycle $cfg
     try { if (Invoke-PrintSeriesCycle $cfg) { continue } } catch { Write-AgentError 'series' $_ }
     # FIX: healthy polling remains 2s; only connection failures back off, capped at 30s.
     $delay = if ($queueOk) { 2 } else { [Math]::Min(30, [Math]::Pow(2, [Math]::Min(5,$script:connectionFailures))) }
