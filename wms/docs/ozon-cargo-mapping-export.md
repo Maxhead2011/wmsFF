@@ -1,6 +1,8 @@
+Published PR559 / 2026-10-10: Excel mapping of WMS boxes to confirmed Ozon cargo IDs, directions and supply/order numbers. Download available after all directions succeed; exact text identifiers and scoped read-only export. Request1861 verified:27 boxes/11 directions. API3313/web417 passed,145/2 skipped; dedicated KIZ DB suites excluded. TypeScript, candidate runtime, live controller and browser download passed. Baseline `2026-10-10-ozon-cargo-export`, sourceParityVerified=false. APK227, print agent, flags, sold WMS and business records preserved. [Evidence](releases/ozon-cargo-export-20261010.json).
+
 # Correspondence of WMS boxes and Ozon cargoes
 
-Prepared on branch `fix/ozon-cargo-mapping-export`; not yet published.
+Published from `fix/ozon-cargo-mapping-export` through PR559 on 10.10.2026.
 
 After all destination operations return SUCCESS, the Ozon assembly panel offers
 “Скачать соответствия коробов (Excel)”. The workbook includes the WMS box code,
