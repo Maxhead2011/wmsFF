@@ -84,12 +84,15 @@ export class TsdAssemblyService {
     private readonly fbo?: FboTwoStageService,
   ) {}
 
-  async listActiveRequests(user: AuthUser, workflow?: string) {
+  async listActiveRequests(user: AuthUser, workflow?: string, marketplace?: string) {
     // FIX: explicit FBO queues exclude FBS before pagination; legacy installations keep their queue.
     if (workflow && !['fbo-pick', 'fbo-pack'].includes(workflow)) throw new BadRequestException('Неизвестный этап сборки.');
     if (workflow && !fboTwoStageEnabled()) throw new BadRequestException('Сборка FBO недоступна в этой ВМС.');
+    // FIX: opt-in marketplace filter; legacy clients retain their existing list.
+    if (marketplace && (!workflow || !['WB', 'OZON'].includes(marketplace))) throw new BadRequestException('Неизвестный маркетплейс ФБО.');
     const fboFilter: Prisma.ClientRequestWhereInput = !workflow ? {} : {
       fbsOrderLinks: { none: {} },
+      ...(marketplace ? { ozonShipment: marketplace === 'OZON' ? { isNot: null } : { is: null } } : {}),
       ...(workflow === 'fbo-pack'
         ? { fboAssembly: { is: { phase: { in: ['PACKING', 'CONTROL'] } } } }
         : { OR: [{ fboAssembly: { is: null } }, { fboAssembly: { is: { phase: 'PICKING' } } }] }),

@@ -57,3 +57,11 @@ describe('TSD FBO opening', () => {
     expect(legacy).not.toHaveBeenCalled();
   });
 });
+
+// TEST: the HTTP controller must forward both selectors, not only the stage.
+it.each(['fbo-pick', 'fbo-pack'])('forwards FBO marketplace for %s', async workflow => {
+  const listActiveRequests = vi.fn().mockResolvedValue([]);
+  const user = { id: 'worker' } as never;
+  await TsdDeviceController.prototype.listAssemblyRequests.call({ assembly: { listActiveRequests } }, user, workflow, 'OZON');
+  expect(listActiveRequests).toHaveBeenCalledWith(user, workflow, 'OZON');
+});

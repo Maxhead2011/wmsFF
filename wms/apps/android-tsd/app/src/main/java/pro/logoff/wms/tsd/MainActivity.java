@@ -191,6 +191,7 @@ public class MainActivity extends Activity {
     private final PersonalEventVoice personalEvents = new PersonalEventVoice();
     private String fboTransferRequestId="";
     private boolean fboPacking;
+    private String fboMarketplace = "WB"; // FIX: shared picker and packer retain marketplace context.
     private TsdAssemblyPlan assemblyPlan;
     private TsdBoxlessPackingResponse boxlessPacking;
     private TsdRelabelTask activeRelabelTask;
@@ -7006,16 +7007,16 @@ public class MainActivity extends Activity {
         // FIX: both stages are children of FBO; existing marketplace picking remains available.
         screen=Screen.FBO_MENU;
         LinearLayout root=baseRoot(); root.addView(header()); root.addView(title("FBO"));
-        root.addView(primaryMenuButton("Сборка FBO", v -> renderFboPickingMenu()));
-        root.addView(primaryMenuButton("Упаковка FBO", v -> { fboPacking=true; openAssemblyRequests(); }));
+        root.addView(primaryMenuButton("Сборка FBO", v -> { fboPacking=false; renderFboPickingMenu(); }));
+        root.addView(primaryMenuButton("Упаковка FBO", v -> { fboPacking=true; renderFboPickingMenu(); }));
         root.addView(secondaryButton("Назад", v -> renderMainScreen())); setScrollableContent(root);
     }
 
     private void renderFboPickingMenu() {
         screen=Screen.FBO_PICK_MENU;
-        LinearLayout root=baseRoot();root.addView(header());root.addView(title("Сборка FBO"));
-        root.addView(primaryMenuButton("FBO WB",v->{fboPacking=false;openAssemblyRequests();}));
-        root.addView(primaryMenuButton("FBO Ozon",v->openOzonFboAssembly()));
+        LinearLayout root=baseRoot();root.addView(header());root.addView(title(fboPacking ? "Упаковка FBO" : "Сборка FBO"));
+        root.addView(primaryMenuButton("FBO WB",v->{fboMarketplace="WB";openAssemblyRequests();}));
+        root.addView(primaryMenuButton("FBO Ozon",v->{fboMarketplace="OZON";openAssemblyRequests();}));
         root.addView(secondaryButton("Назад",v->renderFboMenu()));setScrollableContent(root);
     }
 
@@ -7039,7 +7040,7 @@ public class MainActivity extends Activity {
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             Response<List<TsdAssemblyRequestSummary>> response = ("logoff".equals(BuildConfig.FLAVOR)
-                ? api.listFboRequests(session.authorizationHeader(), fboPacking ? "fbo-pack" : "fbo-pick")
+                ? api.listFboRequests(session.authorizationHeader(), fboPacking ? "fbo-pack" : "fbo-pick", fboMarketplace)
                 : api.listAssemblyRequests(session.authorizationHeader())).execute();
             if (!response.isSuccessful()) {
                 throw new IOException("HTTP " + response.code());
@@ -7063,7 +7064,7 @@ public class MainActivity extends Activity {
         screen = Screen.ASSEMBLY_LIST;
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title("logoff".equals(BuildConfig.FLAVOR) ? (fboPacking ? "Упаковка FBO" : "FBO WB") : "Сборка заявки"));
+        root.addView(title("logoff".equals(BuildConfig.FLAVOR) ? ((fboPacking ? "Упаковка FBO " : "Сборка FBO ") + ("OZON".equals(fboMarketplace) ? "Ozon" : "WB")) : "Сборка заявки"));
 
         if (assemblyRequests.isEmpty()) {
             root.addView(messageView("Активных заявок на сборку нет."));
@@ -7072,9 +7073,11 @@ public class MainActivity extends Activity {
             root.addView(requestButton(request));
         }
 
+        // FIX: legacy Ozon API plans remain reachable alongside unified Ozon requests.
+        if ("logoff".equals(BuildConfig.FLAVOR) && "OZON".equals(fboMarketplace)) root.addView(secondaryButton("Планы Ozon через API", view -> openOzonFboAssembly()));
         root.addView(secondaryButton("Обновить", view -> loadAssemblyRequests()));
         root.addView(secondaryButton("Назад", view -> {
-            if ("logoff".equals(BuildConfig.FLAVOR)) { if (fboPacking) renderFboMenu(); else renderFboPickingMenu(); } else renderMainScreen();
+            if ("logoff".equals(BuildConfig.FLAVOR)) { renderFboPickingMenu(); } else renderMainScreen();
         }));
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
@@ -9548,9 +9551,9 @@ public class MainActivity extends Activity {
             case KIZ_MENU: return "КИЗЫ";
             case KIZ_SEARCH: return "Поиск КИЗ";
             case FBO_MENU: return "FBO";
-            case FBO_PICK_MENU: return "Сборка FBO";
+            case FBO_PICK_MENU: return fboPacking ? "Упаковка FBO" : "Сборка FBO";
             case FBS_MENU: return "FBS";
-            case FBO_TWO_STAGE: return fboPacking ? "Упаковка FBO" : "FBO WB";
+            case FBO_TWO_STAGE: return (fboPacking ? "Упаковка FBO " : "Сборка FBO ") + ("OZON".equals(fboMarketplace) ? "Ozon" : "WB");
             case PALLET_SORTING: return "Сортировка и перемещение";
             case RECEIPT: return "Приёмка";
             case ASSEMBLY_LIST:

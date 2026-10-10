@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 223 // FIX: correct found-KIZ API route, LOGOFF only.
-            versionName = "0.1.223-kiz-found-route"
+            versionCode = 224 // FIX: separate WB/Ozon picking and packing, LOGOFF only.
+            versionName = "0.1.224-fbo-marketplace"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
