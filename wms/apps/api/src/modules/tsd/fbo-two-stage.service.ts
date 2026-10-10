@@ -227,6 +227,11 @@ export class FboTwoStageService {
             const lines = remainingFboLines(r.items, units);
             const requirePhase = (phase: string) => { if (a!.phase !== phase)
                 throw new ConflictException('Этап изменился. Обновите заявку.'); };
+            // FIX: Ozon's unoptimized progress is the loaded physical units, not an absent count.
+            const requirePacking = () => {
+                if (directions && a!.phase === 'PICKING' && process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && units.length > 0) return;
+                requirePhase('PACKING');
+            };
             if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
                 if (directions && dto.action === 'PICK_BOX') throw new ConflictException('Для распределения по направлениям отбирайте товар поштучно.');
                 requirePhase('PICKING');
@@ -303,7 +308,7 @@ export class FboTwoStageService {
                 await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
             }
             else if (dto.action === 'OPEN_BOX') {
-                requirePhase('PACKING');
+                requirePacking();
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, dto.direction, []);
                 const target = await this.target(tx, r, dto.targetBoxCode);
                 await this.requireIdleBox(tx, target.id, id);
@@ -322,7 +327,7 @@ export class FboTwoStageService {
                 }
             }
             else if (dto.action === 'PACK_UNIT') {
-                requirePhase('PACKING');
+                requirePacking();
                 const target = await this.box(tx, r, dto.targetBoxCode);
                 const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
@@ -352,7 +357,7 @@ export class FboTwoStageService {
                 await tx.fboAssemblyUnit.updateMany({ where: { id: { in: picked.map(u => u.id) } }, data: { state: 'PACKED', targetBoxId: box.id, targetBoxCode: box.code, packedAt: new Date(), packedByUserId: user.id } });
             }
             else if (dto.action === 'CANCEL_EMPTY_BOX') {
-                requirePhase('PACKING');
+                requirePacking();
                 const target = await this.box(tx, r, dto.targetBoxCode);
                 const b = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (!b || b.requestId !== id || b.closedAt || units.some(u => u.targetBoxId === target.id) || await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) || await tx.productMark.count({ where: { boxId: target.id } }))
@@ -360,7 +365,7 @@ export class FboTwoStageService {
                 await tx.fboAssemblyBox.delete({ where: { id: b.id } });
             }
             else if (dto.action === 'CLOSE_BOX') {
-                requirePhase('PACKING');
+                requirePacking();
                 const b = await tx.fboAssemblyBox.findUnique({ where: { requestId_boxCode: { requestId: id, boxCode: dto.targetBoxCode ?? '' } } });
                 if (!b || b.closedAt)
                     throw new ConflictException('Короб не открыт или уже закрыт.');
