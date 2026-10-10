@@ -1,3 +1,5 @@
+PR555: `wb-barcode-identity.spec.ts` and `scripts/tests/wb-barcode-runtime.cjs`; real catalog synchronization and guarded SKU update tested against the pinned candidate.
+
 PR553: `marketplace-product-links.spec.ts`, `marketplace-product-links.integration.spec.ts`, `api.product-links.spec.ts`, `marketplace-product-links-runtime.cjs`, `marketplace-links-browser.cjs`.
 
 PR539 marketplace isolation: `fboRequestScope.spec.ts`, `client-requests.service.spec.ts`; actual runtime `scripts/tests/fbo-marketplace-runtime.cjs` and read-only `scripts/releases/fbo-marketplace-20261009/smoke.cjs`. API3266/web414 passed, 144/2 skipped; runtime2 passed.

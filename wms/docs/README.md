@@ -1,3 +1,5 @@
+Current release **PR555**: [WB barcode identity](wb-barcode-identity.md). Baseline `2026-10-10-wb-barcode`; APK227 unchanged.
+
 Current release **PR553**: [WB/Ozon product links](marketplace-product-links.md). Baseline `2026-10-10-marketplace-links`, APK227 preserved.
 
 Published PR551 / 2026-10-10: LOGOFF APK227 adds last-unit packing undo and immediate Ozon destination barcode checks. Exact-unit receipt, atomic stock/KIZ return and audited idempotent undo; closed/stale/intervening operations rejected. WMS_FBO_PACK_UNDO_ENABLED=true only on our WMS. Three API modules and three APK download files changed; sold WMS, routing/schema and business records untouched by deployment. API3287/web414, Android252 per flavor (756), runtime7 and real PostgreSQL concurrency/rollback/KIZ return passed;139/2 skipped, dedicated KIZ integration excluded. Read-only production snapshot1861 verified capability; route allocation excluded. Physical scanner check pending APK installation. Baseline `2026-10-10-fbo-packing-undo`, sourceParityVerified=false.

@@ -1,0 +1,206 @@
+{
+  "startedAt": "2026-10-10T13:09:42.043Z",
+  "completedAt": "2026-10-10T13:09:56.664Z",
+  "clientId": "c76b78f9-1b83-4e9b-bee3-bc28336ee1c9",
+  "connectionId": "3f022635-2efb-4b56-85ab-dfd48d9c24a8",
+  "warehouse": "afb244a1-50ae-4ae6-9111-afe85949fa58",
+  "scope": "seven positive-share warehouses, non-EXCLUDED routes only",
+  "settingsStable": true,
+  "products": 2409,
+  "warehouseSkus": 2446,
+  "matched": 2409,
+  "reads": [
+    {
+      "warehouseId": "1693195",
+      "name": "Мой склад FBS Москва",
+      "at": "2026-10-10T13:09:47.409Z",
+      "completedAt": "2026-10-10T13:09:47.912Z",
+      "requested": 2409,
+      "returned": 2409
+    },
+    {
+      "warehouseId": "1954119",
+      "name": "Мой склад Белая дача",
+      "at": "2026-10-10T13:09:47.912Z",
+      "completedAt": "2026-10-10T13:09:48.635Z",
+      "requested": 2409,
+      "returned": 2409
+    },
+    {
+      "warehouseId": "1935300",
+      "name": "Мой склад Волгоград",
+      "at": "2026-10-10T13:09:48.635Z",
+      "completedAt": "2026-10-10T13:09:49.347Z",
+      "requested": 2409,
+      "returned": 2409
+    },
+    {
+      "warehouseId": "1935327",
+      "name": "Мой склад Казань",
+      "at": "2026-10-10T13:09:49.347Z",
+      "completedAt": "2026-10-10T13:09:50.094Z",
+      "requested": 2409,
+      "returned": 2409
+    },
+    {
+      "warehouseId": "1954106",
+      "name": "Мой склад Москва Вешки",
+      "at": "2026-10-10T13:09:50.094Z",
+      "completedAt": "2026-10-10T13:09:50.801Z",
+      "requested": 2409,
+      "returned": 2409
+    },
+    {
+      "warehouseId": "1935331",
+      "name": "Мой склад Новосибирск",
+      "at": "2026-10-10T13:09:50.801Z",
+      "completedAt": "2026-10-10T13:09:51.512Z",
+      "requested": 2409,
+      "returned": 2409
+    },
+    {
+      "warehouseId": "1935323",
+      "name": "Мой склад Питер",
+      "at": "2026-10-10T13:09:51.512Z",
+      "completedAt": "2026-10-10T13:09:52.230Z",
+      "requested": 2409,
+      "returned": 2409
+    }
+  ],
+  "reserve": {
+    "mode": "UNITS",
+    "value": 3,
+    "lowStock": {
+      "threshold": 5,
+      "reserveUnits": 1
+    }
+  },
+  "summary": {
+    "rows": 2409,
+    "complete": 2409,
+    "incomplete": 0,
+    "unstable": 0,
+    "expected": 2697,
+    "observedKnown": 2697,
+    "excessSkus": 0,
+    "excessUnits": 0,
+    "zeroExpectedWithStock": 0,
+    "zeroExpectedUnits": 0,
+    "shortSkus": 0
+  },
+  "warehouseTotals": [
+    {
+      "warehouse": "Мой склад FBS Москва",
+      "warehouseId": "1693195",
+      "barcodes": 2409,
+      "wms": 1226,
+      "wb": 1226
+    },
+    {
+      "warehouse": "Мой склад Белая дача",
+      "warehouseId": "1954119",
+      "barcodes": 2409,
+      "wms": 188,
+      "wb": 188
+    },
+    {
+      "warehouse": "Мой склад Волгоград",
+      "warehouseId": "1935300",
+      "barcodes": 2409,
+      "wms": 295,
+      "wb": 295
+    },
+    {
+      "warehouse": "Мой склад Казань",
+      "warehouseId": "1935327",
+      "barcodes": 2409,
+      "wms": 282,
+      "wb": 282
+    },
+    {
+      "warehouse": "Мой склад Москва Вешки",
+      "warehouseId": "1954106",
+      "barcodes": 2409,
+      "wms": 178,
+      "wb": 178
+    },
+    {
+      "warehouse": "Мой склад Новосибирск",
+      "warehouseId": "1935331",
+      "barcodes": 2409,
+      "wms": 270,
+      "wb": 270
+    },
+    {
+      "warehouse": "Мой склад Питер",
+      "warehouseId": "1935323",
+      "barcodes": 2409,
+      "wms": 258,
+      "wb": 258
+    }
+  ],
+  "warehousePairMismatches": 0,
+  "zeroExpectedSkus": 2141,
+  "positiveSkus": 268,
+  "excludedMissingCards": 37,
+  "incident": [
+    {
+      "skuId": "efbaf954-53f7-400a-9550-2645064ba066",
+      "barcode": "2052400023910",
+      "article": "Мото_черный",
+      "size": "XS / 42",
+      "chrtId": 1718971701,
+      "available": 0,
+      "reserved": 1,
+      "sellable": 0,
+      "net": 0,
+      "expected": 0,
+      "enabled": true,
+      "limit": null,
+      "stable": true,
+      "complete": true,
+      "sumKnown": 0,
+      "excess": 0,
+      "missing": 0,
+      "amounts": [
+        {
+          "warehouseId": "1693195",
+          "actual": 0,
+          "expected": 0
+        },
+        {
+          "warehouseId": "1954119",
+          "actual": 0,
+          "expected": 0
+        },
+        {
+          "warehouseId": "1935300",
+          "actual": 0,
+          "expected": 0
+        },
+        {
+          "warehouseId": "1935327",
+          "actual": 0,
+          "expected": 0
+        },
+        {
+          "warehouseId": "1954106",
+          "actual": 0,
+          "expected": 0
+        },
+        {
+          "warehouseId": "1935331",
+          "actual": 0,
+          "expected": 0
+        },
+        {
+          "warehouseId": "1935323",
+          "actual": 0,
+          "expected": 0
+        }
+      ]
+    }
+  ],
+  "readOnly": true,
+  "method": "Unique exact barcodes; production stock plan subtracts active reservations, relabel allocations, safety reserve and configured sale limits. Compare per-warehouse integer allocation with uncached WB API; null is not zero. WMS plan unchanged across WB reads."
+}

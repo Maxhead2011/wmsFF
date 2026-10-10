@@ -1,0 +1,77 @@
+{
+  "published": true,
+  "at": 1791637568.7461872,
+  "pr": 555,
+  "commit": "c2c9ffdb364a26a5dd67329c586f3633c36bd559",
+  "api": "sha256:6198aa0feb89c6b908693d748b9580a8e366023e0910349432dfb9c0072f8e8e",
+  "web": "sha256:713de0c036bf3f11c496df4ba14d59341de7821a1543734c28b7711020d655ff",
+  "base": "sha256:86507fac72559b74a63b39a706ca15004286cd9d1e94f0868907dae15b3132a4",
+  "apk": {
+    "versionCode": 227,
+    "versionName": "0.1.227-packing-undo",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-packing-undo-227.apk",
+    "sha256": "83190760303f911a614a72268be71d311d2c7d885aca31a7eb395859f9c995da",
+    "size": 5398935,
+    "releasedAt": "2026-10-10T10:35:10.562024+00:00",
+    "releaseNotes": "Отмена последней упакованной единицы. Проверка потребности направления сразу на скане ШК."
+  },
+  "otherContainersUnchanged": true,
+  "configurationUnchanged": true,
+  "schemaUnchanged": true,
+  "changedApiFiles": [
+    "modules/marketplace-connections/wb-catalog-sync.js",
+    "modules/marketplace-connections/wb-barcode-identity.js",
+    "modules/marketplace-connections/marketplace-connections.service.js"
+  ],
+  "changedWebFiles": [],
+  "catalogVerification": {
+    "at": "2026-10-10T13:07:54.505Z",
+    "result": {
+      "marketplace": "WILDBERRIES",
+      "clientId": "c76b78f9-1b83-4e9b-bee3-bc28336ee1c9",
+      "productsReceived": 2409,
+      "created": 0,
+      "updated": 2409,
+      "mergedDrafts": 0,
+      "barcodesTouched": 4528,
+      "skipped": 0,
+      "errors": [],
+      "excluded": 37
+    },
+    "previous": {
+      "id": "efbaf954-53f7-400a-9550-2645064ba066",
+      "article": "Мото_черный",
+      "size": "XS / 40",
+      "marketplaceProductId": "1164385938:1718971701",
+      "marketplaceOfferId": "2052400023910"
+    },
+    "current": {
+      "id": "efbaf954-53f7-400a-9550-2645064ba066",
+      "article": "Мото_черный",
+      "size": "XS / 42",
+      "marketplaceProductId": "1164385938:1718971701",
+      "marketplaceOfferId": "2052400023910"
+    },
+    "restored": 53,
+    "remaining": 37,
+    "warnings": 71,
+    "completedAt": "2026-10-10T13:07:54.478Z",
+    "missing": 37
+  },
+  "validation": {
+    "apiPassed": 3303,
+    "apiSkipped": 150,
+    "webPassed": 416,
+    "webSkipped": 2,
+    "identityUnitTests": 8,
+    "actualRuntimeSyncAndUpsertPassed": true,
+    "runtimeSafeguardsPassed": 14,
+    "typescriptPassed": true,
+    "dedicatedKizDatabaseSuite": "excluded: unconfigured"
+  },
+  "sourceParityVerified": false,
+  "rollback": {
+    "api": "logoff-api:before-wb-barcode-20261010",
+    "note": "Old guard will block changed descriptions again. Metadata was synchronized to verified WB barcode identities; do not reverse physical inventory."
+  }
+}
