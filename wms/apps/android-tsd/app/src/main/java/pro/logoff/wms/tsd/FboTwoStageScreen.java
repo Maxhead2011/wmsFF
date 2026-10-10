@@ -226,6 +226,28 @@ final class FboTwoStageScreen {
         return true;
     }
 
+    // FIX: show only the selected destination; no additional stock requests or local counting.
+    private void directionContents(LinearLayout root) {
+        if(!"logoff".equals(BuildConfig.FLAVOR)||!packing||!"PACKING".equals(screenPhase()))return;
+        for(TsdFboPlan.Direction d:plan.directions) {
+            if(!d.name.equals(state.direction))continue;
+            text(root,"Состав направления · "+d.name+" · упаковано "+d.packed+" из "+d.needed);
+            if(d.items==null){text(root,"Состав направления недоступен. Обновите заявку.");return;}
+            for(TsdFboPlan.DirectionItem item:d.items) {
+                TsdFboPlan.Line line=null;
+                if(plan.lines!=null)for(TsdFboPlan.Line candidate:plan.lines)
+                    if(item.skuId!=null&&item.skuId.equals(candidate.skuId)){line=candidate;break;}
+                String name=line==null||line.name==null||line.name.isEmpty()?"Товар":line.name;
+                String size=line==null||line.size==null||line.size.isEmpty()?"—":line.size;
+                card(root,"ШК: "+(item.barcode==null?"—":item.barcode)+"\n"+name+" · Размер: "+size+
+                    "\nКоличество: "+item.quantity+" · упаковано "+item.packed+" из "+item.quantity+
+                    " · осталось "+Math.max(0,item.quantity-item.packed),
+                    item.packed>=item.quantity?Color.rgb(187,247,208):Color.rgb(241,245,249));
+            }
+            return;
+        }
+    }
+
     private void render(){
         if(closed||activity.isDestroyed())return;
         if(pickingChoices())prefs.edit().putString(pendingKey+":picking-mode",pickingMode.name()).commit();
@@ -247,6 +269,7 @@ final class FboTwoStageScreen {
                     else text(root,label);
                 }
                 text(root,"Направление короба: "+state.direction);
+                directionContents(root);
             }
             if(plan.parallelPackingSupported)text(root,"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438: "+Math.max(0,plan.picked-plan.packed));
             if(packingChoices()&&("PACKING".equals(plan.phase)||"PICKING".equals(plan.phase)))wholeCartonProgress(root);

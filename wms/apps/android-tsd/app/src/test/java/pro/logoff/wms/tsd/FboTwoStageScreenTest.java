@@ -26,6 +26,30 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: destination quotas are visible before picking finishes and stay destination-specific.
+    @Test public void ozonPackingShowsDestinationItemsAndRefreshesProgress() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.marketplace="OZON";p.parallelPackingSupported=true;p.picked=1;
+            p.directions=new com.squareup.moshi.Moshi.Builder().build().<List<TsdFboPlan.Direction>>adapter(com.squareup.moshi.Types.newParameterizedType(List.class,TsdFboPlan.Direction.class)).fromJson("[{\"name\":\"Краснодар\",\"needed\":5,\"packed\":1,\"items\":[{\"skuId\":\"sku1\",\"barcode\":\"00123\",\"quantity\":5,\"packed\":1}]},{\"name\":\"Москва\",\"needed\":2,\"packed\":0,\"items\":[{\"skuId\":\"sku2\",\"barcode\":\"00999\",\"quantity\":2,\"packed\":0}]}]");
+            TsdFboPlan.Line l=new TsdFboPlan.Line();l.skuId="sku1";l.barcode="00123";l.name="Костюм";l.size="XL / 50";p.lines.add(l);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try {
+                find(a.findViewById(android.R.id.content),"Краснодар · упаковано 1 из 5").performClick();
+                View root=a.findViewById(android.R.id.content);
+                if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(find(root,"ШК: 00123"));return;}
+                assertNotNull(find(root,"ШК: 00123"));assertNotNull(find(root,"Костюм"));assertNotNull(find(root,"Размер: XL / 50"));
+                assertNotNull(find(root,"Количество: 5 · упаковано 1 из 5 · осталось 4"));assertNull(find(root,"ШК: 00999"));
+                find(root,"Москва · упаковано 0 из 2").performClick();root=a.findViewById(android.R.id.content);
+                assertNull(find(root,"ШК: 00123"));assertNotNull(find(root,"ШК: 00999"));assertNotNull(find(root,"Размер: —"));
+                find(root,"Краснодар · упаковано 1 из 5").performClick();
+                p.directions.get(0).packed=2;
+                // Decode a new response just as Retrofit does, without changing any stock.
+                p.directions=new com.squareup.moshi.Moshi.Builder().build().<List<TsdFboPlan.Direction>>adapter(com.squareup.moshi.Types.newParameterizedType(List.class,TsdFboPlan.Direction.class)).fromJson("[{\"name\":\"Краснодар\",\"needed\":5,\"packed\":2,\"items\":[{\"skuId\":\"sku1\",\"barcode\":\"00123\",\"quantity\":5,\"packed\":2}]}]");
+                find(a.findViewById(android.R.id.content),"Обновить").performClick();waitIdle(screen);
+                assertNotNull(find(a.findViewById(android.R.id.content),"Количество: 5 · упаковано 2 из 5 · осталось 3"));assertEquals(0,writes.get());
+            }finally{screen.close();}
+        }
+    }
     // TEST: closing a real packing widget speaks only after the server response.
     @Test public void closingBoxAnnouncesConfirmedClose() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
@@ -468,7 +492,7 @@ public class FboTwoStageScreenTest {
         FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{},move,feedback);
         java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("busy");field.setAccessible(true);
         for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s)){
- if(packing&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(FboScanState.screenPhase(p,true)))find(a.findViewById(android.R.id.content),p.wholeBoxes.isEmpty()?"Собрать новые короба":"Отсканировать целые короба").performClick();
+ if(packing&&!"OZON".equals(p.marketplace)&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(FboScanState.screenPhase(p,true)))find(a.findViewById(android.R.id.content),p.wholeBoxes.isEmpty()?"Собрать новые короба":"Отсканировать целые короба").performClick();
  if(!packing&&"PICKING".equals(p.phase))FboPickingModeTest.choose(a,!p.route.isEmpty()&&FboPickingRoute.whole(p,p.route.get(0)));
  return s;}Thread.sleep(10);}
         fail("Plan did not load");return s;
