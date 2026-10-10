@@ -6,6 +6,22 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 // FIX: barcode and KIZ are a pair; an unanswered command keeps its original id.
 final class FboScanState {
+    // FIX: use the selected carton's destination, not the demand of the whole request.
+    static String packingDirectionError(TsdFboPlan plan, String boxCode, String barcode) {
+        String direction=null;
+        if(plan.boxes!=null)for(TsdFboPlan.Box box:plan.boxes)
+            if(boxCode.equals(box.code)&&!box.closed)direction=box.direction;
+        if(direction==null||plan.directions==null)return "Обновите план: направление короба не найдено.";
+        for(TsdFboPlan.Direction d:plan.directions)if(direction.equals(d.name)){
+            if(d.items==null)return "Обновите план: состав направления не загружен.";
+            boolean required=false;int remaining=0;
+            for(TsdFboPlan.DirectionItem i:d.items)if(barcode.equals(i.barcode)&&i.quantity>0){required=true;remaining+=Math.max(0,i.quantity-i.packed);}
+            if(!required)return "Товар не нужен в направлении «"+direction+"»";
+            if(remaining==0)return "В направлении «"+direction+"» этот товар уже упакован полностью";
+            return null;
+        }
+        return "Обновите план: направление короба не найдено.";
+    }
     // FIX: manual additions intentionally reopen a closed carton; ordinary packing must report duplicates.
     static boolean alreadyPackedBox(TsdFboPlan plan, String code, boolean manual) {
         if (!plan.reusablePackingEnabled || manual || code == null || plan.boxes == null) return false;
@@ -27,6 +43,7 @@ final class FboScanState {
     }
     // FIX: a scanned product survives restart before a box has been scanned.
     boolean productMode, productReady;
+    String lastPackingOperation="", lastPackingBox="", lastPackingBarcode="";
     String productKiz = "";
     String direction = "";
     String pallet = "", source = "", target = "", barcode = "";
@@ -34,10 +51,11 @@ final class FboScanState {
     Map<String,String> checkpoint() {
         Map<String,String> p=new LinkedHashMap<>();p.put("palletCode",pallet);p.put("sourceBoxCode",source);
         p.put("productMode",String.valueOf(productMode));p.put("productReady",String.valueOf(productReady));p.put("productKiz",productKiz);
+        p.put("lastPackingOperation",lastPackingOperation);p.put("lastPackingBox",lastPackingBox);p.put("lastPackingBarcode",lastPackingBarcode);
         p.put("targetBoxCode",target);p.put("barcode",barcode);p.put("direction",direction);return p;
     }
     void restoreCheckpoint(Map<String,String> value) {
-        if(value==null)return;productMode=Boolean.parseBoolean(value.get("productMode"));productReady=Boolean.parseBoolean(value.get("productReady"));productKiz=value.getOrDefault("productKiz","");direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
+        if(value==null)return;lastPackingOperation=value.getOrDefault("lastPackingOperation","");lastPackingBox=value.getOrDefault("lastPackingBox","");lastPackingBarcode=value.getOrDefault("lastPackingBarcode","");productMode=Boolean.parseBoolean(value.get("productMode"));productReady=Boolean.parseBoolean(value.get("productReady"));productKiz=value.getOrDefault("productKiz","");direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
         target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");
     }
     private Map<String,String> pending;
@@ -46,6 +64,7 @@ final class FboScanState {
     Map<String,String> prepare(String action, String kiz, Integer confirmedQuantity) {
         if (pending != null) return new LinkedHashMap<>(pending);
         Map<String,String> p = new LinkedHashMap<>(); p.put("action",action); p.put("operationId",UUID.randomUUID().toString());
+        if ("UNDO_PACK_UNIT".equals(action)) p.put("undoOperationId",lastPackingOperation);
         if (!direction.isEmpty()) p.put("direction",direction);
         if (!pallet.isEmpty()) p.put("palletCode",pallet);
         if (!source.isEmpty()) p.put("sourceBoxCode",source);
@@ -54,6 +73,17 @@ final class FboScanState {
         if (kiz != null && !kiz.isEmpty()) p.put("kiz",kiz);
         if (confirmedQuantity != null) p.put("confirmedQuantity", String.valueOf(confirmedQuantity));
         pending = p; return new LinkedHashMap<>(p);
+    }
+    // FIX: save accepted packing identity with the same commit that clears the pending command.
+    Map<String,String> confirmedPosition(Map<String,String> payload) {
+        Map<String,String> p=checkpoint();p.put("barcode","");p.put("productKiz","");p.put("productReady","false");
+        String action=payload.get("action");
+        if("PACK_UNIT".equals(action)||"PACK_PRODUCT".equals(action)) {
+            p.put("lastPackingOperation",payload.get("operationId"));p.put("lastPackingBox",payload.getOrDefault("targetBoxCode",""));p.put("lastPackingBarcode",payload.getOrDefault("barcode",""));
+        } else {
+            p.put("lastPackingOperation","");p.put("lastPackingBox","");p.put("lastPackingBarcode","");
+        }
+        return p;
     }
     void restore(Map<String,String> value) {
         pending = value == null ? null : new LinkedHashMap<>(value);

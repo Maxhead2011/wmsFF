@@ -4,6 +4,19 @@ import static org.junit.Assert.*;
 import java.util.*;
 import pro.logoff.wms.tsd.network.TsdFboPlan;
 public class OzonProductStateTest {
+ // TEST: undo references only the last confirmed operation and is replayed unchanged after restart.
+ @Test public void undoSurvivesRestartAndClearsOnlyAfterConfirmation(){
+  FboScanState a=new FboScanState();a.target="FFL_A";a.barcode="123";
+  Map<String,String> packed=a.prepare("PACK_PRODUCT","KIZ");
+  Map<String,String> confirmed=a.confirmedPosition(packed);a.accepted();a.restoreCheckpoint(confirmed);
+  FboScanState b=new FboScanState();b.restoreCheckpoint(a.checkpoint());
+  Map<String,String> undo=b.prepare("UNDO_PACK_UNIT",null);
+  assertEquals(packed.get("operationId"),undo.get("undoOperationId"));
+  FboScanState restarted=new FboScanState();restarted.restoreCheckpoint(b.checkpoint());restarted.restore(undo);
+  assertEquals(undo,restarted.prepare("UNDO_PACK_UNIT",null));
+  assertEquals("",restarted.confirmedPosition(undo).get("lastPackingOperation"));
+  assertEquals(packed.get("operationId"),restarted.lastPackingOperation);
+ }
  // TEST: product scan survives restarting before destination box; replay retains operation and KIZ.
  @Test public void restartAndRetryKeepProductIdentity(){
   FboScanState a=new FboScanState();a.productMode=true;a.productReady=true;a.productKiz="KIZ";a.barcode="123";a.direction="Краснодар";

@@ -26,6 +26,66 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: reject an otherwise needed product immediately when it belongs to another destination.
+    @Test public void destinationRejectsBarcodeBeforeAskingForKiz() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=productPlan();
+            TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="FFL_KRD";b.direction="Краснодар";p.boxes.add(b);
+            TsdFboPlan.DirectionItem item=new TsdFboPlan.DirectionItem();item.barcode="999";item.quantity=1;p.directions.get(0).items.add(item);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try{
+                java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);
+                FboScanState state=(FboScanState)field.get(screen);state.target=b.code;state.direction=b.direction;
+                findAction(a.findViewById(android.R.id.content),"Обновить").performClick();waitIdle(screen);
+                screen.scannerField().setText("123");screen.submit();
+                assertNotNull(find(a.findViewById(android.R.id.content),"Товар не нужен в направлении «Краснодар»"));
+                assertEquals("",state.barcode);assertEquals(0,writes.get());
+                item.barcode="123";item.packed=1;
+                screen.scannerField().setText("123");screen.submit();
+                assertNotNull(find(a.findViewById(android.R.id.content),"В направлении «Краснодар» этот товар уже упакован полностью"));
+                assertEquals("",state.barcode);assertEquals(0,writes.get());
+                item.packed=0;screen.scannerField().setText("123");screen.submit();
+                assertEquals("123",state.barcode);assertEquals(0,writes.get());
+            }finally{screen.close();}
+        }
+    }
+    // TEST: UI cancellation needs physical confirmation; lost response retries the same original unit.
+    @Test public void undoLastPackedUnitSurvivesLostResponseAndRestart() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=productPlan();p.packingUndoSupported=true;p.lines.get(0).requiresKiz=false;
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="FFL_KRD";box.direction="Краснодар";p.boxes.add(box);
+            List<Map<String,String>> sent=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
+                boolean action=m.getName().equals("actFbo");
+                Map<String,String> payload=action?new LinkedHashMap<>((Map<String,String>)args[2]):null;
+                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
+                    if(method.getName().equals("execute")){
+                        if(action){sent.add(payload);if("PACK_PRODUCT".equals(payload.get("action"))){box.quantity=1;p.lines.get(0).packed=1;p.packed=1;}
+                            else {box.quantity=0;p.lines.get(0).packed=0;p.packed=0;if(sent.size()==2)throw new java.io.IOException("lost undo response");}}
+                        return Response.success(p);
+                    }return null;
+                });
+            });
+            TsdSession session=new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList());
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",true,()->{});waitIdle(screen);
+            try {
+                findAction(a.findViewById(android.R.id.content),"По товару").performClick();
+                screen.scannerField().setText("123");screen.submit();
+                findAction(a.findViewById(android.R.id.content),"Отменить последнюю единицу").performClick();assertEquals(0,sent.size());
+                screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("FFL_KRD");screen.submit();waitIdle(screen);
+                findAction(a.findViewById(android.R.id.content),"Отменить последнюю единицу").performClick();assertEquals(1,sent.size());
+                org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog().getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();waitIdle(screen);
+                assertEquals("UNDO_PACK_UNIT",sent.get(1).get("action"));assertEquals(sent.get(0).get("operationId"),sent.get(1).get("undoOperationId"));
+                assertFalse(screen.canLeave());screen.close();
+                screen=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",true,()->{});waitIdle(screen);
+                findAction(a.findViewById(android.R.id.content),"Повторить отправку").performClick();waitIdle(screen);
+                assertEquals(sent.get(1),sent.get(2));assertTrue(screen.canLeave());
+                assertFalse(findAction(a.findViewById(android.R.id.content),"Отменить последнюю единицу").isEnabled());
+            }finally{screen.close();}
+        }
+    }
     // TEST: barcode/KIZ alone never packs; destination box confirms exactly one action.
     @Test public void productModeRequiresMatchingBoxAfterProduct() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
