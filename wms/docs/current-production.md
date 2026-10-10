@@ -1,3 +1,11 @@
+# Published PR541 / 2026-10-10 — LOGOFF APK224
+
+Picking and packing each expose WB/Ozon lists. The API filters persisted ozonShipment identity before pagination; legacy requests remain unchanged. APK224 installation required. Progress and stock untouched; sold WMS not deployed.
+Two API runtime modules patched against the current baseline, preserving parallel packing. Web changes only three LOGOFF APK downloads. Signed APK hash and published handlers verified.
+Baseline `2026-10-10-tsd-fbo-marketplace`, sourceParityVerified=false.
+Android244 release tests per flavor, API3268 plus 2 controller checks, web414 and 3 runtime tests passed. API139/web2 skipped; dedicated KIZ DB integration excluded. Read-only live proof: picking WB2/Ozon1, packing WB0/Ozon1. Physical terminal test pending installation.
+[Evidence and rollback](releases/tsd-fbo-marketplace-20261010.json).
+
 Published PR539 (2026-10-09): WB/Ozon FBO lists separated by persisted Ozon shipment relation. API sha256:fe92f300071c6b51a2a8e5452bfef661910711c4e5b629f9e40d2c191aeb9f24, web sha256:302d0ae012e1317cad9b55b07080adc59472a48ca0367a85b21a4ea3af861dfd. Baseline `2026-10-09-fbo-marketplace`; sourceParityVerified=false. APK223, flags and business records unchanged. API3266/web414, runtime2 and read-only live list handler passed; 144/2 skipped, dedicated KIZ DB integration excluded. Rollback tags: logoff-api:before-fbo-marketplace-20261009 and logoff-web:before-fbo-marketplace-20261009.
 
 # Published PR537 / 2026-10-09: print agent 2026.10.09.2
