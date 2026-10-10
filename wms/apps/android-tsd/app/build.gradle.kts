@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 226 // FIX: product-first Ozon packing, LOGOFF only.
-            versionName = "0.1.226-ozon-packing-product"
+            versionCode = 227 // FIX: last-unit undo and immediate destination checks, LOGOFF only.
+            versionName = "0.1.227-packing-undo"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
