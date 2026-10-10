@@ -9,7 +9,7 @@ const cp=require('child_process'),assert=require('assert/strict');
 const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,experimentalDecorators:true,emitDecoratorMetadata:true}}).outputText;
 for(const n of ['ozon-assembly-supply.service','ozon-assembly-supply.controller']){
  const rel='wms/apps/api/src/modules/client-requests/'+n+'.ts',file='modules/client-requests/'+n+'.js';
- const old=cp.execFileSync('git',['show','HEAD^:'+rel],{encoding:'utf8'});
+ const old=cp.execFileSync('git',['show','164a0a79:'+rel],{encoding:'utf8'});
  assert.equal(fs.readFileSync(path.join(root,'api',file),'utf8').replace(/\r/g,''),compile(old).replace(/\r/g,''),'Runtime drift '+n);
  fs.writeFileSync(path.join(root,'api',file),compile(fs.readFileSync(path.join(__dirname,'../apps/api/src/modules/client-requests/'+n+'.ts'),'utf8')));changed.push(file);
 }
