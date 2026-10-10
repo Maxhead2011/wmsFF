@@ -1,3 +1,5 @@
+import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
+import { rememberPackedUnit, packedUnitForUndo } from './fbo-packing-undo';
 import { assertSupplyMutable } from '../client-requests/ozon-supply-policy';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { assertDirectionCapacity, directionProgress, type OzonDirection } from './ozon-fbo-directions';
@@ -164,6 +166,11 @@ export class FboTwoStageService {
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: shipment ? 'OZON' : 'WILDBERRIES',
+            // FIX: only our enabled Ozon deployment advertises the additive workflow.
+            packingByProductSupported: !!shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
+            packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
+            packingSuggestions: shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
+                ? ozonPackingSuggestions(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
@@ -196,6 +203,7 @@ export class FboTwoStageService {
             const key = `${id}:${dto.operationId}`, payloadHash = hash([
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
                 ...(directions ? [dto.direction ?? null] : []),
+                ...(dto.undoOperationId === undefined ? [] : [dto.undoOperationId]),
             ]);
             const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
             if (previous) {
@@ -326,10 +334,16 @@ export class FboTwoStageService {
                     await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code, ...(directions ? { direction: dto.direction } : {}) } });
                 }
             }
-            else if (dto.action === 'PACK_UNIT') {
+            else if (dto.action === 'PACK_UNIT' || dto.action === 'PACK_PRODUCT') {
                 requirePacking();
-                const target = await this.box(tx, r, dto.targetBoxCode);
-                const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
+                const byProduct = dto.action === 'PACK_PRODUCT';
+                if (byProduct && (!directions || process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED !== 'true'))
+                    throw new ConflictException('Упаковка по товару недоступна.');
+                if (byProduct) assertDirectionCapacity(directions!, directionBoxes, units, dto.direction, []);
+                const target = byProduct ? await this.target(tx, r, dto.targetBoxCode) : await this.box(tx, r, dto.targetBoxCode);
+                if (byProduct) await this.requireIdleBox(tx, target.id, id);
+                const parcel = byProduct ? await prepareOzonProductBox(tx, id, target, dto.direction)
+                    : await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
@@ -344,7 +358,21 @@ export class FboTwoStageService {
                     if (moved.count !== 1)
                         throw new ConflictException('КИЗ перемещён после отбора. Нужна сверка.');
                 }
-                await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'PACKED', targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id } });
+                const packedUnit = await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'PACKED', targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id } });
+                await rememberPackedUnit(tx, packedUnit, user.id, key);
+            }
+            else if (dto.action === 'UNDO_PACK_UNIT') {
+                requirePacking();
+                const unit = await packedUnitForUndo(tx, id, dto.undoOperationId, user.id);
+                const target = await this.box(tx, r, unit.targetBoxCode!);
+                await this.requireIdleBox(tx, target.id, id);
+                const holding = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${id}` } });
+                const movement = await this.move(tx, r, unit.skuId, target.id, holding.id, 'PACKING', 'PACKING', 1, key, user);
+                if (unit.markId) {
+                    const moved = await tx.productMark.updateMany({ where: { id: unit.markId, boxId: target.id, status: 'PACKING' }, data: { boxId: holding.id, stockMovementId: movement.id } });
+                    if (moved.count !== 1) throw new ConflictException('КИЗ перемещён после упаковки. Нужна сверка.');
+                }
+                await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'PICKED', targetBoxId: null, targetBoxCode: null, packedAt: null, packedByUserId: null } });
             }
             else if (dto.action === 'PACK_BOX') {
                 requirePhase('PACKING');
@@ -414,7 +442,7 @@ export class FboTwoStageService {
             else if (dto.action !== 'START')
                 throw new BadRequestException('Неизвестное действие.');
             await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });
-            await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
+            await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { ...(dto.undoOperationId ? { undoOperationId: dto.undoOperationId } : {}), operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60000 });
         // FIX: retry only rolled-back serialization conflicts, retaining the durable operation id.
         for (let attempt = 0; ; attempt++) {

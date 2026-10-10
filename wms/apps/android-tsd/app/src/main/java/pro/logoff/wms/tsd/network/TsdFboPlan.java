@@ -7,6 +7,11 @@ public class TsdFboPlan {
     // FIX: retain the server's per-destination quotas and physical packing counts.
     public static class Direction { public String name; public int needed, packed; public List<DirectionItem> items; }
     public static class DirectionItem { public String skuId, barcode; public int quantity, packed; }
+    // FIX: absent capability keeps older servers and sold clients on the existing workflow.
+    public boolean packingByProductSupported;
+    public boolean packingUndoSupported;
+    public List<PackingSuggestion> packingSuggestions;
+    public static class PackingSuggestion { public String skuId, barcode, direction, targetBoxCode; }
     public boolean parallelPackingSupported;
     public boolean localRouteEnabled;
     public String requestId, title, phase;
