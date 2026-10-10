@@ -1196,6 +1196,26 @@ model Sku {
   @@index([clientId, marketplace, marketplaceOfferId])
 }
 
+// FIX: marketplace identities do not own or duplicate physical stock.
+model MarketplaceProductLink {
+  id String @id @default(uuid())
+  clientId String
+  connectionId String
+  skuId String?
+  marketplace String
+  productId String
+  offerId String
+  barcodes String[]
+  size String?
+  color String?
+  status String
+  reason String?
+  payload Json
+  updatedAt DateTime @default(now())
+  @@unique([connectionId, productId])
+  @@index([clientId, skuId])
+}
+
 model NomenclatureItem {
   id               String   @id @default(uuid())
   internalSku      String   @unique

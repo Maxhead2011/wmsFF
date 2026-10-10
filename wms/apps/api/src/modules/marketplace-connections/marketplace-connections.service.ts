@@ -1,3 +1,4 @@
+import { preserveLegacyProductLinks, linkedOrderSku, productLinksEnabled, wbSkuScope, wbLinkedSkus, syncProductLink, readProductLinks, confirmProductLink } from './marketplace-product-links';
 import { filterReceiptOrderBoxes, receiptPublicationPolicy, receiptBlockedBoxes, receiptBlockedByTasks, assertReceiptFbsBox } from '../warehouse/receipt-channel-policy';
 import { boundedBoxScanEnabled, boxCandidateSkuIds, sharePendingBoxScan, boxReservationSnapshot } from './fbs-box-scan-search';
 import { handleOzonPickLines } from './ozon-fbs-pick-workflow';
@@ -1159,6 +1160,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
         continue;
       }
+      await this.bindWbPublications(clientId, connection.id, connection.fbsStockPublications);
       const wbWarehouseId = connection.fbsWarehouseId;
       if (!wbWarehouseId) continue;
       const publications = connection.fbsStockPublications.filter(
@@ -1292,6 +1294,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       include: { sku: { select: { id: true, marketplaceProductId: true } } },
       orderBy: { createdAt: 'asc' },
     });
+    await this.bindWbPublications(clientId, connectionId, publications);
     const sourceBySku = new Map<string, typeof publications[number]>();
     publications.forEach((publication) => {
       const current = sourceBySku.get(publication.skuId);
@@ -6724,7 +6727,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    const sku = await this.prisma.sku.findFirst({
+    const sku = productLinksEnabled(clientId) ? (await wbLinkedSkus(this.prisma, clientId, context.connection.id, await this.prisma.sku.findMany({
+      where: {
+        id: dto.skuId,
+        clientId,
+        ...wbSkuScope(clientId, { marketplace: MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
+      },
+      select: { id: true, marketplaceProductId: true },
+    })))[0] : await this.prisma.sku.findFirst({
       where: {
         id: dto.skuId,
         clientId,
@@ -6968,7 +6978,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Выбранный склад WB не является рабочим складом FBS.');
     }
 
-    const sku = await this.prisma.sku.findFirst({
+    const sku = productLinksEnabled(clientId) ? (await wbLinkedSkus(this.prisma, clientId, context.connection.id, await this.prisma.sku.findMany({
+      where: { id: dto.skuId, clientId },
+      select: { id: true, name: true, marketplaceProductId: true },
+    })))[0] : await this.prisma.sku.findFirst({
       where: { id: dto.skuId, clientId, marketplace: MarketplaceType.WILDBERRIES },
       select: { id: true, name: true, marketplaceProductId: true },
     });
@@ -7040,16 +7053,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
-    const skus = await this.prisma.sku.findMany({
+    const skus = await wbLinkedSkus(this.prisma, clientId, context.connection.id, await this.prisma.sku.findMany({
       where: {
         id: { in: skuIds },
         clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        marketplaceProductId: { not: null },
+        ...wbSkuScope(clientId, { marketplace: MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
         isDraft: false,
       },
       select: { id: true, marketplaceProductId: true },
-    });
+    }));
     const foundIds = new Set(skus.map((sku) => sku.id));
     const missingIds = skuIds.filter((skuId) => !foundIds.has(skuId));
     if (missingIds.length > 0) {
@@ -7275,6 +7287,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       orderBy: { createdAt: 'asc' },
     });
+    await this.bindWbPublications(clientId, context.connection.id, publications);
     if (publications.length === 0) {
       throw new BadRequestException('Сначала укажите хотя бы для одного товара статус «Продавать» или «Не продавать».');
     }
@@ -7528,11 +7541,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     connectedWarehouseName: string,
     executionWarehouseIdOverride?: string,
   ) {
-    const skus = await this.prisma.sku.findMany({
+    const skus = await wbLinkedSkus(this.prisma, client.id, connection.id, await this.prisma.sku.findMany({
       where: {
         clientId: client.id,
-        marketplace: MarketplaceType.WILDBERRIES,
-        marketplaceProductId: { not: null },
+        ...wbSkuScope(client.id, { marketplace: MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
         isDraft: false,
       },
       select: {
@@ -7550,7 +7562,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         },
       },
       orderBy: [{ name: 'asc' }, { size: 'asc' }, { internalSku: 'asc' }],
-    });
+    }));
     const mappedSkus = skus
       .map((sku) => ({ sku, ids: wildberriesStockIds(sku.marketplaceProductId) }))
       .filter((item): item is { sku: typeof skus[number]; ids: { nmId: string; chrtId: number } } =>
@@ -7711,7 +7723,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.sku.findMany({
         where: { id: { in: skuIds }, clientId },
         select: { id: true, marketplaceProductId: true },
-      }),
+      }).then(rows => connectionId ? wbLinkedSkus(this.prisma, clientId, connectionId, rows) : rows),
       this.prisma.stockBalance.findMany({
         where: {
           clientId,
@@ -7868,14 +7880,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
 
     // FIX: publish the same free stock as WMS/Excel, across all WB accounts of this branch.
-    if (wbOrderStockLifecycleEnabled()) {
+    if (wbOrderStockLifecycleEnabled() || productLinksEnabled(clientId)) {
       const unified = await wbReservationQuantities(this.prisma, clientId, skuIds, executionWarehouseId ?? undefined);
       reservedBySku.clear();
       unified.forEach((quantity, skuId) => reservedBySku.set(skuId, quantity));
     }
     for (const [sku, quantity] of receiptPolicy.credit) reservedBySku.set(sku, Math.max(0,(reservedBySku.get(sku)||0)-quantity));
     skus.forEach((sku) => {
-      const ids = wildberriesStockIds(sku.marketplaceProductId);
+      // FIX: the all-account administration view needs physical quantities, never a publication identity.
+      const ids = productLinksEnabled(clientId) && !connectionId ? { chrtId: 0 } : wildberriesStockIds(sku.marketplaceProductId);
       if (!ids) return;
       const available = availableBySku.get(sku.id) ?? 0;
       const reserved = reservedBySku.get(sku.id) ?? 0;
@@ -7915,11 +7928,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         meta: new Map<string, FbsRelabelStockMeta>(),
       };
     }
-    const skus = await this.prisma.sku.findMany({
+    const skus = await wbLinkedSkus(this.prisma, clientId, connectionId, await this.prisma.sku.findMany({
       where: {
         clientId,
-        marketplace: MarketplaceType.WILDBERRIES,
-        marketplaceProductId: { not: null },
+        ...wbSkuScope(clientId, { marketplace: MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
         isDraft: false,
       },
       select: {
@@ -7933,7 +7945,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         barcodes: { select: { value: true } },
       },
       orderBy: [{ size: 'asc' }, { internalSku: 'asc' }],
-    });
+    }));
     const skuIds = skus.map((sku) => sku.id);
     const [base, mappings, publications] = await Promise.all([
       this.calculateFbsStockQuantities(
@@ -26462,14 +26474,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         })
       : rawOrders;
 
+    const productLinks=await readProductLinks(this.prisma,clientId);
+    const linkedIds=uniqueStrings(selectedRawOrders.map(order=>linkedOrderSku(productLinks,order.connectionId,asArray<unknown>(order.skus).map(textValue),order.marketplace===MarketplaceType.WILDBERRIES&&order.nmId&&order.chrtId?`${order.nmId}:${order.chrtId}`:undefined,order.marketplace===MarketplaceType.OZON?textValue(order.article):undefined)??''));
     const barcodes = uniqueStrings(selectedRawOrders.flatMap((order) => asArray<unknown>(order.skus).map(textValue)));
     const articles = uniqueStrings(selectedRawOrders.map((order) => textValue(order.article)));
     const skus =
-      barcodes.length > 0 || articles.length > 0
+      barcodes.length > 0 || articles.length > 0 || linkedIds.length > 0
         ? await this.prisma.sku.findMany({
             where: {
               clientId,
               OR: [
+                ...(linkedIds.length ? [{id:{in:linkedIds}}] : []),
                 ...(barcodes.length > 0 ? [{ barcodes: { some: { value: { in: barcodes } } } }] : []),
                 ...(articles.length > 0
                   ? [
@@ -26531,7 +26546,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       .map((order) => {
         const orderBarcodes = uniqueStrings(asArray<unknown>(order.skus).map(textValue));
         const article = textValue(order.article);
-        const sku =
+        const sku = productLinksEnabled(clientId) && order.marketplace !== MarketplaceType.YANDEX_MARKET ? skus.find(s=>s.id===linkedOrderSku(productLinks,order.connectionId,orderBarcodes,order.marketplace===MarketplaceType.WILDBERRIES && order.nmId && order.chrtId ? `${order.nmId}:${order.chrtId}` : undefined, order.marketplace===MarketplaceType.OZON ? article : undefined)) ?? null :
           orderBarcodes.map((barcode) => skuByBarcode.get(barcode)).find(Boolean) ??
           skuByArticle.get(article.toLowerCase()) ??
           null;
@@ -28509,6 +28524,44 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: publication resolves account-specific IDs instead of the last imported identity.
+  private async bindWbPublications(clientId: string, connectionId: string, rows: Array<{sku: {id:string;marketplaceProductId:string|null}}>) {
+    if (!productLinksEnabled(clientId)) return;
+    const skus=await wbLinkedSkus(this.prisma,clientId,connectionId,rows.map(r=>r.sku));
+    const ids=new Map(skus.map(s=>[s.id,s.marketplaceProductId]));
+    const missing=rows.filter(r=>!ids.has(r.sku.id));
+    if(missing.length)throw new ConflictException('Публикация остановлена: нет подтверждённой связи WB для товаров '+missing.map(r=>r.sku.id).join(', ')+'. Откройте сверку карточек в каталоге.');
+    rows.forEach(r=>{r.sku.marketplaceProductId=ids.get(r.sku.id)!;});
+  }
+
+  // FIX: reconciliation is read-only and uses the same client/branch permissions as catalog sync.
+  async productLinks(id: string, user: AuthUser) {
+    const connection=await this.prisma.clientMarketplaceConnection.findUnique({where:{id}});
+    if(!connection)throw new NotFoundException('Подключение не найдено.');
+    this.clientScopes.requireClientAccess(user,connection.clientId,'read');
+    if(!productLinksEnabled(connection.clientId))return {enabled:false,items:[]};
+    const links=await readProductLinks(this.prisma,connection.clientId,id);
+    const all=await this.prisma.sku.findMany({where:{clientId:connection.clientId},select:{id:true,name:true,article:true,size:true,color:true,barcodes:{select:{value:true}}}});
+    const ids=all.map(s=>s.id);
+    const warehouseId=await this.resolveFbsExecutionWarehouseId(connection.clientId,connection.fbsExecutionWarehouseId);
+    const [balances,reserves]=await Promise.all([
+      this.prisma.stockBalance.groupBy({by:['skuId','status'],where:{clientId:connection.clientId,...(warehouseId?{warehouseId}:{}),skuId:{in:ids}},_sum:{quantity:true}}),
+      wbReservationQuantities(this.prisma,connection.clientId,ids,warehouseId??undefined),
+    ]);
+    return {enabled:true,items:links.map(l=>({id:l.id,marketplace:l.marketplace,productId:l.productId,offerId:l.offerId,status:l.status,reason:l.reason,updatedAt:l.updatedAt,
+      skuId:l.skuId,sku:all.find(s=>s.id===l.skuId)??null,
+      available:balances.find(b=>b.skuId===l.skuId&&b.status==='AVAILABLE')?._sum.quantity??0,reserved:l.skuId?reserves.get(l.skuId)??0:0,
+      candidates:l.status==='REVIEW'?all.filter(s=>s.barcodes.some(b=>l.barcodes.includes(b.value))):[]}))};
+  }
+
+  async confirmProductLink(id:string,linkId:string,body:{skuId:string;updatedAt:string;reason:string},user:AuthUser) {
+    const connection=await this.prisma.clientMarketplaceConnection.findUnique({where:{id}});
+    if(!connection)throw new NotFoundException('Подключение не найдено.');
+    this.clientScopes.requireClientAccess(user,connection.clientId,'write');
+    await this.requireBranchOwnedClientConfiguration(user,connection.clientId);
+    return confirmProductLink(this.prisma,connection.clientId,id,linkId,body.skuId,body.updatedAt,body.reason,user.id);
+  }
+
   async syncProducts(id: string, user: AuthUser) {
     const connection = await this.prisma.clientMarketplaceConnection.findUnique({
       where: { id },
@@ -28534,6 +28587,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const products = await this.fetchMarketplaceProducts(connection);
+    await preserveLegacyProductLinks(this.prisma, connection.clientId);
     const result = {
       marketplace: connection.marketplace,
       clientId: connection.clientId,
@@ -28548,7 +28602,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     for (const product of products) {
       try {
-        const synced = await this.upsertMarketplaceSku(connection.clientId, product);
+        const synced = productLinksEnabled(connection.clientId) && connection.marketplace !== MarketplaceType.YANDEX_MARKET
+          ? await syncProductLink(this.prisma, connection, product, marketplaceSkuData(connection.clientId, product, false))
+          : await this.upsertMarketplaceSku(connection.clientId, product);
+        if ('review' in synced && synced.review) { result.skipped += 1; result.errors.push({offerId: product.offerId, message: 'Карточка требует сверки в каталоге товаров'}); continue; }
         result[synced.created ? 'created' : 'updated'] += 1;
         result.mergedDrafts += synced.mergedDrafts;
         result.barcodesTouched += synced.barcodesTouched;

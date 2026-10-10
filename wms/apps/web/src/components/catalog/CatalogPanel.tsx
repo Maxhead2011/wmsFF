@@ -20,6 +20,7 @@ import {
   type UpdateSkuPayload,
 } from '../../lib/api';
 import { BulkVolumeEditor } from './BulkVolumeEditor';
+import { MarketplaceProductLinks } from './MarketplaceProductLinks';
 import './catalog.css';
 import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
@@ -383,6 +384,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
         </div>
       )}
 
+      {selectedClientId && <MarketplaceProductLinks session={session} connections={connections} canWrite={canWrite} />}
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
 

@@ -1,3 +1,4 @@
+import { ozonLinkedSkus } from './marketplace-product-links';
 import { receiptBlockedBoxes, assertReceiptFbsBox } from '../warehouse/receipt-channel-policy';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { reconcileFbsRequestStatus } from '../../common/stock/fbs-request-auto-status';
@@ -68,7 +69,7 @@ async function initialize(service: any, task: any, user: any): Promise<OzonPickS
     throw new BadRequestException('Многотоварный заказ уже передан или требует маркировки/переклейки. Нужна проверка администратора.');
   }
   if (posting.requirements?.products_requiring_mandatory_mark?.length) throw new BadRequestException('Ozon требует КИЗ: нужна отдельная проверка многотоварного заказа.');
-  const catalog = await service.prisma.sku.findMany({ where: { clientId: task.clientId }, include: { barcodes: true } });
+  const catalog = await ozonLinkedSkus(service.prisma, task.clientId, task.connectionId, await service.prisma.sku.findMany({ where: { clientId: task.clientId }, include: { barcodes: true } }));
   const resolved = products.map(product => ({ product, sku: resolveOzonLineSku(product, catalog) }));
   if (resolved[0].sku.id !== task.skuId || products.reduce((n, p) => n + p.quantity, 0) !== task.itemCount) {
     throw new ConflictException('Состав заказа отличается от заявки WMS. Сначала обновите заявку.');

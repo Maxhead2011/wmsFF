@@ -10630,6 +10630,16 @@ export async function syncMarketplaceProducts(accessToken: string, connectionId:
   });
 }
 
+// FIX: marketplace reconciliation never publishes stock or merges warehouse history.
+export type ProductLinkSku = {id:string;name:string;article:string|null;size:string|null;color:string|null};
+export type ProductLinkRow = {id:string;marketplace:string;productId:string;offerId:string;status:string;reason:string|null;updatedAt:string;skuId:string|null;sku:ProductLinkSku|null;available:number;reserved:number;candidates:ProductLinkSku[]};
+export function fetchProductLinks(accessToken:string,connectionId:string) {
+ return request<{enabled:boolean;items:ProductLinkRow[]}>(`/marketplace-connections/${encodeURIComponent(connectionId)}/product-links`,{accessToken});
+}
+export function confirmProductLink(accessToken:string,connectionId:string,row:ProductLinkRow,skuId:string,reason:string) {
+ return request<{linked:boolean}>(`/marketplace-connections/${encodeURIComponent(connectionId)}/product-links/${encodeURIComponent(row.id)}/confirm`,{accessToken,method:'POST',body:{skuId,updatedAt:row.updatedAt,reason}});
+}
+
 export async function fetchDbsIntegrations(
   accessToken: string,
   filter: { clientId?: string; marketplace?: 'WILDBERRIES' | 'OZON' | 'YANDEX_MARKET' } = {},
