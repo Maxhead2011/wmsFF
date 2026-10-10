@@ -4734,7 +4734,8 @@ function FbsStocksView({
               <th>Товар</th>
               <th>Идентификаторы</th>
               <th>WMS</th>
-              <th>Резерв</th>
+              <th>Резерв заказов</th>
+              <th>Страховой резерв</th>
               <th>К продаже</th>
               <th>Лимит продажи</th>
               <th>В WB</th>
@@ -4793,6 +4794,8 @@ function FbsStocksView({
                   </td>
                   <td><strong>{item.wmsAvailable.toLocaleString('ru-RU')}</strong></td>
                   <td><strong>{item.reserved.toLocaleString('ru-RU')}</strong></td>
+                  {/* FIX: distinguish insurance from units committed to orders. */}
+                  <td><strong>{(item.safetyReserve ?? 0).toLocaleString('ru-RU')}</strong></td>
                   <td><strong>{item.sellable.toLocaleString('ru-RU')}</strong></td>
                   <td>
                     <label className="fbs-stocks__limit-input">
