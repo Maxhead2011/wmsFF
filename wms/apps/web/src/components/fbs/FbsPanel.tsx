@@ -4903,11 +4903,11 @@ function FbsStocksView({
         {visibleItems.length === 0 ? (
           <div className="fbs-empty">
             <span><Search size={27} aria-hidden="true" /></span>
-            <strong>{search.trim() ? `По запросу «${search.trim()}» ничего не найдено` : 'Нет сопоставленных товаров'}</strong>
+            <strong>{search.trim() ? `По запросу «${search.trim()}» ничего не найдено` : 'Нет товаров для выбранных условий'}</strong>
             <p>
               {search.trim()
                 ? 'Измените поисковый запрос.'
-                : 'Проверьте штрихкоды и артикулы товаров в WMS и Wildberries.'}
+                : 'Проверьте фильтры, выбранный кабинет и сверку карточек WB и Ozon в каталоге товаров.'}
             </p>
           </div>
         ) : null}

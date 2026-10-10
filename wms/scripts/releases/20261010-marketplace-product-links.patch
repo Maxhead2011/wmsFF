@@ -1,0 +1,548 @@
+--- a/modules/administration/administration-internal-api.service.js
++++ b/modules/administration/administration-internal-api.service.js
+@@ -242,7 +242,7 @@
+             '/marketplace-connections/fbs/size-substitution', '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
+             '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/marketplace-connections/allocation', '/marketplace-connections/duplicate-groups', '/marketplace-connections/stock-confirmation'],
+         // FIX: preserve delivery-options plus six reshipment handlers; aliases count once.
+-        routeCount: 127, // FIX: includes read-only WB stock verification.
++        routeCount: 129, // FIX: WB verification plus product-link review and confirmation.
+         description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+         logic: ['Перенос из доставки через расширение: после подтверждения выдаёт одну команду кабинету WB, затем независимо проверяет поставки и новый стикер; токены кабинета остаются в браузере.', 'Учёт по статусу WB: решение менеджера после проверки WB; точная пара КИЗ–ШК списывается и сохраняется в истории отгрузок, неизвестный источник — без короба.', 'Замена размера WB: ADMIN/OWNER подтверждает переклейку, создаётся локальная заявка без списания до отбора.', 'Синхронизирует кабинеты, склады и заказы.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
+         dependencies: ['Основная БД', 'WB API', 'Ozon API'],
+--- /dev/null
++++ b/modules/marketplace-connections/dto/confirm-product-link.dto.js
+@@ -0,0 +1,34 @@
++"use strict";
++var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
++    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
++    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
++    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
++    return c > 3 && r && Object.defineProperty(target, key, r), r;
++};
++var __metadata = (this && this.__metadata) || function (k, v) {
++    if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
++};
++Object.defineProperty(exports, "__esModule", { value: true });
++exports.ConfirmProductLinkDto = void 0;
++const class_validator_1 = require("class-validator");
++// FIX: optimistic concurrency and an explicit audit reason for manual matching.
++class ConfirmProductLinkDto {
++    skuId;
++    updatedAt;
++    reason;
++}
++exports.ConfirmProductLinkDto = ConfirmProductLinkDto;
++__decorate([
++    (0, class_validator_1.IsUUID)(),
++    __metadata("design:type", String)
++], ConfirmProductLinkDto.prototype, "skuId", void 0);
++__decorate([
++    (0, class_validator_1.IsDateString)(),
++    __metadata("design:type", String)
++], ConfirmProductLinkDto.prototype, "updatedAt", void 0);
++__decorate([
++    (0, class_validator_1.IsString)(),
++    (0, class_validator_1.MinLength)(3),
++    (0, class_validator_1.MaxLength)(1000),
++    __metadata("design:type", String)
++], ConfirmProductLinkDto.prototype, "reason", void 0);
+--- a/modules/marketplace-connections/marketplace-connections.controller.js
++++ b/modules/marketplace-connections/marketplace-connections.controller.js
+@@ -1,3 +1,4 @@
++const confirm_product_link_dto_1 = require("./dto/confirm-product-link.dto");
+ "use strict";
+ var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
+     var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+@@ -440,6 +441,11 @@
+     delete(id, user) {
+         return this.connections.delete(id, user);
+     }
++    // FIX: read-only reconciliation and separately audited write; no stock publication here.
++    productLinks(id, user) { return this.connections.productLinks(id, user); }
++    confirmProductLink(id, linkId, body, user) {
++        return this.connections.confirmProductLink(id, linkId, body, user);
++    }
+     syncProducts(id, user) {
+         return this.connections.syncProducts(id, user);
+     }
+@@ -1386,6 +1392,26 @@
+     __metadata("design:returntype", void 0)
+ ], MarketplaceConnectionsController.prototype, "delete", null);
+ __decorate([
++    (0, common_1.Get)(':id/product-links'),
++    (0, require_permissions_decorator_1.RequireAnyPermissions)('clients:read', 'marketplace-api:read'),
++    __param(0, (0, common_1.Param)('id')),
++    __param(1, (0, current_user_decorator_1.CurrentUser)()),
++    __metadata("design:type", Function),
++    __metadata("design:paramtypes", [String, Object]),
++    __metadata("design:returntype", void 0)
++], MarketplaceConnectionsController.prototype, "productLinks", null);
++__decorate([
++    (0, common_1.Post)(':id/product-links/:linkId/confirm'),
++    (0, require_permissions_decorator_1.RequireAnyPermissions)('clients:write', 'marketplace-api:write'),
++    __param(0, (0, common_1.Param)('id')),
++    __param(1, (0, common_1.Param)('linkId')),
++    __param(2, (0, common_1.Body)()),
++    __param(3, (0, current_user_decorator_1.CurrentUser)()),
++    __metadata("design:type", Function),
++    __metadata("design:paramtypes", [String, String, confirm_product_link_dto_1.ConfirmProductLinkDto, Object]),
++    __metadata("design:returntype", void 0)
++], MarketplaceConnectionsController.prototype, "confirmProductLink", null);
++__decorate([
+     (0, common_1.Post)(':id/sync-products'),
+     (0, require_permissions_decorator_1.RequireAnyPermissions)('clients:write', 'marketplace-api:write'),
+     __param(0, (0, common_1.Param)('id')),
+--- a/modules/marketplace-connections/marketplace-connections.service.js
++++ b/modules/marketplace-connections/marketplace-connections.service.js
+@@ -1,3 +1,4 @@
++const marketplace_product_links_1 = require("./marketplace-product-links");
+ const receipt_channel_policy_1 = require("../warehouse/receipt-channel-policy");
+ const fbs_box_scan_search_1 = require("./fbs-box-scan-search");
+ "use strict";
+@@ -763,6 +764,7 @@
+                 }
+                 continue;
+             }
++            await this.bindWbPublications(clientId, connection.id, connection.fbsStockPublications);
+             const wbWarehouseId = connection.fbsWarehouseId;
+             if (!wbWarehouseId)
+                 continue;
+@@ -880,6 +882,7 @@
+             include: { sku: { select: { id: true, marketplaceProductId: true } } },
+             orderBy: { createdAt: 'asc' },
+         });
++        await this.bindWbPublications(clientId, connectionId, publications);
+         const sourceBySku = new Map();
+         publications.forEach((publication) => {
+             const current = sourceBySku.get(publication.skuId);
+@@ -5913,7 +5916,14 @@
+         if (context.connectedWarehouseId !== context.warehouse.id) {
+             throw new common_1.BadRequestException('Сначала подключите выбранный склад как рабочий склад FBS, затем меняйте остатки товара.');
+         }
+-        const sku = await this.prisma.sku.findFirst({
++        const sku = (0, marketplace_product_links_1.productLinksEnabled)(clientId) ? (await (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, clientId, context.connection.id, await this.prisma.sku.findMany({
++            where: {
++                id: dto.skuId,
++                clientId,
++                ...(0, marketplace_product_links_1.wbSkuScope)(clientId, { marketplace: client_1.MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
++            },
++            select: { id: true, marketplaceProductId: true },
++        })))[0] : await this.prisma.sku.findFirst({
+             where: {
+                 id: dto.skuId,
+                 clientId,
+@@ -6133,7 +6143,10 @@
+         if (context.connectedWarehouseId !== context.warehouse.id) {
+             throw new common_1.BadRequestException('Выбранный склад WB не является рабочим складом FBS.');
+         }
+-        const sku = await this.prisma.sku.findFirst({
++        const sku = (0, marketplace_product_links_1.productLinksEnabled)(clientId) ? (await (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, clientId, context.connection.id, await this.prisma.sku.findMany({
++            where: { id: dto.skuId, clientId },
++            select: { id: true, name: true, marketplaceProductId: true },
++        })))[0] : await this.prisma.sku.findFirst({
+             where: { id: dto.skuId, clientId, marketplace: client_1.MarketplaceType.WILDBERRIES },
+             select: { id: true, name: true, marketplaceProductId: true },
+         });
+@@ -6187,16 +6200,15 @@
+         if (context.connectedWarehouseId !== context.warehouse.id) {
+             throw new common_1.BadRequestException('Сначала подключите выбранный склад как рабочий склад FBS, затем меняйте остатки товаров.');
+         }
+-        const skus = await this.prisma.sku.findMany({
++        const skus = await (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, clientId, context.connection.id, await this.prisma.sku.findMany({
+             where: {
+                 id: { in: skuIds },
+                 clientId,
+-                marketplace: client_1.MarketplaceType.WILDBERRIES,
+-                marketplaceProductId: { not: null },
++                ...(0, marketplace_product_links_1.wbSkuScope)(clientId, { marketplace: client_1.MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
+                 isDraft: false,
+             },
+             select: { id: true, marketplaceProductId: true },
+-        });
++        }));
+         const foundIds = new Set(skus.map((sku) => sku.id));
+         const missingIds = skuIds.filter((skuId) => !foundIds.has(skuId));
+         if (missingIds.length > 0) {
+@@ -6383,6 +6395,7 @@
+             },
+             orderBy: { createdAt: 'asc' },
+         });
++        await this.bindWbPublications(clientId, context.connection.id, publications);
+         if (publications.length === 0) {
+             throw new common_1.BadRequestException('Сначала укажите хотя бы для одного товара статус «Продавать» или «Не продавать».');
+         }
+@@ -6582,11 +6595,10 @@
+             .filter((office) => Boolean(office.id));
+     }
+     async buildFbsStocksResponse(client, connections, connection, warehouses, warehouse, connectedWarehouseId, connectedWarehouseName, executionWarehouseIdOverride) {
+-        const skus = await this.prisma.sku.findMany({
++        const skus = await (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, client.id, connection.id, await this.prisma.sku.findMany({
+             where: {
+                 clientId: client.id,
+-                marketplace: client_1.MarketplaceType.WILDBERRIES,
+-                marketplaceProductId: { not: null },
++                ...(0, marketplace_product_links_1.wbSkuScope)(client.id, { marketplace: client_1.MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
+                 isDraft: false,
+             },
+             select: {
+@@ -6604,7 +6616,7 @@
+                 },
+             },
+             orderBy: [{ name: 'asc' }, { size: 'asc' }, { internalSku: 'asc' }],
+-        });
++        }));
+         const mappedSkus = skus
+             .map((sku) => ({ sku, ids: wildberriesStockIds(sku.marketplaceProductId) }))
+             .filter((item) => Boolean(item.ids));
+@@ -6738,7 +6750,7 @@
+             this.prisma.sku.findMany({
+                 where: { id: { in: skuIds }, clientId },
+                 select: { id: true, marketplaceProductId: true },
+-            }),
++            }).then(rows => connectionId ? (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, clientId, connectionId, rows) : rows),
+             this.prisma.stockBalance.findMany({
+                 where: {
+                     clientId,
+@@ -6890,7 +6902,7 @@
+             });
+         }
+         // FIX: publish the same free stock as WMS/Excel, across all WB accounts of this branch.
+-        if ((0, wb_order_stock_lifecycle_1.wbOrderStockLifecycleEnabled)()) {
++        if ((0, wb_order_stock_lifecycle_1.wbOrderStockLifecycleEnabled)() || (0, marketplace_product_links_1.productLinksEnabled)(clientId)) {
+             const unified = await (0, wb_order_stock_lifecycle_1.wbReservationQuantities)(this.prisma, clientId, skuIds, executionWarehouseId ?? undefined);
+             reservedBySku.clear();
+             unified.forEach((quantity, skuId) => reservedBySku.set(skuId, quantity));
+@@ -6898,7 +6910,8 @@
+         for (const [sku, quantity] of receiptPolicy.credit)
+             reservedBySku.set(sku, Math.max(0, (reservedBySku.get(sku) || 0) - quantity));
+         skus.forEach((sku) => {
+-            const ids = wildberriesStockIds(sku.marketplaceProductId);
++            // FIX: the all-account administration view needs physical quantities, never a publication identity.
++            const ids = (0, marketplace_product_links_1.productLinksEnabled)(clientId) && !connectionId ? { chrtId: 0 } : wildberriesStockIds(sku.marketplaceProductId);
+             if (!ids)
+                 return;
+             const available = availableBySku.get(sku.id) ?? 0;
+@@ -6936,11 +6949,10 @@
+                 meta: new Map(),
+             };
+         }
+-        const skus = await this.prisma.sku.findMany({
++        const skus = await (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, clientId, connectionId, await this.prisma.sku.findMany({
+             where: {
+                 clientId,
+-                marketplace: client_1.MarketplaceType.WILDBERRIES,
+-                marketplaceProductId: { not: null },
++                ...(0, marketplace_product_links_1.wbSkuScope)(clientId, { marketplace: client_1.MarketplaceType.WILDBERRIES, marketplaceProductId: { not: null } }),
+                 isDraft: false,
+             },
+             select: {
+@@ -6954,7 +6966,7 @@
+                 barcodes: { select: { value: true } },
+             },
+             orderBy: [{ size: 'asc' }, { internalSku: 'asc' }],
+-        });
++        }));
+         const skuIds = skus.map((sku) => sku.id);
+         const [base, mappings, publications] = await Promise.all([
+             this.calculateFbsStockQuantities(clientId, skuIds, executionWarehouseId, connectionId),
+@@ -23262,13 +23274,16 @@
+                 return previousOrderStates.get(key) !== fbsOrderRefreshFingerprint(order);
+             })
+             : rawOrders;
++        const productLinks = await (0, marketplace_product_links_1.readProductLinks)(this.prisma, clientId);
++        const linkedIds = uniqueStrings(selectedRawOrders.map(order => (0, marketplace_product_links_1.linkedOrderSku)(productLinks, order.connectionId, asArray(order.skus).map(textValue), order.marketplace === client_1.MarketplaceType.WILDBERRIES && order.nmId && order.chrtId ? `${order.nmId}:${order.chrtId}` : undefined, order.marketplace === client_1.MarketplaceType.OZON ? textValue(order.article) : undefined) ?? ''));
+         const barcodes = uniqueStrings(selectedRawOrders.flatMap((order) => asArray(order.skus).map(textValue)));
+         const articles = uniqueStrings(selectedRawOrders.map((order) => textValue(order.article)));
+-        const skus = barcodes.length > 0 || articles.length > 0
++        const skus = barcodes.length > 0 || articles.length > 0 || linkedIds.length > 0
+             ? await this.prisma.sku.findMany({
+                 where: {
+                     clientId,
+                     OR: [
++                        ...(linkedIds.length ? [{ id: { in: linkedIds } }] : []),
+                         ...(barcodes.length > 0 ? [{ barcodes: { some: { value: { in: barcodes } } } }] : []),
+                         ...(articles.length > 0
+                             ? [
+@@ -23320,9 +23335,10 @@
+             .map((order) => {
+             const orderBarcodes = uniqueStrings(asArray(order.skus).map(textValue));
+             const article = textValue(order.article);
+-            const sku = orderBarcodes.map((barcode) => skuByBarcode.get(barcode)).find(Boolean) ??
+-                skuByArticle.get(article.toLowerCase()) ??
+-                null;
++            const sku = (0, marketplace_product_links_1.productLinksEnabled)(clientId) && order.marketplace !== client_1.MarketplaceType.YANDEX_MARKET ? skus.find(s => s.id === (0, marketplace_product_links_1.linkedOrderSku)(productLinks, order.connectionId, orderBarcodes, order.marketplace === client_1.MarketplaceType.WILDBERRIES && order.nmId && order.chrtId ? `${order.nmId}:${order.chrtId}` : undefined, order.marketplace === client_1.MarketplaceType.OZON ? article : undefined)) ?? null :
++                orderBarcodes.map((barcode) => skuByBarcode.get(barcode)).find(Boolean) ??
++                    skuByArticle.get(article.toLowerCase()) ??
++                    null;
+             const supplierStatus = textValue(order.supplierStatus) || 'new';
+             const wbStatus = textValue(order.wbStatus) || 'waiting';
+             const category = fbsOrderCategory(supplierStatus, wbStatus);
+@@ -25157,6 +25173,46 @@
+             deleted: true,
+         };
+     }
++    // FIX: publication resolves account-specific IDs instead of the last imported identity.
++    async bindWbPublications(clientId, connectionId, rows) {
++        if (!(0, marketplace_product_links_1.productLinksEnabled)(clientId))
++            return;
++        const skus = await (0, marketplace_product_links_1.wbLinkedSkus)(this.prisma, clientId, connectionId, rows.map(r => r.sku));
++        const ids = new Map(skus.map(s => [s.id, s.marketplaceProductId]));
++        const missing = rows.filter(r => !ids.has(r.sku.id));
++        if (missing.length)
++            throw new common_1.ConflictException('Публикация остановлена: нет подтверждённой связи WB для товаров ' + missing.map(r => r.sku.id).join(', ') + '. Откройте сверку карточек в каталоге.');
++        rows.forEach(r => { r.sku.marketplaceProductId = ids.get(r.sku.id); });
++    }
++    // FIX: reconciliation is read-only and uses the same client/branch permissions as catalog sync.
++    async productLinks(id, user) {
++        const connection = await this.prisma.clientMarketplaceConnection.findUnique({ where: { id } });
++        if (!connection)
++            throw new common_1.NotFoundException('Подключение не найдено.');
++        this.clientScopes.requireClientAccess(user, connection.clientId, 'read');
++        if (!(0, marketplace_product_links_1.productLinksEnabled)(connection.clientId))
++            return { enabled: false, items: [] };
++        const links = await (0, marketplace_product_links_1.readProductLinks)(this.prisma, connection.clientId, id);
++        const all = await this.prisma.sku.findMany({ where: { clientId: connection.clientId }, select: { id: true, name: true, article: true, size: true, color: true, barcodes: { select: { value: true } } } });
++        const ids = all.map(s => s.id);
++        const warehouseId = await this.resolveFbsExecutionWarehouseId(connection.clientId, connection.fbsExecutionWarehouseId);
++        const [balances, reserves] = await Promise.all([
++            this.prisma.stockBalance.groupBy({ by: ['skuId', 'status'], where: { clientId: connection.clientId, ...(warehouseId ? { warehouseId } : {}), skuId: { in: ids } }, _sum: { quantity: true } }),
++            (0, wb_order_stock_lifecycle_1.wbReservationQuantities)(this.prisma, connection.clientId, ids, warehouseId ?? undefined),
++        ]);
++        return { enabled: true, items: links.map(l => ({ id: l.id, marketplace: l.marketplace, productId: l.productId, offerId: l.offerId, status: l.status, reason: l.reason, updatedAt: l.updatedAt,
++                skuId: l.skuId, sku: all.find(s => s.id === l.skuId) ?? null,
++                available: balances.find(b => b.skuId === l.skuId && b.status === 'AVAILABLE')?._sum.quantity ?? 0, reserved: l.skuId ? reserves.get(l.skuId) ?? 0 : 0,
++                candidates: l.status === 'REVIEW' ? all.filter(s => s.barcodes.some(b => l.barcodes.includes(b.value))) : [] })) };
++    }
++    async confirmProductLink(id, linkId, body, user) {
++        const connection = await this.prisma.clientMarketplaceConnection.findUnique({ where: { id } });
++        if (!connection)
++            throw new common_1.NotFoundException('Подключение не найдено.');
++        this.clientScopes.requireClientAccess(user, connection.clientId, 'write');
++        await this.requireBranchOwnedClientConfiguration(user, connection.clientId);
++        return (0, marketplace_product_links_1.confirmProductLink)(this.prisma, connection.clientId, id, linkId, body.skuId, body.updatedAt, body.reason, user.id);
++    }
+     async syncProducts(id, user) {
+         const connection = await this.prisma.clientMarketplaceConnection.findUnique({
+             where: { id },
+@@ -25182,6 +25238,7 @@
+             return (0, wb_catalog_sync_1.synchronizeWbCatalog)(this.prisma, connection, () => this.fetchWildberriesProducts(connection), product => this.upsertMarketplaceSku(connection.clientId, product), true);
+         }
+         const products = await this.fetchMarketplaceProducts(connection);
++        await (0, marketplace_product_links_1.preserveLegacyProductLinks)(this.prisma, connection.clientId);
+         const result = {
+             marketplace: connection.marketplace,
+             clientId: connection.clientId,
+@@ -25195,7 +25252,14 @@
+         };
+         for (const product of products) {
+             try {
+-                const synced = await this.upsertMarketplaceSku(connection.clientId, product);
++                const synced = (0, marketplace_product_links_1.productLinksEnabled)(connection.clientId) && connection.marketplace !== client_1.MarketplaceType.YANDEX_MARKET
++                    ? await (0, marketplace_product_links_1.syncProductLink)(this.prisma, connection, product, marketplaceSkuData(connection.clientId, product, false))
++                    : await this.upsertMarketplaceSku(connection.clientId, product);
++                if ('review' in synced && synced.review) {
++                    result.skipped += 1;
++                    result.errors.push({ offerId: product.offerId, message: 'Карточка требует сверки в каталоге товаров' });
++                    continue;
++                }
+                 result[synced.created ? 'created' : 'updated'] += 1;
+                 result.mergedDrafts += synced.mergedDrafts;
+                 result.barcodesTouched += synced.barcodesTouched;
+--- /dev/null
++++ b/modules/marketplace-connections/marketplace-product-links.js
+@@ -0,0 +1,142 @@
++"use strict";
++Object.defineProperty(exports, "__esModule", { value: true });
++exports.productLinksEnabled = productLinksEnabled;
++exports.productLinkCandidate = productLinkCandidate;
++exports.linkedOrderSku = linkedOrderSku;
++exports.ozonLinkedSkus = ozonLinkedSkus;
++exports.readProductLinks = readProductLinks;
++exports.wbLinkedSkus = wbLinkedSkus;
++exports.wbSkuScope = wbSkuScope;
++exports.preserveLegacyProductLinks = preserveLegacyProductLinks;
++exports.syncProductLink = syncProductLink;
++exports.confirmProductLink = confirmProductLink;
++const common_1 = require("@nestjs/common");
++const client_1 = require("@prisma/client");
++const node_crypto_1 = require("node:crypto");
++// FIX: opt-in by deployment AND client; legacy clients do not query the new table.
++function productLinksEnabled(clientId) {
++    return process.env.WMS_MARKETPLACE_PRODUCT_LINKS_ENABLED === 'true' &&
++        (process.env.WMS_MARKETPLACE_PRODUCT_LINK_CLIENTS ?? '').split(',').map(s => s.trim()).includes(clientId);
++}
++const norm = (s) => (s ?? '').trim().toLocaleLowerCase('ru-RU');
++function productLinkCandidate(p, candidates) {
++    const matches = candidates.filter(s => s.barcodes.some(b => p.barcodes.includes(b.value)));
++    if (matches.length !== 1)
++        return { skuId: null, reason: matches.length ? 'Несколько товаров с этим штрихкодом' : 'Нет товара с этим штрихкодом' };
++    const s = matches[0];
++    if (['size', 'color'].some(k => norm(p[k]) && norm(s[k]) && norm(p[k]) !== norm(s[k])))
++        return { skuId: null, reason: 'Не совпадает размер или цвет' };
++    return { skuId: s.id, reason: null };
++}
++// FIX: incoming orders resolve through the same account-specific physical identity as publication.
++function linkedOrderSku(links, connectionId, barcodes, wbIdentity, offerId) {
++    const candidates = links.filter(l => l.connectionId === connectionId && l.status === 'LINKED' &&
++        (wbIdentity ? l.productId === wbIdentity : offerId ? l.offerId === offerId : l.barcodes.some(b => barcodes.includes(b))));
++    return candidates.length === 1 ? candidates[0].skuId : null;
++}
++// FIX: Ozon consumers use the chosen account's identity even for a WB-origin warehouse SKU.
++async function ozonLinkedSkus(db, clientId, connectionId, rows) {
++    if (!productLinksEnabled(clientId))
++        return rows;
++    const links = (await readProductLinks(db, clientId, connectionId)).filter(l => l.marketplace === 'OZON' && l.status === 'LINKED');
++    const bySku = new Map(links.map(l => [l.skuId, l]));
++    return rows.flatMap(s => { const link = bySku.get(s.id); return link ? [{ ...s, marketplaceProductId: link.productId, marketplaceOfferId: link.offerId }] : []; });
++}
++async function readProductLinks(db, clientId, connectionId, productId, skuId) {
++    if (!productLinksEnabled(clientId))
++        return [];
++    return db.$queryRaw `SELECT l.id,l."clientId",l."connectionId",l."skuId",l.marketplace,l."productId",l."offerId",l.barcodes,l.size,l.color,l.status,l.reason,l."updatedAt" FROM "MarketplaceProductLink" l
++    JOIN "ClientMarketplaceConnection" c ON c.id=l."connectionId" AND c."clientId"=l."clientId"
++    WHERE l."clientId"=${clientId} ${connectionId ? client_1.Prisma.sql `AND l."connectionId"=${connectionId}` : client_1.Prisma.empty}
++    ${productId ? client_1.Prisma.sql `AND l."productId"=${productId}` : client_1.Prisma.empty}
++    ${skuId ? client_1.Prisma.sql `AND l."skuId"=${skuId}` : client_1.Prisma.empty}
++    ORDER BY l."productId"`;
++}
++// FIX: one WB identity per physical SKU per account, with fail-closed publication before reconciliation.
++async function wbLinkedSkus(db, clientId, connectionId, rows) {
++    if (!productLinksEnabled(clientId))
++        return rows;
++    if (!connectionId)
++        throw new common_1.ConflictException('Для связанных карточек выберите кабинет WB.');
++    const links = (await readProductLinks(db, clientId, connectionId)).filter(l => l.marketplace === 'WILDBERRIES' && l.status === 'LINKED' && l.skuId);
++    const bySku = new Map(links.map(l => [l.skuId, l.productId]));
++    return rows.flatMap(s => bySku.has(s.id) ? [{ ...s, marketplaceProductId: bySku.get(s.id) }] : []);
++}
++function wbSkuScope(clientId, legacy) {
++    return productLinksEnabled(clientId) ? {} : legacy;
++}
++// FIX: preserve existing identities only when their owning account is unambiguous.
++async function preserveLegacyProductLinks(db, clientId) {
++    if (!productLinksEnabled(clientId))
++        return;
++    await db.$transaction(async (tx) => {
++        await tx.$queryRaw `SELECT id FROM "Client" WHERE id=${clientId} FOR UPDATE`;
++        const connections = await tx.clientMarketplaceConnection.findMany({ where: { clientId, isActive: true, marketplace: { in: ['WILDBERRIES', 'OZON'] } }, select: { id: true, marketplace: true } });
++        const skus = await tx.sku.findMany({ where: { clientId, marketplaceProductId: { not: null }, isDraft: false }, include: { barcodes: true } });
++        for (const s of skus) {
++            const accounts = connections.filter(c => c.marketplace === s.marketplace);
++            if (accounts.length !== 1)
++                continue;
++            await tx.$executeRaw `INSERT INTO "MarketplaceProductLink" (id,"clientId","connectionId","skuId",marketplace,"productId","offerId",barcodes,size,color,status,payload,"updatedAt")
++        VALUES (${(0, node_crypto_1.randomUUID)()},${clientId},${accounts[0].id},${s.id},${s.marketplace},${s.marketplaceProductId},${s.marketplaceOfferId ?? ''},${s.barcodes.map(b => b.value)},${s.size},${s.color},'LINKED',${JSON.stringify(s.marketplacePayload ?? {})}::jsonb,NOW()) ON CONFLICT DO NOTHING`;
++        }
++    }, { timeout: 60000 });
++}
++async function syncProductLink(db, connection, p, createData) {
++    return db.$transaction(async (tx) => {
++        // Same-client imports and manual confirmations serialize without locking warehouse movements.
++        await tx.$queryRaw `SELECT id FROM "Client" WHERE id=${connection.clientId} FOR UPDATE`;
++        const prior = (await readProductLinks(tx, connection.clientId, connection.id, p.productId))[0];
++        const candidates = await tx.sku.findMany({ where: { clientId: connection.clientId, barcodes: { some: { value: { in: p.barcodes } } } }, include: { barcodes: true } });
++        let decision = productLinkCandidate(p, candidates);
++        let created = false;
++        if (prior?.status === 'LINKED') {
++            // An established identity never silently switches to a new physical product.
++            const linked = await tx.sku.findFirst({ where: { id: prior.skuId, clientId: connection.clientId }, include: { barcodes: true } });
++            const checked = linked ? productLinkCandidate(p, [linked]) : { skuId: null, reason: 'Связанный товар не найден' };
++            decision = checked.skuId === prior.skuId ? checked : { skuId: null, reason: 'Изменились реквизиты связанной карточки; требуется сверка' };
++        }
++        else if (!candidates.length && !prior && p.barcodes.length) {
++            const existing = await tx.sku.findFirst({ where: { clientId: connection.clientId, internalSku: createData.internalSku } });
++            if (!existing) {
++                const s = await tx.sku.create({ data: createData });
++                for (const value of [...new Set(p.barcodes)])
++                    await tx.barcode.create({ data: { skuId: s.id, value, isPrimary: value === p.barcodes[0] } });
++                decision = { skuId: s.id, reason: null };
++                created = true;
++            }
++            else
++                decision = { skuId: null, reason: 'Артикул уже существует с другим штрихкодом' };
++        }
++        if (decision.skuId) {
++            const other = (await readProductLinks(tx, connection.clientId, connection.id, undefined, decision.skuId)).find(l => l.productId !== p.productId && l.status === 'LINKED');
++            if (other)
++                decision = { skuId: null, reason: 'Другой размер карточки этого кабинета уже связан с товаром' };
++        }
++        const status = decision.skuId ? 'LINKED' : 'REVIEW', id = prior?.id ?? (0, node_crypto_1.randomUUID)();
++        await tx.$executeRaw `INSERT INTO "MarketplaceProductLink" (id,"clientId","connectionId","skuId",marketplace,"productId","offerId",barcodes,size,color,status,reason,payload,"updatedAt")
++      VALUES (${id},${connection.clientId},${connection.id},${decision.skuId},${connection.marketplace},${p.productId},${p.offerId},${p.barcodes},${p.size ?? null},${p.color ?? null},${status},${decision.reason},${JSON.stringify(p.payload ?? {})}::jsonb,NOW())
++      ON CONFLICT ("connectionId","productId") DO UPDATE SET "skuId"=EXCLUDED."skuId", "offerId"=EXCLUDED."offerId",barcodes=EXCLUDED.barcodes,size=EXCLUDED.size,color=EXCLUDED.color,status=EXCLUDED.status,reason=EXCLUDED.reason,payload=EXCLUDED.payload,"updatedAt"=NOW()`;
++        return { created, mergedDrafts: 0, barcodesTouched: created ? p.barcodes.length : 0, review: !decision.skuId };
++    });
++}
++async function confirmProductLink(db, clientId, connectionId, linkId, skuId, expectedUpdatedAt, reason, actorId) {
++    if (!productLinksEnabled(clientId))
++        throw new common_1.NotFoundException();
++    return db.$transaction(async (tx) => {
++        await tx.$queryRaw `SELECT id FROM "Client" WHERE id=${clientId} FOR UPDATE`;
++        const link = (await readProductLinks(tx, clientId, connectionId)).find(l => l.id === linkId);
++        if (!link || link.status === 'LINKED')
++            throw new common_1.ConflictException('Карточка уже обработана или не найдена. Обновите сверку.');
++        if (new Date(link.updatedAt).toISOString() !== expectedUpdatedAt)
++            throw new common_1.ConflictException('Карточка изменилась. Обновите сверку.');
++        const sku = await tx.sku.findFirst({ where: { id: skuId, clientId }, include: { barcodes: true } });
++        if (!sku || !reason.trim() || productLinkCandidate(link, [sku]).skuId !== sku.id)
++            throw new common_1.ConflictException('Нужны совпадающие штрихкод, размер и цвет и причина решения.');
++        if ((await readProductLinks(tx, clientId, connectionId)).some(l => l.id !== link.id && l.skuId === skuId && l.status === 'LINKED'))
++            throw new common_1.ConflictException('Этот товар уже связан с другой карточкой кабинета. Обновите сверку.');
++        await tx.$executeRaw `UPDATE "MarketplaceProductLink" SET "skuId"=${skuId},status='LINKED',reason=NULL,"updatedAt"=NOW() WHERE id=${linkId}`;
++        await tx.auditLog.create({ data: { userId: actorId, action: 'marketplace_product_link.confirmed', entity: 'MarketplaceProductLink', entityId: linkId, payload: { clientId, connectionId, skuId, reason, previous: JSON.parse(JSON.stringify(link)) } } });
++        return { linked: true };
++    });
++}
+--- a/modules/marketplace-connections/ozon-fbs-pick-workflow.js
++++ b/modules/marketplace-connections/ozon-fbs-pick-workflow.js
+@@ -1,3 +1,4 @@
++const marketplace_product_links_1 = require("./marketplace-product-links");
+ const receipt_channel_policy_1 = require("../warehouse/receipt-channel-policy");
+ "use strict";
+ Object.defineProperty(exports, "__esModule", { value: true });
+@@ -74,7 +75,7 @@
+     }
+     if (posting.requirements?.products_requiring_mandatory_mark?.length)
+         throw new common_1.BadRequestException('Ozon требует КИЗ: нужна отдельная проверка многотоварного заказа.');
+-    const catalog = await service.prisma.sku.findMany({ where: { clientId: task.clientId }, include: { barcodes: true } });
++    const catalog = await (0, marketplace_product_links_1.ozonLinkedSkus)(service.prisma, task.clientId, task.connectionId, await service.prisma.sku.findMany({ where: { clientId: task.clientId }, include: { barcodes: true } }));
+     const resolved = products.map(product => ({ product, sku: (0, ozon_fbs_pick_lines_1.resolveOzonLineSku)(product, catalog) }));
+     if (resolved[0].sku.id !== task.skuId || products.reduce((n, p) => n + p.quantity, 0) !== task.itemCount) {
+         throw new common_1.ConflictException('Состав заказа отличается от заявки WMS. Сначала обновите заявку.');
+--- a/modules/ozon-fbo/ozon-fbo.service.js
++++ b/modules/ozon-fbo/ozon-fbo.service.js
+@@ -10,6 +10,7 @@
+ };
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.OzonFboService = void 0;
++const marketplace_product_links_1 = require("../marketplace-connections/marketplace-product-links");
+ const common_1 = require("@nestjs/common");
+ const client_scope_service_1 = require("../auth/client-scope.service");
+ const prisma_service_1 = require("../../common/prisma/prisma.service");
+@@ -90,6 +91,7 @@
+         this.clientScope.requireClientAccess(user, clientId, 'write');
+         const connection = await this.connection(connectionId, user, 'write', clientId);
+         const parsed = (0, ozon_fbo_xlsx_1.parseOzonFboWorkbook)(file.buffer);
++        const links = (await (0, marketplace_product_links_1.readProductLinks)(this.prisma, clientId, connectionId)).filter(l => l.marketplace === 'OZON' && l.status === 'LINKED');
+         const [ozonClusters, ozonProducts, localSkus] = await Promise.all([
+             this.fetchClusters(connection),
+             this.fetchProducts(connection, parsed.offerIds),
+@@ -97,6 +99,7 @@
+                 where: {
+                     clientId,
+                     OR: [
++                        ...(links.length ? [{ id: { in: links.map(l => l.skuId) } }] : []),
+                         { internalSku: { in: parsed.offerIds } },
+                         { clientSku: { in: parsed.offerIds } },
+                         { article: { in: parsed.offerIds } },
+@@ -109,7 +112,9 @@
+         const productByOffer = new Map(ozonProducts.map((item) => [String(item.offer_id), item]));
+         const skuByOffer = new Map();
+         for (const sku of localSkus) {
+-            for (const key of [sku.internalSku, sku.clientSku, sku.article, sku.marketplaceOfferId]) {
++            // FIX: opted-in imports resolve only confirmed account links, not another marketplace's offer.
++            const keys = (0, marketplace_product_links_1.productLinksEnabled)(clientId) ? links.filter(l => l.skuId === sku.id && links.filter(other => other.offerId === l.offerId).length === 1).map(l => l.offerId) : [sku.internalSku, sku.clientSku, sku.article, sku.marketplaceOfferId];
++            for (const key of keys) {
+                 if (key && !skuByOffer.has(key))
+                     skuByOffer.set(key, sku);
+             }

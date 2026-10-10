@@ -1,3 +1,4 @@
+import { ConfirmProductLinkDto } from './dto/confirm-product-link.dto';
 import { FbsReshipmentService } from './fbs-reshipment.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
@@ -999,6 +1000,17 @@ export class MarketplaceConnectionsController {
   @RequireAnyPermissions('clients:write', 'marketplace-api:write')
   delete(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.connections.delete(id, user);
+  }
+
+  // FIX: read-only reconciliation and separately audited write; no stock publication here.
+  @Get(':id/product-links')
+  @RequireAnyPermissions('clients:read', 'marketplace-api:read')
+  productLinks(@Param('id') id:string,@CurrentUser() user:AuthUser) { return this.connections.productLinks(id,user); }
+
+  @Post(':id/product-links/:linkId/confirm')
+  @RequireAnyPermissions('clients:write', 'marketplace-api:write')
+  confirmProductLink(@Param('id') id:string,@Param('linkId') linkId:string,@Body() body:ConfirmProductLinkDto,@CurrentUser() user:AuthUser) {
+    return this.connections.confirmProductLink(id,linkId,body,user);
   }
 
   @Post(':id/sync-products')

@@ -1,3 +1,4 @@
+import { productLinksEnabled, readProductLinks } from '../marketplace-connections/marketplace-product-links';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
@@ -106,6 +107,7 @@ export class OzonFboService {
     this.clientScope.requireClientAccess(user, clientId, 'write');
     const connection = await this.connection(connectionId, user, 'write', clientId);
     const parsed = parseOzonFboWorkbook(file.buffer);
+    const links=(await readProductLinks(this.prisma,clientId,connectionId)).filter(l=>l.marketplace==='OZON'&&l.status==='LINKED');
     const [ozonClusters, ozonProducts, localSkus] = await Promise.all([
       this.fetchClusters(connection),
       this.fetchProducts(connection, parsed.offerIds),
@@ -113,6 +115,7 @@ export class OzonFboService {
         where: {
           clientId,
           OR: [
+            ...(links.length ? [{id:{in:links.map(l=>l.skuId!)}}] : []),
             { internalSku: { in: parsed.offerIds } },
             { clientSku: { in: parsed.offerIds } },
             { article: { in: parsed.offerIds } },
@@ -125,7 +128,9 @@ export class OzonFboService {
     const productByOffer = new Map(ozonProducts.map((item) => [String(item.offer_id), item]));
     const skuByOffer = new Map<string, (typeof localSkus)[number]>();
     for (const sku of localSkus) {
-      for (const key of [sku.internalSku, sku.clientSku, sku.article, sku.marketplaceOfferId]) {
+      // FIX: opted-in imports resolve only confirmed account links, not another marketplace's offer.
+      const keys=productLinksEnabled(clientId)?links.filter(l=>l.skuId===sku.id&&links.filter(other=>other.offerId===l.offerId).length===1).map(l=>l.offerId):[sku.internalSku, sku.clientSku, sku.article, sku.marketplaceOfferId];
+      for (const key of keys) {
         if (key && !skuByOffer.has(key)) skuByOffer.set(key, sku);
       }
     }
