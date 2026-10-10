@@ -1,3 +1,4 @@
+import { fbsStockReserveDisplay } from './fbs-stock-reserve-display';
 import { preserveLegacyProductLinks, linkedOrderSku, productLinksEnabled, wbSkuScope, wbLinkedSkus, syncProductLink, readProductLinks, confirmProductLink } from './marketplace-product-links';
 import { filterReceiptOrderBoxes, receiptPublicationPolicy, receiptBlockedBoxes, receiptBlockedByTasks, assertReceiptFbsBox } from '../warehouse/receipt-channel-policy';
 import { boundedBoxScanEnabled, boxCandidateSkuIds, sharePendingBoxScan, boxReservationSnapshot } from './fbs-box-scan-search';
@@ -7648,7 +7649,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         relabeling,
         wmsAvailable: quantity.available,
         reserved: quantity.reserved,
-        sellable: quantity.sellable,
+        // FIX: the table and summary use availability after the effective safety reserve.
+        ...fbsStockReserveDisplay(quantity.sellable, sku.id, stockPlan),
         requestedAmount: amounts?.requestedAmount ?? null,
         wbAmount,
         targetAmount,

@@ -3492,6 +3492,7 @@ export type FbsStockItem = {
   enabled: boolean | null;
   wmsAvailable: number;
   reserved: number;
+  safetyReserve?: number;
   sellable: number;
   wbAmount: number;
   /**
