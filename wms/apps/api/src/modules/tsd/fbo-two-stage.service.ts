@@ -1,3 +1,4 @@
+import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
 import { assertSupplyMutable } from '../client-requests/ozon-supply-policy';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { assertDirectionCapacity, directionProgress, type OzonDirection } from './ozon-fbo-directions';
@@ -164,6 +165,10 @@ export class FboTwoStageService {
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: shipment ? 'OZON' : 'WILDBERRIES',
+            // FIX: only our enabled Ozon deployment advertises the additive workflow.
+            packingByProductSupported: !!shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
+            packingSuggestions: shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
+                ? ozonPackingSuggestions(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
@@ -326,10 +331,16 @@ export class FboTwoStageService {
                     await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: target.id, activeBoxId: target.id, boxCode: target.code, ...(directions ? { direction: dto.direction } : {}) } });
                 }
             }
-            else if (dto.action === 'PACK_UNIT') {
+            else if (dto.action === 'PACK_UNIT' || dto.action === 'PACK_PRODUCT') {
                 requirePacking();
-                const target = await this.box(tx, r, dto.targetBoxCode);
-                const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
+                const byProduct = dto.action === 'PACK_PRODUCT';
+                if (byProduct && (!directions || process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED !== 'true'))
+                    throw new ConflictException('Упаковка по товару недоступна.');
+                if (byProduct) assertDirectionCapacity(directions!, directionBoxes, units, dto.direction, []);
+                const target = byProduct ? await this.target(tx, r, dto.targetBoxCode) : await this.box(tx, r, dto.targetBoxCode);
+                if (byProduct) await this.requireIdleBox(tx, target.id, id);
+                const parcel = byProduct ? await prepareOzonProductBox(tx, id, target, dto.direction)
+                    : await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;

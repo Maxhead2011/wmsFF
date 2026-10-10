@@ -25,15 +25,19 @@ final class FboScanState {
         return packing ? "PACKING".equals(phase)||"CONTROL".equals(phase)||"COMPLETED".equals(phase)
             : "NOT_STARTED".equals(phase)||"PICKING".equals(phase);
     }
+    // FIX: a scanned product survives restart before a box has been scanned.
+    boolean productMode, productReady;
+    String productKiz = "";
     String direction = "";
     String pallet = "", source = "", target = "", barcode = "";
     // FIX: navigation survives reopening; pending stock commands are stored independently.
     Map<String,String> checkpoint() {
         Map<String,String> p=new LinkedHashMap<>();p.put("palletCode",pallet);p.put("sourceBoxCode",source);
+        p.put("productMode",String.valueOf(productMode));p.put("productReady",String.valueOf(productReady));p.put("productKiz",productKiz);
         p.put("targetBoxCode",target);p.put("barcode",barcode);p.put("direction",direction);return p;
     }
     void restoreCheckpoint(Map<String,String> value) {
-        if(value==null)return;direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
+        if(value==null)return;productMode=Boolean.parseBoolean(value.get("productMode"));productReady=Boolean.parseBoolean(value.get("productReady"));productKiz=value.getOrDefault("productKiz","");direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");
         target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");
     }
     private Map<String,String> pending;
@@ -53,7 +57,7 @@ final class FboScanState {
     }
     void restore(Map<String,String> value) {
         pending = value == null ? null : new LinkedHashMap<>(value);
-        if(value!=null){direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");}
+        if(value!=null){if("PACK_PRODUCT".equals(value.get("action"))){productMode=true;productReady=true;productKiz=value.getOrDefault("kiz","");}direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");}
     }
     boolean scanLocation(TsdFboPlan plan,String code) {
         return scanLocation(plan.route,code);
@@ -77,7 +81,7 @@ final class FboScanState {
         if(!hasPallet)pallet="";
         if(!hasSource)source="";
         if(!hasTarget||!"PACKING".equals(phase))target="";
-        if(("PICKING".equals(phase)&&source.isEmpty())||("PACKING".equals(phase)&&target.isEmpty()))barcode="";
+        if(("PICKING".equals(phase)&&source.isEmpty())||("PACKING".equals(phase)&&target.isEmpty()&&!productMode))barcode="";
         if(!barcode.isEmpty()){
             boolean needed=false;if(plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
                 if(barcode.equals(line.barcode)&&("PICKING".equals(phase)?line.remaining>0:"PACKING".equals(phase)&&line.picked>line.packed))needed=true;
@@ -85,6 +89,6 @@ final class FboScanState {
         }
     }
     Map<String,String> pending() { return pending == null ? null : new LinkedHashMap<>(pending); }
-    void accepted() { pending=null; barcode=""; }
+    void accepted() { pending=null; barcode=""; productKiz=""; productReady=false; }
     void rejected() { pending=null; }
 }
