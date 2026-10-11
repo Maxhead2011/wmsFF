@@ -23,6 +23,17 @@ export function untouchedManualTask(task: Record<string, unknown> | null | undef
     !Number(task.scannedItemCount || 0));
 }
 export const manualHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// FIX: WB's nanosecond paging cursor exceeds Number.MAX_SAFE_INTEGER. Keep its JSON source digits.
+export function manualOrderPage(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw, ((key: string, value: unknown, context?: { source?: string }) => {
+      if (key !== 'next' || typeof value !== 'number') return value;
+      if (context?.source) return context.source;
+      if (Number.isSafeInteger(value)) return String(value);
+      throw new Error('JSON parser cannot preserve this WB cursor');
+    }) as Parameters<typeof JSON.parse>[1]);
+  } catch { throw new BadRequestException('Не удалось точно прочитать страницу WB. Повторите проверку.'); }
+}
 export type ManualBox = { boxId: string; boxCode: string; palletCode: string; free: number };
 export type ManualRow = { orderId: string; skuId: string | null; article: string; size: string; supplyId: string;
   supplierStatus: string; wbStatus: string; blockers: string[]; boxes: ManualBox[]; free: number };

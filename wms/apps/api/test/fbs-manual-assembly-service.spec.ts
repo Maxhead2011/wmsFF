@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const mocked=vi.hoisted(()=>({wb:vi.fn(),reserved:vi.fn(),rules:vi.fn(),pending:vi.fn()}));
-vi.mock('../src/modules/marketplace-connections/marketplace-connections.service',()=>({MarketplaceConnectionsService:class {},marketplaceJson:mocked.wb}));
+const mocked=vi.hoisted(()=>({wb:vi.fn(),fetch:vi.fn(),reserved:vi.fn(),rules:vi.fn(),pending:vi.fn()}));
+vi.mock('../src/modules/marketplace-connections/marketplace-connections.service',()=>({MarketplaceConnectionsService:class {},marketplaceJson:mocked.wb,marketplaceFetch:mocked.fetch,formatMarketplaceHttpError:()=> 'WB HTTP error'}));
 vi.mock('../src/common/stock/wb-order-stock-lifecycle',()=>({wbReservationQuantities:mocked.reserved}));
 vi.mock('../src/modules/warehouse/receipt-channel-policy',()=>({receiptRules:mocked.rules,pendingReceiptBoxIds:mocked.pending,
   receiptAllows:(r:any)=>!r||r.fbs===true}));
@@ -100,6 +100,7 @@ describe('fresh WB gateway',()=>{
   afterEach(()=>vi.clearAllMocks());
   it('uses only read endpoints and verifies exact supply membership',async()=>{
     const f=fixture();f.live.mockRestore();
+    mocked.fetch.mockResolvedValue(new Response(JSON.stringify({orders:[{id:11,supplyId:'WB-X',skus:['4601'],article:'A'}],next:0})));
     mocked.wb.mockImplementation(async(url:string)=>{
       if(url.includes('/orders?'))return {orders:[{id:11,supplyId:'WB-X',skus:['4601'],article:'A'}],next:0};
       if(url.endsWith('/orders/status'))return {orders:[{id:11,supplierStatus:'confirm',wbStatus:'waiting'}]};
@@ -110,7 +111,17 @@ describe('fresh WB gateway',()=>{
     expect(mocked.wb.mock.calls.every(([url,init])=>init.method==='GET'||(init.method==='POST'&&url.endsWith('/orders/status')))).toBe(true);
   });
   it('never treats repeated pagination as complete',async()=>{
-    const f=fixture();f.live.mockRestore();mocked.wb.mockResolvedValue({orders:[],next:1});
+    const f=fixture();f.live.mockRestore();mocked.fetch.mockImplementation(async()=>new Response('{"orders":[],"next":1}'));
     await expect(f.service.readOrders('secret',['11'])).rejects.toThrow('повторил страницу');
+  });
+  // TEST: reproduces the live uint64 cursor; its low digits must survive the next request.
+  it('passes a uint64 WB cursor to the next page without rounding',async()=>{
+    const f=fixture();f.live.mockRestore();
+    mocked.fetch.mockResolvedValueOnce(new Response('{"orders":[],"next":1789212864297140123}'))
+      .mockResolvedValueOnce(new Response('{"orders":[],"next":0}'));
+    mocked.wb.mockResolvedValue({orders:[]});
+    await f.service.readOrders('secret',['11']);
+    expect(mocked.fetch.mock.calls.at(-1)![0]).toContain('next=1789212864297140123&');
+    expect(mocked.fetch.mock.calls.every(([,init])=>init.method==='GET')).toBe(true);
   });
 });
