@@ -30179,7 +30179,8 @@ function marketplaceRetryDelayMs(response: Response, attempt: number) {
   return Math.min(12_000, 1_500 * 2 ** attempt);
 }
 
-async function marketplaceFetch(
+// FIX: manual order paging reads the raw cursor through the same seller scheduler.
+export async function marketplaceFetch(
   url: string,
   init: RequestInit,
   rateLimitRetries = MARKETPLACE_RATE_LIMIT_RETRIES,

@@ -6,10 +6,10 @@ import { wbReservationQuantities } from '../../common/stock/wb-order-stock-lifec
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { pendingReceiptBoxIds, receiptAllows, receiptRules } from '../warehouse/receipt-channel-policy';
-import { marketplaceJson, MarketplaceConnectionsService } from './marketplace-connections.service';
+import { marketplaceFetch, marketplaceJson, formatMarketplaceHttpError, MarketplaceConnectionsService } from './marketplace-connections.service';
 import type { CreateFbsManualAssemblyDto, PreviewFbsManualAssemblyDto } from './dto/fbs-manual-assembly.dto';
 import { manualAssemblyAllowed, manualAssemblyEnabled, manualHash, manualOrderIds, requireManualAssembly,
-  untouchedManualTask, validateManualChoices, type ManualRow } from './fbs-manual-assembly';
+  untouchedManualTask, validateManualChoices, manualOrderPage, type ManualRow } from './fbs-manual-assembly';
 
 type Db = Prisma.TransactionClient;
 type WbOrder = { id: string; supplyId: string; barcodes: string[]; article: string; warehouseId: string;
@@ -61,14 +61,17 @@ export class FbsManualAssemblyService {
       method: body ? 'POST' : 'GET', headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(25_000),
     });
-    const wanted = new Set(orderIds), found = new Map<string, Record<string, unknown>>(), cursors = new Set<number>();
+    const wanted = new Set(orderIds), found = new Map<string, Record<string, unknown>>(), cursors = new Set<string>();
     const dateFrom = Math.floor(Date.now() / 1000) - 30 * 86400;
-    let next = 0;
+    let next = '0';
     for (let page = 0; page < 100; page++) {
       if (cursors.has(next)) throw new BadRequestException('WB повторил страницу заказов. Проверка не завершена.');
       cursors.add(next);
-      const data = await read(`/api/v3/orders?limit=1000&next=${next}&dateFrom=${dateFrom}`);
-      if (!Array.isArray(data.orders) || !Number.isSafeInteger(data.next) || Number(data.next) < 0)
+      const url = `https://marketplace-api.wildberries.ru/api/v3/orders?limit=1000&next=${next}&dateFrom=${dateFrom}`;
+      const response = await marketplaceFetch(url, { method: 'GET', headers: { Authorization: apiKey }, signal: AbortSignal.timeout(25_000) });
+      const data = manualOrderPage(await response.text());
+      if (!response.ok) throw new BadRequestException(formatMarketplaceHttpError(url, response.status, data));
+      if (!Array.isArray(data.orders) || typeof data.next !== 'string' || !/^(0|[1-9]\d{0,19})$/.test(data.next))
         throw new BadRequestException('WB вернул неполный список заказов. Повторите проверку.');
       for (const raw of data.orders) {
         const order = record(raw), id = String(order.id);
@@ -77,8 +80,8 @@ export class FbsManualAssemblyService {
           found.set(id, order);
         }
       }
-      next = Number(data.next);
-      if (!next || found.size === wanted.size) break;
+      next = data.next;
+      if (next === '0' || found.size === wanted.size) break;
       if (page === 99) throw new BadRequestException('Достигнут предел проверки WB; результат неполный. Уточните кабинет.');
     }
     const data = await read('/api/v3/orders/status', { orders: orderIds.map(Number) });

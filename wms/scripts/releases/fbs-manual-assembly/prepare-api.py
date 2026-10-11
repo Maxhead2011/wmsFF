@@ -37,6 +37,12 @@ text = replace_once(text, 'controllers: [', 'controllers: [fbs_manual_assembly_c
 text = replace_once(text, 'providers: [', 'providers: [fbs_manual_assembly_service_1.FbsManualAssemblyService, ')
 pending[module] = text
 
+# Expose the existing raw HTTP helper without replacing the deployed marketplace service.
+gateway = args.candidate / base / 'marketplace-connections.service.js'
+pending[gateway] = replace_once(gateway.read_text(encoding='utf8'),
+    'exports.marketplaceJson = marketplaceJson;',
+    'exports.marketplaceJson = marketplaceJson;\nexports.marketplaceFetch = marketplaceFetch;')
+
 registry = args.candidate / 'modules/administration/administration-internal-api.service.js'
 text = registry.read_text(encoding='utf8')
 text = replace_once(text, "'/marketplace-connection/fbs/reshipment',", "'/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly',")
