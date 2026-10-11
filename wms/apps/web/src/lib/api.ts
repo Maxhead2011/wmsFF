@@ -12541,3 +12541,9 @@ export function ozonAssemblySupply(accessToken:string,id:string,action?:string,b
 }
 // FIX: authenticated download uses stored Ozon receipts, with no new shipment operation.
 export function downloadOzonCargoMapping(accessToken:string,id:string){return requestBlob(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/cargo-mapping.xlsx`,accessToken);}
+
+// FIX: manual FBS assembly uses server-authorized preview and durable idempotent create.
+export const fetchManualFbsCapabilities=(accessToken:string)=>request<{enabled:boolean}>('/service/fbs-manual-assembly/capabilities',{accessToken});
+export const fetchManualFbsOptions=(accessToken:string,clientId:string)=>request<import('./fbs-manual-assembly').ManualFbsOptions>(withQuery('/service/fbs-manual-assembly/options',{clientId}),{accessToken});
+export const previewManualFbsAssembly=(accessToken:string,body:import('./fbs-manual-assembly').ManualFbsInput)=>request<import('./fbs-manual-assembly').ManualFbsPreview>('/service/fbs-manual-assembly/preview',{accessToken,method:'POST',body});
+export const createManualFbsAssembly=(accessToken:string,token:string,choices:import('./fbs-manual-assembly').ManualFbsChoice[])=>request<import('./fbs-manual-assembly').ManualFbsResult>('/service/fbs-manual-assembly/create',{accessToken,method:'POST',body:{token,choices}});

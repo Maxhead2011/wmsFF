@@ -1,3 +1,6 @@
+// FIX: isolated, opt-in manual FBS assembly in the service menu.
+import { FbsManualAssemblyService } from './fbs-manual-assembly.service';
+import { FbsManualAssemblyController } from './fbs-manual-assembly.controller';
 import { Module } from '@nestjs/common';
 // FIX: restore client Telegram routing for committed FBS status transitions.
 import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
@@ -19,8 +22,9 @@ import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule, ClientNotificationsModule],
-  controllers: [MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+  controllers: [FbsManualAssemblyController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [
+    FbsManualAssemblyService,
     MarketplaceStockControlService,
     // FIX: keep current stock-control registration when adding independent repeats.
     FbsRepeatAssemblyService,
