@@ -26,7 +26,7 @@ if True:
  sidecar=dest/(name+'.idsig')
  if sidecar.exists():sidecar.unlink()
  data=(dest/name).read_bytes();(dest/'logoff-tsd.apk').write_bytes(data)
- meta={'versionCode':228,'versionName':'0.1.228-unboxed-fbo','apkUrl':'https://wms.logoff.pro/downloads/'+name,'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'releasedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'releaseNotes':'РЈРїР°РєРѕРІРєР° Ozon: РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ РёР»Рё РїРѕ С‚РѕРІР°СЂСѓ СЃ РїРѕРґСЃРєР°Р·РєРѕР№ РЅР°РїСЂР°РІР»РµРЅРёСЏ Рё РїСЂРѕРІРµСЂРєРѕР№ РєРѕСЂРѕР±Р°.'}
+ meta={'versionCode':228,'versionName':'0.1.228-unboxed-fbo','apkUrl':'https://wms.logoff.pro/downloads/'+name,'sha256':hashlib.sha256(data).hexdigest(),'size':len(data),'releasedAt':datetime.datetime.now(datetime.timezone.utc).isoformat(),'releaseNotes':'FBO WB/Ozon: barcode picking from unboxed stock; destination packing preserved.'}
  (dest/'logoff-tsd.json').write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n')
  (r/'context/Dockerfile').write_text('FROM '+base+'\nCOPY overlay/ /usr/share/nginx/html/\n')
  subprocess.run(['docker','build','--network','none','-t','logoff-web:unboxed-fbo-228',str(r/'context')],check=True)
