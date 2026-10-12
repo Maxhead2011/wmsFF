@@ -3,7 +3,7 @@
   "at": 1791789731.6746924,
   "pr": 563,
   "api": "sha256:b0bd1d2b1ab164d62db691d6164ce13122bda61ef6d9d51a8c430f120d0f3bf1",
-  "web": "sha256:c5d1ded3492cdce61a6fc5df9b48a5805bb6e73e6c175f31b59109871c829abd",
+  "web": "sha256:a87cf751dc7094c8bc73367e18d93c045349ce2adee9cdb3cee1079fea7b2486",
   "base": "sha256:10fff6f3468b40ee656f42e03f46827c08899dcb557539377f9e7f9df26baa9b",
   "webBase": "sha256:2d29eb829fcdbeb829d246d74001790729265922537d5bb796eadb8008df0c11",
   "apk": {
@@ -13,7 +13,7 @@
     "sha256": "952260a5bca290157e8136a02382c15d28a28cd426345c4f819642b13f6fccf7",
     "size": 5398935,
     "releasedAt": "2026-10-12T07:19:57.829877+00:00",
-    "releaseNotes": "РЈРїР°РєРѕРІРєР° Ozon: РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ РёР»Рё РїРѕ С‚РѕРІР°СЂСѓ СЃ РїРѕРґСЃРєР°Р·РєРѕР№ РЅР°РїСЂР°РІР»РµРЅРёСЏ Рё РїСЂРѕРІРµСЂРєРѕР№ РєРѕСЂРѕР±Р°."
+    "releaseNotes": "FBO WB/Ozon: barcode picking from unboxed stock; destination packing preserved."
   },
   "flags": {
     "WMS_SKU_COLLECTION_CANCEL_ENABLED": "true",

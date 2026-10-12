@@ -2,8 +2,8 @@
   "sourceParityVerified": false,
   "containers": {
     "infra-web-1": {
-      "image": "sha256:c5d1ded3492cdce61a6fc5df9b48a5805bb6e73e6c175f31b59109871c829abd",
-      "id": "caeb9a7f7c639d224ba78492453fb27cea4fbafb087db2c991fd615004392d51"
+      "image": "sha256:a87cf751dc7094c8bc73367e18d93c045349ce2adee9cdb3cee1079fea7b2486",
+      "id": "b126da88cd45f2701574d0b04b959bd1511611103dc038eefc5643cae12d5524"
     },
     "infra-api-1": {
       "image": "sha256:b0bd1d2b1ab164d62db691d6164ce13122bda61ef6d9d51a8c430f120d0f3bf1",
@@ -33,7 +33,7 @@
   "artifacts": {
     "api-runtime.tar.gz": {
       "size": 1467885,
-      "sha256": "f4c9ddcfb2d98d09db8efa77e02a2635fd940272e23fcd78dc5b57caf27e0585",
+      "sha256": "aae9f3c8e90ec5b644f63b141da029b6320da7d8c5b5353d5dba83df951648ba",
       "files": {
         "scripts/repair-sku633-pilot.js": "d95f738bafe590139f3d7e2ba37c7f2c863b4b45f03f6fe6a10e41f73a794f3a",
         "scripts/repair-fbs-double-consumption.js": "36cc3d9da09d2535ca4f483fcad62bbc50941f7a5d7ab249cfc74cbc6643dcf9",
@@ -3010,7 +3010,7 @@
     "downloads/logoff-tsd-fbo-packing-progress-205.apk": "66177f01a1700d8ca9c128b2ccf67a81fb98ee163bcb21062de7087e9f2a0a53",
     "downloads/logoff-tsd-box-audit-170.apk": "da8c25b57155c35c9bb959c6d6558ed711f479e2ea42d2d94ed725bcc9ffebc7",
     "downloads/factory-dispatch-tsd.json": "caeeb851613a8183a9e938653a88657aed051b454963ef6f37e17481aed9303f",
-    "downloads/logoff-tsd.json": "41edb2dd501990107408c536791014d675f1e327243856b39fbc1b066b6eab0e",
+    "downloads/logoff-tsd.json": "51530b9e9f8d574642cf5295fb14cd4279e295e6b041dc4c885a9fb11d4639fc",
     "downloads/logoff-tsd-fbs-kiz-audit-167.apk": "83b23285a1b94b3b799731aa4ea41c5bfbe0433201c304912265ed62addf7693",
     "downloads/logoff-tsd-sorting-159.apk": "83497bfba3c025ac3be813ede3329c36da8154883fb1bacaffb2287ff20d30f8",
     "downloads/logoff-tsd.json.bak-0.1.121": "3de9995a4e5d28bed7e8a6228c930e71939d4860896953569ffdf1a0a307c9c1",
@@ -3133,7 +3133,7 @@
     "at": 1791789731.6746924,
     "pr": 563,
     "api": "sha256:b0bd1d2b1ab164d62db691d6164ce13122bda61ef6d9d51a8c430f120d0f3bf1",
-    "web": "sha256:c5d1ded3492cdce61a6fc5df9b48a5805bb6e73e6c175f31b59109871c829abd",
+    "web": "sha256:a87cf751dc7094c8bc73367e18d93c045349ce2adee9cdb3cee1079fea7b2486",
     "base": "sha256:10fff6f3468b40ee656f42e03f46827c08899dcb557539377f9e7f9df26baa9b",
     "webBase": "sha256:2d29eb829fcdbeb829d246d74001790729265922537d5bb796eadb8008df0c11",
     "apk": {
@@ -3143,7 +3143,7 @@
       "sha256": "952260a5bca290157e8136a02382c15d28a28cd426345c4f819642b13f6fccf7",
       "size": 5398935,
       "releasedAt": "2026-10-12T07:19:57.829877+00:00",
-      "releaseNotes": "РЈРїР°РєРѕРІРєР° Ozon: РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ РёР»Рё РїРѕ С‚РѕРІР°СЂСѓ СЃ РїРѕРґСЃРєР°Р·РєРѕР№ РЅР°РїСЂР°РІР»РµРЅРёСЏ Рё РїСЂРѕРІРµСЂРєРѕР№ РєРѕСЂРѕР±Р°."
+      "releaseNotes": "FBO WB/Ozon: barcode picking from unboxed stock; destination packing preserved."
     },
     "flags": {
       "WMS_SKU_COLLECTION_CANCEL_ENABLED": "true",
@@ -3405,6 +3405,6 @@
     "sha256": "952260a5bca290157e8136a02382c15d28a28cd426345c4f819642b13f6fccf7",
     "size": 5398935,
     "releasedAt": "2026-10-12T07:19:57.829877+00:00",
-    "releaseNotes": "РЈРїР°РєРѕРІРєР° Ozon: РїРѕ РЅР°РїСЂР°РІР»РµРЅРёСЋ РёР»Рё РїРѕ С‚РѕРІР°СЂСѓ СЃ РїРѕРґСЃРєР°Р·РєРѕР№ РЅР°РїСЂР°РІР»РµРЅРёСЏ Рё РїСЂРѕРІРµСЂРєРѕР№ РєРѕСЂРѕР±Р°."
+    "releaseNotes": "FBO WB/Ozon: barcode picking from unboxed stock; destination packing preserved."
   }
 }
