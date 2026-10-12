@@ -13,7 +13,7 @@ describe('Ozon customer import',()=>{
     ]),'Поставка');
     const file={buffer:XLSX.write(wb,{type:'buffer',bookType:'xlsx'}),originalname:'test.xlsx',mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'} as any;
     const tx={ $executeRaw:vi.fn(),ozonFboShipment:{findUnique:vi.fn().mockResolvedValue(null)},clientRequest:{create:vi.fn().mockResolvedValue({id:'request',number:1})}};
-    const db={warehouseClient:{findFirst:vi.fn().mockResolvedValue({})},client:{findUniqueOrThrow:vi.fn().mockResolvedValue({storesWithoutBoxes:false})},
+    const db={warehouseClient:{findMany:vi.fn().mockResolvedValue([{warehouseId:'warehouse',warehouse:{name:'Москва'}}]),findFirst:vi.fn().mockResolvedValue({})},client:{findUniqueOrThrow:vi.fn().mockResolvedValue({storesWithoutBoxes:false})},
       barcode:{findMany:vi.fn().mockResolvedValue([{value:'4610389216310',skuId:'sku',sku:{name:'Товар'}}])},$transaction:vi.fn(fn=>fn(tx))};
     const scopes={requireClientAccess:vi.fn()};
     return {service:new OzonFboImportService(db as any,scopes as any),tx,db,scopes,file};
@@ -53,4 +53,48 @@ describe('Ozon customer import',()=>{
     await expect(s.service.list('other',user)).rejects.toThrow('denied');
     expect(findMany).toHaveBeenCalledTimes(1);
   });
+  // TEST: reproduce the client cabinet with no branch selector or active warehouse.
+  it('uses the only active client branch for preview, commit and list',async()=>{
+    const s=setup(),cabinet={...user,roleCodes:['CLIENT'],permissionCodes:[],activeWarehouseId:null};
+    Object.assign(s.db,{clientRequest:{findMany:vi.fn().mockResolvedValue([])}});
+    expect((await s.service.preview(s.file,dto,cabinet)).warehouseId).toBe('warehouse');
+    await s.service.commit(s.file,dto,cabinet);
+    expect(s.tx.clientRequest.create.mock.calls[0][0].data.warehouseId).toBe('warehouse');
+    await s.service.list('client',cabinet);
+    expect((s.db as any).clientRequest.findMany.mock.calls[0][0].where.warehouseId).toBe('warehouse');
+  });
+
+  // TEST: ambiguity, inactive branches and internal restrictions cannot silently redirect stock.
+  it('requires an explicit choice with two branches and commits the chosen one',async()=>{
+    const s=setup(),cabinet={...user,roleCodes:['CLIENT'],activeWarehouseId:null};
+    s.db.warehouseClient.findMany.mockResolvedValue([{warehouseId:'a',warehouse:{name:'A'}},{warehouseId:'b',warehouse:{name:'B'}}]);
+    await expect(s.service.preview(s.file,dto,cabinet)).rejects.toThrow('Выберите филиал');
+    await s.service.commit(s.file,{...dto,warehouseId:'b'},cabinet);
+    expect(s.tx.clientRequest.create.mock.calls[0][0].data.warehouseId).toBe('b');
+    await expect(s.service.preview(s.file,{...dto,warehouseId:'foreign'},cabinet)).rejects.toThrow('недоступен');
+  });
+  it('does not use a stale cabinet active branch for another client',async()=>{
+    const s=setup();
+    expect((await s.service.preview(s.file,dto,{...user,roleCodes:['CLIENT'],activeWarehouseId:'stale'})).warehouseId).toBe('warehouse');
+  });
+  it('rejects a client with no active branch before reading the workbook',async()=>{
+    const s=setup();s.db.warehouseClient.findMany.mockResolvedValue([]);
+    await expect(s.service.preview(s.file,dto,{...user,roleCodes:['CLIENT'],activeWarehouseId:null})).rejects.toThrow('нет активного');
+    expect(s.db.barcode.findMany).not.toHaveBeenCalled();
+  });
+  it('restricts internal choices to the active writable branch and rejects overrides',async()=>{
+    const s=setup(),internal={...user,roleCodes:['BRANCH_MANAGER'],permissionCodes:[],warehouseIds:['warehouse','other'],writableWarehouseIds:['warehouse']};
+    await s.service.warehouses('client',internal);
+    expect(s.db.warehouseClient.findMany.mock.calls[0][0].where).toEqual({clientId:'client',warehouseId:'warehouse',status:'ACTIVE',warehouse:{isActive:true}});
+    await expect(s.service.preview(s.file,{...dto,warehouseId:'other'},internal)).rejects.toThrow('недоступен');
+    await expect(s.service.preview(s.file,dto,{...internal,writableWarehouseIds:[]})).rejects.toThrow('только просмотр');
+  });
+  it('checks client authorization and the feature flag before listing branches',async()=>{
+    const s=setup();s.scopes.requireClientAccess.mockImplementation(()=>{throw Error('denied');});
+    await expect(s.service.warehouses('foreign',user)).rejects.toThrow('denied');
+    expect(s.db.warehouseClient.findMany).not.toHaveBeenCalled();
+    vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED','false');
+    await expect(s.service.warehouses('client',user)).rejects.toThrow('выключен');
+  });
+
 });

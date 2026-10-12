@@ -6,32 +6,53 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { effectiveWarehouseId } from './client-request-warehouse-scope';
-import { ImportOutboundRequestXlsxDto } from './dto/import-outbound-request-xlsx.dto';
+import { OzonFboImportDto } from './dto/ozon-fbo-import.dto';
 import { parseOzonFboRows } from './parsers/ozon-fbo-xlsx.parser';
 import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 
 @Injectable()
 export class OzonFboImportService {
   constructor(private readonly db: PrismaService, private readonly scopes: ClientScopeService) {}
+  // FIX: scope candidates to this client; never fall back across an internal user's branch.
+  async warehouses(clientId: string, user: AuthUser, mode: 'read' | 'write' = 'write') {
+    if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
+    if (!clientId?.trim()) throw new BadRequestException('Выберите клиента.');
+    this.scopes.requireClientAccess(user, clientId, mode);
+    const scoped = effectiveWarehouseId(user, mode);
+    const fixed = scoped ?? (!(user.roleCodes ?? []).includes('CLIENT') ? user.activeWarehouseId : null);
+    const rows = await this.db.warehouseClient.findMany({where: {
+      clientId, status: 'ACTIVE', warehouse: {isActive: true}, ...(fixed ? {warehouseId: fixed} : {}),
+    }, select: {warehouseId: true, warehouse: {select: {name: true}}}, orderBy: {warehouseId: 'asc'}});
+    return rows.map(row => ({id: row.warehouseId, name: row.warehouse.name}));
+  }
+  private async resolveWarehouse(clientId: string, user: AuthUser, mode: 'read' | 'write', selected?: string) {
+    const choices = await this.warehouses(clientId, user, mode);
+    const scoped = effectiveWarehouseId(user, mode);
+    const cabinet = (user.roleCodes ?? []).includes('CLIENT');
+    const requested = selected?.trim() || scoped || (!cabinet ? user.activeWarehouseId : null);
+    if (requested) {
+      if (!choices.some(row => row.id === requested)) throw new BadRequestException('Выбранный филиал недоступен для этого клиента.');
+      return requested;
+    }
+    if (cabinet && choices.length === 1) return choices[0].id;
+    throw new BadRequestException(choices.length ? 'Выберите филиал.' : 'У клиента нет активного филиала.');
+  }
   // FIX: the Ozon screen lists the same assemblies it creates, within client and branch scope.
-  async list(clientId: string, user: AuthUser) {
+  async list(clientId: string, user: AuthUser, selectedWarehouseId?: string) {
     if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
     if (!clientId?.trim()) throw new BadRequestException('Выберите клиента.');
     this.scopes.requireClientAccess(user, clientId, 'read');
-    const warehouseId = effectiveWarehouseId(user, 'read') ?? user.activeWarehouseId;
-    if (!warehouseId) throw new BadRequestException('Выберите филиал.');
+    const warehouseId = await this.resolveWarehouse(clientId, user, 'read', selectedWarehouseId);
     const rows = await this.db.clientRequest.findMany({where:{clientId,warehouseId,ozonShipment:{isNot:null}},
       orderBy:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
         items:{select:{quantity:true}},ozonShipment:{select:{directions:true}},fboAssembly:{select:{phase:true}}}});
     return rows.map(r=>({id:r.id,number:r.number,title:r.title,status:r.status,desiredDate:r.desiredDate,destinationCity:r.destinationCity,
       quantity:r.items.reduce((s,i)=>s+i.quantity,0),directions:(r.ozonShipment!.directions as unknown[]).length,phase:r.fboAssembly?.phase??'NOT_STARTED'}));
   }
-  async preview(file: Express.Multer.File, dto: ImportOutboundRequestXlsxDto, user: AuthUser) {
+  async preview(file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {
     if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
     this.scopes.requireClientAccess(user, dto.clientId, 'write');
-    const warehouseId = effectiveWarehouseId(user, 'write') ?? user.activeWarehouseId;
-    if (!warehouseId || !await this.db.warehouseClient.findFirst({ where: { clientId: dto.clientId, warehouseId, status: 'ACTIVE', warehouse: { isActive: true } } }))
-      throw new BadRequestException('Выберите филиал, в котором активен клиент.');
+    const warehouseId = await this.resolveWarehouse(dto.clientId, user, 'write', dto.warehouseId);
     const client = await this.db.client.findUniqueOrThrow({ where: { id: dto.clientId } });
     if (client.storesWithoutBoxes && !unboxedFboEnabled()) throw new BadRequestException('Для этой сборки нужен учёт клиента по коробам.');
     if (!dto.destinationCity?.trim()) throw new BadRequestException('Укажите место общей отгрузки.');
@@ -64,12 +85,12 @@ export class OzonFboImportService {
       directions.map(d => [d.name, d.items.map(i => [i.skuId, i.quantity]).sort()]).sort()])).digest('hex');
     return { warehouseId, importKey, directions, items, totalQuantity: items.reduce((s, i) => s + i.quantity, 0) };
   }
-  async commit(file: Express.Multer.File, dto: ImportOutboundRequestXlsxDto, user: AuthUser) {
+  async commit(file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {
     const p = await this.preview(file, dto, user);
     return this.db.$transaction(tx => this.createPrepared(tx,p,file,dto,user));
   }
   // FIX: link import creates demand and external ownership in the same transaction.
-  async createPrepared(tx: any, p: Awaited<ReturnType<OzonFboImportService['preview']>>, file: Express.Multer.File, dto: ImportOutboundRequestXlsxDto, user: AuthUser) {
+  async createPrepared(tx: any, p: Awaited<ReturnType<OzonFboImportService['preview']>>, file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${p.importKey}))`;
       const prior = await tx.ozonFboShipment.findUnique({ where: { importKey: p.importKey }, include: { request: true } });
       if (prior) return { request: prior.request, directions: p.directions, existing: true };
