@@ -1,5 +1,5 @@
 ﻿# FIX: explicit interactive user, stable installation and a single station process.
-$script:AgentVersion = '2026.10.09.2'
+$script:AgentVersion = '2026.10.10.1'
 $script:AgentTaskName = 'LOGOFF FBS Print Agent'
 function Get-AgentHome { return Join-Path $env:LOCALAPPDATA 'LOGOFF\PrintAgent' }
 function Assert-AgentInteractiveUser {
@@ -46,7 +46,7 @@ function Install-AgentFiles([string]$packageRoot, $cfg) {
   $agentHome = Get-AgentHome
   [IO.Directory]::CreateDirectory($agentHome) | Out-Null
   $task = Get-ScheduledTask -TaskName $script:AgentTaskName -ErrorAction SilentlyContinue
-  $files = @('LOGOFF-FBS-Print-Agent.ps1','WmsApi.ps1','PrintSeries.ps1','JobJournal.ps1','AgentLifecycle.ps1','Setup-Agent.ps1','Install-Agent.cmd','README.txt')
+  $files = @('LOGOFF-FBS-Print-Agent.ps1','WmsApi.ps1','PrintSeries.ps1','KizDuplicate.ps1','JobJournal.ps1','AgentLifecycle.ps1','Setup-Agent.ps1','Install-Agent.cmd','README.txt')
   $unchanged = $true
   foreach ($name in $files) {
     $source = Join-Path $packageRoot $name

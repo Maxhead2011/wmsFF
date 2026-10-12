@@ -5,10 +5,16 @@ import type {AuthUser} from '../auth/auth.types';
 import {assertWarehouseAccess} from './client-request-warehouse-scope';
 import {bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
+import {cargoMappingWorkbook} from './ozon-cargo-export';
 
 @Injectable()
 export class OzonAssemblySupplyService {
  constructor(private readonly db:PrismaService,private readonly scopes:ClientScopeService){}
+ // FIX: scoped read-only export remains available after reopening a completed assembly.
+ async cargoMappingFile(id:string,user:AuthUser){
+  const s=await this.load(id,user);
+  return {fileName:`ozon-boxes-${s.request.number}.xlsx`,buffer:await cargoMappingWorkbook(s.request.fboAssembly?.boxes??[],s.integration as SupplyIntegration|null)};
+ }
  private async load(id:string,user:AuthUser,mode:'read'|'write'='read',db:any=this.db){
   if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true')throw new NotFoundException('Связь Ozon выключена.');
   const s=await db.ozonFboShipment.findUnique({where:{requestId:id},include:{request:{include:{fboAssembly:{include:{boxes:true,units:true}}}}}});
@@ -29,7 +35,7 @@ export class OzonAssemblySupplyService {
    const p=await r.json().catch(()=>({}));if(!r.ok)throw new BadGatewayException(`Ozon: HTTP ${r.status}. ${String(p.message??'Ошибка запроса').slice(0,300)}`);return p;
   }
  }
- private async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
+ async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
   if(!/^\d+$/.test(orderId)||!Number.isSafeInteger(Number(orderId)))throw new BadRequestException('Укажите числовой ID заявки Ozon из адреса кабинета.');
   const data=await this.call(c,'/v3/supply-order/get',{order_ids:[Number(orderId)]});
   const o=data.orders?.find((o:any)=>String(o.order_id)===orderId);if(!o?.supplies?.length)throw new NotFoundException('Поставка не найдена в выбранном кабинете Ozon.');

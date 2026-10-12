@@ -49,7 +49,8 @@ final class FboTwoStageScreen {
     private PackingMode packingMode=PackingMode.MENU;
     // FIX: our picker chooses a remaining route; packaging, quantities and the server phase stay shared.
     private FboPickingRoute.Mode pickingMode=FboPickingRoute.Mode.MENU;
-    private boolean pickingChoices(){return !packing&&"logoff".equals(BuildConfig.FLAVOR);}
+    private boolean unboxedPicking(){return plan!=null&&plan.unboxedPickingSupported&&"logoff".equals(BuildConfig.FLAVOR);}
+    private boolean pickingChoices(){return !packing&&!unboxedPicking()&&"logoff".equals(BuildConfig.FLAVOR);}
     private List<TsdFboPlan.Route> pickingRoute(){return pickingChoices()?FboPickingRoute.select(plan,pickingMode):plan.route;}
     private void choosePickingMode(FboPickingRoute.Mode mode){
         if(!ready()||!state.barcode.isEmpty())return;
@@ -392,7 +393,7 @@ final class FboTwoStageScreen {
             else {
                 String hint="ШК товара";
                 if("CONTROL".equals(screenPhase()))hint="ШК короба поставки";
-                else if("PICKING".equals(screenPhase())&&state.source.isEmpty())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
+                else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
                 else if("PACKING".equals(screenPhase())&&state.target.isEmpty())hint=packingChoices()
                     ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":packingMode==PackingMode.MANUAL&&plan.reusablePackingEnabled?"ШК нового или закрытого короба для дополнения":"ШК короба для упаковки")
                     :plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
@@ -410,6 +411,7 @@ final class FboTwoStageScreen {
                     if(plan.manualPackingEnabled)button(root,"Добавить КИЗ вручную",ready(),this::manualPackingKiz);
                 }
                 if("PICKING".equals(screenPhase())){
+                    if(unboxedPicking())text(root,"Хранение без коробов. Сканируйте ШК товара. Осталось отобрать: "+(plan.needed-plan.picked));
                     if(pickingChoices()){
                         text(root,pickingMode==FboPickingRoute.Mode.WHOLE_BOXES?"Сборка целых коробов":"Частичный отбор");
                         text(root,"В этом маршруте: "+pickingRoute().size()+" коробов · "+FboPickingRoute.quantity(pickingRoute())+" ед.");
@@ -473,7 +475,7 @@ final class FboTwoStageScreen {
         if("CONTROL".equals(screenPhase())){state.target=value;send("CONFIRM_BOX",null);return;}
         feedbackColor=Color.rgb(254,202,202);
         if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
-        if("PICKING".equals(screenPhase())&&state.source.isEmpty()){
+        if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking()){
             boolean accepted=state.scanLocation(pickingRoute(),value);
             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";

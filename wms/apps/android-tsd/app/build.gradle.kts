@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 227 // FIX: last-unit undo and immediate destination checks, LOGOFF only.
-            versionName = "0.1.227-packing-undo"
+            versionCode = 228 // FIX: FBO picking without a source box, LOGOFF only.
+            versionName = "0.1.228-unboxed-fbo"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

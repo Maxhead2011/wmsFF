@@ -1,0 +1,27 @@
+{
+  "published": true,
+  "at": 1791640077.1790786,
+  "pr": 557,
+  "web": "sha256:b7f555e77b1f7b3252898d7ccb40e7a5b2b6b33ab89b9a98ecfbb96dba522469",
+  "webBase": "sha256:713de0c036bf3f11c496df4ba14d59341de7821a1543734c28b7711020d655ff",
+  "api": "sha256:6198aa0feb89c6b908693d748b9580a8e366023e0910349432dfb9c0072f8e8e",
+  "packageSha256": "c2b91e719fc040ea81de63c9aa24a6bac23a39244ff3a26ef959d3521a415c37",
+  "changed": [
+    "downloads/LOGOFF-FBS-Print-Agent.zip"
+  ],
+  "apiAndOtherContainersUnchanged": true,
+  "apkAndConfigurationUnchanged": true,
+  "installedOnPrintingComputer": false,
+  "tests": {
+    "passed": true,
+    "packageSha256": "c2b91e719fc040ea81de63c9aa24a6bac23a39244ff3a26ef959d3521a415c37",
+    "agent": 31,
+    "packagedAgent": 31,
+    "api": 3303,
+    "apiSkipped": 145,
+    "web": 416,
+    "webSkipped": 2,
+    "physicalPrinterTested": false
+  },
+  "rollback": "logoff-web:before-kiz-agent-20261010"
+}

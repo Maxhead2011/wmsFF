@@ -7,6 +7,14 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: refresh preserves a pending barcode/KIZ pair without inventing a source box.
+    @Test public void loosePickingDoesNotRequireSourceBox(){
+        TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";p.unboxedPickingSupported=true;
+        p.route=Collections.emptyList();p.boxes=Collections.emptyList();TsdFboPlan.Line l=new TsdFboPlan.Line();l.barcode="sku";l.remaining=2;p.lines=Collections.singletonList(l);
+        FboScanState s=new FboScanState();s.barcode="sku";s.reconcile(p,false);assertEquals("sku",s.barcode);
+        Map<String,String> command=s.prepare("PICK_UNIT",null);assertFalse(command.containsKey("sourceBoxCode"));assertEquals("sku",command.get("barcode"));
+        s.rejected();p.unboxedPickingSupported=false;s.reconcile(p,false);assertEquals("",s.barcode);
+    }
     // TEST: a retry after restart cannot silently change the destination of the same operation.
     @Test public void directionSurvivesRestartAndPendingRetry(){
         FboScanState s=new FboScanState();s.direction="Уфа";s.target="box";

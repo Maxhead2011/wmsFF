@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {unboxedFboEnabled} from '../tsd/fbo-unboxed-picking';
 import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -53,7 +54,7 @@ export class OzonFboImportService {
     this.scopes.requireClientAccess(user, dto.clientId, 'write');
     const warehouseId = await this.resolveWarehouse(dto.clientId, user, 'write', dto.warehouseId);
     const client = await this.db.client.findUniqueOrThrow({ where: { id: dto.clientId } });
-    if (client.storesWithoutBoxes) throw new BadRequestException('Для этой сборки нужен учёт клиента по коробам.');
+    if (client.storesWithoutBoxes && !unboxedFboEnabled()) throw new BadRequestException('Для этой сборки нужен учёт клиента по коробам.');
     if (!dto.destinationCity?.trim()) throw new BadRequestException('Укажите место общей отгрузки.');
     if (!file?.buffer?.length || file.buffer.length > 10 * 1024 * 1024) throw new BadRequestException('Нужен Excel-файл до 10 МБ.');
     let parsed: ReturnType<typeof parseOzonFboRows>;
@@ -86,7 +87,10 @@ export class OzonFboImportService {
   }
   async commit(file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {
     const p = await this.preview(file, dto, user);
-    return this.db.$transaction(async tx => {
+    return this.db.$transaction(tx => this.createPrepared(tx,p,file,dto,user));
+  }
+  // FIX: link import creates demand and external ownership in the same transaction.
+  async createPrepared(tx: any, p: Awaited<ReturnType<OzonFboImportService['preview']>>, file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${p.importKey}))`;
       const prior = await tx.ozonFboShipment.findUnique({ where: { importKey: p.importKey }, include: { request: true } });
       if (prior) return { request: prior.request, directions: p.directions, existing: true };
@@ -102,6 +106,5 @@ export class OzonFboImportService {
         events: { create: { clientId: dto.clientId, eventType: 'CREATED', title: 'Единая сборка ФБО Ozon из файла клиента', statusTo: 'SUBMITTED', createdByUserId: user.id } },
       } });
       return { request, directions: p.directions, existing: false };
-    });
   }
 }

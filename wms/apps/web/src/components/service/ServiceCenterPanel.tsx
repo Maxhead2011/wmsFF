@@ -1,3 +1,4 @@
+import { FbsManualAssemblyPanel } from './FbsManualAssemblyPanel';
 import {
   AlertTriangle,
   Bell,
@@ -81,6 +82,7 @@ const telegramSectionOptions: Array<{ id: TelegramNotificationSection; label: st
 ];
 
 const tabs = [
+  { id: 'manualFbs', label: 'Сборка ФБС по номерам', icon: Boxes },
   { id: 'wbPrintCheck', label: 'Проверка печати WB', icon: Search },
   { id: 'mode', label: 'Режим', icon: Lock },
   { id: 'sessions', label: 'Сессии', icon: Users },
@@ -372,7 +374,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
       </div>
 
       <div className="service-tabs" role="tablist" aria-label="Разделы сервисного меню">
-        {tabs.filter(tab => tab.id !== 'wbPrintCheck' || import.meta.env.VITE_WB_PRINT_CHECK_ENABLED === 'true').map((tab) => {
+        {tabs.filter(tab => tab.id !== 'manualFbs' || (import.meta.env.VITE_FBS_MANUAL_ASSEMBLY_ENABLED === 'true' && !session.user.isDemo && session.user.roleCodes.some(r => ['ADMIN','OWNER'].includes(r)))).filter(tab => tab.id !== 'wbPrintCheck' || import.meta.env.VITE_WB_PRINT_CHECK_ENABLED === 'true').map((tab) => {
           const Icon = tab.icon;
           return (
             <button
@@ -396,6 +398,8 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
         onChange={setSelectedClientId}
         onRefresh={() => void loadClients()}
       />}
+
+      {activeTab === 'manualFbs' && <FbsManualAssemblyPanel key={selectedClientId + session.accessToken} session={session} clientId={selectedClientId}/>}
 
       {activeTab === 'wbPrintCheck' && <WbPrintCheckPanel accessToken={session.accessToken}/>}
 

@@ -4,10 +4,12 @@ export type OzonImportLine = { direction: string; barcode: string; article: stri
 // FIX: a customer allocation is authoritative; blank direction cells inherit only within a group.
 export function parseOzonFboRows(rows: SheetMatrix) {
   const text = (v: unknown) => String(v ?? '').trim();
-  const header = rows.findIndex(r => r.some(c => text(c).toLowerCase() === 'склад хранения') && r.some(c => text(c).toLowerCase() === 'шк'));
-  if (header < 0) throw new Error('Нужны колонки «Склад хранения», «Артикул», «ШК», «Поставка, шт».');
+  // FIX: retain historical headers while naming the actual destination clearly.
+  const destination = (v: string) => ['склад хранения', 'направление / склад назначения ozon'].includes(v);
+  const header = rows.findIndex(r => r.some(c => destination(text(c).toLowerCase())) && r.some(c => text(c).toLowerCase() === 'шк'));
+  if (header < 0) throw new Error('Нужны колонки «Направление / склад назначения Ozon», «Артикул», «ШК», «Поставка, шт».');
   const cols = rows[header].map(c => text(c).toLowerCase());
-  const dc = cols.indexOf('склад хранения'), bc = cols.indexOf('шк'), ac = cols.indexOf('артикул');
+  const dc = cols.findIndex(destination), bc = cols.indexOf('шк'), ac = cols.indexOf('артикул');
   const qc = cols.findIndex(c => /^поставка.*шт/.test(c));
   if (qc < 0 || ac < 0) throw new Error('Не найдены артикул или количество поставки.');
   const lines: OzonImportLine[] = [];
