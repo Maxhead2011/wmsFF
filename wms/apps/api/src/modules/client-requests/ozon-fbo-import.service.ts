@@ -66,7 +66,10 @@ export class OzonFboImportService {
   }
   async commit(file: Express.Multer.File, dto: ImportOutboundRequestXlsxDto, user: AuthUser) {
     const p = await this.preview(file, dto, user);
-    return this.db.$transaction(async tx => {
+    return this.db.$transaction(tx => this.createPrepared(tx,p,file,dto,user));
+  }
+  // FIX: link import creates demand and external ownership in the same transaction.
+  async createPrepared(tx: any, p: Awaited<ReturnType<OzonFboImportService['preview']>>, file: Express.Multer.File, dto: ImportOutboundRequestXlsxDto, user: AuthUser) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${p.importKey}))`;
       const prior = await tx.ozonFboShipment.findUnique({ where: { importKey: p.importKey }, include: { request: true } });
       if (prior) return { request: prior.request, directions: p.directions, existing: true };
@@ -82,6 +85,5 @@ export class OzonFboImportService {
         events: { create: { clientId: dto.clientId, eventType: 'CREATED', title: 'Единая сборка ФБО Ozon из файла клиента', statusTo: 'SUBMITTED', createdByUserId: user.id } },
       } });
       return { request, directions: p.directions, existing: false };
-    });
   }
 }
