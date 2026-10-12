@@ -35,7 +35,7 @@ export class OzonAssemblySupplyService {
    const p=await r.json().catch(()=>({}));if(!r.ok)throw new BadGatewayException(`Ozon: HTTP ${r.status}. ${String(p.message??'Ошибка запроса').slice(0,300)}`);return p;
   }
  }
- private async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
+ async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
   if(!/^\d+$/.test(orderId)||!Number.isSafeInteger(Number(orderId)))throw new BadRequestException('Укажите числовой ID заявки Ozon из адреса кабинета.');
   const data=await this.call(c,'/v3/supply-order/get',{order_ids:[Number(orderId)]});
   const o=data.orders?.find((o:any)=>String(o.order_id)===orderId);if(!o?.supplies?.length)throw new NotFoundException('Поставка не найдена в выбранном кабинете Ozon.');

@@ -1,3 +1,4 @@
+import { OzonLinkImportService, type OzonLinksInput } from './ozon-link-import.service';
 import { Body, Controller, Get, Post, Query, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -8,7 +9,10 @@ import { OzonFboImportService } from './ozon-fbo-import.service';
 @Controller('ozon-fbo-import')
 @RequirePermissions('client-requests:write')
 export class OzonFboImportController {
-  constructor(private readonly service: OzonFboImportService) {}
+  constructor(private readonly service: OzonFboImportService, private readonly links: OzonLinkImportService) {}
+  @Get('link-connections') linkConnections(@Query('clientId') id:string,@CurrentUser() user:AuthUser){return this.links.connections(id,user);}
+  @Post('links/preview') previewLinks(@Body() body:OzonLinksInput,@CurrentUser() user:AuthUser){return this.links.preview(body,user);}
+  @Post('links/commit') commitLinks(@Body() body:OzonLinksInput,@CurrentUser() user:AuthUser){return this.links.commit(body,user);}
   @Get('capability') capability() { return { enabled: process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' }; }
   @Get('requests') list(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.service.list(clientId,user); }
   @Post('preview') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))

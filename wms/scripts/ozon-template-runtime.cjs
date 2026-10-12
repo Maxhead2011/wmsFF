@@ -1,0 +1,26 @@
+// FIX: change only proven source-parity API modules and the two import functions in the live JS graph.
+const fs=require('fs'),path=require('path'),cp=require('child_process'),assert=require('assert/strict'),ts=require('../node_modules/typescript');
+const esbuild=require('module').createRequire(require.resolve('../apps/web/node_modules/vite/package.json'))('esbuild');
+const {repair}=require('./single-react-graph.cjs');const root=process.argv[2],w=path.resolve(__dirname,'..');
+const normalize=s=>s.replace(/\r/g,'').replace('const fbo_unboxed_picking_1 = require("../tsd/fbo-unboxed-picking");\n','').replace('(0, fbo_unboxed_picking_1.unboxedFboEnabled)()',"require('../tsd/fbo-unboxed-picking').unboxedFboEnabled()");
+const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,experimentalDecorators:true,emitDecoratorMetadata:true}}).outputText;
+const names=['parsers/ozon-fbo-xlsx.parser','ozon-fbo-import.service','ozon-fbo-import.controller','ozon-link-import.service'],changed=[];
+for(const n of names){const rel='wms/apps/api/src/modules/client-requests/'+n+'.ts',dest=path.join(root,'api/modules/client-requests/'+n+'.js'),fresh=compile(fs.readFileSync(path.join(path.dirname(w),rel),'utf8'));
+ if(n!=='ozon-link-import.service'){const old=compile(cp.execFileSync('git',['show','HEAD:'+rel],{cwd:path.dirname(w),encoding:'utf8'})),actual=fs.readFileSync(dest,'utf8');assert.ok([old,fresh].some(v=>normalize(v)===normalize(actual)),'Runtime parity required: '+n);}
+ fs.writeFileSync(dest,fresh);changed.push('modules/client-requests/'+n+'.js');}
+const moduleName='modules/client-requests/client-requests.module.js',mp=path.join(root,'api',moduleName);let ms=fs.readFileSync(mp,'utf8');assert.equal(ms.split('providers: [').length,2);ms=ms.replace('providers: [','providers: [require("./ozon-link-import.service").OzonLinkImportService,');fs.writeFileSync(mp,ms);changed.push(moduleName);
+const admin='modules/administration/administration-internal-api.service.js',ap=path.join(root,'api',admin);let ad=fs.readFileSync(ap,'utf8');assert.equal(ad.split('routeCount: 50,').length,2);ad=ad.replace('routeCount: 50,','routeCount: 53,');fs.writeFileSync(ap,ad);changed.push(admin);
+const input=path.join(root,'web-base'),output=path.join(root,'web'),cache={};const files=new Proxy(cache,{get(t,n){if(!(n in t)){const p=path.join(input,n);t[n]=fs.existsSync(p)?fs.readFileSync(p,'utf8'):undefined;}return t[n];}});
+const read=n=>fs.readFileSync(path.join(w,'apps/web/src/components/client-requests/',n+'.tsx'),'utf8').replace(/^\uFEFF/,'').replace(/^import .*;\r?\n/gm,'');
+let patched=0;
+for(const n of fs.readdirSync(path.join(input,'assets')).filter(n=>n.endsWith('.js'))){let s=files['assets/'+n],found=[];const sf=ts.createSourceFile(n,s,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS);function visit(x){if(ts.isStringLiteral(x)&&x.text.startsWith('Колонки: Склад хранения')){let f=x;while(f&&!ts.isFunctionDeclaration(f))f=f.parent;assert.ok(f);found.push(f);}ts.forEachChild(x,visit)}visit(sf);if(!found.length)continue;assert.equal(found.length,1);const f=found[0],name=f.name.text,bindings=name==='j'?['Q','X','R']:name==='he'?['me','be','ge']:null;assert.ok(bindings,'Unknown import wrapper');
+ const helpers=`const React=e;const {useState,useEffect,useRef}=e;const ozonCustomerImportEnabled=${bindings[0]},previewOzonCustomerFile=${bindings[1]},createOzonCustomerFile=${bindings[2]};
+ async function linkApi(path,token,body){const r=await fetch('/api/v1/ozon-fbo-import/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const v=await r.json();if(!r.ok)throw Error(Array.isArray(v.message)?v.message.join('; '):v.message??('HTTP '+r.status));return v;}
+ const fetchOzonLinkConnections=(t,c)=>linkApi('link-connections?clientId='+encodeURIComponent(c),t),previewOzonLinks=(t,b)=>linkApi('links/preview',t,b),createOzonLinks=(t,b)=>linkApi('links/commit',t,b);`;
+ const module=esbuild.buildSync({stdin:{contents:helpers+read('OzonLinkImport')+read('OzonCustomerImport'),loader:'tsx'},bundle:true,write:false,format:'iife',globalName:'__OzonImportLinks',minify:true,jsxFactory:'React.createElement',jsxFragment:'React.Fragment'}).outputFiles[0].text;
+ s=s.slice(0,f.getStart(sf))+module+`function ${name}(props){return __OzonImportLinks.OzonCustomerImport(props);}`+s.slice(f.end);cache['assets/'+n]=s;patched++;
+}assert.equal(patched,2);
+const entry=/src="\/assets\/([^"/]+\.js)"/.exec(files['index.html'])[1],result=repair(files,entry,entry,'ozon-template-20261012');
+for(const[n,data]of Object.entries(result)){const p=path.join(output,n);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,data);}
+const download='downloads/ozon-fbo-template.xlsx';fs.mkdirSync(path.join(output,'downloads'),{recursive:true});fs.copyFileSync(path.join(w,'apps/web/public',download),path.join(output,download));
+fs.writeFileSync(path.join(root,'api-changes.json'),JSON.stringify(changed));fs.writeFileSync(path.join(root,'web-changes.json'),JSON.stringify([...Object.keys(result),download]));console.log(JSON.stringify({patched,api:changed.length,web:Object.keys(result).length+1}));
