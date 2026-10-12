@@ -111,7 +111,7 @@ final class FboScanState {
         if(!hasPallet)pallet="";
         if(!hasSource)source="";
         if(!hasTarget||!"PACKING".equals(phase))target="";
-        if(("PICKING".equals(phase)&&source.isEmpty())||("PACKING".equals(phase)&&target.isEmpty()&&!productMode))barcode="";
+        if(("PICKING".equals(phase)&&source.isEmpty()&&!plan.unboxedPickingSupported)||("PACKING".equals(phase)&&target.isEmpty()&&!productMode))barcode="";
         if(!barcode.isEmpty()){
             boolean needed=false;if(plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
                 if(barcode.equals(line.barcode)&&("PICKING".equals(phase)?line.remaining>0:"PACKING".equals(phase)&&line.picked>line.packed))needed=true;

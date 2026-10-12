@@ -1,0 +1,4 @@
+// TEST: read-only candidate eligibility and shared reserve calculation on actual client/warehouse.
+require('reflect-metadata');const assert=require('assert/strict'),{PrismaClient}=require('@prisma/client');
+const {unboxedFree,unboxedFboEnabled}=require('/app/apps/api/dist/modules/tsd/fbo-unboxed-picking');
+const db=new PrismaClient();(async()=>{assert.equal(unboxedFboEnabled(),true);const c=await db.client.findUniqueOrThrow({where:{id:'bda8be6b-3328-4cae-a18a-ac0d16dd4301'}});assert.equal(c.storesWithoutBoxes,true);const free=await unboxedFree(db,{id:'candidate-read-only',clientId:c.id,warehouseId:'afb244a1-50ae-4ae6-9111-afe85949fa58'},['2c91eb56-2a2d-4b02-b6c9-7b4061b0ccdf']);assert.ok(Number.isFinite([...free.values()][0]));console.log(JSON.stringify({passed:true,readOnly:true,unboxedClient:true,availableAfterReserves:[...free.values()][0]}));})().finally(()=>db.$disconnect()).catch(e=>{console.error(e.message);process.exitCode=1});

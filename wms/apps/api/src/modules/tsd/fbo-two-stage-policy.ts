@@ -1,4 +1,5 @@
 import type { Prisma } from '@prisma/client';
+import {unboxedFboEnabled} from './fbo-unboxed-picking';
 export const fboTwoStageEnabled = () => process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true';
 export async function hasLegacyFboProgress(db: Prisma.TransactionClient, requestId: string) {
     return !!(await db.stockMovement.findFirst({ where: { sourceDocument: requestId, type: { in: ['PICK', 'PACK', 'SHIP'] } } }) ||
@@ -9,7 +10,7 @@ export async function isFboTwoStageRequest(db: Prisma.TransactionClient, request
     if (!fboTwoStageEnabled())
         return false;
     const r = await db.clientRequest.findUnique({ where: { id: requestId }, select: { type: true, status: true, client: { select: { storesWithoutBoxes: true } }, _count: { select: { fbsOrderLinks: true, packages: true } } } });
-    if (!r || r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || r.client.storesWithoutBoxes)
+    if (!r || r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || (r.client.storesWithoutBoxes && !unboxedFboEnabled()))
         return false;
     if (await db.fboAssembly.findUnique({ where: { requestId } }))
         return true;

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {unboxedFboEnabled} from '../tsd/fbo-unboxed-picking';
 import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -32,7 +33,7 @@ export class OzonFboImportService {
     if (!warehouseId || !await this.db.warehouseClient.findFirst({ where: { clientId: dto.clientId, warehouseId, status: 'ACTIVE', warehouse: { isActive: true } } }))
       throw new BadRequestException('Выберите филиал, в котором активен клиент.');
     const client = await this.db.client.findUniqueOrThrow({ where: { id: dto.clientId } });
-    if (client.storesWithoutBoxes) throw new BadRequestException('Для этой сборки нужен учёт клиента по коробам.');
+    if (client.storesWithoutBoxes && !unboxedFboEnabled()) throw new BadRequestException('Для этой сборки нужен учёт клиента по коробам.');
     if (!dto.destinationCity?.trim()) throw new BadRequestException('Укажите место общей отгрузки.');
     if (!file?.buffer?.length || file.buffer.length > 10 * 1024 * 1024) throw new BadRequestException('Нужен Excel-файл до 10 МБ.');
     let parsed: ReturnType<typeof parseOzonFboRows>;

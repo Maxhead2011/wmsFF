@@ -10,6 +10,8 @@ public class TsdFboPlan {
     // FIX: absent capability keeps older servers and sold clients on the existing workflow.
     public boolean packingByProductSupported;
     public boolean packingUndoSupported;
+    // FIX: physical source box is optional only when the server advertises loose storage.
+    public boolean unboxedPickingSupported;
     public List<PackingSuggestion> packingSuggestions;
     public static class PackingSuggestion { public String skuId, barcode, direction, targetBoxCode; }
     public boolean parallelPackingSupported;
