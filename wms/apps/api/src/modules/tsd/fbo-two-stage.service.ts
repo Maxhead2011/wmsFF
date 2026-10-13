@@ -1,4 +1,5 @@
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
+import { confirmedUnplacedFboBoxes } from './fbo-unplaced-picking';
 import { fboBarcodeAliases, fboBarcodeMatches } from './fbo-barcode-aliases';
 import {unboxedFboEnabled,unboxedFree,pickUnboxed} from './fbo-unboxed-picking';
 import { rememberPackedUnit, packedUnitForUndo } from './fbo-packing-undo';
@@ -117,8 +118,9 @@ export class FboTwoStageService {
                 storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
         });
         const route = [];
-        // FIX: PALLET_SORT stock is physically accepted but cannot be picked before placement.
+        // FIX: warehouse picking may use confirmed unplaced receipts; cabinet rules stay separate.
         const requiresPlacement = wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT';
+        const confirmedUnplaced = requiresPlacement ? await confirmedUnplacedFboBoxes(tx,r,boxes.filter(b=>!b.storagePlacement).map(b=>b.id)) : new Set<string>();
         const availability = unboxed || indexedStock && !needsRoute ? { free: () => 0, take: () => {} }
             : await loadFboFbsAvailability(tx, r, indexedStock ? remainingSkuIds : Object.keys(demand));
         const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
@@ -134,7 +136,7 @@ export class FboTwoStageService {
                 box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)))), preference) : boxes;
         for (const box of ordered) {
             if (busyBoxes.has(box.id)) continue;
-            if (requiresPlacement && !box.storagePlacement) continue;
+            if (requiresPlacement && !box.storagePlacement && !confirmedUnplaced.has(box.id)) continue;
             const tasks: Array<{
                 skuId: string;
                 barcode: string;
@@ -170,7 +172,7 @@ export class FboTwoStageService {
         const waitingBySku = new Map<string, number>();
         const pendingLocations: Array<{skuId:string;boxCode:string;pallet:string;zone:string;quantity:number}> = [];
         if (requiresPlacement) for (const box of boxes) {
-            if (box.storagePlacement || busyBoxes.has(box.id)) continue;
+            if (box.storagePlacement || confirmedUnplaced.has(box.id) || busyBoxes.has(box.id)) continue;
             for (const balance of box.balances) {
                 if (balance.status !== 'AVAILABLE' || balance.quantity <= 0) continue;
                 const quantity = Math.min(demand[balance.skuId] ?? 0, balance.quantity, availability.free(box.id, balance.skuId));
@@ -269,7 +271,8 @@ export class FboTwoStageService {
                 const source = await this.box(tx, r, dto.sourceBoxCode);
                 await this.requireIdleBox(tx, source.id, id, true);
                 const location = await tx.box.findUniqueOrThrow({ where: { id: source.id }, include: { pallet: true, storagePlacement: { include: { pallet: true } } } });
-                if (wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT' && !location.storagePlacement)
+                if (wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT' && !location.storagePlacement
+                    && !(await confirmedUnplacedFboBoxes(tx,r,[source.id])).has(source.id))
                     throw new ConflictException('Товар принят, ожидает размещения на палет-сорте. Разместите короб и обновите маршрут ФБО.');
                 const palletCode = location.storagePlacement?.pallet.code ?? location.pallet?.code;
                 if (palletCode && dto.palletCode !== palletCode)

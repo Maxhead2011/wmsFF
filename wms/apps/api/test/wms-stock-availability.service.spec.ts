@@ -18,6 +18,17 @@ const user: AuthUser = {
 };
 
 describe('WMS stock availability source', () => {
+  // TEST: warehouse-only picking must not expose unplaced PALLET_SORT stock to clients.
+  it('keeps client placement filtering when unplaced FBO picking is enabled', async () => {
+    vi.stubEnv('WMS_FBO_UNPLACED_PICKING_ENABLED', 'true');
+    try {
+      const prisma = prismaMock();
+      const service = new WmsStockAvailabilityService(prisma as never, {requireClientAccess:vi.fn()} as never, {get:()=>2} as never);
+      await service.snapshot('client-1', user, {warehouseId:'warehouse-1'});
+      const where = prisma.stockBalance.groupBy.mock.calls[0][0].where;
+      expect(JSON.stringify(where)).toContain('"storagePlacement":{"is":{"pallet":{"warehouseId":"warehouse-1"}}}');
+    } finally {vi.unstubAllEnvs();}
+  });
   // TEST: total stock, reserve, duplicate barcode, zero/clamped values and a
   // picked unit already removed from AVAILABLE are calculated exactly once.
   it('aggregates one sellable row per barcode and subtracts the active reserve once', async () => {
