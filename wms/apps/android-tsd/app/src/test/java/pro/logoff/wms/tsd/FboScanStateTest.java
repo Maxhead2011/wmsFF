@@ -7,6 +7,22 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: aliases cannot cross SKUs or destination quotas.
+    @Test public void aliasKeepsSkuAndDirectionBoundaries(){
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        TsdFboPlan p=new TsdFboPlan();TsdFboPlan.Line l=new TsdFboPlan.Line();l.skuId="greta54";l.barcode="4630584392961";l.barcodes=Arrays.asList(l.barcode,"4610389218703");p.lines=new java.util.ArrayList<>(Collections.singletonList(l));
+        assertTrue(FboScanState.matches(p,l,"4610389218703"));assertFalse(FboScanState.matches(p,l,"wrong"));
+        TsdFboPlan.DirectionItem item=new TsdFboPlan.DirectionItem();item.skuId="greta54";item.barcode=l.barcode;
+        assertTrue(FboScanState.directionMatches(p,item,"4610389218703"));item.skuId="greta56";assertFalse(FboScanState.directionMatches(p,item,"4610389218703"));
+        TsdFboPlan.Line other=new TsdFboPlan.Line();other.skuId="greta56";other.barcode="4610389218703";p.lines.add(other);
+        assertFalse(FboScanState.matches(p,l,"4610389218703"));
+    }
+    // TEST: the scanned receipt barcode survives refresh when the request uses its alias.
+    @Test public void receiptBarcodeSurvivesPickingRefresh() throws Exception {
+        TsdFboPlan p=new com.squareup.moshi.Moshi.Builder().build().adapter(TsdFboPlan.class).fromJson("{\"phase\":\"PICKING\",\"unboxedPickingSupported\":true,\"route\":[],\"boxes\":[],\"lines\":[{\"skuId\":\"greta54\",\"barcode\":\"4630584392961\",\"barcodes\":[\"4610389218703\",\"4630584392961\"],\"remaining\":14}]}");
+        FboScanState state=new FboScanState();state.barcode="4610389218703";state.reconcile(p,false);
+        assertEquals("logoff".equals(BuildConfig.FLAVOR)?"4610389218703":"",state.barcode);
+    }
     // TEST: refresh preserves a pending barcode/KIZ pair without inventing a source box.
     @Test public void loosePickingDoesNotRequireSourceBox(){
         TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";p.unboxedPickingSupported=true;

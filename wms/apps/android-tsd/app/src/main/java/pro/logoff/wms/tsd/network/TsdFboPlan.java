@@ -29,6 +29,7 @@ public class TsdFboPlan {
     public List<String> wholeBoxes;
     public static class Line {
         public String id, skuId, barcode, name, article, size;
+        public List<String> barcodes;
         public boolean requiresKiz;
         public int needed, picked, packed, remaining;
     }

@@ -78,7 +78,7 @@ final class FboTwoStageScreen {
     private boolean productActive(){return productAvailable()&&state.productMode&&"PACKING".equals(screenPhase());}
     private TsdFboPlan.PackingSuggestion productSuggestion(){
         if(plan.packingSuggestions==null||plan.lines==null)return null;
-        for(TsdFboPlan.Line l:plan.lines)if(state.barcode.equals(l.barcode))
+        for(TsdFboPlan.Line l:plan.lines)if(FboScanState.matches(plan,l,state.barcode))
             for(TsdFboPlan.PackingSuggestion s:plan.packingSuggestions)if(l.skuId!=null&&l.skuId.equals(s.skuId))return s;
         return null;
     }
@@ -90,7 +90,7 @@ final class FboTwoStageScreen {
     // FIX: no packing mutation before the destination box is physically scanned.
     private void scanProduct(String value){
         if(state.barcode.isEmpty()){
-            TsdFboPlan.Line found=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&l.picked>l.packed){found=l;break;}
+            TsdFboPlan.Line found=null;for(TsdFboPlan.Line l:plan.lines)if(FboScanState.matches(plan,l,value)&&l.picked>l.packed){found=l;break;}
             if(found==null){message="Этот ШК не ожидает упаковки.";render();return;}
             state.barcode=value;state.productKiz="";state.productReady=!found.requiresKiz;state.target="";
         }else if(!state.productReady){
@@ -522,7 +522,7 @@ final class FboTwoStageScreen {
             if(rejected!=null){state.barcode="";message=rejected;packingErrorSpeech=true;speakScan(false);render();return;}
         }
         if(!state.barcode.isEmpty()){send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",value);return;}
-        TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(value.equals(l.barcode)&&("PICKING".equals(screenPhase())?l.remaining>0:l.picked>l.packed)){line=l;break;}
+        TsdFboPlan.Line line=null;for(TsdFboPlan.Line l:plan.lines)if(FboScanState.matches(plan,l,value)&&("PICKING".equals(screenPhase())?l.remaining>0:l.picked>l.packed)){line=l;break;}
         if(line==null){if(!AssemblyScanVoice.isKiz(value))speakScan(false);message="Этот ШК не требуется на текущем этапе.";packingErrorSpeech=true;render();return;}
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
