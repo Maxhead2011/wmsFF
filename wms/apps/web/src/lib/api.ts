@@ -8784,7 +8784,7 @@ export type OzonCustomerRequest={id:string;number:number;title:string;status:str
 export type OzonCustomerWarehouse = {id:string;name:string};
 // FIX: use the same explicit branch for the list and both multipart import steps.
 export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}
-export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):''),{accessToken});}
+export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string,view:'active'|'completed'='active'){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):'')+'&view='+view,{accessToken});}
 function ozonCustomerForm(payload:OutboundRequestXlsxPayload & {warehouseId?:string}){const form=outboundRequestXlsxForm(payload);appendOptional(form,'warehouseId',payload.warehouseId);return form;}
 export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
 export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload & {warehouseId?:string}) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',ozonCustomerForm(payload),accessToken);}

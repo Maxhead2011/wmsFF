@@ -46,7 +46,7 @@ describe('Ozon customer import',()=>{
     const s=setup();const findMany=vi.fn().mockResolvedValue([{id:'r',number:1,title:'Кубрин',status:'SUBMITTED',items:[{quantity:5}],ozonShipment:{directions:[{},{}]},fboAssembly:null}]);
     Object.assign(s.db,{clientRequest:{findMany}});
     expect((await s.service.list('client',user))[0]).toMatchObject({quantity:5,directions:2,phase:'NOT_STARTED'});
-    expect(findMany.mock.calls[0][0].where).toEqual({clientId:'client',warehouseId:'warehouse',ozonShipment:{isNot:null}});
+    expect(findMany.mock.calls[0][0].where).toEqual({clientId:'client',warehouseId:'warehouse',ozonShipment:{isNot:null},status:{notIn:['DONE','CANCELLED','REJECTED']}});
     expect(s.scopes.requireClientAccess).toHaveBeenCalledWith(user,'client','read');
     await expect(s.service.list('client',{...user,activeWarehouseId:null})).rejects.toThrow('филиал');
     s.scopes.requireClientAccess.mockImplementation(()=>{throw Error('denied');});
@@ -97,4 +97,18 @@ describe('Ozon customer import',()=>{
     await expect(s.service.warehouses('client',user)).rejects.toThrow('выключен');
   });
 
+  // TEST: closed requests cannot crowd active assemblies out of the limited query.
+  it('filters active requests before the limit and keeps packed awaiting handover active',async()=>{
+    const s=setup(),findMany=vi.fn().mockResolvedValue([]);Object.assign(s.db,{clientRequest:{findMany}});
+    await s.service.list('client',user);
+    expect(findMany.mock.calls[0][0]).toMatchObject({where:{status:{notIn:['DONE','CANCELLED','REJECTED']}},take:100});
+    expect(findMany.mock.calls[0][0].where).not.toHaveProperty('fboAssembly');
+  });
+  it('explicitly lists completed requests within the same client and warehouse',async()=>{
+    const s=setup(),findMany=vi.fn().mockResolvedValue([]);Object.assign(s.db,{clientRequest:{findMany}});
+    await s.service.list('client',user,'warehouse','completed');
+    expect(findMany.mock.calls[0][0].where).toMatchObject({clientId:'client',warehouseId:'warehouse',status:{in:['DONE','CANCELLED','REJECTED']}});
+    await expect(s.service.list('client',user,'warehouse','invalid')).rejects.toThrow();
+    expect(findMany).toHaveBeenCalledTimes(1);
+  });
 });
