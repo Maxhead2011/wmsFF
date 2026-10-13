@@ -1,4 +1,5 @@
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
+import { fboBarcodeAliases, fboBarcodeMatches } from './fbo-barcode-aliases';
 import {unboxedFboEnabled,unboxedFree,pickUnboxed} from './fbo-unboxed-picking';
 import { rememberPackedUnit, packedUnitForUndo } from './fbo-packing-undo';
 import { assertSupplyMutable } from '../client-requests/ozon-supply-policy';
@@ -97,6 +98,7 @@ export class FboTwoStageService {
         const actors = await tx.user.findMany({ where: { id: { in: [...new Set(units.flatMap(u => [u.pickedByUserId, u.packedByUserId]).filter((id): id is string => !!id))] } }, select: { id: true, name: true } });
         const actorNames = new Map(actors.map(a => [a.id, a.name]));
         const lines = remainingFboLines(r.items, units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
+            barcodes: fboBarcodeAliases(i, r.items), // FIX: expose receipt aliases without changing the request barcode.
             name: i.name || i.sku!.name, article: i.sku!.article, size: i.sku!.size, requiresKiz: (i.sku!.needsChestnyZnak && !i.sku!.isUnmarked) || units.some(u => u.skuId === i.skuId && !!u.markId),
             needed: i.needed, picked: i.picked, packed: i.packed, remaining: i.remaining }));
         const demand: Record<string, number> = {};
@@ -293,7 +295,7 @@ export class FboTwoStageService {
                     chosen = Array.from({ length: decision.quantity }, (_, i) => ({ skuId, mark: marked ? marks[i] : null }));
                 }
                 else {
-                    const line = lines.find(l => l.remaining > 0 && (l.barcode === dto.barcode || l.sku!.barcodes.some(b => b.value === dto.barcode)));
+                    const line = lines.find(l => l.remaining > 0 && fboBarcodeMatches(l.skuId!, dto.barcode, r.items));
                     if (!line)
                         throw new BadRequestException('Этот товар не требуется или уже полностью отобран.');
                     const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
@@ -368,7 +370,8 @@ export class FboTwoStageService {
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
-                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && u.barcode === dto.barcode && (mark ? u.markId === mark.id : !u.markId));
+                // FIX: packing accepts the same registered SKU aliases as picking; KIZ/state checks remain mandatory.
+                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && fboBarcodeMatches(u.skuId, dto.barcode, r.items) && (mark ? u.markId === mark.id : !u.markId));
                 if (!unit)
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);

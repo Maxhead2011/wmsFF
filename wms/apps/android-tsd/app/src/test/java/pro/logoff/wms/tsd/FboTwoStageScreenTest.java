@@ -26,6 +26,16 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: a physical scan reaches PICK_UNIT when receipt and request barcodes differ.
+    @Test public void pickingAcceptsRegisteredReceiptBarcode() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");
+            TsdFboPlan.Line l=new TsdFboPlan.Line();l.skuId="greta54";l.barcode="4630584392961";l.barcodes=Arrays.asList(l.barcode,"4610389218703");l.remaining=14;p.lines.add(l);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,false,writes);
+            try{screen.scannerField().setText("PL_1");screen.submit();screen.scannerField().setText("BOX_1");screen.submit();screen.scannerField().setText("4610389218703");screen.submit();waitIdle(screen);assertEquals(1,writes.get());}finally{screen.close();}
+        }
+    }
     // TEST: reject an otherwise needed product immediately when it belongs to another destination.
     @Test public void destinationRejectsBarcodeBeforeAskingForKiz() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;

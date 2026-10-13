@@ -12,6 +12,16 @@ function fixture(phase='PICKING',complete=false){
   const request:any={id:'r',clientId:'c',warehouseId:'w',client:{},items:[1,2].map(n=>({id:'i'+n,skuId:'s'+n,barcode:'code'+n,quantity:1,sku:{name:'Item'+n}}))};
   return {tx,service,request,units};
 }
+// TEST: the terminal receives both receipt and request identities without changing demand.
+it('includes registered barcode aliases in the packing snapshot',async()=>{
+  const f=fixture('PACKING',true);
+  f.request.items[0].barcode='4630584392961';
+  f.request.items[0].sku.barcodes=[{value:'4610389218703'},{value:'4630584392961'}];
+  const plan=await f.service.snapshot(f.tx,f.request);
+  expect(plan.lines[0].barcode).toBe('4630584392961');
+  expect(plan.lines[0].barcodes).toEqual(['4630584392961','4610389218703']);
+  expect(plan.picked).toBe(2);expect(plan.packed).toBe(1);
+});
 // TEST: picked demand must not trigger fresh warehouse reservation calculations.
 it('loads stock only for the remainder while preserving picked progress',async()=>{
   const f=fixture();const plan=await f.service.snapshot(f.tx,f.request);
