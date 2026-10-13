@@ -1,5 +1,6 @@
 import {BadRequestException,ConflictException,Injectable,NotFoundException} from '@nestjs/common';
 import {randomUUID} from 'node:crypto';
+import {syncComposition} from './ozon-request-sync-policy';
 import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
@@ -44,6 +45,40 @@ export class OzonStockAdjustmentService {
   return {s,plan,rows,basis,token:adjustmentHash([user.id,id,basis,rows])};
  }
  async preview(id:string,user:AuthUser){const x=await this.db.$transaction(tx=>this.assess(tx,id,user),{isolationLevel:'RepeatableRead',timeout:30000});const c=await this.connection(x.s),link=await this.fresh(x.s,c);await this.assertEmptyCargoes(c,link);if(supplyDifferences(x.s.directions,link).length)throw new ConflictException('Состав WMS уже расходится с Ozon. Сначала выполните сверку поставок.');return {token:x.token,rows:x.rows,lines:x.plan.lines,pendingLocations:x.plan.pendingLocations,route:x.plan.route,needed:x.plan.needed,after:x.rows.reduce((n,r)=>n+r.after,0)};}
+ // FIX: inbound synchronization reads Ozon only; a fresh preview guards every local write.
+ private async syncAssessment(tx:any,s:any,link:SupplyIntegration,user:AuthUser){
+  assertNoOzonAdjustment(s.integration);
+  const r=s.request,a=r.fboAssembly;
+  if(!['SUBMITTED','APPROVED','IN_WORK'].includes(r.status)||s.integration?.frozenHash||Object.keys(s.integration?.operations??{}).length||a&&(!['PICKING','PACKING'].includes(a.phase)||a.pickClosure))throw new ConflictException('Синхронизация доступна до контроля и передачи грузомест.');
+  if(new Set(r.items.map((i:any)=>i.skuId)).size!==r.items.length||r.items.some((i:any)=>!i.skuId))throw new ConflictException('Строки заявки требуют сверки.');
+  if(a?.compositionHash&&a.compositionHash!==composition(r.items))throw new ConflictException('Состав сборки требует сверки.');
+  if(supplyOrders(link).some(o=>!['DATA_FILLING','READY_TO_SUPPLY'].includes(o.state)))throw new ConflictException('Поставка Ozon больше не находится в подготовке.');
+  const barcodes=link.supplies.flatMap(v=>v.items.map(i=>i.barcode));
+  const catalog=await tx.sku.findMany({where:{clientId:r.clientId,barcodes:{some:{value:{in:barcodes}}}},include:{barcodes:true}});
+  const result=syncComposition(s,link,catalog);
+  const basis={status:r.status,items:r.items,directions:s.directions,assembly:a,integration:s.integration};
+  // Ignore remote read timestamps, but bind the token to all local progress and remote demand.
+  const remote=supplyOrders(link).map(o=>({orderId:o.orderId,state:o.state,supplies:o.supplies}));
+  return {...result,token:adjustmentHash([user.id,r.id,basis,remote,result])};
+ }
+ async syncPreview(id:string,user:AuthUser){
+  const initial=await this.load(this.db,id,user),c=await this.connection(initial),link=await this.fresh(initial,c);await this.assertEmptyCargoes(c,link);
+  return this.locked(id,user,async(s,tx)=>{if(adjustmentHash(s.integration)!==adjustmentHash(initial.integration))throw new ConflictException('Привязка изменилась. Повторите сверку.');return this.syncAssessment(tx,s,link,user);});
+ }
+ async syncApply(id:string,body:{token:string;confirm:boolean},user:AuthUser){
+  if(body?.confirm!==true||!body.token)throw new BadRequestException('Подтвердите синхронизацию заявки с Ozon.');
+  const initial=await this.load(this.db,id,user),c=await this.connection(initial),link=await this.fresh(initial,c);await this.assertEmptyCargoes(c,link);
+  return this.locked(id,user,async(s,tx)=>{
+   if(adjustmentHash(s.integration)!==adjustmentHash(initial.integration))throw new ConflictException('Привязка изменилась. Повторите сверку.');
+   const p=await this.syncAssessment(tx,s,link,user);if(p.token!==body.token)throw new ConflictException('Состав Ozon или сборка изменились. Повторите предпросмотр.');
+   const items=[];for(const item of p.items){const old=s.request.items.find((i:any)=>i.skuId===item.skuId);items.push(old?await tx.clientRequestItem.update({where:{id:old.id},data:{quantity:item.quantity,barcode:item.barcode}}):await tx.clientRequestItem.create({data:{requestId:id,...item}}));}
+   for(const old of s.request.items)if(!p.items.some(i=>i.skuId===old.skuId))await tx.clientRequestItem.delete({where:{id:old.id}});
+   await tx.ozonFboShipment.update({where:{requestId:id},data:{directions:p.directions,integration:link as any}});
+   const a=s.request.fboAssembly;if(a){const picked=a.units.filter((u:any)=>u.state!=='RETURNED').length;await tx.fboAssembly.update({where:{requestId:id},data:{compositionHash:composition(items),...(p.after>picked?{phase:'PICKING'}:{})}});}
+   await tx.auditLog.create({data:{userId:user.id,action:'OZON_REMOTE_COMPOSITION_SYNC',entity:'ClientRequest',entityId:id,payload:{oldItems:s.request.items,oldDirections:s.directions,rows:p.rows,needed:p.needed,after:p.after,checkedAt:link.checkedAt} as any}});
+   return {applied:true,needed:p.needed,after:p.after};
+  });
+ }
  // FIX: persist intent before external writes; unknown outcomes are never blindly retried.
  async start(id:string,body:{token:string;quantities:number[];confirm:boolean},user:AuthUser){
   if(body?.confirm!==true)throw new BadRequestException('Подтвердите изменение количества в WMS и Ozon.');
