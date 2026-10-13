@@ -328,6 +328,11 @@ final class FboTwoStageScreen {
 
     private void render(){
         if(closed||activity.isDestroyed())return;
+        // FIX: a packing checkpoint must not block reopened picking; unanswered commands stay intact.
+        if(!packing&&"logoff".equals(BuildConfig.FLAVOR)&&state.productMode&&state.pending()==null){
+            state.productMode=false;state.productReady=false;state.productKiz="";
+            state.barcode="";state.target="";state.direction="";
+        }
         if(productActive()&&state.pending()==null){TsdFboPlan.PackingSuggestion suggestion=productSuggestion();if(suggestion!=null)state.direction=suggestion.direction;}
         if(pickingChoices())prefs.edit().putString(pendingKey+":picking-mode",pickingMode.name()).commit();
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
@@ -353,7 +358,7 @@ final class FboTwoStageScreen {
                     else text(root,label);
                 }
                 text(root,"Направление короба: "+state.direction);
-                if(state.productMode&&!productAvailable()&&"logoff".equals(BuildConfig.FLAVOR)){
+                if(packing&&state.productMode&&!productAvailable()&&"logoff".equals(BuildConfig.FLAVOR)){
                     text(root,"Упаковка по товару сейчас недоступна. Сохранённый товар не вложен.");
                     button(root,"Отложить товар и вернуться к направлениям",ready(),()->{state.barcode="";state.productKiz="";state.productReady=false;chooseProductMode(false);});
                 }
@@ -484,7 +489,7 @@ final class FboTwoStageScreen {
         if(pickingChoices()&&"PICKING".equals(screenPhase())&&pickingMode==FboPickingRoute.Mode.WHOLE_BOXES){
             message="Подтвердите отбор целого короба кнопкой ниже.";render();return;
         }
-        if(state.productMode&&ozon()&&"logoff".equals(BuildConfig.FLAVOR)&&!productAvailable()){
+        if(packing&&state.productMode&&ozon()&&"logoff".equals(BuildConfig.FLAVOR)&&!productAvailable()){
             message="Упаковка по товару недоступна. Отложите товар или обновите заявку.";render();return;
         }
         if(productActive()){scanProduct(value);return;}
