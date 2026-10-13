@@ -12509,7 +12509,7 @@ async function responseError(response: Response) {
 }
 
 // FIX: read-only KIZ history uses the same scoped endpoint as the administrator TSD.
-export type KizReviewCase = {id:string;kizIdentity:string;taskId:string;status:string;decision:string;active:boolean;
+export type KizReviewCase = {id:string;kizIdentity:string;taskId:string;status:string;decision:string;active:boolean;physicalReuseAllowed?:boolean;
   createdAt:string;updatedAt:string;attempts:number;resolution:string|null;reason:string|null;decidedByName:string|null;
   snapshot:{requestNumber:number;orderId:string;productName:string;article:string|null;barcode:string|null;boxCode:string|null;workerName:string|null};
   evidence:{circulation:string|null;history:Array<{orderId:string|null;event:string;at:string|null;request?:{number:number}|null}>}};

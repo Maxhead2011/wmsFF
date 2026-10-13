@@ -41,6 +41,7 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
     }}>
       <h4>{selected.resolution==='REUSE'?'Разрешить использовать':'Разрешить переклейку'} · заказ {selected.row.snapshot.orderId}</h4>
       <p>КИЗ: {selected.row.kizIdentity}</p>
+      {selected.resolution==='REUSE'&&selected.row.physicalReuseAllowed&&<p>Подтвердите именно эту физическую единицу. Прежняя привязка останется в истории как спорная; разрешение действует только для этого задания.</p>}
       <label>Основание решения<textarea required minLength={5} maxLength={1000} value={reason} disabled={saving} onChange={e=>setReason(e.target.value)}/></label>
       <label><input type="checkbox" required checked={confirmed} disabled={saving} onChange={e=>setConfirmed(e.target.checked)}/>
         {selected.resolution==='REUSE'?'Проверено: единица физически на складе, КИЗ не погашен и допускает повторное использование.':'Подтверждаю наличие этой единицы для замены старого КИЗа на новый без пересчёта всего короба.'}</label>
