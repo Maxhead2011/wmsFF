@@ -26,6 +26,38 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: switching screens cannot discard or rewrite a packing command with a lost response.
+    @Test public void reopenedPickingPreservesUnansweredPacking() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.marketplace="OZON";
+            FboTwoStageScreen screen=open(a,p,false,new AtomicInteger());
+            try{
+                java.lang.reflect.Field f=FboTwoStageScreen.class.getDeclaredField("state");f.setAccessible(true);
+                FboScanState state=(FboScanState)f.get(screen);state.productMode=true;state.barcode="123";state.productKiz="kiz";state.target="target";
+                Map<String,String> pending=state.prepare("PACK_PRODUCT","kiz");
+                java.lang.reflect.Method render=FboTwoStageScreen.class.getDeclaredMethod("render");render.setAccessible(true);render.invoke(screen);
+                assertEquals(pending,state.pending());assertEquals("123",state.barcode);assertEquals("kiz",state.productKiz);
+            }finally{screen.close();}
+        }
+    }
+    // TEST: reopening picking after product packing must not route scans through packing guards.
+    @Test public void savedProductPackingDoesNotBlockPicking() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.marketplace="OZON";
+            TsdFboPlan.Line l=new TsdFboPlan.Line();l.skuId="s";l.barcode="123";l.remaining=1;p.lines.add(l);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,false,writes);
+            try {
+                java.lang.reflect.Field f=FboTwoStageScreen.class.getDeclaredField("state");f.setAccessible(true);
+                FboScanState state=(FboScanState)f.get(screen);state.productMode=true;state.productReady=true;state.productKiz="old-kiz";state.barcode="old-product";
+                java.lang.reflect.Method render=FboTwoStageScreen.class.getDeclaredMethod("render");render.setAccessible(true);render.invoke(screen);
+                assertFalse(state.productMode);assertEquals("",state.barcode);assertEquals("",state.productKiz);
+                screen.scannerField().setText("PL_1");screen.submit();screen.scannerField().setText("BOX_1");screen.submit();screen.scannerField().setText("123");screen.submit();waitIdle(screen);
+                assertEquals(1,writes.get());
+            }finally{screen.close();}
+        }
+    }
     // TEST: a physical scan reaches PICK_UNIT when receipt and request barcodes differ.
     @Test public void pickingAcceptsRegisteredReceiptBarcode() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
