@@ -85,6 +85,11 @@ export class FboTwoStageService {
         if (r.pickWaveRequests.some(w => ['PENDING', 'SUBMITTED'].includes(w.wave.balanceReviewStatus)))
             throw new ConflictException('Сначала завершите проверку балансов волны.');
     }
+    // FIX: adjustment uses the same scoped route and inventory calculation inside its transaction.
+    async adjustmentContext(tx: Prisma.TransactionClient, id: string, user: AuthUser) {
+        const request=await this.load(tx,id,user,'write');this.requireFbo(request);
+        return {request,plan:await this.snapshot(tx,request)};
+    }
     private async snapshot(tx: Prisma.TransactionClient, r: Request) {
         const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
@@ -163,6 +168,7 @@ export class FboTwoStageService {
             for(const l of lines)if(marked.some(m=>m.skuId===l.skuId))l.requiresKiz=true;
         }
         const waitingBySku = new Map<string, number>();
+        const pendingLocations: Array<{skuId:string;boxCode:string;pallet:string;zone:string;quantity:number}> = [];
         if (requiresPlacement) for (const box of boxes) {
             if (box.storagePlacement || busyBoxes.has(box.id)) continue;
             for (const balance of box.balances) {
@@ -172,6 +178,7 @@ export class FboTwoStageService {
                 availability.take(box.id, balance.skuId, quantity);
                 demand[balance.skuId] -= quantity;
                 waitingBySku.set(balance.skuId, (waitingBySku.get(balance.skuId) ?? 0) + quantity);
+                pendingLocations.push({skuId:balance.skuId,boxCode:box.code,pallet:box.pallet?.code??'',zone:box.zone?.name??'',quantity});
             }
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
@@ -187,7 +194,7 @@ export class FboTwoStageService {
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             lines: lines.map(l => { const pending = Math.min(l.remaining, waitingBySku.get(l.skuId) ?? 0); waitingBySku.set(l.skuId, (waitingBySku.get(l.skuId) ?? 0) - pending); return { ...l, pendingPlacementQuantity: pending }; }),
-            route, pendingPlacementQuantity,
+            route, pendingPlacementQuantity, pendingLocations,
             observedAt: new Date().toISOString(),
             pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
                 kiz: u.kiz, sourceBoxCode: u.sourceBoxCode, targetBoxCode: u.targetBoxCode, wholeBox: u.wholeBox, state: u.state,
