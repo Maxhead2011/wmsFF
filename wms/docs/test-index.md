@@ -1,3 +1,5 @@
+PR584: Ozon cargo throttling regression tests in `ozon-assembly-supply.spec.ts`; compiled transport/recovery and read-only request2000 proof in `scripts/releases/ozon-rate-20261013/smoke.cjs`. API3423/web427 passed;155/2 skipped.
+
 PR561/562: manual FBS helper/service/PostgreSQL tests; `scripts/tests/fbs-manual-runtime-browser.cjs`; live staging and published preview are rolled back. Source and candidate PostgreSQL scenarios pass; read paging preserves uint64 WB cursor.
 
 PR555: `wb-barcode-identity.spec.ts` and `scripts/tests/wb-barcode-runtime.cjs`; real catalog synchronization and guarded SKU update tested against the pinned candidate.
