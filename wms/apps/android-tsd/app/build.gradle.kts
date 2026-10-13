@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 228 // FIX: FBO picking without a source box, LOGOFF only.
-            versionName = "0.1.228-unboxed-fbo"
+            versionCode = 229 // FIX: registered SKU barcode aliases in FBO picking and packing, LOGOFF only.
+            versionName = "0.1.229-fbo-barcodes"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
