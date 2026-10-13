@@ -1,3 +1,5 @@
+PR561/562: manual FBS helper/service/PostgreSQL tests; `scripts/tests/fbs-manual-runtime-browser.cjs`; live staging and published preview are rolled back. Source and candidate PostgreSQL scenarios pass; read paging preserves uint64 WB cursor.
+
 PR555: `wb-barcode-identity.spec.ts` and `scripts/tests/wb-barcode-runtime.cjs`; real catalog synchronization and guarded SKU update tested against the pinned candidate.
 
 PR553: `marketplace-product-links.spec.ts`, `marketplace-product-links.integration.spec.ts`, `api.product-links.spec.ts`, `marketplace-product-links-runtime.cjs`, `marketplace-links-browser.cjs`.
