@@ -11,6 +11,10 @@ describe('FBO packing and final box control',()=>{
   it('shows Ozon directions inside the same assembly',()=>{
     const plan={...base,marketplace:'OZON',directions:[{name:'Уфа',needed:2,packed:1,items:[{skuId:'s',barcode:'1',quantity:2,packed:1}]}]};
     const html=render(plan);
+    // TEST: adjustment is available only inside the editable Ozon assembly.
+    expect(html).toContain('Скорректировать по фактическим остаткам');
+    expect(render(base)).not.toContain('Скорректировать по фактическим остаткам');
+    expect(renderToStaticMarkup(<FboTwoStagePanel initial={plan} accessToken="test" userId="picker" canWrite={false} onClose={()=>{}}/>)).not.toContain('Скорректировать по фактическим остаткам');
     expect(html).toContain('Единая сборка');expect(html).toContain('Уфа: упаковано 1 из 2');expect(html).toContain('Направление короба');
     expect(render({...plan,phase:'COMPLETED'})).not.toContain('Скачать файл WB');
   });

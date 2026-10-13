@@ -2,13 +2,14 @@ import { ConflictException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 
-export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number }> };
+export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number; sku?: string }> };
 export type SupplyIntegration = {
   orders?: SupplyOrderSnapshot[];
   connectionId: string; orderId: string; orderNumber: string; place: string; date: string; state: string;
   supplies: SupplySnapshot[]; mapping: Record<string, string>; checkedAt: string;
   operations: Record<string, { state: 'SENDING'|'UNKNOWN'|'ACCEPTED'|'SUCCESS'|'FAILED'; operationId?: string; error?: string; cargoes?: Array<{key:string;cargoId:string;barcode?:string}>; labelOperationId?: string; labelUrl?: string }>;
   frozenHash?: string;
+  adjustment?: {state:string;[key:string]:any};
 };
 
 export type SupplyOrderSnapshot = Pick<SupplyIntegration,'orderId'|'orderNumber'|'place'|'date'|'state'|'supplies'|'checkedAt'>;
@@ -79,5 +80,13 @@ export function packedCargoes(directions: OzonDirection[], link: SupplyIntegrati
 }
 export function cargoHash(cargoes:Record<string,any[]>) {return createHash('sha256').update(JSON.stringify(Object.entries(cargoes).sort(([a],[b])=>a.localeCompare(b)))).digest('hex');}
 export function assertSupplyMutable(integration: unknown, action: string) {
+  assertNoOzonAdjustment(integration);
+
   if((integration as SupplyIntegration|null)?.frozenHash && action!=='FINISH') throw new ConflictException('Состав зафиксирован для Ozon. Изменение требует отдельной сверки грузомест.');
+}
+
+// FIX: an uncertain external quantity update freezes scans and cargo changes until reconciled.
+export function assertNoOzonAdjustment(integration: unknown) {
+ const op=(integration as SupplyIntegration|null)?.adjustment;
+ if(op&&!['APPLIED','CANCELLED'].includes(op.state))throw new ConflictException('Идёт корректировка количества в Ozon. Сначала проверьте её результат в заявке.');
 }

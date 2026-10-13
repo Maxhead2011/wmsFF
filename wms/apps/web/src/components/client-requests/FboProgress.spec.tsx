@@ -11,9 +11,11 @@ import type {AuthSession,ClientRequestSummary,FboPlan} from '../../lib/api';
 describe('FBO live execution and navigation',()=>{
  // TEST: pending accepted stock is not labelled as missing in the online monitor.
  it('explains waiting for placement without reporting a missing box',()=>{
-  const plan={needed:3,picked:0,packed:0,pendingPlacementQuantity:3,route:[],boxes:[],lines:[{id:'l',skuId:'s',name:'Suit',needed:3,picked:0,packed:0,remaining:3,pendingPlacementQuantity:3}]} as unknown as FboPlan;
+  const plan={needed:3,picked:0,packed:0,pendingPlacementQuantity:3,pendingLocations:[{skuId:'s',boxCode:'FFL_TEST_1',pallet:'',zone:'',quantity:3}],route:[],boxes:[],lines:[{id:'l',skuId:'s',name:'Suit',needed:3,picked:0,packed:0,remaining:3,pendingPlacementQuantity:3}]} as unknown as FboPlan;
   const html=renderToStaticMarkup(<FboProgress plan={plan}/>);
   expect(html).toContain('Принято, ожидает размещения');
+  expect(html).toContain('FFL_TEST_1');
+  expect(html).toContain('Паллет-сорт не назначен');
   expect(html).not.toContain('Доступный короб не найден');
  });
  afterEach(()=>vi.useRealTimers());

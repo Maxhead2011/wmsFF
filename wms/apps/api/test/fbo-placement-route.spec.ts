@@ -16,6 +16,8 @@ it('waits for placement and automatically includes the placed box on refresh', a
   expect(waiting.route).toEqual([]);
   expect(waiting.pendingPlacementQuantity).toBe(3);
   expect(waiting.shortage).toBe(0);
+  // TEST: retain the actual box location even before pallet-sort assignment.
+  expect(waiting.pendingLocations).toEqual([expect.objectContaining({skuId: 's', boxCode: box.code, quantity: 3})]);
   box.storagePlacement = { pallet: { code: 'PALET_SORT_1' } };
   const ready = await service.snapshot(tx, request);
   expect(ready.pendingPlacementQuantity).toBe(0);
