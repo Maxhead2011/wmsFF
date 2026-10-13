@@ -11142,6 +11142,7 @@ export type FboPlan = {
   marketplace?:string;
   directions?:Array<{name:string;needed:number;packed:number;items:Array<{skuId:string;barcode:string;quantity:number;packed:number}>}>;
   pendingPlacementQuantity?:number;
+  pendingLocations?:Array<{skuId:string;boxCode:string;pallet:string;zone:string;quantity:number}>;
   number?:number; observedAt?:string;
   pickedUnits?:Array<{id:string;requestItemId:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;wholeBox:boolean;state:string;pickedAt:string;packedAt:string|null;pickedBy:string|null;packedBy:string|null}>;
   requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
@@ -12558,3 +12559,9 @@ export type OzonLinkPreview=OzonCustomerPreview & {previewHash:string;place:stri
 export const fetchOzonLinkConnections=(accessToken:string,clientId:string)=>request<Array<{id:string;accountName:string|null;sellerId:string}>>('/ozon-fbo-import/link-connections?clientId='+encodeURIComponent(clientId),{accessToken});
 export const previewOzonLinks=(accessToken:string,body:OzonLinkInput)=>request<OzonLinkPreview>('/ozon-fbo-import/links/preview',{accessToken,method:'POST',body});
 export const createOzonLinks=(accessToken:string,body:OzonLinkInput)=>request<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/links/commit',{accessToken,method:'POST',body});
+
+// FIX: preview is read-only; start explicitly confirms changes in both systems.
+export type OzonAdjustmentRow={direction:string;skuId:string;barcode:string;before:number;packed:number;after:number};
+export type OzonAdjustmentPreview={token:string;rows:OzonAdjustmentRow[];lines:FboPlan['lines'];needed:number;after:number};
+export type OzonAdjustmentState={operation:null|{id:string;state:string;rows:OzonAdjustmentRow[];operations:Array<{supplyId:string;state:string;error?:string}>}};
+export const ozonAdjustment=(accessToken:string,id:string,action:''|'preview'|'start'|'resume'|'cancel',body:unknown={})=>request<OzonAdjustmentPreview&OzonAdjustmentState>(`/tsd/requests/${encodeURIComponent(id)}/fbo/ozon-adjustment${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});

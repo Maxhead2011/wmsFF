@@ -1,3 +1,4 @@
+import {OzonStockAdjustment} from './OzonStockAdjustment';
 import { startVisiblePolling } from '../../lib/visiblePolling';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { startFboPolling } from './fboLivePolling';
@@ -19,6 +20,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   const [pallet,setPallet]=useState('');
   const [direction,setDirection]=useState('');
   const [scanMode,setScanMode]=useState(false);
+  const [adjusting,setAdjusting]=useState(false);
   const [refreshing,setRefreshing]=useState(false);
   const storageKey=`fbo-pending:${userId}:${initial.requestId}`;
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[pending,setPending]=useState<FboAction|null>(()=>{
@@ -32,7 +34,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   const sourceTask=plan.route.find(b=>b.boxCode===source);
   const title=plan.phase==='CONTROL'?'Проверка всех коробов поставки':plan.phase==='PACKING'?'2. Упаковка поставки':'1. Отбор товара';
   async function command(action:string,extra:Partial<FboAction>={}) {
-    if(inFlight.current || !canWrite) return;
+    if(inFlight.current || (!canWrite||adjusting)) return;
     const dto=pending??{action,operationId:crypto.randomUUID(),palletCode:pallet,direction:direction||undefined,...extra};inFlight.current=true;setBusy(true);setError('');setPending(dto);
     try {localStorage.setItem(storageKey,JSON.stringify(dto));const next=await actFbo(accessToken,plan.requestId,dto);setPlan(next);localStorage.removeItem(storageKey);setPending(null);setBarcode('');setCode('');
       if(!next.route.some(r=>r.boxCode===source))setSource('');
@@ -63,9 +65,10 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     <h2>FBO {plan.marketplace==='OZON'?'Ozon':'WB'} {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
     <div className="online-execution-modal__actions"><button type="button" className="icon-button" aria-label="Закрыть" title="Закрыть" disabled={busy&&!refreshing} onClick={onClose}>×</button></div>
     </header>
+    {plan.marketplace==='OZON'&&canWrite&&<OzonStockAdjustment requestId={plan.requestId} accessToken={accessToken} disabled={busy||!!pending} onLockChange={setAdjusting} onChanged={()=>void refresh()}/>}
     <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>
     {!!plan.directions?.length&&<section aria-label="Направления сборки"><h3>Единая сборка · направления</h3>{plan.directions.map(d=><details key={d.name}><summary>{d.name}: упаковано {d.packed} из {d.needed}</summary><ul>{d.items.map(i=><li key={i.skuId}>{plan.lines.find(l=>l.skuId===i.skuId)?.name} · {i.barcode}: {i.packed} из {i.quantity}</li>)}</ul></details>)}
-    {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
+    {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||adjusting||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     {/* FIX: accepted stock must not be presented as physically missing. */}
@@ -73,23 +76,23 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     <h3>{plan.phase==='COMPLETED'?'Поставка проверена':title}</h3>
     {error&&<p role="alert">{error}</p>}
     {pending&&!busy&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void command(pending.action)}>Повторить неподтверждённый запрос</button>}
-    {plan.phase==='NOT_STARTED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('START')}>Начать отбор</button>}
-    {canWrite&&['PICKING','PACKING','CONTROL'].includes(plan.phase)&&<details onToggle={e=>setScanMode(e.currentTarget.open)}><summary>Сканирование в ВМС</summary><form onSubmit={scan} style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap',margin:'20px 0'}}><label style={{display:'grid',gap:8,flex:'1 1 240px'}}>{hint}<input ref={field} value={code} onChange={e=>setCode(e.target.value)} disabled={busy||!!pending} style={{minHeight:44,padding:10,border:'1px solid var(--line)',borderRadius:6}}/></label><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending}>Подтвердить скан</button></form></details>}
+    {plan.phase==='NOT_STARTED'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('START')}>Начать отбор</button>}
+    {canWrite&&['PICKING','PACKING','CONTROL'].includes(plan.phase)&&<details onToggle={e=>setScanMode(e.currentTarget.open)}><summary>Сканирование в ВМС</summary><form onSubmit={scan} style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap',margin:'20px 0'}}><label style={{display:'grid',gap:8,flex:'1 1 240px'}}>{hint}<input ref={field} value={code} onChange={e=>setCode(e.target.value)} disabled={busy||adjusting||!!pending} style={{minHeight:44,padding:10,border:'1px solid var(--line)',borderRadius:6}}/></label><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending}>Подтвердить скан</button></form></details>}
     {sourceTask&&plan.phase==='PICKING'&&<div><p>{sourceTask.boxCode} · {sourceTask.pallet} · {sourceTask.zone}</p>{sourceTask.tasks.map(t=><p key={t.skuId}>Отберите {t.quantity} ед. · {assemblyProductLabel(t, `${t.name} · ${t.barcode}`)}</p>)}
       {sourceTask.recount&&<p role="alert">Количество и КИЗ расходятся. Требуется актуализация короба.</p>}
-      {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
-      <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setSource('');setBarcode('');}}>Другой исходный короб</button></div>}
-    {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.picked!==plan.needed||!canWrite} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>
-      {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
+      {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
+      <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending} onClick={()=>{setSource('');setBarcode('');}}>Другой исходный короб</button></div>}
+    {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.picked!==plan.needed||(!canWrite||adjusting)} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>
+      {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
       {!pallet&&<ul>{[...new Set(plan.route.map(r=>r.pallet).filter(Boolean))].map(p=><li key={p}>{p} · Нужных коробов: {plan.route.filter(r=>r.pallet===p).length}</li>)}</ul>}
       <div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Паллет / зона</th><th>Нужный короб</th><th>Отобрать</th></tr></thead><tbody>{plan.route.filter(r=>r.pallet===pallet).map(r=><tr key={r.boxCode}><td>{r.pallet||'Без паллета'} · {r.zone}</td><td>{r.boxCode}</td><td>{r.tasks.map(t=>`${assemblyProductLabel(t, t.name)}: ${t.quantity}`).join('; ')}</td></tr>)}</tbody></table></div></>}
     {plan.phase==='PACKING'&&<><p>{target?`Открыт короб ${target}`:'Отсканируйте короб для упаковки'} · Осталось вложить {plan.needed-plan.packed}</p>
-      {!!target&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('CLOSE_BOX',{targetBoxCode:target})}>Закрыть короб</button>}
-      {!!target&&plan.boxes.some(b=>b.code===target&&!b.quantity&&!b.closed)&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||!canWrite} onClick={()=>void command('CANCEL_EMPTY_BOX',{targetBoxCode:target})}>Отложить пустой короб</button>}
+      {!!target&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('CLOSE_BOX',{targetBoxCode:target})}>Закрыть короб</button>}
+      {!!target&&plan.boxes.some(b=>b.code===target&&!b.quantity&&!b.closed)&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('CANCEL_EMPTY_BOX',{targetBoxCode:target})}>Отложить пустой короб</button>}
       {plan.wholeBoxes.length>0&&<p>Целые короба к добавлению: {plan.wholeBoxes.join(', ')}</p>}
-      <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.packed!==plan.needed||plan.boxes.some(b=>!b.closed)||!canWrite} onClick={()=>void command('SORTED')}>Короба разобраны</button></>}
+      <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.packed!==plan.needed||plan.boxes.some(b=>!b.closed)||(!canWrite||adjusting)} onClick={()=>void command('SORTED')}>Короба разобраны</button></>}
     {['PACKING','CONTROL','COMPLETED'].includes(plan.phase)&&<ul>{plan.boxes.map(b=><li key={b.code}>{b.code} {b.direction ? `· ${b.direction}` : ''} · {b.quantity} ед. · {b.confirmed?'Подтверждён':b.closed?'Закрыт':'Открыт'}</li>)}</ul>}
-    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||!!pending||plan.boxes.some(b=>!b.confirmed)||!canWrite} onClick={()=>void command('FINISH')}>{plan.marketplace==='OZON'?'Завершить проверку направлений':'Завершить проверку и сформировать файл WB'}</button></>}
+    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.boxes.some(b=>!b.confirmed)||(!canWrite||adjusting)} onClick={()=>void command('FINISH')}>{plan.marketplace==='OZON'?'Завершить проверку направлений':'Завершить проверку и сформировать файл WB'}</button></>}
     {plan.phase==='COMPLETED'&&plan.marketplace!=='OZON'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
     <p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy} onClick={()=>void refresh()}>Обновить</button> <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy&&!refreshing} onClick={onClose}>Закрыть</button></p>
   </section></div>;
