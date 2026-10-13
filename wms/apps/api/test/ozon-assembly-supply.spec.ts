@@ -31,3 +31,28 @@ describe('Ozon assembly delivery',()=>{
   await expect(s.svc.upload('r',true,s.user)).rejects.toThrow('заполнения');expect(s.call).not.toHaveBeenCalled();
  });
 });
+
+// TEST: explicit throttling is recoverable; ambiguous writes are not.
+describe('Ozon cargo throttling',()=>{
+ afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();vi.unstubAllEnvs();});
+ it('retries an explicitly rejected cargo creation after a delay',async()=>{
+  vi.useFakeTimers();const fetcher=vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({message:'limit'}),{status:429})).mockResolvedValueOnce(new Response(JSON.stringify({operation_id:'op'})));
+  vi.stubGlobal('fetch',fetcher);const svc=new OzonAssemblySupplyService({} as any,{} as any);
+  const result=svc.call({sellerId:'s',apiKey:'k'},'/v1/cargoes/create',{},false);
+  const check=expect(result).resolves.toEqual({operation_id:'op'});await vi.runAllTimersAsync();await check;expect(fetcher).toHaveBeenCalledTimes(2);
+ });
+ it('does not retry cargo network failures',async()=>{
+  const fetcher=vi.fn().mockRejectedValue(Error('timeout'));vi.stubGlobal('fetch',fetcher);
+  await expect(new OzonAssemblySupplyService({} as any,{} as any).call({},'/v1/cargoes/create',{},false)).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(1);
+ });
+ it('unblocks legacy 429 only after confirmed empty remote cargoes',async()=>{
+  const x=setup();x.shipment.integration.operations['42']={state:'UNKNOWN',error:'Ozon: HTTP 429. limit'};
+  await x.svc.status('r',x.user);expect(x.shipment.integration.operations['42']).toBeUndefined();expect(x.db.auditLog.create).toHaveBeenCalled();
+ });
+ it.each(['timeout','Ozon: HTTP 500. failure'])('preserves ambiguous rejection %s',async(error)=>{
+  const x=setup();x.shipment.integration.operations['42']={state:'UNKNOWN',error};await x.svc.status('r',x.user);expect(x.shipment.integration.operations['42'].state).toBe('UNKNOWN');expect(x.call).not.toHaveBeenCalled();
+ });
+ it('does not unblock 429 when remote cargoes exist',async()=>{
+  const x=setup();x.shipment.integration.operations['42']={state:'UNKNOWN',error:'Ozon: HTTP 429. limit'};x.call.mockResolvedValue({supplies_cargoes:[{supply_id:42,cargoes_without_transport_cargoes:[{cargo_id:1}]}]});await x.svc.status('r',x.user);expect(x.shipment.integration.operations['42'].state).toBe('UNKNOWN');
+ });
+});
