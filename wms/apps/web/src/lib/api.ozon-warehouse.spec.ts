@@ -1,6 +1,12 @@
 import {afterEach,it,expect,vi} from 'vitest';
 import {fetchOzonCustomerWarehouses,fetchOzonCustomerRequests,previewOzonCustomerFile,createOzonCustomerFile} from './api';
 afterEach(()=>vi.unstubAllGlobals());
+// TEST: tabs request separate server-filtered lists.
+it('requests active by default and completed explicitly',async()=>{
+ const f=vi.fn().mockResolvedValue({ok:true,json:async()=>[]});vi.stubGlobal('fetch',f);
+ await fetchOzonCustomerRequests('t','c','w');await fetchOzonCustomerRequests('t','c','w','completed');
+ expect(f.mock.calls[0][0]).toContain('&view=active');expect(f.mock.calls[1][0]).toContain('&view=completed');
+});
 // TEST: the actual transports keep the same selected branch through all steps.
 it('sends the client and warehouse to list, preview and commit',async()=>{
  const fetcher=vi.fn().mockResolvedValue({ok:true,json:async()=>[]});vi.stubGlobal('fetch',fetcher);

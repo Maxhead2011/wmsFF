@@ -16,7 +16,7 @@ export class OzonFboImportController {
   @Get('capability') capability() { return { enabled: process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' }; }
   // FIX: client-specific choices are authorized by the same service as preview/commit.
   @Get('warehouses') warehouses(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.service.warehouses(clientId,user); }
-  @Get('requests') list(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser, @Query('warehouseId') warehouseId?: string) { return this.service.list(clientId,user,warehouseId); }
+  @Get('requests') list(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser, @Query('warehouseId') warehouseId?: string, @Query('view') view?: string) { return this.service.list(clientId,user,warehouseId,view); }
   @Post('preview') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
   preview(@UploadedFile() file: Express.Multer.File, @Body() dto: OzonFboImportDto, @CurrentUser() user: AuthUser) { return this.service.preview(file, dto, user); }
   @Post('commit') @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))

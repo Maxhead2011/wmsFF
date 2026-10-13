@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ClientRequestStatus } from '@prisma/client';
 import {unboxedFboEnabled} from '../tsd/fbo-unboxed-picking';
 import { createHash } from 'node:crypto';
 import * as XLSX from 'xlsx';
@@ -38,12 +39,16 @@ export class OzonFboImportService {
     throw new BadRequestException(choices.length ? 'Выберите филиал.' : 'У клиента нет активного филиала.');
   }
   // FIX: the Ozon screen lists the same assemblies it creates, within client and branch scope.
-  async list(clientId: string, user: AuthUser, selectedWarehouseId?: string) {
+  async list(clientId: string, user: AuthUser, selectedWarehouseId?: string, view: string = 'active') {
     if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
     if (!clientId?.trim()) throw new BadRequestException('Выберите клиента.');
     this.scopes.requireClientAccess(user, clientId, 'read');
     const warehouseId = await this.resolveWarehouse(clientId, user, 'read', selectedWarehouseId);
-    const rows = await this.db.clientRequest.findMany({where:{clientId,warehouseId,ozonShipment:{isNot:null}},
+    // FIX: filter before take; completed packing alone does not mean handover.
+    if (view !== 'active' && view !== 'completed') throw new BadRequestException('Неизвестный список сборок.');
+    const closed = [ClientRequestStatus.DONE, ClientRequestStatus.CANCELLED, ClientRequestStatus.REJECTED];
+    const rows = await this.db.clientRequest.findMany({where:{clientId,warehouseId,ozonShipment:{isNot:null},
+      status: view === 'completed' ? {in:closed} : {notIn:closed}},
       orderBy:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
         items:{select:{quantity:true}},ozonShipment:{select:{directions:true}},fboAssembly:{select:{phase:true}}}});
     return rows.map(r=>({id:r.id,number:r.number,title:r.title,status:r.status,desiredDate:r.desiredDate,destinationCity:r.destinationCity,
