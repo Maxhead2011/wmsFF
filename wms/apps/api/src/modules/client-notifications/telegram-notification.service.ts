@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { AuditLogService } from '../../common/audit/audit-log.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -14,6 +14,7 @@ export type TelegramClientSettings = {
   clientId: string;
   enabled: boolean;
   chatId: string;
+  messageThreadId?: number | null;
   sections: TelegramNotificationSection[];
 };
 
@@ -103,13 +104,20 @@ export class TelegramNotificationService {
       clientId,
       enabled: payload?.enabled === true,
       chatId: typeof payload?.chatId === 'string' ? payload.chatId : '',
+      messageThreadId: telegramTopicId(payload?.messageThreadId),
       sections: normalizeSections(payload?.sections),
     };
   }
 
   async updateClientSettings(clientId: string, payload: Omit<TelegramClientSettings, 'clientId'>, user: AuthUser) {
+    // FIX: preserve a configured topic when older settings forms save this group.
+    const current = payload.messageThreadId === undefined ? await this.getClientSettings(clientId) : null;
+    const messageThreadId = payload.messageThreadId === undefined
+      ? (current?.chatId === payload.chatId.trim() ? current.messageThreadId : null)
+      : telegramTopicId(payload.messageThreadId);
     const settings = {
       clientId,
+      messageThreadId,
       enabled: payload.enabled === true,
       chatId: payload.chatId.trim(),
       sections: normalizeSections(payload.sections),
@@ -135,7 +143,7 @@ export class TelegramNotificationService {
       return { sent: false, reason: 'Раздел отключен в настройках Telegram клиента.' };
     }
 
-    return this.sendMessage(global.botToken, client.chatId, text);
+    return this.sendMessage(global.botToken, client.chatId, text, client.messageThreadId);
   }
 
   async notifyFulfillment(text: string, section: TelegramNotificationSection = inferNotificationSection(text)) {
@@ -160,7 +168,7 @@ export class TelegramNotificationService {
     if (!global.enabled || !global.botToken || !client.enabled || !client.chatId) {
       return { sent: false, reason: 'Telegram выключен или группа клиента не заполнена.' };
     }
-    return this.sendMessage(global.botToken, client.chatId, 'LOGOFF WMS: тестовое уведомление для клиента.');
+    return this.sendMessage(global.botToken, client.chatId, 'LOGOFF WMS: тестовое уведомление для клиента.', client.messageThreadId);
   }
 
   async sendTestToFulfillment() {
@@ -197,13 +205,15 @@ export class TelegramNotificationService {
     }
   }
 
-  private async sendMessage(botToken: string, chatId: string, text: string) {
+  private async sendMessage(botToken: string, chatId: string, text: string, messageThreadId?: number | null) {
     try {
       const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           chat_id: chatId,
+          // FIX: Telegram forum destinations require the topic as well as the group.
+          ...(messageThreadId ? { message_thread_id: messageThreadId } : {}),
           text,
           disable_web_page_preview: true,
         }),
@@ -303,4 +313,11 @@ function inferNotificationSection(text: string): TelegramNotificationSection {
     return 'REQUESTS';
   }
   return 'SYSTEM';
+}
+
+function telegramTopicId(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0)
+    throw new BadRequestException('ID темы Telegram должен быть положительным целым числом.');
+  return value;
 }

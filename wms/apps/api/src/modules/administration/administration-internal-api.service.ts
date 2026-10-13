@@ -130,7 +130,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'client-requests',
     name: 'Заявки клиентов',
     prefixes: ['/client-requests', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
-    routeCount: 50, // FIX: authenticated Ozon box/cargo workbook download.
+    routeCount: 54, // FIX: Ozon link import and authorized warehouse choices.
     description: 'Онлайн-заявки, документы, маршруты сборки и управление заказами FBS.',
     logic: ['Создаёт и изменяет заявки.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
     dependencies: ['Основная БД', 'Склад', 'Подключения маркетплейсов'],
@@ -303,8 +303,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'tsd',
     name: 'ТСД',
-    prefixes: ['/tsd', '/tsd/requests/:id/fbo'],
-    routeCount: 97, // FIX: include the three FBS picking-stage relabel print routes.
+    prefixes: ['/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment'],
+    routeCount: 104, // FIX: include inbound Ozon composition preview and apply.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Печатает два целевых ШК переклейки через станцию и проверяет подтверждение печати.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

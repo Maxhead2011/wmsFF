@@ -1,3 +1,6 @@
+import {OzonStockAdjustmentController} from './ozon-stock-adjustment.controller';
+import {OzonStockAdjustmentService} from './ozon-stock-adjustment.service';
+import {OzonAssemblySupplyService} from '../client-requests/ozon-assembly-supply.service';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { StockModule } from '../stock/stock.module';
@@ -23,8 +26,8 @@ import { ClientRequestMarketplaceFilesService } from '../client-requests/client-
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule, InventoryModule],
-  controllers: [TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
-  providers: [
+  controllers: [OzonStockAdjustmentController,TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
+  providers: [OzonStockAdjustmentService, OzonAssemblySupplyService,
     ReceiptBarcodeReviewService,
     FboTwoStageService,
     ClientRequestMarketplaceFilesService,

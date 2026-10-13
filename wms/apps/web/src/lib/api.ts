@@ -8781,10 +8781,14 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 
 export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
 export type OzonCustomerRequest={id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
-export function fetchOzonCustomerRequests(accessToken:string,clientId:string){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId),{accessToken});}
+export type OzonCustomerWarehouse = {id:string;name:string};
+// FIX: use the same explicit branch for the list and both multipart import steps.
+export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}
+export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string,view:'active'|'completed'='active'){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):'')+'&view='+view,{accessToken});}
+function ozonCustomerForm(payload:OutboundRequestXlsxPayload & {warehouseId?:string}){const form=outboundRequestXlsxForm(payload);appendOptional(form,'warehouseId',payload.warehouseId);return form;}
 export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
-export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',outboundRequestXlsxForm(payload),accessToken);}
-export function createOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload) {return requestMultipart<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/commit',outboundRequestXlsxForm(payload),accessToken);}
+export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload & {warehouseId?:string}) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',ozonCustomerForm(payload),accessToken);}
+export function createOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload & {warehouseId?:string}) {return requestMultipart<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/commit',ozonCustomerForm(payload),accessToken);}
 
 export async function commitOutboundRequestXlsx(accessToken: string, payload: OutboundRequestXlsxPayload) {
   return requestMultipart<CommitOutboundRequestXlsxResult>(
@@ -11138,6 +11142,7 @@ export type FboPlan = {
   marketplace?:string;
   directions?:Array<{name:string;needed:number;packed:number;items:Array<{skuId:string;barcode:string;quantity:number;packed:number}>}>;
   pendingPlacementQuantity?:number;
+  pendingLocations?:Array<{skuId:string;boxCode:string;pallet:string;zone:string;quantity:number}>;
   number?:number; observedAt?:string;
   pickedUnits?:Array<{id:string;requestItemId:string;barcode:string;kiz:string|null;sourceBoxCode:string;targetBoxCode:string|null;wholeBox:boolean;state:string;pickedAt:string;packedAt:string|null;pickedBy:string|null;packedBy:string|null}>;
   requestId:string; title:string; phase:string; needed:number; picked:number; packed:number; looseRemaining:number; shortage:number;
@@ -12547,3 +12552,18 @@ export const fetchManualFbsCapabilities=(accessToken:string)=>request<{enabled:b
 export const fetchManualFbsOptions=(accessToken:string,clientId:string)=>request<import('./fbs-manual-assembly').ManualFbsOptions>(withQuery('/service/fbs-manual-assembly/options',{clientId}),{accessToken});
 export const previewManualFbsAssembly=(accessToken:string,body:import('./fbs-manual-assembly').ManualFbsInput)=>request<import('./fbs-manual-assembly').ManualFbsPreview>('/service/fbs-manual-assembly/preview',{accessToken,method:'POST',body});
 export const createManualFbsAssembly=(accessToken:string,token:string,choices:import('./fbs-manual-assembly').ManualFbsChoice[])=>request<import('./fbs-manual-assembly').ManualFbsResult>('/service/fbs-manual-assembly/create',{accessToken,method:'POST',body:{token,choices}});
+
+// FIX: existing Ozon supply links are read before explicit WMS creation.
+export type OzonLinkInput={clientId:string;connectionId:string;links:string;previewHash?:string};
+export type OzonLinkPreview=OzonCustomerPreview & {previewHash:string;place:string;date:string;orders:Array<{orderId:string;orderNumber:string;state:string}>;existingRequest:{id:string;number:number}|null};
+export const fetchOzonLinkConnections=(accessToken:string,clientId:string)=>request<Array<{id:string;accountName:string|null;sellerId:string}>>('/ozon-fbo-import/link-connections?clientId='+encodeURIComponent(clientId),{accessToken});
+export const previewOzonLinks=(accessToken:string,body:OzonLinkInput)=>request<OzonLinkPreview>('/ozon-fbo-import/links/preview',{accessToken,method:'POST',body});
+export const createOzonLinks=(accessToken:string,body:OzonLinkInput)=>request<{request:{id:string;number:number};existing:boolean}>('/ozon-fbo-import/links/commit',{accessToken,method:'POST',body});
+
+// FIX: preview is read-only; start explicitly confirms changes in both systems.
+export type OzonAdjustmentRow={direction:string;skuId:string;barcode:string;before:number;packed:number;after:number};
+export type OzonSyncPreview={token:string;rows:Array<OzonAdjustmentRow&{name?:string}>;needed:number;after:number};
+export const ozonSync=(accessToken:string,id:string,action:'sync-preview'|'sync-apply',body:unknown={})=>request<OzonSyncPreview>(`/tsd/requests/${encodeURIComponent(id)}/fbo/ozon-adjustment/${action}`,{accessToken,method:'POST',body});
+export type OzonAdjustmentPreview={token:string;rows:OzonAdjustmentRow[];lines:FboPlan['lines'];needed:number;after:number};
+export type OzonAdjustmentState={operation:null|{id:string;state:string;rows:OzonAdjustmentRow[];operations:Array<{supplyId:string;state:string;error?:string}>}};
+export const ozonAdjustment=(accessToken:string,id:string,action:''|'preview'|'start'|'resume'|'cancel',body:unknown={})=>request<OzonAdjustmentPreview&OzonAdjustmentState>(`/tsd/requests/${encodeURIComponent(id)}/fbo/ozon-adjustment${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});

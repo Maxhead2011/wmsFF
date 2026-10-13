@@ -3,7 +3,7 @@ import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
 import {assertWarehouseAccess} from './client-request-warehouse-scope';
-import {bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
+import {assertNoOzonAdjustment,bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
 import {cargoMappingWorkbook} from './ozon-cargo-export';
 
@@ -21,6 +21,7 @@ export class OzonAssemblySupplyService {
   if(!s)throw new NotFoundException('Сборка Ozon не найдена.');
   this.scopes.requireClientAccess(user,s.request.clientId,mode);assertWarehouseAccess(user,s.request,mode);
   if(!user.activeWarehouseId||s.request.warehouseId!==user.activeWarehouseId)throw new NotFoundException('Выберите филиал сборки.');
+  if(mode==='write')assertNoOzonAdjustment(s.integration);
   return s;
  }
  private async connection(id:string,clientId:string){
@@ -35,7 +36,7 @@ export class OzonAssemblySupplyService {
    const p=await r.json().catch(()=>({}));if(!r.ok)throw new BadGatewayException(`Ozon: HTTP ${r.status}. ${String(p.message??'Ошибка запроса').slice(0,300)}`);return p;
   }
  }
- private async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
+ async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
   if(!/^\d+$/.test(orderId)||!Number.isSafeInteger(Number(orderId)))throw new BadRequestException('Укажите числовой ID заявки Ozon из адреса кабинета.');
   const data=await this.call(c,'/v3/supply-order/get',{order_ids:[Number(orderId)]});
   const o=data.orders?.find((o:any)=>String(o.order_id)===orderId);if(!o?.supplies?.length)throw new NotFoundException('Поставка не найдена в выбранном кабинете Ozon.');
@@ -51,12 +52,12 @@ export class OzonAssemblySupplyService {
     if(!b.has_next)break;if(!b.last_id||seen.has(b.last_id))throw new BadGatewayException('Ошибка пагинации состава Ozon.');last=b.last_id;seen.add(last);
    }
    const cluster=clusters.clusters?.find((v:any)=>String(v.macrolocal_cluster_id??v.id)===String(s.macrolocal_cluster_id));
-   supplies.push({id:String(s.supply_id),name:cluster?.name??s.storage_warehouse?.name??String(s.macrolocal_cluster_id),items:items.map(i=>({barcode:String(i.barcode??''),offerId:String(i.offer_id??''),quantity:Number(i.quantity),quant:Number(i.quant)||1}))});
+   supplies.push({id:String(s.supply_id),name:cluster?.name??s.storage_warehouse?.name??String(s.macrolocal_cluster_id),items:items.map(i=>({barcode:String(i.barcode??''),offerId:String(i.offer_id??''),quantity:Number(i.quantity),quant:Number(i.quant)||1,...(i.sku?{sku:String(i.sku)}:{})}))});
   }
   return {connectionId:c.id,orderId,orderNumber:String(o.order_number??orderId),place:o.drop_off_warehouse?.name??'',date:o.timeslot?.timeslot?.from??'',state:o.state,supplies,mapping:{},operations:{},checkedAt:new Date().toISOString()};
  }
  private async locked(id:string,user:AuthUser,fn:(s:any,tx:any)=>Promise<any>){
-  return this.db.$transaction(async tx=>{await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;const s=await this.load(id,user,'write',tx);return fn(s,tx);});
+  return this.db.$transaction(async tx=>{await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;const s=await this.load(id,user,'write',tx);assertNoOzonAdjustment(s.integration);return fn(s,tx);});
  }
  private async save(tx:any,id:string,link:SupplyIntegration,user:AuthUser,action:string){
   await tx.ozonFboShipment.update({where:{requestId:id},data:{integration:link}});

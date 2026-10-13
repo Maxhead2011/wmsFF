@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 227 // FIX: last-unit undo and immediate destination checks, LOGOFF only.
-            versionName = "0.1.227-packing-undo"
+            versionCode = 230 // FIX: saved product packing must not block reopened picking, LOGOFF only.
+            versionName = "0.1.230-ozon-picking"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

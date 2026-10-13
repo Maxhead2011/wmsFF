@@ -1,4 +1,6 @@
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
+import { fboBarcodeAliases, fboBarcodeMatches } from './fbo-barcode-aliases';
+import {unboxedFboEnabled,unboxedFree,pickUnboxed} from './fbo-unboxed-picking';
 import { rememberPackedUnit, packedUnitForUndo } from './fbo-packing-undo';
 import { assertSupplyMutable } from '../client-requests/ozon-supply-policy';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
@@ -74,7 +76,7 @@ export class FboTwoStageService {
         }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
     }
     private requireFbo(r: Request) {
-        if (r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || r.client.storesWithoutBoxes)
+        if (r.type !== 'OUTBOUND' || r._count.fbsOrderLinks || (r.client.storesWithoutBoxes && !unboxedFboEnabled()))
             throw new BadRequestException('Этот режим предназначен для ФБО с учётом по коробам.');
         if (!r.warehouseId)
             throw new BadRequestException('Укажите филиал заявки.');
@@ -82,6 +84,11 @@ export class FboTwoStageService {
             throw new BadRequestException('У каждой строки ФБО должны быть товар, ШК и положительное количество.');
         if (r.pickWaveRequests.some(w => ['PENDING', 'SUBMITTED'].includes(w.wave.balanceReviewStatus)))
             throw new ConflictException('Сначала завершите проверку балансов волны.');
+    }
+    // FIX: adjustment uses the same scoped route and inventory calculation inside its transaction.
+    async adjustmentContext(tx: Prisma.TransactionClient, id: string, user: AuthUser) {
+        const request=await this.load(tx,id,user,'write');this.requireFbo(request);
+        return {request,plan:await this.snapshot(tx,request)};
     }
     private async snapshot(tx: Prisma.TransactionClient, r: Request) {
         const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
@@ -91,6 +98,7 @@ export class FboTwoStageService {
         const actors = await tx.user.findMany({ where: { id: { in: [...new Set(units.flatMap(u => [u.pickedByUserId, u.packedByUserId]).filter((id): id is string => !!id))] } }, select: { id: true, name: true } });
         const actorNames = new Map(actors.map(a => [a.id, a.name]));
         const lines = remainingFboLines(r.items, units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
+            barcodes: fboBarcodeAliases(i, r.items), // FIX: expose receipt aliases without changing the request barcode.
             name: i.name || i.sku!.name, article: i.sku!.article, size: i.sku!.size, requiresKiz: (i.sku!.needsChestnyZnak && !i.sku!.isUnmarked) || units.some(u => u.skuId === i.skuId && !!u.markId),
             needed: i.needed, picked: i.picked, packed: i.packed, remaining: i.remaining }));
         const demand: Record<string, number> = {};
@@ -100,7 +108,8 @@ export class FboTwoStageService {
         const indexedStock = process.env.WMS_RECEIPT_STOCK_INDEX_ENABLED === 'true';
         const remainingSkuIds = Object.keys(demand).filter(k => demand[k] > 0);
         const needsRoute = (!assembly?.phase || assembly.phase === 'PICKING') && remainingSkuIds.length > 0;
-        const boxes = (indexedStock ? !needsRoute : assembly?.phase && assembly.phase !== 'PICKING') ? [] : await tx.box.findMany({
+        const unboxed=r.client.storesWithoutBoxes && unboxedFboEnabled();
+        const boxes = unboxed || (indexedStock ? !needsRoute : assembly?.phase && assembly.phase !== 'PICKING') ? [] : await tx.box.findMany({
             where: { clientId: r.clientId, warehouseId: r.warehouseId, status: 'active', balances: { some: {
                         skuId: { in: Object.keys(demand).filter(k => demand[k] > 0) }, status: 'AVAILABLE', quantity: { gt: 0 }
                     } } },
@@ -110,7 +119,7 @@ export class FboTwoStageService {
         const route = [];
         // FIX: PALLET_SORT stock is physically accepted but cannot be picked before placement.
         const requiresPlacement = wbOrderStockLifecycleEnabled() && r.client.stockBalanceMode === 'PALLET_SORT';
-        const availability = indexedStock && !needsRoute ? { free: () => 0, take: () => {} }
+        const availability = unboxed || indexedStock && !needsRoute ? { free: () => 0, take: () => {} }
             : await loadFboFbsAvailability(tx, r, indexedStock ? remainingSkuIds : Object.keys(demand));
         const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
         // FIX: historical stock may have real marks even when the SKU flag was never filled.
@@ -151,7 +160,15 @@ export class FboTwoStageService {
             route.push({ boxCode: box.code, pallet: box.storagePlacement?.pallet.code ?? box.pallet?.code ?? '',
                 zone: box.storagePlacement?.pallet.zone?.name ?? box.zone?.name ?? '', tasks, wholeBox: decision.allowed, recount: decision.recount });
         }
+        // FIX: no source location is required for loose storage; quotas still protect other orders.
+        if(unboxed && needsRoute){
+            const free=await unboxedFree(tx,r,remainingSkuIds);
+            for(const sku of remainingSkuIds)demand[sku]=Math.max(0,demand[sku]-(free.get(sku)??0));
+            const marked=await tx.productMark.findMany({where:{clientId:r.clientId,skuId:{in:remainingSkuIds},boxId:null,status:'AVAILABLE',stockMovement:{warehouseId:r.warehouseId}},select:{skuId:true}});
+            for(const l of lines)if(marked.some(m=>m.skuId===l.skuId))l.requiresKiz=true;
+        }
         const waitingBySku = new Map<string, number>();
+        const pendingLocations: Array<{skuId:string;boxCode:string;pallet:string;zone:string;quantity:number}> = [];
         if (requiresPlacement) for (const box of boxes) {
             if (box.storagePlacement || busyBoxes.has(box.id)) continue;
             for (const balance of box.balances) {
@@ -161,12 +178,14 @@ export class FboTwoStageService {
                 availability.take(box.id, balance.skuId, quantity);
                 demand[balance.skuId] -= quantity;
                 waitingBySku.set(balance.skuId, (waitingBySku.get(balance.skuId) ?? 0) + quantity);
+                pendingLocations.push({skuId:balance.skuId,boxCode:box.code,pallet:box.pallet?.code??'',zone:box.zone?.name??'',quantity});
             }
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: shipment ? 'OZON' : 'WILDBERRIES',
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
+            unboxedPickingSupported: unboxed,
             packingByProductSupported: !!shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
             packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
             packingSuggestions: shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
@@ -175,7 +194,7 @@ export class FboTwoStageService {
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             lines: lines.map(l => { const pending = Math.min(l.remaining, waitingBySku.get(l.skuId) ?? 0); waitingBySku.set(l.skuId, (waitingBySku.get(l.skuId) ?? 0) - pending); return { ...l, pendingPlacementQuantity: pending }; }),
-            route, pendingPlacementQuantity,
+            route, pendingPlacementQuantity, pendingLocations,
             observedAt: new Date().toISOString(),
             pickedUnits: units.filter(u => u.state !== 'RETURNED').map(u => ({ id: u.id, requestItemId: u.requestItemId, barcode: u.barcode,
                 kiz: u.kiz, sourceBoxCode: u.sourceBoxCode, targetBoxCode: u.targetBoxCode, wholeBox: u.wholeBox, state: u.state,
@@ -240,7 +259,11 @@ export class FboTwoStageService {
                 if (directions && a!.phase === 'PICKING' && process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && units.length > 0) return;
                 requirePhase('PACKING');
             };
-            if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
+            if (unboxedFboEnabled() && r.client.storesWithoutBoxes && (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX')) {
+                requirePhase('PICKING');
+                await pickUnboxed(tx,r,lines,dto,key,user,this.move.bind(this),this.exactMark.bind(this));
+            }
+            else if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
                 if (directions && dto.action === 'PICK_BOX') throw new ConflictException('Для распределения по направлениям отбирайте товар поштучно.');
                 requirePhase('PICKING');
                 const source = await this.box(tx, r, dto.sourceBoxCode);
@@ -272,7 +295,7 @@ export class FboTwoStageService {
                     chosen = Array.from({ length: decision.quantity }, (_, i) => ({ skuId, mark: marked ? marks[i] : null }));
                 }
                 else {
-                    const line = lines.find(l => l.remaining > 0 && (l.barcode === dto.barcode || l.sku!.barcodes.some(b => b.value === dto.barcode)));
+                    const line = lines.find(l => l.remaining > 0 && fboBarcodeMatches(l.skuId!, dto.barcode, r.items));
                     if (!line)
                         throw new BadRequestException('Этот товар не требуется или уже полностью отобран.');
                     const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
@@ -347,7 +370,8 @@ export class FboTwoStageService {
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
-                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && u.barcode === dto.barcode && (mark ? u.markId === mark.id : !u.markId));
+                // FIX: packing accepts the same registered SKU aliases as picking; KIZ/state checks remain mandatory.
+                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && fboBarcodeMatches(u.skuId, dto.barcode, r.items) && (mark ? u.markId === mark.id : !u.markId));
                 if (!unit)
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);
@@ -494,8 +518,8 @@ export class FboTwoStageService {
             throw new ConflictException('КИЗ отсутствует или имеет несколько записей. Нужна актуализация.');
         return matches[0];
     }
-    private async move(tx: Prisma.TransactionClient, r: Request, skuId: string, from: string, to: string, sourceStatus: StockStatus, targetStatus: StockStatus, quantity: number, key: string, user: AuthUser) {
-        const rows = await tx.stockBalance.findMany({ where: { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId: from, status: sourceStatus, quantity: { gt: 0 } }, orderBy: { id: 'asc' } });
+    private async move(tx: Prisma.TransactionClient, r: Request, skuId: string, from: string|null, to: string, sourceStatus: StockStatus, targetStatus: StockStatus, quantity: number, key: string, user: AuthUser) {
+        const rows = await tx.stockBalance.findMany({ where: { clientId: r.clientId, warehouseId: r.warehouseId, skuId, boxId: from, ...(from===null?{palletId:null}:{}), status: sourceStatus, quantity: { gt: 0 } }, orderBy: { id: 'asc' } });
         let left = quantity;
         for (const b of rows) {
             const take = Math.min(left, b.quantity);

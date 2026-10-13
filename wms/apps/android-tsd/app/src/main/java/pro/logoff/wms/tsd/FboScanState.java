@@ -6,6 +6,22 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 // FIX: barcode and KIZ are a pair; an unanswered command keeps its original id.
 final class FboScanState {
+    // FIX: aliases are server-owned SKU identities; keep legacy flavor/server behavior.
+    static boolean matches(TsdFboPlan plan,TsdFboPlan.Line line,String value) {
+        if(value==null)return false;
+        if(!"logoff".equals(BuildConfig.FLAVOR)||line.barcodes==null)return value.equals(line.barcode);
+        if(!line.barcodes.contains(value))return false;
+        if(plan.lines!=null)for(TsdFboPlan.Line other:plan.lines)
+            if(other!=line&&(value.equals(other.barcode)||(other.barcodes!=null&&other.barcodes.contains(value)))
+                &&(line.skuId==null||!line.skuId.equals(other.skuId)))return false;
+        return true;
+    }
+    static boolean directionMatches(TsdFboPlan plan,TsdFboPlan.DirectionItem item,String value){
+        if("logoff".equals(BuildConfig.FLAVOR)&&plan.lines!=null)
+            for(TsdFboPlan.Line line:plan.lines)if(line.barcodes!=null&&matches(plan,line,value))
+                return line.skuId!=null&&line.skuId.equals(item.skuId);
+        return value.equals(item.barcode);
+    }
     // FIX: use the selected carton's destination, not the demand of the whole request.
     static String packingDirectionError(TsdFboPlan plan, String boxCode, String barcode) {
         String direction=null;
@@ -15,7 +31,7 @@ final class FboScanState {
         for(TsdFboPlan.Direction d:plan.directions)if(direction.equals(d.name)){
             if(d.items==null)return "Обновите план: состав направления не загружен.";
             boolean required=false;int remaining=0;
-            for(TsdFboPlan.DirectionItem i:d.items)if(barcode.equals(i.barcode)&&i.quantity>0){required=true;remaining+=Math.max(0,i.quantity-i.packed);}
+            for(TsdFboPlan.DirectionItem i:d.items)if(directionMatches(plan,i,barcode)&&i.quantity>0){required=true;remaining+=Math.max(0,i.quantity-i.packed);}
             if(!required)return "Товар не нужен в направлении «"+direction+"»";
             if(remaining==0)return "В направлении «"+direction+"» этот товар уже упакован полностью";
             return null;
@@ -111,10 +127,10 @@ final class FboScanState {
         if(!hasPallet)pallet="";
         if(!hasSource)source="";
         if(!hasTarget||!"PACKING".equals(phase))target="";
-        if(("PICKING".equals(phase)&&source.isEmpty())||("PACKING".equals(phase)&&target.isEmpty()&&!productMode))barcode="";
+        if(("PICKING".equals(phase)&&source.isEmpty()&&!plan.unboxedPickingSupported)||("PACKING".equals(phase)&&target.isEmpty()&&!productMode))barcode="";
         if(!barcode.isEmpty()){
             boolean needed=false;if(plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
-                if(barcode.equals(line.barcode)&&("PICKING".equals(phase)?line.remaining>0:"PACKING".equals(phase)&&line.picked>line.packed))needed=true;
+                if(matches(plan,line,barcode)&&("PICKING".equals(phase)?line.remaining>0:"PACKING".equals(phase)&&line.picked>line.packed))needed=true;
             if(!needed)barcode="";
         }
     }
