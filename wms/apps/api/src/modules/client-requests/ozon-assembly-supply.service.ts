@@ -28,11 +28,17 @@ export class OzonAssemblySupplyService {
   const c=await this.db.clientMarketplaceConnection.findFirst({where:{id,clientId,marketplace:'OZON',isActive:true}});
   if(!c?.sellerId||!c.apiKey)throw new BadRequestException('Кабинет Ozon не настроен для этого клиента.');return c;
  }
- // FIX: only read operations retry throttling; a write with an unknown result is never repeated.
+ // FIX: retry only explicit rate-limit rejection for cargo creation, never an ambiguous write.
  async call(c:any,path:string,body:any,read=true):Promise<any>{
   for(let attempt=0;attempt<3;attempt++){
    let r:Response;try{r=await fetch('https://api-seller.ozon.ru'+path,{method:'POST',headers:{'Content-Type':'application/json','Client-Id':c.sellerId,'Api-Key':c.apiKey},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});}catch{throw new BadGatewayException('Нет подтверждённого ответа Ozon. Проверьте статус; не отправляйте повторно.');}
-   if(read&&r.status===429&&attempt<2){await new Promise(r=>setTimeout(r,1500*(attempt+1)));continue;}
+   if((read||path==='/v1/cargoes/create')&&r.status===429&&attempt<2){
+    const retryAfter=r.headers.get('retry-after');
+    const requested=retryAfter?(Number.isFinite(Number(retryAfter))?Number(retryAfter)*1000:Date.parse(retryAfter)-Date.now()):0;
+    const delay=Math.max(1500*(attempt+1),Number.isFinite(requested)?requested:0);
+    // Do not retry before a long server cooldown, or hold the incoming request indefinitely.
+    if(delay<=10000){await r.body?.cancel();await new Promise(r=>setTimeout(r,delay));continue;}
+   }
    const p=await r.json().catch(()=>({}));if(!r.ok)throw new BadGatewayException(`Ozon: HTTP ${r.status}. ${String(p.message??'Ошибка запроса').slice(0,300)}`);return p;
   }
  }
@@ -133,6 +139,18 @@ export class OzonAssemblySupplyService {
  async status(id:string,user:AuthUser){
   const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration;if(!l)throw new ConflictException('Нет привязки.');const c=await this.connection(l.connectionId,s.request.clientId);
   for(const [supplyId,op] of Object.entries(l.operations)){
+   // FIX: legacy explicit 429 failures can be released only after a fresh empty-cargo read.
+   if(op.state==='UNKNOWN'&&!op.operationId&&op.error?.startsWith('Ozon: HTTP 429.')){
+    const result=await this.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supplyId)]});
+    const remote=result.supplies_cargoes?.find((v:any)=>String(v.supply_id)===supplyId);
+    if(remote&&Array.isArray(remote.transport_cargoes)&&Array.isArray(remote.cargoes_without_transport_cargoes)&&!remote.transport_cargoes.length&&!remote.cargoes_without_transport_cargoes.length){
+     await this.locked(id,user,async(cur,tx)=>{const link=cur.integration as SupplyIntegration;
+      if(bindingIdentity(link)!==bindingIdentity(l)||JSON.stringify(link.operations[supplyId])!==JSON.stringify(op))return;
+      delete link.operations[supplyId];await this.save(tx,id,link,user,'OZON_CARGO_THROTTLE_RELEASED');
+     });
+    }
+    continue;
+   }
    if(!op.operationId)continue;
    const r=await this.call(c,'/v2/cargoes/create/info',{operation_id:op.operationId});
    const state=r.status==='SUCCESS'?'SUCCESS':r.status==='FAILED'?'FAILED':'ACCEPTED';
