@@ -4,7 +4,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Users/La_pa/.cache/c
 const html=fs.readFileSync(file('index.html'),'utf8'),entry=/src="\/assets\/([^"/]+\.js)"/.exec(html)[1],script=fs.readFileSync(file('assets/'+entry),'utf8');
 const key=/\bvp="([^"]+)"/.exec(script)?.[1];assert(key);
 const browser=await chromium.launch({channel:'msedge',headless:true});try{
- for(const [id,name,style]of [['d65d6258-d4e8-4bc1-b1cf-583d1a1e4c82','Элеонора','winx'],['f89c0efe-dcd2-4dfa-9cea-e35c0c492f83','Соня','disney']]){
+ for(const [id,name,style]of [['8e175b30-8535-4881-9324-a875c9fd8c1d','Элькапоне','winx'],['f89c0efe-dcd2-4dfa-9cea-e35c0c492f83','Соня','disney']]){
  for(const fresh of [false,true]){
  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));
  const user={id,name,email:'fixture',roleCodes:['WORKER'],permissionCodes:[],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],warehouseIds:[]};

@@ -235,3 +235,6 @@ Setup-Agent → AgentLifecycle (сохранённый stationId, задача �
 
 
 PR604: personal login welcome correction published; see [details and tests](personal-login-welcome.md).
+
+
+Prepared Eleonora account correction: legacy Elya ID differed from actual login. [Details and regression](eleonora-account-welcome.md).

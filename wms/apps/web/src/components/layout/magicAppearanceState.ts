@@ -12,6 +12,6 @@ export function nextWallpaperIndex(count: number, previous = -1, random = Math.r
 }
 // FIX: verified account IDs; login and display name are different fields.
 export function welcomeStyle(user: {id: string; name: string}): MagicStyle | null {
-  if (user.id === 'd65d6258-d4e8-4bc1-b1cf-583d1a1e4c82') return 'winx';
+  if (user.id === '8e175b30-8535-4881-9324-a875c9fd8c1d') return 'winx';
   return user.id === 'f89c0efe-dcd2-4dfa-9cea-e35c0c492f83' ? 'disney' : null;
 }
