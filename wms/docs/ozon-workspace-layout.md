@@ -40,3 +40,13 @@ web graph and preserve its subsequent changes. `sourceParityVerified=false`:
 do not deploy the complete local build. Prepare and browser-test the precise
 UI delta against that fresh graph, then repeat live image checks under the release
 lock. This document does not claim runtime publication or candidate parity.
+
+## Release candidate
+
+Prepared from the fresh PR592/593 web image (APK232 retained). Runtime patch
+`scripts/ozon-workspace-layout-runtime.cjs` replaces two import entry points,
+one customer workspace and one supply panel, with one scoped CSS file.
+Single React owner preserved. `scripts/releases/ozon-layout-20261014/browser.cjs`
+verifies the actual candidate graph with the published CSS; the earlier account
+access browser suite passes at both entry points. Stage verifies an exact 34-file
+web delta and unchanged image configuration. Eight release-baseline tests pass.
