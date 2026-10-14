@@ -7,9 +7,11 @@ function lum(rgb){const c=rgb.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>{v/
 const page=await browser.newPage();
 for(const style of ['light','dark'])for(const variant of ['la_panthera']){
 await page.setContent(`<html data-ui-style="${style}" data-ui-theme="modern" data-ui-variant="${variant}"><body><div class="app-layout" data-ui-theme="modern" data-ui-variant="${variant}"><aside class="app-sidebar"><div class="app-sidebar__footer"><span>Доступно разделов</span><strong>37</strong></div></aside></div></body></html>`);
+if(process.env.WMS_TEST_CSS)await page.addStyleTag({path:process.env.WMS_TEST_CSS});else {
 await page.addStyleTag({path:path.join(root,'styles.css')});
 for(const file of fs.readdirSync(path.join(root,'components/layout')).filter(n=>n.endsWith('-theme.css')))await page.addStyleTag({path:path.join(root,'components/layout',file)});
 for(const file of ['la-panthera-light.css','la-panthera-light-tuning.css'])await page.addStyleTag({path:path.join(root,'components/layout',file)});
+}
 const colors=await page.locator('.app-sidebar__footer strong').evaluate(el=>({fg:getComputedStyle(el).color,bg:getComputedStyle(el).backgroundColor}));
 const a=lum(colors.fg),b=lum(colors.bg),ratio=(Math.max(a,b)+.05)/(Math.min(a,b)+.05);console.log(variant,colors,ratio);assert.ok(ratio>=4.5,variant+' badge contrast '+ratio);
 }
