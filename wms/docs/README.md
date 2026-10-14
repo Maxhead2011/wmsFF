@@ -1,3 +1,5 @@
+Published PR594 / 2026-10-14: approved Ozon customer workspace 65/35 layout, responsive import and supply panels, named accounts. Web433/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Source/candidate/live browser checks at five widths and three appearances, both import entry points and eight baseline tests passed. Exact 34-file web overlay; API, APK232, print agent, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-ozon-layout`, sourceParityVerified=false. [Details](ozon-workspace-layout.md).
+
 Published PR592 / 2026-10-14: LOGOFF APK232 clears restored unmarked FBO picking checkpoints after upgrade. Marked products and uncertain commands preserved. Android261 tests per flavor (783 total), release build, signature and public hashes passed. Only three APK download files changed over live October14 web; API853c97df unchanged. Baseline `2026-10-14-fbo-restore-232`, sourceParityVerified=false. Physical scanner requires APK232 installation. [Evidence](releases/fbo-restore-232.json).
 
 Published PR590 / 2026-10-14: Ozon link import uses authorized customer warehouse selection and shows client owner beside account number. Both managed Korolev clients verified read-only. API3437/web431 and both actual browser entry points passed;150/2 skipped, dedicated KIZ DB suites excluded. API/web TypeScript passed. One API module and Ozon import UI; APK231, stock, configuration and sold WMS unchanged. Baseline `2026-10-14-ozon-client-access`, sourceParityVerified=false. [Details](ozon-client-link-access.md).
@@ -111,5 +113,3 @@ Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, L
 
 
 Опубликован PR531: [постоянная станция печати](print-agent-lifecycle.md), версия 2026.10.09.1. Актуальный baseline `2026-10-09-print-agent`; сервер PR529 и APK222 сохранены.
-
-Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.

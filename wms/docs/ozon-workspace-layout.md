@@ -1,7 +1,7 @@
-# Ozon customer workspace — prepared layout, not deployed
+# Ozon customer workspace — published PR594
 
-Approved preview implemented on `fix/ozon-workspace-layout`, based on the
-PR590/591 source context. Intended PR target: `feature/wb-print-check`.
+Approved preview implemented on `fix/ozon-workspace-layout` and published through
+PR594 into `feature/wb-print-check`, preserving the newer PR592/593 release.
 
 - Customer workspace: 65/35 columns, compact request cards, separate full-width
   action rows. Below 760px of available workspace width, stack the columns.
@@ -39,7 +39,7 @@ Web is newer than the PR590 web baseline. Before publication, capture the curren
 web graph and preserve its subsequent changes. `sourceParityVerified=false`:
 do not deploy the complete local build. Prepare and browser-test the precise
 UI delta against that fresh graph, then repeat live image checks under the release
-lock. This document does not claim runtime publication or candidate parity.
+lock. Published from the verified web-only candidate; the subsequent live browser check passed.
 
 ## Release candidate
 
@@ -50,3 +50,10 @@ Single React owner preserved. `scripts/releases/ozon-layout-20261014/browser.cjs
 verifies the actual candidate graph with the published CSS; the earlier account
 access browser suite passes at both entry points. Stage verifies an exact 34-file
 web delta and unchanged image configuration. Eight release-baseline tests pass.
+
+## Published result
+
+Web `sha256:e6c0ddf66d825d7f3b92ede9246cd8c7afd71af9f4e4e76e0d2eb5411772614c`. API unchanged.
+Rollback: `logoff-web:before-ozon-layout-20261014`. Public file hashes, API health, APK232
+metadata, unchanged configuration and other container IDs verified. The live
+asset graph passed the same mocked browser workflow; no business records changed.
