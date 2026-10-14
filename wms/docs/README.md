@@ -111,3 +111,5 @@ Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, L
 
 
 Опубликован PR531: [постоянная станция печати](print-agent-lifecycle.md), версия 2026.10.09.1. Актуальный baseline `2026-10-09-print-agent`; сервер PR529 и APK222 сохранены.
+
+Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.

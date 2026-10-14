@@ -1,3 +1,4 @@
+import '../ozon-fbo/ozon-workspace.css';
 import {OzonLinkImport} from './OzonLinkImport';
 import {useEffect,useState} from 'react';
 import {fetchOzonCustomerWarehouses,type OzonCustomerWarehouse,ozonCustomerImportEnabled,previewOzonCustomerFile,createOzonCustomerFile,type AuthSession,type ClientSummary,type OzonCustomerPreview} from '../../lib/api';
@@ -25,18 +26,19 @@ export function OzonCustomerImport({session,clients,onCreated,onWarehouseChange,
     if(commit){const r=await createOzonCustomerFile(session.accessToken,payload);setMessage(`Сборка №${r.request.number} ${r.existing?'уже существует':'создана'}. Все направления внутри одной заявки.`);setPreview(null);onCreated();}
     else setPreview(await previewOzonCustomerFile(session.accessToken,payload));
   }catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
-  return <><details open={embedded||undefined} className="client-request-excel-collapse"><summary>ФБО Ozon — файл клиента по направлениям</summary>
-    <fieldset disabled={busy}>{!fixedClientId&&<label>Клиент<select value={clientId} onChange={e=>change(()=>setClient(e.target.value))}><option value="">Выберите клиента</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
+  return <div className="ozfbo-customer-import"><details open={embedded||undefined} className="client-request-excel-collapse"><summary>ФБО Ozon — файл клиента по направлениям</summary>
+    <fieldset className="ozfbo-import-fields" disabled={busy}>{!fixedClientId&&<label>Клиент<select value={clientId} onChange={e=>change(()=>setClient(e.target.value))}><option value="">Выберите клиента</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>}
     <label>Филиал<select value={warehouseId} onChange={e=>{const selected=e.target.value;change(()=>setBranches(old=>({...old,selected})));onWarehouseChange?.(clientId,selected);}}>
       <option value="">Выберите филиал</option>{branches.clientId===clientId&&branches.rows.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}
     </select></label>
-    <label>Название общей сборки<input value={title} onChange={e=>change(()=>setTitle(e.target.value))}/></label>
-    <label>Место общей отгрузки<input value={destinationCity} onChange={e=>change(()=>setDestination(e.target.value))}/></label>
     <label>Дата отгрузки<input type="date" value={desiredDate} onChange={e=>change(()=>setDate(e.target.value))}/></label>
+    <label className="ozfbo-wide-field">Название общей сборки<input value={title} onChange={e=>change(()=>setTitle(e.target.value))}/></label>
+    <label className="ozfbo-wide-field">Место общей отгрузки<input value={destinationCity} onChange={e=>change(()=>setDestination(e.target.value))}/></label>
+
     {/* FIX: download and upload belong to the same customer-file row. */}
-    <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}><label>Файл клиента<input type="file" accept=".xlsx,.xls" onChange={e=>change(()=>setFile(e.target.files?.[0]??null))}/></label><a href="/downloads/ozon-fbo-template.xlsx" download="Шаблон-ФБО-Ozon.xlsx">Скачать шаблон</a></div>
+    <div className="ozfbo-upload-row"><label>Файл клиента<input type="file" accept=".xlsx,.xls" onChange={e=>change(()=>setFile(e.target.files?.[0]??null))}/></label><a href="/downloads/ozon-fbo-template.xlsx" download="Шаблон-ФБО-Ozon.xlsx">Скачать шаблон</a></div>
     <p>Колонки: Направление / склад назначения Ozon · ШК · Поставка, шт · Артикул (необязательно). При кросс-докинге в файле указываются конечные направления, а выше — общая точка сдачи. Остальной товар остаётся на складе.</p>
     <button type="button" disabled={!file||!clientId||!warehouseId||!destinationCity.trim()} onClick={()=>void run(false)}>Проверить файл</button>
     {preview&&<><p>Одна сборка · {preview.directions.length} направлений · {preview.totalQuantity} шт.</p><ul>{preview.directions.map(d=><li key={d.name}>{d.name}: {d.items.reduce((s,i)=>s+i.quantity,0)} шт.</li>)}</ul><button type="button" onClick={()=>void run(true)}>Создать единую сборку</button></>}
-    </fieldset>{message&&<p role="status">{message}</p>}</details><OzonLinkImport key={clientId+":"+warehouseId} session={session} clientId={clientId} clientName={clients.find(c=>c.id===clientId)?.name} warehouseId={warehouseId} onCreated={onCreated}/></>;
+    </fieldset>{message&&<p role="status">{message}</p>}</details><OzonLinkImport key={clientId+":"+warehouseId} session={session} clientId={clientId} clientName={clients.find(c=>c.id===clientId)?.name} warehouseId={warehouseId} onCreated={onCreated}/></div>;
 }

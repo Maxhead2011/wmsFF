@@ -220,3 +220,5 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 ## Постоянная станция Windows
 
 Setup-Agent → AgentLifecycle (сохранённый stationId, задача пользователя) → основной агент → JobJournal → существующие FBS/generic/series API. Рендер этикеток и PrintDocument серии сохранены. [Проверки и установка](print-agent-lifecycle.md).
+
+Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.

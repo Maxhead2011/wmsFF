@@ -10,3 +10,12 @@ it('places a downloadable workbook next to upload for the customer',()=>{
  expect(html).toContain('href="/downloads/ozon-fbo-template.xlsx"');expect(html).toContain('download="Шаблон-ФБО-Ozon.xlsx"');
  expect(html).toMatch(/type="file"[^]*Скачать шаблон<\/a><\/div>/);expect(html).toContain('конечные направления');
 });
+// TEST: upload and link entry remain separate, with wide wrapping form fields.
+it('uses scoped form sections without losing file and link imports',()=>{
+ const html=renderToStaticMarkup(<OzonCustomerImport session={{accessToken:'t',user:{id:'u'}} as any} clients={[]} fixedClientId="client" embedded onCreated={()=>{}}/>);
+ expect(html).toContain('ozfbo-customer-import');
+ expect(html).toContain('ozfbo-import-fields');
+ expect(html).toContain('ozfbo-link-import');
+ expect(html).toContain('type="date"');
+ expect(html).toContain('type="file"');
+});
