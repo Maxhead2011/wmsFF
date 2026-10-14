@@ -24,7 +24,7 @@ activeWarehouseId отсутствует, что допустимо для кл�
 
 Четыре новые регрессии воспроизведены до исправления, затем прошли.
 API3437 passed /150 skipped; dedicated kiz*.integration.spec.ts исключены.
-Web429 passed /2 skipped; API/web TypeScript noEmit прошли.
+Web431 passed /2 skipped; API/web TypeScript noEmit прошли.
 На рабочих данных в read-only транзакции сравнили текущий обработчик и
 скомпилированный исправленный модуль: старый отказывает для обоих клиентов,
 новый возвращает соответствующий Ozon-кабинет и определяет ФФ Москва.
@@ -35,4 +35,13 @@ Web429 passed /2 skipped; API/web TypeScript noEmit прошли.
 Будущий выпуск — точечный runtime delta от актуального production baseline,
 сохранить остальные изменения Ozon. sourceParityVerified остаётся false.
 
-Ветка fix/ozon-client-cabinet-access; PR в feature/wb-print-check после подтверждения.
+Ветка fix/ozon-client-cabinet-access; PR в feature/wb-print-check. Публикация разрешена пользователем.
+
+Добавлены подписи владельца из выбранного клиента: имя клиента, дополнительное
+название кабинета (если есть), sellerId. Два теста подписей и браузерная проверка
+обоих runtime entry points, переключения клиентов и передачи филиала прошли.
+Веб-сборка сохраняет текущую точку входа cabinet-keys-20261014 и её экспортируемые
+возможности; ссылки старого React entry перенаправлены на текущий через
+существующий single-react-graph, чтобы не загрузить второй экземпляр React.
+Runtime API — один модуль после проверки соответствия исходной версии;
+resolveWarehouse уже существует в опубликованном JS (private действует только в TS).
