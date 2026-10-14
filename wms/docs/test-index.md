@@ -1,5 +1,3 @@
-Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.
-
 PR590: `ozon-link-import.spec.ts`, `OzonLinkImport.spec.tsx`, `api.ozon-link-warehouse.spec.ts`; actual runtime browser and read-only smoke in `scripts/releases/ozon-client-access-20261014`. API3437/web431 passed,150/2 skipped; dedicated KIZ DB suites excluded. Both managed clients, named accounts and branch isolation verified.
 
 PR588: FboTwoStageScreenTest covers unmarked manual top-up and definitive rejection in both acknowledgement protocols. 260 tests per Android flavor passed.
@@ -204,3 +202,5 @@ Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; sc
 ## Агент Windows 2026.10.09.1
 
 `apps/windows-print-agent/ack-regression.test.cjs`, `lifecycle.test.cjs`, `agent.test.cjs`, `print-series.test.cjs`: реальный PowerShell5, имитация HTTP/spooler, потеря ACK, перезапуск, mutex, сохранение ID и task settings. Запуск с AGENT_TEST_ROOT на распакованном архиве; AGENT_OLD_SOURCE воспроизводит старую ошибку. [Ограничения](print-agent-lifecycle.md).
+
+Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.

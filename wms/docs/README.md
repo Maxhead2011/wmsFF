@@ -1,5 +1,3 @@
-Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.
-
 Published PR590 / 2026-10-14: Ozon link import uses authorized customer warehouse selection and shows client owner beside account number. Both managed Korolev clients verified read-only. API3437/web431 and both actual browser entry points passed;150/2 skipped, dedicated KIZ DB suites excluded. API/web TypeScript passed. One API module and Ozon import UI; APK231, stock, configuration and sold WMS unchanged. Baseline `2026-10-14-ozon-client-access`, sourceParityVerified=false. [Details](ozon-client-link-access.md).
 
 Published PR588 / 2026-10-14: LOGOFF APK231 fixes unmarked FBO manual top-up and stale barcode after definitive picking rejection. Marked products and uncertain commands preserved. Android260 tests per flavor (780 total), release build, signature and public hashes passed. Only three APK download files changed over live October14 web; API89534e60 unchanged. Baseline `2026-10-14-fbo-unmarked-231`, sourceParityVerified=false. Physical scanner requires APK231 installation. [Evidence](releases/fbo-unmarked-231.json).
@@ -111,3 +109,5 @@ Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, L
 
 
 Опубликован PR531: [постоянная станция печати](print-agent-lifecycle.md), версия 2026.10.09.1. Актуальный baseline `2026-10-09-print-agent`; сервер PR529 и APK222 сохранены.
+
+Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.
