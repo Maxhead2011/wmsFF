@@ -53,3 +53,10 @@
  :root[data-ui-variant='la_panthera'] .workspace-shell:has(.ui-style-switcher) { grid-template-rows:auto minmax(0,1fr); }
 }
 @media screen { :root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='light'] .header-notification-center > button > svg { color:#966814 !important; fill:rgb(244 215 142 / 20%); } }
+/* FIX: keep the section count readable when Light overrides generic strong text. */
+@media screen {
+ :root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='light'] .app-sidebar__footer > strong {
+  background: #30363e;
+  color: #ffffff;
+ }
+}
