@@ -57,3 +57,11 @@ Web `sha256:e6c0ddf66d825d7f3b92ede9246cd8c7afd71af9f4e4e76e0d2eb5411772614c`. A
 Rollback: `logoff-web:before-ozon-layout-20261014`. Public file hashes, API health, APK232
 metadata, unchanged configuration and other container IDs verified. The live
 asset graph passed the same mocked browser workflow; no business records changed.
+
+## PR596 compact follow-up
+
+Removed the 585px nested scroll cap: every assembly now participates in document
+scrolling. Reduced only customer form/card gaps; matching native file-selector
+and template buttons preserve keyboard and download behavior. Five-row browser
+regression fails before and passes after, including the live CSS graph. Only
+index.html and assets/ozon-workspace-compact-20261014.css changed at runtime.

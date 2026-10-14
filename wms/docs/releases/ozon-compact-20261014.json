@@ -1,0 +1,51 @@
+{
+  "published": true,
+  "at": 1791983886.3050144,
+  "pr": 596,
+  "api": "sha256:853c97dfaa475a33eedcb14c1d1c746dbbbb06602707f361983fef060e6b6838",
+  "web": "sha256:c25dc3c2dd206c75b4b565e804f95312b90ba086260ff1cd91f4d32556981e98",
+  "webBase": "sha256:e6c0ddf66d825d7f3b92ede9246cd8c7afd71af9f4e4e76e0d2eb5411772614c",
+  "apk": {
+    "versionCode": 232,
+    "versionName": "0.1.232-fbo-restore",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-restore-232.apk",
+    "sha256": "788a56c65d2f06072d2c93989483ae0149375bb2a00fc1c9c8b7264cc76cf348",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:36:28.053276+00:00",
+    "releaseNotes": "FBO: clear stale unmarked picking checkpoints after update; preserve pending commands."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "rollback": "logoff-web:before-ozon-compact-20261014",
+  "changedWebFiles": [
+    "index.html",
+    "assets/ozon-workspace-compact-20261014.css"
+  ],
+  "validation": {
+    "passed": true,
+    "webPassed": 433,
+    "webSkipped": 2,
+    "apiPassed": 3437,
+    "apiSkipped": 150,
+    "apiExcluded": "kiz*.integration.spec.ts",
+    "runtimeBrowser": true,
+    "regressionFailedBefore": true,
+    "fiveRowsNoInnerScroll": true,
+    "nativeFileChooser": true,
+    "widths": [
+      1440,
+      1024,
+      736,
+      390,
+      320
+    ],
+    "themes": [
+      "default",
+      "la_panthera dark",
+      "la_panthera light"
+    ],
+    "liveBrowser": true,
+    "sourceBrowser": true
+  },
+  "sourceParityVerified": false
+}
