@@ -26,7 +26,8 @@ export class OzonFboImportService {
     }, select: {warehouseId: true, warehouse: {select: {name: true}}}, orderBy: {warehouseId: 'asc'}});
     return rows.map(row => ({id: row.warehouseId, name: row.warehouse.name}));
   }
-  private async resolveWarehouse(clientId: string, user: AuthUser, mode: 'read' | 'write', selected?: string) {
+  // FIX: file and link imports share the same client/branch authorization.
+  async resolveWarehouse(clientId: string, user: AuthUser, mode: 'read' | 'write', selected?: string) {
     const choices = await this.warehouses(clientId, user, mode);
     const scoped = effectiveWarehouseId(user, mode);
     const cabinet = (user.roleCodes ?? []).includes('CLIENT');

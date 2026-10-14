@@ -12554,7 +12554,7 @@ export const previewManualFbsAssembly=(accessToken:string,body:import('./fbs-man
 export const createManualFbsAssembly=(accessToken:string,token:string,choices:import('./fbs-manual-assembly').ManualFbsChoice[])=>request<import('./fbs-manual-assembly').ManualFbsResult>('/service/fbs-manual-assembly/create',{accessToken,method:'POST',body:{token,choices}});
 
 // FIX: existing Ozon supply links are read before explicit WMS creation.
-export type OzonLinkInput={clientId:string;connectionId:string;links:string;previewHash?:string};
+export type OzonLinkInput={clientId:string;connectionId:string;links:string;warehouseId?:string;previewHash?:string};
 export type OzonLinkPreview=OzonCustomerPreview & {previewHash:string;place:string;date:string;orders:Array<{orderId:string;orderNumber:string;state:string}>;existingRequest:{id:string;number:number}|null};
 export const fetchOzonLinkConnections=(accessToken:string,clientId:string)=>request<Array<{id:string;accountName:string|null;sellerId:string}>>('/ozon-fbo-import/link-connections?clientId='+encodeURIComponent(clientId),{accessToken});
 export const previewOzonLinks=(accessToken:string,body:OzonLinkInput)=>request<OzonLinkPreview>('/ozon-fbo-import/links/preview',{accessToken,method:'POST',body});

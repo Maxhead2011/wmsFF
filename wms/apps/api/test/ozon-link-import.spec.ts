@@ -1,5 +1,6 @@
 import {afterEach,it,expect,vi} from 'vitest';
 import {OzonLinkImportService,ozonLinkIds} from '../src/modules/client-requests/ozon-link-import.service';
+import {ClientScopeService} from '../src/modules/auth/client-scope.service';
 import {OzonFboImportService} from '../src/modules/client-requests/ozon-fbo-import.service';
 const user={id:'u',roleCodes:[],permissionCodes:['system:admin'],activeWarehouseId:'w'} as any;
 const body={clientId:'c',connectionId:'conn',links:'https://seller.ozon.ru/app/supply/orders/123'};
@@ -19,3 +20,45 @@ it('returns existing and rejects partial overlap',async()=>{const s=setup(),p=aw
 it('rejects missing SKU, denied client and disabled feature',async()=>{const s=setup();s.db.barcode.findMany.mockResolvedValue([]);await expect(s.service.preview(body,user)).rejects.toThrow('не найден');s.scopes.requireClientAccess.mockImplementation(()=>{throw Error('denied');});await expect(s.service.preview(body,user)).rejects.toThrow('denied');vi.stubEnv('WMS_OZON_FBO_IMPORT_ENABLED','false');await expect(s.service.preview(body,user)).rejects.toThrow('выключен');expect(s.db.$transaction).not.toHaveBeenCalled();});
 it('separates duplicate destination names from different orders',async()=>{const s=setup(),p=await s.service.preview({...body,links:body.links+' '+body.links.replace('123','124')},user);expect(p.totalQuantity).toBe(20);expect(new Set(p.directions.map(d=>d.name)).size).toBe(2);});
 it('retries transaction serialization collision',async()=>{const s=setup(),p=await s.service.preview(body,user);s.db.$transaction.mockRejectedValueOnce({code:'P2034'});await s.service.commit({...body,previewHash:p.previewHash},user);expect(s.db.$transaction).toHaveBeenCalledTimes(2);expect(s.db.clientRequest.create).toHaveBeenCalledTimes(1);});
+
+// TEST: one customer manages two legal entities without an internal active branch.
+for (const clientId of ['c','second']) it(`customer can preview and create for ${clientId} without activeWarehouseId`,async()=>{
+ const s=setup();const customer={...user,roleCodes:['CLIENT'],permissionCodes:[],activeWarehouseId:null,clientScopeMode:'LIMITED',clientIds:['c','second'],writableClientIds:['c','second']} as any;
+ s.scopes.requireClientAccess.mockImplementation((u,id)=>{if(!u.writableClientIds.includes(id))throw Error('denied');});
+ const input={...body,clientId};const p=await s.service.preview(input,customer);await s.service.commit({...input,previewHash:p.previewHash},customer);
+ expect(s.db.clientRequest.create.mock.calls[0][0].data).toMatchObject({clientId,warehouseId:'w'});
+});
+it('preserves explicit branch through preview and rejects a changed branch at commit',async()=>{
+ const s=setup();const customer={...user,roleCodes:['CLIENT'],activeWarehouseId:null};
+ s.db.warehouseClient.findMany.mockResolvedValue([{warehouseId:'w',warehouse:{name:'Moscow'}},{warehouseId:'w2',warehouse:{name:'Other'}}]);
+ const input={...body,warehouseId:'w2'};const p=await s.service.preview(input,customer);await s.service.commit({...input,previewHash:p.previewHash},customer);
+ expect(s.db.clientRequest.create.mock.calls[0][0].data.warehouseId).toBe('w2');
+ await expect(s.service.commit({...input,warehouseId:'w',previewHash:p.previewHash},customer)).rejects.toThrow('изменился');
+});
+it('requires branch selection when ambiguous and refuses unrelated branch or account',async()=>{
+ const s=setup(),customer={...user,roleCodes:['CLIENT'],activeWarehouseId:null};
+ s.db.warehouseClient.findMany.mockResolvedValue([{warehouseId:'w',warehouse:{name:'A'}},{warehouseId:'w2',warehouse:{name:'B'}}]);
+ await expect(s.service.preview(body,customer)).rejects.toThrow('Выберите филиал');
+ await expect(s.service.preview({...body,warehouseId:'foreign'},customer)).rejects.toThrow('недоступен');
+ s.db.clientMarketplaceConnection.findFirst.mockResolvedValue(null);
+ await expect(s.service.preview({...body,warehouseId:'w'},customer)).rejects.toThrow('Кабинет Ozon');
+ expect(s.db.$transaction).not.toHaveBeenCalled();
+});
+
+// TEST: use real authorization for two managed clients; unrelated/read-only access is denied.
+it('lists only the requested managed client accounts without needing an active internal branch',async()=>{
+ const s=setup(),scope=new ClientScopeService();
+ const customer={...user,roleCodes:['CLIENT'],permissionCodes:[],activeWarehouseId:null,clientScopeMode:'LIMITED',clientIds:['c','second','readonly'],writableClientIds:['c','second']} as any;
+ s.db.clientMarketplaceConnection.findMany=vi.fn(async({where}:any)=>[{id:where.clientId+'-account'}]);
+ const service=new OzonLinkImportService(s.db,scope,new OzonFboImportService(s.db,scope),s.supply as any);
+ for(const clientId of ['c','second']){
+  expect(await service.connections(clientId,customer)).toEqual([{id:clientId+'-account'}]);
+  expect(s.db.clientMarketplaceConnection.findMany).toHaveBeenLastCalledWith(expect.objectContaining({where:{clientId,marketplace:'OZON',isActive:true}}));
+ }
+ for(const clientId of ['other','readonly'])await expect(service.connections(clientId,customer)).rejects.toThrow('Нет доступа');
+ expect(s.db.clientMarketplaceConnection.findMany).toHaveBeenCalledTimes(2);
+});
+it('does not bypass internal branch scope',async()=>{
+ const s=setup();await expect(s.service.preview(body,{...user,permissionCodes:[],roleCodes:['BRANCH_MANAGER'],activeWarehouseId:null,warehouseIds:['w'],writableWarehouseIds:['w']})).rejects.toThrow('Активный филиал');
+ expect(s.supply.snapshot).not.toHaveBeenCalled();
+});
