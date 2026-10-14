@@ -1,0 +1,35 @@
+{
+  "published": true,
+  "at": 1791977846.340196,
+  "pr": 592,
+  "api": "sha256:853c97dfaa475a33eedcb14c1d1c746dbbbb06602707f361983fef060e6b6838",
+  "web": "sha256:73dcea096d2298053d5cc5eef3c6bbf723974c0cfa4d4cc009f8076da5ac0e74",
+  "webBase": "sha256:d4622b70deefa68f009288af9e36e38f4c56d9271c5aace085e86c81b7e09736",
+  "apk": {
+    "versionCode": 232,
+    "versionName": "0.1.232-fbo-restore",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-restore-232.apk",
+    "sha256": "788a56c65d2f06072d2c93989483ae0149375bb2a00fc1c9c8b7264cc76cf348",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:36:28.053276+00:00",
+    "releaseNotes": "FBO: clear stale unmarked picking checkpoints after update; preserve pending commands."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "changedWebFiles": [
+    "downloads/logoff-tsd-fbo-restore-232.apk",
+    "downloads/logoff-tsd.apk",
+    "downloads/logoff-tsd.json"
+  ],
+  "sourceParityVerified": false,
+  "validation": {
+    "androidPerFlavor": 261,
+    "total": 783,
+    "releaseBuild": true,
+    "certificateVerified": true,
+    "publicHashesVerified": true,
+    "physicalScanner": "requires APK232 installation"
+  },
+  "rollback": "logoff-web:before-fbo-restore-232",
+  "note": "Preserves PR590 Ozon client access release observed before staging."
+}

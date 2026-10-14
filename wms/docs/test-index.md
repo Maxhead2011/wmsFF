@@ -1,3 +1,5 @@
+PR592: FboTwoStageScreenTest covers restored loose-picking checkpoint without stock mutation, plus prior marking and pending-operation regressions. 260 tests per Android flavor passed.
+
 PR590: `ozon-link-import.spec.ts`, `OzonLinkImport.spec.tsx`, `api.ozon-link-warehouse.spec.ts`; actual runtime browser and read-only smoke in `scripts/releases/ozon-client-access-20261014`. API3437/web431 passed,150/2 skipped; dedicated KIZ DB suites excluded. Both managed clients, named accounts and branch isolation verified.
 
 PR588: FboTwoStageScreenTest covers unmarked manual top-up and definitive rejection in both acknowledgement protocols. 260 tests per Android flavor passed.
