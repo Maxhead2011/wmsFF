@@ -1,0 +1,73 @@
+{
+  "published": true,
+  "at": 1791984849.6703894,
+  "pr": 599,
+  "api": "sha256:853c97dfaa475a33eedcb14c1d1c746dbbbb06602707f361983fef060e6b6838",
+  "web": "sha256:4bf81180386a60041a691af48eda87318506ed4af7311177a3d965e7e1c0875b",
+  "webBase": "sha256:c25dc3c2dd206c75b4b565e804f95312b90ba086260ff1cd91f4d32556981e98",
+  "apk": {
+    "versionCode": 232,
+    "versionName": "0.1.232-fbo-restore",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-restore-232.apk",
+    "sha256": "788a56c65d2f06072d2c93989483ae0149375bb2a00fc1c9c8b7264cc76cf348",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:36:28.053276+00:00",
+    "releaseNotes": "FBO: clear stale unmarked picking checkpoints after update; preserve pending commands."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "rollback": "logoff-web:before-ozon-inline-20261014",
+  "tests": {
+    "passed": true,
+    "web": {
+      "passed": 434,
+      "skipped": 2
+    },
+    "api": {
+      "passed": 3437,
+      "skipped": 150,
+      "excluded": "dedicated KIZ DB integration"
+    },
+    "typescript": true,
+    "sourceBrowser": true,
+    "candidateBrowser": true
+  },
+  "liveBrowser": true,
+  "changedFiles": [
+    "index.html",
+    "assets/ozon-inline-20261014-24.js",
+    "assets/ozon-inline-20261014-12.js",
+    "assets/ozon-inline-20261014-0.js",
+    "assets/ozon-inline-20261014-4.js",
+    "assets/ozon-inline-20261014-31.js",
+    "assets/ozon-inline-20261014-13.js",
+    "assets/ozon-inline-20261014-14.js",
+    "assets/ozon-inline-20261014-17.js",
+    "assets/ozon-inline-20261014-27.js",
+    "assets/ozon-inline-20261014-20.js",
+    "assets/ozon-inline-20261014-22.js",
+    "assets/ozon-inline-20261014-15.js",
+    "assets/ozon-inline-20261014-16.js",
+    "assets/ozon-inline-20261014-18.js",
+    "assets/ozon-inline-20261014-25.js",
+    "assets/ozon-inline-20261014-2.js",
+    "assets/ozon-inline-20261014-19.js",
+    "assets/ozon-inline-20261014-26.js",
+    "assets/ozon-inline-20261014-28.js",
+    "assets/ozon-inline-20261014-29.js",
+    "assets/ozon-inline-20261014-30.js",
+    "assets/ozon-inline-20261014-11.js",
+    "assets/ozon-inline-20261014-10.js",
+    "assets/ozon-inline-20261014-23.js",
+    "assets/ozon-inline-20261014-5.js",
+    "assets/ozon-inline-20261014-6.js",
+    "assets/ozon-inline-20261014-7.js",
+    "assets/ozon-inline-20261014-8.js",
+    "assets/ozon-inline-20261014-21.js",
+    "assets/ozon-inline-20261014-9.js",
+    "assets/ozon-inline-20261014-3.js",
+    "assets/ozon-inline-20261014-1.js",
+    "assets/ozon-workspace-inline-20261014.css"
+  ],
+  "sourceParityVerified": false
+}
