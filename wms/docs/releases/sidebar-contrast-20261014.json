@@ -1,0 +1,33 @@
+{
+  "published": true,
+  "at": 1791986333.388973,
+  "pr": 601,
+  "api": "sha256:853c97dfaa475a33eedcb14c1d1c746dbbbb06602707f361983fef060e6b6838",
+  "web": "sha256:519e5f4d3e0bd10215b5cd545d5b8efaa0228fa170ccd2cd4a4f8f5f2cdfaa8a",
+  "webBase": "sha256:8c11d364063678308fd110690b7071823eb10a810d7a26225be678b7e222bff9",
+  "apk": {
+    "versionCode": 232,
+    "versionName": "0.1.232-fbo-restore",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-restore-232.apk",
+    "sha256": "788a56c65d2f06072d2c93989483ae0149375bb2a00fc1c9c8b7264cc76cf348",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:36:28.053276+00:00",
+    "releaseNotes": "FBO: clear stale unmarked picking checkpoints after update; preserve pending commands."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "changedWebFiles": [
+    "index.html",
+    "assets/sidebar-count-a2494457b162.css"
+  ],
+  "validation": {
+    "webPassed": 431,
+    "webSkipped": 2,
+    "contrastBefore": 1.1967,
+    "contrastAfter": 12.1887,
+    "darkContrast": 6.0092,
+    "publishedBrowserPassed": true
+  },
+  "sourceParityVerified": false,
+  "rollback": "logoff-web:before-sidebar-contrast-20261014"
+}
