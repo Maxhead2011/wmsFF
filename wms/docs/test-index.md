@@ -1,3 +1,5 @@
+Published PR596 / 2026-10-14: compact Ozon customer forms/cards; full assembly list uses page scrolling instead of the 585px inner viewport; themed native file/template controls. Web433/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Five-row source/candidate/live browser checks, five widths, three appearances and native file chooser passed. CSS + index only; application JS, API, APK232, print agent, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-ozon-compact`, sourceParityVerified=false. [Evidence](releases/ozon-compact-20261014.json).
+
 Published PR594 / 2026-10-14: approved Ozon customer workspace 65/35 layout, responsive import and supply panels, named accounts. Web433/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Source/candidate/live browser checks at five widths and three appearances, both import entry points and eight baseline tests passed. Exact 34-file web overlay; API, APK232, print agent, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-ozon-layout`, sourceParityVerified=false. [Details](ozon-workspace-layout.md).
 
 PR592: FboTwoStageScreenTest covers restored loose-picking checkpoint without stock mutation, plus prior marking and pending-operation regressions. 260 tests per Android flavor passed.
@@ -206,5 +208,3 @@ Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; sc
 ## Агент Windows 2026.10.09.1
 
 `apps/windows-print-agent/ack-regression.test.cjs`, `lifecycle.test.cjs`, `agent.test.cjs`, `print-series.test.cjs`: реальный PowerShell5, имитация HTTP/spooler, потеря ACK, перезапуск, mutex, сохранение ID и task settings. Запуск с AGENT_TEST_ROOT на распакованном архиве; AGENT_OLD_SOURCE воспроизводит старую ошибку. [Ограничения](print-agent-lifecycle.md).
-
-Prepared Ozon compact follow-up: scoped `ozon-workspace.css` removes the 585px inner list viewport, reduces form/card spacing and styles native file/template controls. Five-row regression in source and runtime browser suites; no application JS/API changes.
