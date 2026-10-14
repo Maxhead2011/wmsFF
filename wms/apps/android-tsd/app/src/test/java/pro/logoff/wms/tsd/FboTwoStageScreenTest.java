@@ -26,6 +26,27 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: definitive rejection must not turn the next unmarked barcode into a KIZ.
+    @Test public void rejectedUnmarkedPickClearsBarcodeForBothProtocols() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        for(boolean fast:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.fastAcknowledgementSupported=fast;
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.skuId="sku";line.remaining=1;p.lines.add(line);
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
+                boolean mutation=m.getName().equals("actFbo")||m.getName().equals("acknowledgeFbo");
+                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->method.getName().equals("execute")?(mutation?Response.error(400,okhttp3.ResponseBody.create(okhttp3.MediaType.parse("application/json"),"{\"message\":\"No stock\"}")):Response.success(p)):null);
+            });
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{},()->{});
+            try {
+                waitIdle(screen);FboPickingModeTest.choose(a,false);
+                screen.scannerField().setText("PL_1");screen.submit();screen.scannerField().setText("BOX_1");screen.submit();
+                screen.scannerField().setText("123");screen.submit();waitIdle(screen);
+                java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);
+                FboScanState state=(FboScanState)field.get(screen);
+                assertNull(state.pending());assertEquals("",state.barcode);
+            }finally{screen.close();}
+        }
+    }
     // TEST: switching screens cannot discard or rewrite a packing command with a lost response.
     @Test public void reopenedPickingPreservesUnansweredPacking() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
@@ -345,6 +366,34 @@ public class FboTwoStageScreenTest {
                 else{screen.scannerField().setText("KIZ");screen.submit();}
                 waitIdle(screen);assertEquals(1,Collections.frequency(spoken,FboPackingVoice.Cue.PUT));
                 if(timeout)assertEquals(ids.get(0),ids.get(1));
+            }finally{screen.close();}
+        }
+    }
+    // TEST: already picked unmarked stock can top up a manual box without a KIZ.
+    @Test public void manualPackingUnmarkedPickedProductNeedsOnlyBarcode() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.manualPackingEnabled=true;
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.skuId="sku";line.picked=1;line.needed=1;p.lines.add(line);
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="TARGET";p.boxes.add(box);
+            List<Map<String,String>> commands=new ArrayList<>();List<FboPackingVoice.Cue> spoken=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
+                if(m.getName().equals("actFbo"))commands.add(new LinkedHashMap<>((Map<String,String>)args[2]));
+                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->method.getName().equals("execute")?Response.success(p):null);
+            });
+            FboScanFeedback feedback=new FboScanFeedback(){public void play(boolean hit){}public void close(){}public void prompt(FboPackingVoice.Cue cue){spoken.add(cue);}};
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{},feedback);
+            try {
+                waitIdle(screen);TextView manual=find(a.findViewById(android.R.id.content),"Добавить товар вручную");
+                if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(manual);return;}
+                assertNotNull(manual);manual.performClick();
+                screen.scannerField().setText("TARGET");screen.submit();waitIdle(screen);
+                assertEquals("MANUAL_OPEN_BOX",commands.get(0).get("action"));
+                screen.scannerField().setText("123");screen.submit();waitIdle(screen);
+                assertEquals(2,commands.size());
+                assertEquals("PACK_UNIT",commands.get(1).get("action"));
+                assertEquals("TARGET",commands.get(1).get("targetBoxCode"));
+                assertEquals("123",commands.get(1).get("barcode"));
+                assertFalse(commands.get(1).containsKey("kiz"));
             }finally{screen.close();}
         }
     }

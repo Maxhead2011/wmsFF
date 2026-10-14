@@ -1,0 +1,35 @@
+{
+  "published": true,
+  "at": 1791976854.041156,
+  "pr": 588,
+  "api": "sha256:89534e60d66ddaf1a7990bf1ee173825c6a9385fd5f012f68c26e724e4f4bc0d",
+  "web": "sha256:1149b90f3f0fb261c0a29ad4183ddd218332a3832bb96f37ba559d3bd73b4610",
+  "webBase": "sha256:0d071ae6bd438c9934aa007a023a82eedb1b9acf26fdea27460311477948545b",
+  "apk": {
+    "versionCode": 231,
+    "versionName": "0.1.231-fbo-unmarked",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-unmarked-231.apk",
+    "sha256": "271c00bb993bfd386d93c2f9b3cfab1a1490d3181b2c325f4b47ffde6411c93f",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:19:40.263552+00:00",
+    "releaseNotes": "FBO: pack picked unmarked goods by barcode and clear definitively rejected unmarked picks."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "changedWebFiles": [
+    "downloads/logoff-tsd-fbo-unmarked-231.apk",
+    "downloads/logoff-tsd.apk",
+    "downloads/logoff-tsd.json"
+  ],
+  "sourceParityVerified": false,
+  "validation": {
+    "androidPerFlavor": 260,
+    "total": 780,
+    "releaseBuild": true,
+    "certificateVerified": true,
+    "publicHashesVerified": true,
+    "physicalScanner": "requires APK231 installation"
+  },
+  "rollback": "logoff-web:before-fbo-unmarked-231",
+  "note": "Preserves live October14 vitkovsky-fbs-fix API and react-singleton web updates observed before this APK-only release."
+}

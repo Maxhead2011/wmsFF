@@ -517,7 +517,7 @@ final class FboTwoStageScreen {
         if(packingChoices()&&packingMode==PackingMode.MANUAL&&"PACKING".equals(screenPhase())){
             if(!state.barcode.isEmpty())send("MANUAL_PACK_UNIT",value);
             else if(AssemblyScanVoice.isKiz(value)){message="Сначала отсканируйте ШК товара.";packingErrorSpeech=true;render();}
-            else{feedbackColor=Color.rgb(187,247,208);state.barcode=value;if(scanFeedback!=null)scanFeedback.success();message="Отсканируйте КИЗ товара.";render();}
+            else{feedbackColor=Color.rgb(187,247,208);state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(unmarkedLine(value,true)){send("PACK_UNIT",null);}else{message="Отсканируйте КИЗ товара.";render();}}
             return;
         }
         if(manualPackingScan&&packingScanRecovery()){send("MANUAL_PACK_UNIT",value);return;}
@@ -532,6 +532,23 @@ final class FboTwoStageScreen {
         // FIX: show the accepted product while waiting for its KIZ; a barcode alone is not a completed pick.
         feedbackColor=Color.rgb(187,247,208);message="Нужный товар";speakScan(true);
         state.barcode=value;if(scanFeedback!=null)scanFeedback.success();if(line.requiresKiz)render();else send("PICKING".equals(screenPhase())?"PICK_UNIT":"PACK_UNIT",null);
+    }
+    // FIX: only a unique known unmarked SKU can skip KIZ; server validates the picked unit.
+    private boolean unmarkedLine(String barcode,boolean needsPacking){
+        if(!"logoff".equals(BuildConfig.FLAVOR)||plan==null||plan.lines==null)return false;
+        TsdFboPlan.Line match=null;
+        for(TsdFboPlan.Line line:plan.lines)if(FboScanState.matches(plan,line,barcode)){
+            if(match!=null||line.requiresKiz)return false;
+            match=line;
+        }
+        return match!=null&&(!needsPacking||match.picked>match.packed);
+    }
+    // FIX: clear only definitively rejected unmarked picks, never uncertain durable commands.
+    private void rejectConfirmedScan(Map<String,String> payload){
+        state.rejected();
+        if("PICK_UNIT".equals(payload.get("action"))&&unmarkedLine(payload.get("barcode"),false)){
+            state.barcode="";state.productKiz="";state.productReady=false;
+        }
     }
     private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);reconcilePickingMode();if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
@@ -561,7 +578,7 @@ final class FboTwoStageScreen {
             if(res.isSuccessful()&&validReceipt(res.body(),payload)){handler.post(()->acceptReceipt(res.body(),payload));return;}
             if(!res.isSuccessful()&&FboFeedback.definitiveRejection(res.code())&&res.code()!=404&&res.code()!=405){
                 String detail=error(res);handler.post(()->{if(closed)return;busy=false;
-                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}
+                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit()){rejectConfirmedScan(payload);if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}
                     message=detail;packingErrorSpeech=true;feedbackColor=Color.rgb(254,202,202);if(res.code()==409&&state.pending()==null&&!packingScanRecovery())refresh();else render();});return;
             }
         }catch(Exception e){android.util.Log.w("FboConfirmation","Acknowledgement unavailable: "+e.getClass().getSimpleName());}
@@ -590,7 +607,7 @@ final class FboTwoStageScreen {
         if(fast){sendAcknowledged(payload);return;}
         busy=true;message="";render();executor.execute(()->{try{
             Response<TsdFboPlan> res=api.actFbo(session.authorizationHeader(),id,payload).execute();
-            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){state.rejected();if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
+            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){rejectConfirmedScan(payload);if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
