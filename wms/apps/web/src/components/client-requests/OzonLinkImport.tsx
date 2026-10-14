@@ -1,3 +1,4 @@
+import '../ozon-fbo/ozon-workspace.css';
 import {useEffect,useRef,useState} from 'react';
 import {fetchOzonLinkConnections,previewOzonLinks,createOzonLinks,type AuthSession,type OzonLinkPreview} from '../../lib/api';
 // FIX: show the owner even when the marketplace account has no custom name.
@@ -20,7 +21,7 @@ export function OzonLinkImport({session,clientId,clientName,warehouseId,onCreate
   if(commit){if(!preview)return;const result=await createOzonLinks(session.accessToken,body);if(g!==generation.current)return;setMessage(`Сборка №${result.request.number} ${result.existing?'уже существует':'создана'}.`);setPreview(null);onCreated();}
   else {const result=await previewOzonLinks(session.accessToken,body);if(g===generation.current)setPreview(result);}
  }catch(e){if(g===generation.current)setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
- return <section aria-label="Создать сборку по ссылке Ozon" style={{marginTop:24}}><h3>Создать сборку по ссылке Ozon</h3>
+ return <section className="ozfbo-link-import" aria-label="Создать сборку по ссылке Ozon"><h3>Создать сборку по ссылке Ozon</h3>
  <p>Вставьте ссылку на существующую заявку из кабинета Ozon. Для общей сборки можно указать несколько ссылок — по одной на строку. Точка сдачи и время отгрузки должны совпадать.</p>
  <fieldset disabled={busy||loading||!clientId}><label>Кабинет Ozon<select value={connectionId} onChange={e=>change(()=>setConnection(e.target.value))}><option value="">Выберите кабинет</option>{connections.map(c=><option key={c.id} value={c.id}>{ozonCabinetLabel(c,clientName)}</option>)}</select></label>
  <label>Ссылка на заявку Ozon<textarea rows={3} value={links} placeholder="https://seller.ozon.ru/app/supply/orders/134006772" onChange={e=>change(()=>setLinks(e.target.value))}/></label>

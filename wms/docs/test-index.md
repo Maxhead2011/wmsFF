@@ -1,3 +1,5 @@
+Prepared, not deployed: [Ozon workspace layout](ozon-workspace-layout.md) — 65/35 customer columns, responsive import and supply panels. Scoped CSS; existing API and shipment guards retained. Browser regression: `scripts/tests/ozon-workspace-layout.cjs`.
+
 PR590: `ozon-link-import.spec.ts`, `OzonLinkImport.spec.tsx`, `api.ozon-link-warehouse.spec.ts`; actual runtime browser and read-only smoke in `scripts/releases/ozon-client-access-20261014`. API3437/web431 passed,150/2 skipped; dedicated KIZ DB suites excluded. Both managed clients, named accounts and branch isolation verified.
 
 PR588: FboTwoStageScreenTest covers unmarked manual top-up and definitive rejection in both acknowledgement protocols. 260 tests per Android flavor passed.
