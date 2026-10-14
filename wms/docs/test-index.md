@@ -1,3 +1,5 @@
+PR588: FboTwoStageScreenTest covers unmarked manual top-up and definitive rejection in both acknowledgement protocols. 260 tests per Android flavor passed.
+
 PR586: `fbo-unplaced-confirmed.spec.ts` verifies receipt-gated routes and picking, reserves and disabled capability. `wms-stock-availability.service.spec.ts` preserves client pallet-sort filtering. Six compiled runtime checks: `scripts/releases/fbo-unplaced-20261013/smoke.cjs`. API3431/web427 passed.
 
 PR584: Ozon cargo throttling regression tests in `ozon-assembly-supply.spec.ts`; compiled transport/recovery and read-only request2000 proof in `scripts/releases/ozon-rate-20261013/smoke.cjs`. API3423/web427 passed;155/2 skipped.
