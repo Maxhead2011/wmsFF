@@ -1,3 +1,5 @@
+Published PR606 / 2026-10-14: Winx welcome now assigned to actual login Eleonora (display name Elkapone), not separate Elya account. Sofia unchanged. Web442/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. TypeScript, baseline8 and six public-site browser cases passed with real network HTML/JS/CSS/video (only API mocked). One account-ID change plus cache-safe graph renaming; API/APK232/configuration/business data/sold WMS unchanged. Baseline `2026-10-14-eleonora-account`, sourceParityVerified=false. [Details](eleonora-account-welcome.md). [Evidence](releases/eleonora-account-20261014.json).
+
 Published PR604 / 2026-10-14: personal welcome after successful login for verified Sofia/Eleonora IDs in all themes; supplied Disney/Winx animations, exact text, skip and completion. Web441/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. TypeScript, baseline8 and actual runtime login/appearance/Ozon tests passed. Exact33-file web delta over sidebar-contrast; API, APK232, configuration, business records and sold WMS unchanged. Baseline `2026-10-14-personal-login`, sourceParityVerified=false. [Details](personal-login-welcome.md). [Evidence](releases/personal-login-20261014.json).
 
 PR601: `scripts/sidebar-count-contrast.browser.test.cjs` verifies actual Light/Dark badge contrast; WMS_TEST_CSS supports candidate and published styles.
@@ -221,4 +223,4 @@ Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; sc
 PR604: personal login welcome correction published; see [details and tests](personal-login-welcome.md).
 
 
-Prepared Eleonora account correction: legacy Elya ID differed from actual login. [Details and regression](eleonora-account-welcome.md).
+Published PR606 Eleonora account correction: legacy Elya ID differed from actual login. [Details and regression](eleonora-account-welcome.md).

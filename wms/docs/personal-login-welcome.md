@@ -1,3 +1,5 @@
+Correction PR606: the historical Eleonora ID below was Elya, a separate account. See [corrected account mapping](eleonora-account-welcome.md).
+
 # Personal login welcome correction
 
 Published on 2026-10-14 through PR604 from fix/personal-login-welcome into feature/wb-print-check.
