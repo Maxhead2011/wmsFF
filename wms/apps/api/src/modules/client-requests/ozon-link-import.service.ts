@@ -4,11 +4,10 @@ import * as XLSX from 'xlsx';
 import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
-import {effectiveWarehouseId} from './client-request-warehouse-scope';
 import {OzonFboImportService} from './ozon-fbo-import.service';
 import {OzonAssemblySupplyService} from './ozon-assembly-supply.service';
 import {mergeSupplyOrders,supplyOrders,supplyDifferences,type SupplyIntegration} from './ozon-supply-policy';
-export type OzonLinksInput={clientId:string;connectionId:string;links:string;previewHash?:string};
+export type OzonLinksInput={clientId:string;connectionId:string;links:string;warehouseId?:string;previewHash?:string};
 // FIX: only exact seller order URLs are accepted; input never becomes a fetch URL.
 export function ozonLinkIds(links:unknown){
  if(typeof links!=='string'||links.length>5000)throw new BadRequestException('Вставьте ссылки Ozon.');
@@ -19,13 +18,15 @@ export function ozonLinkIds(links:unknown){
 @Injectable()
 export class OzonLinkImportService {
  constructor(private readonly db:PrismaService,private readonly scopes:ClientScopeService,private readonly importer:OzonFboImportService,private readonly supply:OzonAssemblySupplyService){}
- private async access(clientId:string,user:AuthUser){
-  if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true')throw new NotFoundException('Импорт ФБО Ozon выключен.');
-  if(typeof clientId!=='string'||!clientId)throw new BadRequestException('Выберите клиента.');this.scopes.requireClientAccess(user,clientId,'write');
-  const warehouseId=effectiveWarehouseId(user,'write')??user.activeWarehouseId;
-  if(!warehouseId||!await this.db.warehouseClient.findFirst({where:{clientId,warehouseId,status:'ACTIVE',warehouse:{isActive:true}}}))throw new BadRequestException('Клиент недоступен в выбранном филиале.');return warehouseId;
+ // FIX: cabinet users need no internal active branch; use the file-import resolver.
+ private async access(clientId:string,user:AuthUser,warehouseId?:string){
+  return this.importer.resolveWarehouse(clientId,user,'write',warehouseId);
  }
- async connections(clientId:string,user:AuthUser){await this.access(clientId,user);return this.db.clientMarketplaceConnection.findMany({where:{clientId,marketplace:'OZON',isActive:true},select:{id:true,accountName:true,sellerId:true}});}
+ async connections(clientId:string,user:AuthUser){
+  const choices=await this.importer.warehouses(clientId,user);
+  if(!choices.length)throw new BadRequestException('У клиента нет активного филиала.');
+  return this.db.clientMarketplaceConnection.findMany({where:{clientId,marketplace:'OZON',isActive:true},select:{id:true,accountName:true,sellerId:true}});
+ }
  private async existing(tx:any,keys:string[],clientId:string,warehouseId:string){
   const bindings=await tx.ozonFboOrderBinding.findMany({where:{externalOrderKey:{in:keys}}});
   const legacy=await tx.ozonFboShipment.findMany({where:{externalOrderKey:{in:keys}},select:{requestId:true}});
@@ -39,7 +40,7 @@ export class OzonLinkImportService {
   return {id:request.id,number:request.number};
  }
  private async prepare(body:OzonLinksInput,user:AuthUser){
-  const warehouseId=await this.access(body?.clientId,user),ids=ozonLinkIds(body.links);
+  const warehouseId=await this.access(body?.clientId,user,body?.warehouseId),ids=ozonLinkIds(body.links);
   if(typeof body.connectionId!=='string')throw new BadRequestException('Выберите кабинет Ozon.');
   const c=await this.db.clientMarketplaceConnection.findFirst({where:{id:body.connectionId,clientId:body.clientId,marketplace:'OZON',isActive:true}});
   if(!c?.apiKey||!c.sellerId)throw new BadRequestException('Кабинет Ozon не настроен для клиента.');
@@ -55,7 +56,7 @@ export class OzonLinkImportService {
   }
   const book=XLSX.utils.book_new();XLSX.utils.book_append_sheet(book,XLSX.utils.aoa_to_sheet(rows),'Поставка');
   const file={buffer:XLSX.write(book,{type:'buffer',bookType:'xlsx'}),originalname:`Ozon-${ids.join('-')}.xlsx`,mimetype:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'} as Express.Multer.File;
-  const dto={clientId:body.clientId,destinationCity:integration.place,desiredDate:integration.date,title:`ФБО Ozon · ${snapshots.map(s=>s.orderNumber).join(', ')}`};
+  const dto={clientId:body.clientId,warehouseId,destinationCity:integration.place,desiredDate:integration.date,title:`ФБО Ozon · ${snapshots.map(s=>s.orderNumber).join(', ')}`};
   const p=await this.importer.preview(file,dto,user);if(supplyDifferences(p.directions,integration).length)throw new ConflictException('Не удалось однозначно сопоставить товары Ozon.');
   const keys=ids.map(id=>`${c.sellerId}:${id}`).sort();
   const previewHash=createHash('sha256').update(JSON.stringify([body.clientId,warehouseId,c.id,supplyOrders(integration).map(({checkedAt,...o})=>o),p.directions])).digest('hex');

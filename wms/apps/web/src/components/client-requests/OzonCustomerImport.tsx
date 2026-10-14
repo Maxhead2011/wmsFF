@@ -38,5 +38,5 @@ export function OzonCustomerImport({session,clients,onCreated,onWarehouseChange,
     <p>Колонки: Направление / склад назначения Ozon · ШК · Поставка, шт · Артикул (необязательно). При кросс-докинге в файле указываются конечные направления, а выше — общая точка сдачи. Остальной товар остаётся на складе.</p>
     <button type="button" disabled={!file||!clientId||!warehouseId||!destinationCity.trim()} onClick={()=>void run(false)}>Проверить файл</button>
     {preview&&<><p>Одна сборка · {preview.directions.length} направлений · {preview.totalQuantity} шт.</p><ul>{preview.directions.map(d=><li key={d.name}>{d.name}: {d.items.reduce((s,i)=>s+i.quantity,0)} шт.</li>)}</ul><button type="button" onClick={()=>void run(true)}>Создать единую сборку</button></>}
-    </fieldset>{message&&<p role="status">{message}</p>}</details><OzonLinkImport key={clientId} session={session} clientId={clientId} onCreated={onCreated}/></>;
+    </fieldset>{message&&<p role="status">{message}</p>}</details><OzonLinkImport key={clientId+":"+warehouseId} session={session} clientId={clientId} clientName={clients.find(c=>c.id===clientId)?.name} warehouseId={warehouseId} onCreated={onCreated}/></>;
 }
