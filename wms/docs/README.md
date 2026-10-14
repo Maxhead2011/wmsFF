@@ -126,3 +126,6 @@ Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, L
 
 
 PR604: personal login welcome correction published; see [details and tests](personal-login-welcome.md).
+
+
+Prepared Eleonora account correction: legacy Elya ID differed from actual login. [Details and regression](eleonora-account-welcome.md).

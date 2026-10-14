@@ -17,7 +17,7 @@ describe('magic appearance',()=>{
   expect(nextWallpaperIndex(1,0)).toBe(0);
  });
  it('uses only confirmed identity/name for welcome',()=>{
-  expect(welcomeStyle({id:'d65d6258-d4e8-4bc1-b1cf-583d1a1e4c82',name:'Элеонора'})).toBe('winx');
+  expect(welcomeStyle({id:'8e175b30-8535-4881-9324-a875c9fd8c1d',name:'Элькапоне'})).toBe('winx');
   expect(welcomeStyle({id:'another',name:' София '})).toBeNull();
   expect(welcomeStyle({id:'another',name:'София другая'})).toBeNull();
   expect(welcomeStyle({id:'another',name:'Соня'})).toBeNull();
@@ -26,3 +26,6 @@ describe('magic appearance',()=>{
 
 // TEST: production Sofia login is stored under a different display name.
 it('recognizes Sofia by verified account ID',()=>{expect(welcomeStyle({id:'f89c0efe-dcd2-4dfa-9cea-e35c0c492f83',name:'Sonya'})).toBe('disney');});
+
+// TEST: Elya is a different account, not the confirmed Eleonora login.
+it('does not assign Eleonora welcome to Elya',()=>{expect(welcomeStyle({id:'d65d6258-d4e8-4bc1-b1cf-583d1a1e4c82',name:'Elya'})).toBeNull();});
