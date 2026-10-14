@@ -1,3 +1,5 @@
+PR601: `scripts/sidebar-count-contrast.browser.test.cjs` verifies actual Light/Dark badge contrast; WMS_TEST_CSS supports candidate and published styles.
+
 Prepared, NOT published (2026-10-14): [Winx / Disney in la_panthera](panthera-magic-themes.md). 33 supplied wallpapers, cursors and personal welcome; our web-WMS only. Web440/API3437 passed; 2/150 skipped, dedicated KIZ DB suites excluded.
 
 Published PR599 / 2026-10-14: Ozon online execution embedded below the link-import form in the left column; right assembly list stays usable. Optional embedded mode preserves other modal callers. Web434/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. TypeScript, source/candidate/live browser checks passed. Only workspace and panel display properties changed in current runtime; API, APK232, flags, operations and sold WMS unchanged. Baseline `2026-10-14-ozon-inline`, sourceParityVerified=false. [Evidence](releases/ozon-inline-20261014.json).
