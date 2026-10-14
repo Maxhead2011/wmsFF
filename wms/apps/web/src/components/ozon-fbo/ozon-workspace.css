@@ -145,3 +145,12 @@
 .ozfbo-customer-import input:not([type=file]), .ozfbo-customer-import select,
 .ozfbo-link-import textarea, .ozfbo-link-import select { min-height: 44px; padding: 8px 12px; }
 .ozfbo-customer-import p, .ozfbo-link-import p { line-height: 1.4; }
+
+
+/* FIX: inline execution occupies the left column without a viewport overlay. */
+.ozfbo-customer-workspace .ozfbo-workspace-left { min-width: 0; display: grid; gap: 16px; align-content: start; }
+.ozfbo-customer-workspace .fbo-inline-execution { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface, transparent); }
+.ozfbo-customer-workspace .fbo-inline-execution__header { flex-wrap: wrap; }
+.ozfbo-customer-workspace .fbo-inline-execution__header h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 20px; }
+.ozfbo-customer-workspace .fbo-inline-execution .online-execution-table-wrap { max-width: 100%; overflow-x: auto; }
+.ozfbo-customer-workspace .fbo-inline-execution button { white-space: normal; }

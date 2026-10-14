@@ -1,3 +1,13 @@
+<!-- FIX: Ozon embedded execution, local implementation pending release. -->
+### Подготовлено: встроенное онлайн-выполнение Ozon
+
+Ветка `fix/ozon-inline-execution`: `OzonCustomerWorkspace` размещает
+`FboTwoStagePanel embedded` под импортом по ссылке внутри левой колонки.
+Правый список остаётся доступным; обычный режим панели в других разделах
+сохраняет модальное окно. API и логика операций не изменяются.
+Проверки: `FboTwoStagePanel.spec.tsx`, `scripts/tests/ozon-workspace-layout.cjs`.
+Эта запись не означает публикацию; действующий выпуск указан в current-production.md.
+
 Published PR596 / 2026-10-14: compact Ozon customer forms/cards; full assembly list uses page scrolling instead of the 585px inner viewport; themed native file/template controls. Web433/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Five-row source/candidate/live browser checks, five widths, three appearances and native file chooser passed. CSS + index only; application JS, API, APK232, print agent, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-ozon-compact`, sourceParityVerified=false. [Evidence](releases/ozon-compact-20261014.json).
 
 Published PR594 / 2026-10-14: approved Ozon customer workspace 65/35 layout, responsive import and supply panels, named accounts. Web433/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Source/candidate/live browser checks at five widths and three appearances, both import entry points and eight baseline tests passed. Exact 34-file web overlay; API, APK232, print agent, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-ozon-layout`, sourceParityVerified=false. [Details](ozon-workspace-layout.md).

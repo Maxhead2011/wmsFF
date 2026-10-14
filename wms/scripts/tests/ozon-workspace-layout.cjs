@@ -15,6 +15,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Users/La_pa/.cache/c
  else if(u.pathname.endsWith('/capability'))value={enabled:true};
  else if(u.pathname.endsWith('/warehouses'))value=[{id:'w1',name:'ФФ Москва'}];
  else if(u.pathname.endsWith('/link-connections'))value=data.connections;
+ else if(u.pathname.endsWith('/fbo'))value={requestId:u.pathname.split('/').at(-2),title:'Сборка '+u.pathname.split('/').at(-2),marketplace:'OZON',phase:'COMPLETED',needed:0,picked:0,packed:0,looseRemaining:0,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[]};
  else if(u.pathname.includes('/supply'))value=data;
  else if(u.pathname.endsWith('/links/preview'))value={place:'Москва',date:'2026-10-12',directions:[],orders:[],totalQuantity:10,previewHash:'h'};
  else if(u.pathname.endsWith('/requests'))value=u.searchParams.get('view')==='completed'?[]:Array.from({length:5},(_,i)=>({id:'r'+(i+1),number:1952+i,title:'ФБО Ozon · 132780954-'+(i+1),quantity:10,directions:2,destinationCity:'МОСКВА_8021',desiredDate:'2026-10-12',phase:'COMPLETED',status:'IN_PROGRESS'}));
@@ -25,6 +26,21 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Users/La_pa/.cache/c
  // TEST: five assemblies grow with the document; no clipped inner scroll area.
  const compact=await page.evaluate(()=>{const list=document.querySelector('.ozfbo-plan-list'),style=getComputedStyle(list),fields=getComputedStyle(document.querySelector('.ozfbo-import-fields')),file=getComputedStyle(document.querySelector('input[type=file]'),'::file-selector-button'),download=getComputedStyle(document.querySelector('.ozfbo-upload-row a'));return {count:list.children.length,height:list.clientHeight,scroll:list.scrollHeight,max:style.maxHeight,overflow:style.overflowY,gap:parseFloat(fields.rowGap),fileRadius:parseFloat(file.borderTopLeftRadius),linkDecoration:download.textDecorationLine}});
  assert.equal(compact.count,5);assert.equal(compact.max,'none');assert.equal(compact.overflow,'visible');assert(compact.scroll<=compact.height+1);assert(compact.gap<=10);assert(compact.fileRadius>=8);assert.equal(compact.linkDecoration,'none');
+ // TEST: opening, switching and closing embedded assembly keeps the list usable.
+ await page.setViewportSize({width:1440,height:1200});
+ await page.getByRole('button',{name:'Открыть сборку',exact:true}).first().click();
+ const execution=page.getByRole('region',{name:'Двухэтапная сборка ФБО',exact:true});
+ await execution.getByRole('heading',{name:/Сборка r1/}).waitFor();
+ assert.equal(await page.locator('.online-execution-modal').count(),0);
+ assert.equal(await execution.locator('xpath=..').getAttribute('class'),'ozfbo-workspace-left');
+ const position=await page.evaluate(()=>({panel:document.querySelector('.fbo-inline-execution').getBoundingClientRect().top,form:document.querySelector('.ozfbo-import').getBoundingClientRect().bottom}));
+ assert(position.panel>=position.form);
+ await page.getByRole('button',{name:'Открыть сборку',exact:true}).nth(1).click();
+ await execution.getByRole('heading',{name:/Сборка r2/}).waitFor();
+ for(const width of [1440,390,320]){await page.setViewportSize({width,height:1200});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'inline overflow '+width);}
+ await execution.getByRole('button',{name:'Закрыть',exact:true}).first().click();
+ await execution.waitFor({state:'detached'});
+ await page.getByRole('button',{name:'Открыть сборку',exact:true}).first().waitFor();
  const picked=page.waitForEvent('filechooser');await page.locator('input[type=file]').click();const chooser=await picked;await chooser.setFiles({name:'Приёмка.xlsx',mimeType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',buffer:Buffer.from('fixture')});assert.equal(await page.locator('input[type=file]').evaluate(e=>e.files[0].name),'Приёмка.xlsx');assert.equal(await page.locator('.ozfbo-upload-row a').getAttribute('download'),'Шаблон-ФБО-Ozon.xlsx');
  await page.getByRole('button',{name:'Поставка и грузоместа Ozon',exact:true}).first().click();const panel=page.getByRole('region',{name:'Связь сборки с Ozon'});await panel.getByText('Состав файла совпадает с Ozon.').waitFor();
  assert.equal(await panel.getByRole('button',{name:'Передать короба в Ozon'}).isDisabled(),true);
