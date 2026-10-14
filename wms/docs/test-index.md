@@ -1,6 +1,6 @@
 PR601: `scripts/sidebar-count-contrast.browser.test.cjs` verifies actual Light/Dark badge contrast; WMS_TEST_CSS supports candidate and published styles.
 
-Prepared, NOT published (2026-10-14): [Winx / Disney in la_panthera](panthera-magic-themes.md). 33 supplied wallpapers, cursors and personal welcome; our web-WMS only. Web440/API3437 passed; 2/150 skipped, dedicated KIZ DB suites excluded.
+Published PR598 / 2026-10-14: Winx and Disney styles in la_panthera, 33 supplied wallpapers, themed cursors and centered personal welcome. Web440/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Candidate/live login, restoration and Ozon inline browser checks passed. Exact 74-file web delta; API, APK232, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-panthera-magic`, sourceParityVerified=false. [Details](panthera-magic-themes.md). [Evidence](releases/panthera-magic-20261014.json).
 
 Published PR599 / 2026-10-14: Ozon online execution embedded below the link-import form in the left column; right assembly list stays usable. Optional embedded mode preserves other modal callers. Web434/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. TypeScript, source/candidate/live browser checks passed. Only workspace and panel display properties changed in current runtime; API, APK232, flags, operations and sold WMS unchanged. Baseline `2026-10-14-ozon-inline`, sourceParityVerified=false. [Evidence](releases/ozon-inline-20261014.json).
 
@@ -214,3 +214,6 @@ Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; sc
 ## Агент Windows 2026.10.09.1
 
 `apps/windows-print-agent/ack-regression.test.cjs`, `lifecycle.test.cjs`, `agent.test.cjs`, `print-series.test.cjs`: реальный PowerShell5, имитация HTTP/spooler, потеря ACK, перезапуск, mutex, сохранение ID и task settings. Запуск с AGENT_TEST_ROOT на распакованном архиве; AGENT_OLD_SOURCE воспроизводит старую ошибку. [Ограничения](print-agent-lifecycle.md).
+
+
+Prepared correction (not published): personal login welcome for verified Sofia/Eleonora accounts, all themes; fresh-login regression. [Details and tests](personal-login-welcome.md).
