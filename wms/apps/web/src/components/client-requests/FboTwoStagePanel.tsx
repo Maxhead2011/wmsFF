@@ -14,7 +14,7 @@ export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:st
   return box?{pallet,source:box.boxCode}:null;
 }
 
-export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void}) {
+export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose, embedded=false }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void;embedded?:boolean}) {
   const panel=useRef<HTMLDivElement>(null);
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
   const [pallet,setPallet]=useState('');
@@ -59,11 +59,11 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   async function refresh(){if(inFlight.current)return;inFlight.current=true;setRefreshing(true);setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);if(!active.current)return;setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){if(active.current)setError(`Не удалось обновить статистику: ${String(e)}`);}finally{inFlight.current=false;if(active.current){setBusy(false);setRefreshing(false);}}}
   async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
   const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
-  return <div ref={panel} className="online-execution-modal" role="dialog" aria-modal="true" aria-label="Двухэтапная сборка ФБО"><section className="online-execution-modal__panel" style={{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
+  return <div ref={panel} className={embedded?"fbo-inline-execution":"online-execution-modal"} role={embedded?"region":"dialog"} aria-modal={embedded?undefined:true} aria-label="Двухэтапная сборка ФБО"><section className={embedded?"fbo-inline-execution__panel":"online-execution-modal__panel"} style={embedded?{display:"block",width:"100%",minWidth:0}:{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     {/* FIX: standard header enables retained la_panthera windows; reads never trap the user. */}
-    <header className="online-execution-modal__header" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
+    <header className={embedded?"fbo-inline-execution__header":"online-execution-modal__header"} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
     <h2>FBO {plan.marketplace==='OZON'?'Ozon':'WB'} {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
-    <div className="online-execution-modal__actions"><button type="button" className="icon-button" aria-label="Закрыть" title="Закрыть" disabled={busy&&!refreshing} onClick={onClose}>×</button></div>
+    <div className={embedded?"fbo-inline-execution__actions":"online-execution-modal__actions"}><button type="button" className="icon-button" aria-label="Закрыть" title="Закрыть" disabled={busy&&!refreshing} onClick={onClose}>×</button></div>
     </header>
     {plan.marketplace==='OZON'&&canWrite&&<OzonStockAdjustment requestId={plan.requestId} accessToken={accessToken} disabled={busy||!!pending} onLockChange={setAdjusting} onChanged={()=>void refresh()}/>}
     <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>

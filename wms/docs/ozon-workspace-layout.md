@@ -1,3 +1,5 @@
+Published PR599 / 2026-10-14: Ozon online execution embedded below the link-import form in the left column; right assembly list stays usable. Optional embedded mode preserves other modal callers. Web434/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. TypeScript, source/candidate/live browser checks passed. Only workspace and panel display properties changed in current runtime; API, APK232, flags, operations and sold WMS unchanged. Baseline `2026-10-14-ozon-inline`, sourceParityVerified=false. [Evidence](releases/ozon-inline-20261014.json).
+
 # Ozon customer workspace — published PR594
 
 Approved preview implemented on `fix/ozon-workspace-layout` and published through
@@ -57,3 +59,11 @@ Web `sha256:e6c0ddf66d825d7f3b92ede9246cd8c7afd71af9f4e4e76e0d2eb5411772614c`. A
 Rollback: `logoff-web:before-ozon-layout-20261014`. Public file hashes, API health, APK232
 metadata, unchanged configuration and other container IDs verified. The live
 asset graph passed the same mocked browser workflow; no business records changed.
+
+## PR596 compact follow-up
+
+Removed the 585px nested scroll cap: every assembly now participates in document
+scrolling. Reduced only customer form/card gaps; matching native file-selector
+and template buttons preserve keyboard and download behavior. Five-row browser
+regression fails before and passes after, including the live CSS graph. Only
+index.html and assets/ozon-workspace-compact-20261014.css changed at runtime.

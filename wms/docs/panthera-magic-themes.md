@@ -33,3 +33,7 @@ Run test/magic-appearance.browser.cjs against Vite on 127.0.0.1:5187. Optional M
 ## Release boundary
 
 sourceParityVerified=false: the full local build is not a production candidate. Before publication recheck the live image, prepare the exact delta on the fresh runtime graph, and browser-test that candidate. Do not transfer to sold WMS. This document does not change the published baseline.
+
+## Integration update
+
+Merged integration base 58e34076 (PR599/600 included). Retained both the prepared-feature note and published Ozon release records in README, project map and test index. On the merged tree: web 440 passed / 2 skipped, TypeScript and appearance browser checks passed.
