@@ -12,6 +12,6 @@ function Fixture(){
  return <div className="app-layout"><aside className="app-sidebar"><h2>LOGOFF</h2>{['Товары','Сборка','Остатки'].map(m=><button key={m} onClick={()=>setMenu(m)}>{m}</button>)}</aside>
  <main className="workspace-shell"><header className="workspace-header">{mounted&&<ThemeStyleSwitcher key={user} userId={user} workspaceId={menu}/>}</header>
  <section className="workspace-content"><section className="panel"><h2>{menu}</h2><input aria-label="Поиск"/><button onClick={()=>setUser(user==='one'?'two':'one')}>Другой пользователь</button><button onClick={()=>setMounted(!mounted)}>Сменить тему</button><button onClick={()=>setLoading(!loading)}>Загрузка</button></section>
- {loading&&<MagicWelcome user={{id:'sonya',name:'София'}}/>}</section></main></div>;
+ {loading&&<MagicWelcome user={{id:'f89c0efe-dcd2-4dfa-9cea-e35c0c492f83',name:'Соня'}}/>}</section></main></div>;
 }
 createRoot(document.getElementById('root')!).render(<React.StrictMode><Fixture/></React.StrictMode>);

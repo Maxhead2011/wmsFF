@@ -119,3 +119,6 @@ Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, L
 
 
 Опубликован PR531: [постоянная станция печати](print-agent-lifecycle.md), версия 2026.10.09.1. Актуальный baseline `2026-10-09-print-agent`; сервер PR529 и APK222 сохранены.
+
+
+Prepared correction (not published): personal login welcome for verified Sofia/Eleonora accounts, all themes; fresh-login regression. [Details and tests](personal-login-welcome.md).

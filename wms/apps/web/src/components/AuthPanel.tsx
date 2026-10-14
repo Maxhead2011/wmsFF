@@ -1,3 +1,5 @@
+import {MagicWelcome} from './layout/MagicWelcome';
+import {magicEnabled,welcomeStyle} from './layout/magicAppearanceState';
 import { Crown, Download, Eye, KeyRound, LogIn, ScanBarcode, ShieldPlus, Smartphone } from 'lucide-react';
 import { FormEvent, useState } from 'react';
 import { bootstrapAdmin, login, type AuthSession } from '../lib/api';
@@ -10,6 +12,8 @@ type AuthPanelProps = {
 type Mode = 'login' | 'bootstrap';
 
 export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
+  // FIX: play the supplied personal welcome after successful authentication, in every theme.
+  const [welcomeSession,setWelcomeSession]=useState<AuthSession|null>(null);
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -34,7 +38,8 @@ export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
               bootstrapSecret,
             });
 
-      onSession(session);
+      if(mode === 'login' && magicEnabled(window.location.hostname) && welcomeStyle(session.user)) setWelcomeSession(session);
+      else onSession(session);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Не удалось выполнить вход.');
     } finally {
@@ -58,6 +63,8 @@ export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
       setSubmitting(false);
     }
   }
+
+  if(welcomeSession) return <main className="auth-shell"><MagicWelcome user={welcomeSession.user} onComplete={()=>onSession(welcomeSession)}/></main>;
 
   return (
     <main className="auth-shell">

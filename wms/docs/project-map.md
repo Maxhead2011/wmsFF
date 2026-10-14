@@ -228,3 +228,6 @@ API: `modules/wms-ai/wms-openclaw.service.ts`, `wms-ai.controller.ts`,
 ## Постоянная станция Windows
 
 Setup-Agent → AgentLifecycle (сохранённый stationId, задача пользователя) → основной агент → JobJournal → существующие FBS/generic/series API. Рендер этикеток и PrintDocument серии сохранены. [Проверки и установка](print-agent-lifecycle.md).
+
+
+Prepared correction (not published): personal login welcome for verified Sofia/Eleonora accounts, all themes; fresh-login regression. [Details and tests](personal-login-welcome.md).

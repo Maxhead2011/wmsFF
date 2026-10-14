@@ -212,3 +212,6 @@ Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; sc
 ## Агент Windows 2026.10.09.1
 
 `apps/windows-print-agent/ack-regression.test.cjs`, `lifecycle.test.cjs`, `agent.test.cjs`, `print-series.test.cjs`: реальный PowerShell5, имитация HTTP/spooler, потеря ACK, перезапуск, mutex, сохранение ID и task settings. Запуск с AGENT_TEST_ROOT на распакованном архиве; AGENT_OLD_SOURCE воспроизводит старую ошибку. [Ограничения](print-agent-lifecycle.md).
+
+
+Prepared correction (not published): personal login welcome for verified Sofia/Eleonora accounts, all themes; fresh-login regression. [Details and tests](personal-login-welcome.md).
