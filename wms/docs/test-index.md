@@ -1,3 +1,5 @@
+Prepared, NOT published (2026-10-14): [Winx / Disney in la_panthera](panthera-magic-themes.md). 33 supplied wallpapers, cursors and personal welcome; our web-WMS only. Web439/API3437 passed; 2/150 skipped, dedicated KIZ DB suites excluded.
+
 Published PR594 / 2026-10-14: approved Ozon customer workspace 65/35 layout, responsive import and supply panels, named accounts. Web433/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. Source/candidate/live browser checks at five widths and three appearances, both import entry points and eight baseline tests passed. Exact 34-file web overlay; API, APK232, print agent, configuration, stock and sold WMS unchanged. Baseline `2026-10-14-ozon-layout`, sourceParityVerified=false. [Details](ozon-workspace-layout.md).
 
 PR592: FboTwoStageScreenTest covers restored loose-picking checkpoint without stock mutation, plus prior marking and pending-operation regressions. 260 tests per Android flavor passed.
