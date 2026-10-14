@@ -22,8 +22,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Users/La_pa/.cache/c
  assert.equal(await page.locator('.panel').evaluate(e=>getComputedStyle(e).backgroundColor),'rgb(255, 255, 255)');
  await page.mouse.move(700,150);await page.waitForFunction(()=>document.documentElement.dataset.magicCursor==='true');
  await page.getByLabel('Поиск').hover();assert.equal(await page.evaluate(()=>document.documentElement.dataset.magicCursor),undefined);
- await page.route('**/themes/magic/winx/*.webp',route=>route.abort());
- const beforeFailure=await background();await page.getByRole('button',{name:'Остатки',exact:true}).click();await page.waitForTimeout(200);assert.equal(await background(),beforeFailure);await page.unroute('**/themes/magic/winx/*.webp');
+ await page.evaluate(()=>{window.OriginalImage=window.Image;window.Image=class extends window.OriginalImage{set src(value){queueMicrotask(()=>this.onerror?.(new Event('error')));}};});
+ const beforeFailure=await background();await page.getByRole('button',{name:'Остатки',exact:true}).click();await page.waitForTimeout(200);assert.equal(await background(),beforeFailure);await page.evaluate(()=>{window.Image=window.OriginalImage;delete window.OriginalImage;});
  await select.selectOption('disney');await page.waitForFunction(()=>document.querySelector('.magic-wallpaper')?.style.backgroundImage.includes('/disney/'));
  await page.reload();await page.waitForFunction(()=>document.querySelector('.magic-wallpaper')?.style.backgroundImage.includes('/disney/'));
  await page.getByRole('button',{name:'Другой пользователь'}).click();assert.equal(await select.inputValue(),'dark');assert.equal(await page.locator('.magic-wallpaper').count(),0);

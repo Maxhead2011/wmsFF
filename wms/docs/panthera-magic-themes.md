@@ -37,3 +37,9 @@ sourceParityVerified=false: the full local build is not a production candidate. 
 ## Integration update
 
 Merged integration base 58e34076 (PR599/600 included). Retained both the prepared-feature note and published Ozon release records in README, project map and test index. On the merged tree: web 440 passed / 2 skipped, TypeScript and appearance browser checks passed.
+
+## Verified publication candidate
+
+Captured live web 4bf81180386a60041a691af48eda87318506ed4af7311177a3d965e7e1c0875b with unchanged API 853c97df. Runtime builder scripts/panthera-magic-runtime.cjs compiles only the appearance components using the live React owner and patches the switcher, restore fallback and 16 compiled workspace fallbacks. Source has one additional build-conditional FBO fallback. Existing personal login delay is bypassed only for la_panthera; other themes retain it.
+
+Candidate browser checks execute the real compiled App for both users (fresh login and restoration), appearance fixtures, and latest inline Ozon regression. All API calls are mocked. scripts/releases/panthera-magic-20261014 contains the tests and locked publication scripts. Stage verifies exactly 74 changed/added web files, no deletion, unchanged image configuration, unchanged API and source file hashes. The JS graph is renamed to keep one React owner and avoid stale caches. API materialization check reports no changed files.
