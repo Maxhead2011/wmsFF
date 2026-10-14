@@ -206,3 +206,5 @@ Receipt review: API `receipt-barcode-*.spec.ts`, `tsd-receipt-close.spec.ts`; sc
 ## Агент Windows 2026.10.09.1
 
 `apps/windows-print-agent/ack-regression.test.cjs`, `lifecycle.test.cjs`, `agent.test.cjs`, `print-series.test.cjs`: реальный PowerShell5, имитация HTTP/spooler, потеря ACK, перезапуск, mutex, сохранение ID и task settings. Запуск с AGENT_TEST_ROOT на распакованном архиве; AGENT_OLD_SOURCE воспроизводит старую ошибку. [Ограничения](print-agent-lifecycle.md).
+
+Prepared Ozon compact follow-up: scoped `ozon-workspace.css` removes the 585px inner list viewport, reduces form/card spacing and styles native file/template controls. Five-row regression in source and runtime browser suites; no application JS/API changes.

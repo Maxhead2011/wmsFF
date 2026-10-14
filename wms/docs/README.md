@@ -113,3 +113,5 @@ Current verified receipt release: PR522, baseline `2026-10-09-receipt-review`, L
 
 
 Опубликован PR531: [постоянная станция печати](print-agent-lifecycle.md), версия 2026.10.09.1. Актуальный baseline `2026-10-09-print-agent`; сервер PR529 и APK222 сохранены.
+
+Prepared Ozon compact follow-up: scoped `ozon-workspace.css` removes the 585px inner list viewport, reduces form/card spacing and styles native file/template controls. Five-row regression in source and runtime browser suites; no application JS/API changes.
