@@ -1,6 +1,6 @@
 # Personal login welcome correction
 
-Prepared on 2026-10-14 in fix/personal-login-welcome; not published.
+Published on 2026-10-14 through PR604 from fix/personal-login-welcome into feature/wb-print-check.
 
 ## Cause and fix
 
@@ -17,3 +17,7 @@ Fresh live capture: web sha256:519e5f4d3e0bd10215b5cd545d5b8efaa0228fa170ccd2cd4
 Before fix: account-ID regression returned null; actual runtime fresh-login browser test timed out waiting for the welcome. After fix: web 441 passed / 2 skipped; TypeScript passed. API 3437 passed / 150 skipped; dedicated test/kiz*.integration.spec.ts DB suites excluded as in the baseline. Actual runtime login/restoration for both users, six fresh-login cases across la_panthera/spirit/soul, skip/end/media-error, all 33 wallpapers/cursors/viewport/reduced motion and Ozon inline regression passed. No business writes: browser APIs are mocked.
 
 Files: apps/web/src/components/AuthPanel.tsx (submit); components/layout/MagicWelcome.tsx and magicAppearanceState.ts (welcomeStyle); magicAppearance.test.ts; test/magic-appearance.fixture.tsx; scripts/personal-login-runtime.cjs; scripts/releases/panthera-magic-20261014/{app-browser.cjs,browser.cjs,personal-login.browser.cjs}.
+
+## Published evidence
+
+Web sha256:d84c5629fe4fbe73c81ffa0fca9d71577134a8ee12fb54c5484d228f38352db0. Public hash checks passed for all33 changed files; API/APK/configuration/other containers unchanged. Rollback logoff-web:before-personal-login-20261014. Baseline 2026-10-14-personal-login.
