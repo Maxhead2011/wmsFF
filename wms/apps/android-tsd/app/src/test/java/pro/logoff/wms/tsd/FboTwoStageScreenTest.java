@@ -47,6 +47,27 @@ public class FboTwoStageScreenTest {
             }finally{screen.close();}
         }
     }
+    // TEST: an old unmarked loose-picking checkpoint must not request KIZ on reopen.
+    @Test public void restoredUnmarkedLoosePickDoesNotRequestKiz() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.unboxedPickingSupported=true;
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="123";line.skuId="sku";line.remaining=2;p.lines.add(line);
+            TsdSession session=new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList());
+            a.getSharedPreferences("fbo-pending",android.content.Context.MODE_PRIVATE).edit()
+                .putString(session.userId+":request:position","{\"barcode\":\"123\"}").commit();
+            AtomicInteger writes=new AtomicInteger();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
+                if(m.getName().equals("actFbo"))writes.incrementAndGet();
+                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->method.getName().equals("execute")?Response.success(p):null);
+            });
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",false,()->{},()->{},null);
+            try {
+                waitIdle(screen);assertEquals("ШК товара",screen.scannerField().getHint().toString());assertEquals(0,writes.get());
+                screen.scannerField().setText("123");screen.submit();waitIdle(screen);assertEquals(1,writes.get());
+            }finally{screen.close();}
+        }
+    }
     // TEST: switching screens cannot discard or rewrite a packing command with a lost response.
     @Test public void reopenedPickingPreservesUnansweredPacking() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
