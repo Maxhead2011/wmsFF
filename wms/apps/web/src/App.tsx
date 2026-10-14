@@ -1,3 +1,5 @@
+import {magicEnabled, welcomeStyle} from './components/layout/magicAppearanceState';
+import {MagicWelcome} from './components/layout/MagicWelcome'; // FIX: personalized loading without delay.
 import {ThemeStyleSwitcher} from './components/layout/ThemeStyleSwitcher'; // FIX: independent user appearance.
 import { MarkAllNotificationsButton } from './components/layout/MarkAllNotificationsButton';
 import { PantheraNavigation } from './components/layout/PantheraNavigation';
@@ -534,10 +536,10 @@ export function App() {
   if (isRestoring) {
     return (
       <main className="auth-shell">
-        <section className="auth-panel auth-panel--loading" aria-live="polite">
+        {session && uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <section className="auth-panel auth-panel--loading" aria-live="polite">
           <p className="eyebrow">Фулфилмент LOGOFF</p>
           <h1>Проверка сессии</h1>
-        </section>
+        </section>}
       </main>
     );
   }
@@ -781,7 +783,7 @@ export function App() {
                 ))}
               </select>
             </label>
-            {uiTheme === 'la_panthera' ? <ThemeStyleSwitcher key={session.user.id} userId={session.user.id}/> : null}
+            {uiTheme === 'la_panthera' ? <ThemeStyleSwitcher key={session.user.id} userId={session.user.id} workspaceId={activeWorkspace.id}/> : null}
             <div className="workspace-user">
               <span className="workspace-user__avatar" aria-hidden="true">
                 {session.user.name.trim().charAt(0).toUpperCase() || 'W'}
@@ -938,29 +940,29 @@ function renderWorkspace(
 ) {
   switch (activeWorkspaceId) {
     case 'operations-statistics':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю статистику…</div>}><OperationsStatisticsPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю статистику…</div>}><OperationsStatisticsPanel session={session} /></Suspense>;
     case 'ai':
       return <WmsAiPanel session={session} />;
     case 'cabinet':
       return <ClientCabinetPanel session={session} />;
     case 'analytics':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю аналитику…</div>}><AnalyticsPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю аналитику…</div>}><AnalyticsPanel session={session} /></Suspense>;
     case 'access':
       return <AccessAdminPanel session={session} />;
     case 'administration':
       return (
-        <Suspense fallback={<div className="workspace-loading">Загружаю защищённый контур…</div>}>
+        <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю защищённый контур…</div>}>
           <AdministrationPanel session={session} onOpenWorkspace={setActiveWorkspaceId} />
         </Suspense>
       );
     case 'integration-api':
       return (
-        <Suspense fallback={<div className="workspace-loading">Загружаю API WMS…</div>}>
+        <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю API WMS…</div>}>
           <IntegrationApiPanel session={session} />
         </Suspense>
       );
     case 'directories':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю справочники…</div>}><DirectoryPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю справочники…</div>}><DirectoryPanel session={session} /></Suspense>;
     case 'imports':
       return <ImportPanel session={session} />;
     case 'logistics':
@@ -978,34 +980,34 @@ function renderWorkspace(
     case 'kiz':
       return <KizIssuesPanel session={session} />;
     case 'kiz-circulation':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю погашение КИЗ…</div>}><KizCirculationPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю погашение КИЗ…</div>}><KizCirculationPanel session={session} /></Suspense>;
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel compactMobile={uiTheme === 'soul'} session={session} onOpenFbsOrders={() => setActiveWorkspaceId('fbs')} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel compactMobile={uiTheme === 'soul'} session={session} onOpenFbsOrders={() => setActiveWorkspaceId('fbs')} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
     case 'order-assembly':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю сборку заказов…</div>}><OrderAssemblyPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю сборку заказов…</div>}><OrderAssemblyPanel session={session} /></Suspense>;
     case 'contracts':
       return <ContractsPanel session={session} />;
     case 'fbs':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
     case 'factory':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
     case 'fbs-packed':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю журнал упаковки…</div>}><FbsPackedItemsPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю журнал упаковки…</div>}><FbsPackedItemsPanel session={session} /></Suspense>;
     case 'monitoring':
-      return <Suspense fallback={<div className="workspace-loading">Подключаю мониторинг…</div>}><MonitoringPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Подключаю мониторинг…</div>}><MonitoringPanel session={session} /></Suspense>;
     case 'dbs':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю DBS…</div>}><DbsPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю DBS…</div>}><DbsPanel session={session} /></Suspense>;
     case 'fbo-ozon':
-      if (import.meta.env.VITE_FBO_WORKSPACE_ENABLED === 'true') return <Suspense fallback={<div className="workspace-loading">Загружаю FBO…</div>}><FboWorkspace session={session}/></Suspense>;
-      return <Suspense fallback={<div className="workspace-loading">Загружаю FBO Ozon…</div>}><OzonFboPanel session={session} /></Suspense>;
+      if (import.meta.env.VITE_FBO_WORKSPACE_ENABLED === 'true') return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBO…</div>}><FboWorkspace session={session}/></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBO Ozon…</div>}><OzonFboPanel session={session} /></Suspense>;
     case 'relabeling':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю переклейку…</div>}><RelabelingPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю переклейку…</div>}><RelabelingPanel session={session} /></Suspense>;
     case 'catalog':
       return <CatalogPanel session={session} />;
     case 'billing':
-      return <Suspense fallback={<div className="workspace-loading">Загружаю биллинг…</div>}><BillingPanel session={session} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю биллинг…</div>}><BillingPanel session={session} /></Suspense>;
     case 'expenses':
       return <ExpensesPanel session={session} />;
     case 'services':
