@@ -1,3 +1,4 @@
+import { startVisiblePolling } from '../../lib/visiblePolling';
 // FIX: keep reshipment alongside the deployed FBS delivery controls.
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
 import { FbsReshipmentPanel } from './FbsReshipmentPanel';
@@ -480,6 +481,8 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const marketplaceCountsLoadSequence = useRef(0);
   const supplyReconcileRequestSequence = useRef(0);
   const supplyRequestAuditSequence = useRef(0);
+  // FIX: scope background reads to this retained desktop window.
+  const pollingRoot = useRef<HTMLElement | null>(null);
   const canManagePricing =
     session.user.permissionCodes.includes('system:admin') ||
     session.user.permissionCodes.includes('billing:write') ||
@@ -652,6 +655,9 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     if (!selectedClientId) {
       return;
     }
+    if (import.meta.env.VITE_MENU_READS_ENABLED === 'true') {
+      return startVisiblePolling(() => void loadOrders(), () => pollingRoot.current, 60_000);
+    }
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void loadOrders();
@@ -663,6 +669,9 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   useEffect(() => {
     if (!marketplace) return;
     void loadActiveClients();
+    if (import.meta.env.VITE_MENU_READS_ENABLED === 'true') {
+      return startVisiblePolling(() => void loadActiveClients(), () => pollingRoot.current, 60_000);
+    }
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void loadActiveClients();
@@ -674,6 +683,9 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   useEffect(() => {
     if (marketplace) return;
     void loadMarketplaceOrderCounts();
+    if (import.meta.env.VITE_MENU_READS_ENABLED === 'true') {
+      return startVisiblePolling(() => void loadMarketplaceOrderCounts(), () => pollingRoot.current, 60_000);
+    }
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void loadMarketplaceOrderCounts();
@@ -685,6 +697,9 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   useEffect(() => {
     if (marketplace !== 'WILDBERRIES' || activeView !== 'cargo' || !selectedClientId) return;
     void loadCargoPackings();
+    if (import.meta.env.VITE_MENU_READS_ENABLED === 'true') {
+      return startVisiblePolling(() => void loadCargoPackings(), () => pollingRoot.current, 20_000);
+    }
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void loadCargoPackings();
@@ -1583,7 +1598,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
 
   if (!marketplace) {
     return (
-      <section className="fbs-panel fbs-marketplace-entry" aria-label="Выбор FBS-маркетплейса">
+      <section ref={pollingRoot} className="fbs-panel fbs-marketplace-entry" aria-label="Выбор FBS-маркетплейса">
         <header className="fbs-panel__hero fbs-marketplace-entry__hero">
           <div className="fbs-panel__hero-icon">
             <ShoppingBasket size={24} aria-hidden="true" />
@@ -1656,7 +1671,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   }
 
   return (
-    <section className="fbs-panel" aria-label="FBS">
+    <section ref={pollingRoot} className="fbs-panel" aria-label="FBS">
       <header className="fbs-panel__hero">
         <div className="fbs-panel__hero-icon">
           <ShoppingBasket size={24} aria-hidden="true" />
