@@ -1,0 +1,30 @@
+{
+  "status": "prepared-not-published",
+  "apiBase": "sha256:c1f2ad806419a71c1cdc51393804705eaa6afdde6e5268dec42cda36a675c078",
+  "webBase": "sha256:80a153ed4e09f7d6dc00310aac8bcc85910ca8d4974fd37239d62fa8d607c5ee",
+  "sourceParityVerified": false,
+  "flag": "WMS_FBS_MONITOR_ROUTING_ENABLED=true",
+  "delta": [
+    {
+      "path": "modules/marketplace-connections/fbs-stock-monitoring.rules.js",
+      "before": "8daa4fe6848d9d7da526629626b16ae60ee19aed914f502a9bddd922d63b94f3",
+      "after": "07435f8ee6bcf981962d8ca5c8bf7db103de6f04daf92a0c4528f34913126a69"
+    },
+    {
+      "path": "modules/marketplace-connections/marketplace-connections.service.js",
+      "before": "93c0559667d7857919e4a1638a30258e0f8850f7603e167a4e18a4725b626416",
+      "after": "efcf948f192214163b2f387b59f78fc3333d852907d6964f285664f0a0f61a65"
+    },
+    {
+      "path": "modules/marketplace-connections/fbs-stock-monitoring.service.js",
+      "before": "eaa288d08412a6f2dd7e1cecae4a8e88a639bb6732d0232b93ce642278b7b656",
+      "after": "ae5ee0ac3806bf88bf15263b098bc6feb8f18303e7cc887323a344071c23518e"
+    },
+    {
+      "path": "modules/marketplace-connections/fbs-monitor-routing.js",
+      "before": null,
+      "after": "0c68c334efa0bc1925014acc9271b42f994cb3e0f3881ed681f42963fb95d942"
+    }
+  ],
+  "runtimeTests": 13
+}

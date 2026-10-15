@@ -10,6 +10,7 @@ export type FbsStockMonitorRuleInput = {
   expectedAfterAmount?: number | null;
   exactOrderMatched: boolean;
   exactReservationMatched?: boolean;
+  exactReservationRequired?: boolean;
   exactReservationReleased?: boolean;
   nowMs: number;
   deadlineMs: number;
@@ -94,6 +95,12 @@ export function evaluateFbsStockMonitorWms(
       observedDelta: observedDelta(input.beforeAmount, input.currentAmount, input.eventType),
       message: null,
     };
+  }
+  // FIX: aggregate changes from other orders cannot prove this order's reservation.
+  if (input.exactReservationRequired) {
+    return { status: input.nowMs >= input.deadlineMs || input.attempt >= input.maxAttempts ? 'ERROR' : 'PENDING',
+      expectedAfterAmount, observedDelta: null,
+      message: input.eventType === 'SALE' ? 'Фактический резерв этого заказа не подтверждён.' : 'Освобождение резерва этого заказа не подтверждено.' };
   }
   return evaluateAmountRule(input, true);
 }
