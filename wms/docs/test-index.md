@@ -1,4 +1,5 @@
-Prepared, NOT published (2026-10-15): [Ozon TSD closed-carton top-up](ozon-tsd-reopen-box.md). Explicit REOPEN_BOX, destination and cargo-freeze guards, ordinary item packing; separate opt-in capability for LOGOFF APK.
+PR608: Ozon closed-carton reopen dispatcher/DTO runtime cases5; source tests9; Android263 per flavor. UI cancellation, ordinary packing after reopening, feature guards and durable replay verified.
+
 
 Published PR606 / 2026-10-14: Winx welcome now assigned to actual login Eleonora (display name Elkapone), not separate Elya account. Sofia unchanged. Web442/API3437 passed;2/150 skipped, dedicated KIZ DB suites excluded. TypeScript, baseline8 and six public-site browser cases passed with real network HTML/JS/CSS/video (only API mocked). One account-ID change plus cache-safe graph renaming; API/APK232/configuration/business data/sold WMS unchanged. Baseline `2026-10-14-eleonora-account`, sourceParityVerified=false. [Details](eleonora-account-welcome.md). [Evidence](releases/eleonora-account-20261014.json).
 
