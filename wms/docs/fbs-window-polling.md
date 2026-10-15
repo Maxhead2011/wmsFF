@@ -24,3 +24,5 @@ ref устранены сохранением прежнего порядка с
 Кандидат сохраняет остальные файлы текущего образа; 33 файла графа меняются из-за
 cache-safe переименования зависимостей. Публикация проверяет PR, свежие image ID,
 хеши, health, неизменность API/APK/окружения и остальных контейнеров, с откатом web.
+
+Published PR623; web `sha256:1393f26ad7c5c6abc14f12b079ddcd9e7bda5586dec394e97fc601bd31eaae33`. Five published-graph browser checks passed. Baseline `2026-10-15-fbs-window-polling`.
