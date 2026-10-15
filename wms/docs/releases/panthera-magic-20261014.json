@@ -1,0 +1,35 @@
+{
+  "published": true,
+  "at": 1791986238.0953612,
+  "pr": 598,
+  "api": "sha256:853c97dfaa475a33eedcb14c1d1c746dbbbb06602707f361983fef060e6b6838",
+  "web": "sha256:8c11d364063678308fd110690b7071823eb10a810d7a26225be678b7e222bff9",
+  "webBase": "sha256:4bf81180386a60041a691af48eda87318506ed4af7311177a3d965e7e1c0875b",
+  "apk": {
+    "versionCode": 232,
+    "versionName": "0.1.232-fbo-restore",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-restore-232.apk",
+    "sha256": "788a56c65d2f06072d2c93989483ae0149375bb2a00fc1c9c8b7264cc76cf348",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:36:28.053276+00:00",
+    "releaseNotes": "FBO: clear stale unmarked picking checkpoints after update; preserve pending commands."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "rollback": "logoff-web:before-panthera-magic-20261014",
+  "verification": {
+    "files": 74,
+    "imageConfigUnchanged": true,
+    "apiDelta": []
+  },
+  "tests": {
+    "web": 440,
+    "api": 3437,
+    "webSkipped": 2,
+    "apiSkipped": 150,
+    "dedicatedKizDbExcluded": true,
+    "candidateAndLiveAppBrowser": true,
+    "candidateAndLiveOzonBrowser": true,
+    "appearanceBrowser": true
+  }
+}

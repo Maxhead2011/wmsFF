@@ -4,7 +4,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'C:/Users/La_pa/.cache/c
 const html=fs.readFileSync(file('index.html'),'utf8'),entry=/src="\/assets\/([^"/]+\.js)"/.exec(html)[1],script=fs.readFileSync(file('assets/'+entry),'utf8');
 const key=/\bvp="([^"]+)"/.exec(script)?.[1];assert(key);
 const browser=await chromium.launch({channel:'msedge',headless:true});try{
- for(const [id,name,style]of [['d65d6258-d4e8-4bc1-b1cf-583d1a1e4c82','Элеонора','winx'],['fixture-sofia','София','disney']]){
+ for(const [id,name,style]of [['8e175b30-8535-4881-9324-a875c9fd8c1d','Элькапоне','winx'],['f89c0efe-dcd2-4dfa-9cea-e35c0c492f83','Соня','disney']]){
  for(const fresh of [false,true]){
  const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));
  const user={id,name,email:'fixture',roleCodes:['WORKER'],permissionCodes:[],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],warehouseIds:[]};
@@ -13,7 +13,7 @@ const browser=await chromium.launch({channel:'msedge',headless:true});try{
  await page.route('https://wms.logoff.pro/**',async route=>{const n=new URL(route.request().url()).pathname.slice(1);
  if(n.startsWith('api/')){if(route.request().method()!=='GET')writes.push(n);let body=[];if(n.endsWith('/auth/login'))body={accessToken:'fixture',tokenType:'Bearer',user};if(n.endsWith('/auth/me')){await ready;body=user;}return route.fulfill({contentType:'application/json',body:JSON.stringify(body)});}
  const f=file(n||'index.html');if(!fs.existsSync(f))return route.abort();return route.fulfill({path:f,contentType:n.endsWith('.js')?'application/javascript':n.endsWith('.css')?'text/css':n.endsWith('.mp4')?'video/mp4':n.endsWith('.webp')?'image/webp':n.endsWith('.png')?'image/png':n===''?'text/html':undefined});});
- await page.goto('https://wms.logoff.pro/'+(fresh?'#login':''));if(fresh){releaseMe();await page.locator('input[autocomplete="username"]').fill('fixture');await page.locator('input[type="password"]').fill('fixture');await page.locator('form button[type="submit"]').click();}else{await page.locator('.magic-welcome').waitFor();
+ await page.goto('https://wms.logoff.pro/'+(fresh?'#login':''));if(fresh){releaseMe();await page.locator('input[autocomplete="username"]').fill('fixture');await page.locator('input[type="password"]').fill('fixture');await page.locator('form button[type="submit"]').click();await page.locator('.magic-welcome').waitFor({timeout:5000});assert.ok((await page.locator('.magic-welcome video').getAttribute('src')).includes(style));await page.getByRole('button',{name:'Пропустить',exact:true}).click();}else{await page.locator('.magic-welcome').waitFor();
  assert.ok((await page.locator('.magic-welcome').boundingBox()).width<=560);
  assert.ok((await page.locator('.magic-welcome video').getAttribute('src')).includes(style));releaseMe();}
  await page.getByLabel('Стиль оформления').waitFor();assert.equal(await page.getByLabel('Стиль оформления').inputValue(),style);
