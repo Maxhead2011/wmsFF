@@ -1,3 +1,5 @@
+Prepared 2026-10-15 (not published): [WB monitor routing and reservation proof](wb-monitor-routing-proof.md). Opt-in WMS_FBS_MONITOR_ROUTING_ENABLED; four API modules, 13 source/runtime regression scenarios. Full API: 3459 passed / 155 skipped (two dedicated KIZ DB suites excluded); web: 442 passed / 2 skipped; API TypeScript and baseline verification passed. Includes routed stock audit and approved Balandin 3 → 0 correction.
+
 PR608: Ozon closed-carton reopen dispatcher/DTO runtime cases5; source tests9; Android263 per flavor. UI cancellation, ordinary packing after reopening, feature guards and durable replay verified.
 
 

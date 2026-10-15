@@ -1,3 +1,4 @@
+import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorScopeWhere } from './fbs-monitor-routing';
 import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientRequestStatus, ClientRequestType, MarketplaceType, Prisma, StockStatus, type FbsStockMonitorEvent } from '@prisma/client';
@@ -57,6 +58,7 @@ export type FbsStockMonitorProbeInput = {
 
 export type FbsStockMonitorProbeResult = {
   eventId: string;
+  executionWarehouseId?: string | null;
   wbCurrentAmount: number | null;
   wbOrderMatched: boolean;
   wbError?: string | null;
@@ -64,6 +66,7 @@ export type FbsStockMonitorProbeResult = {
   wmsSellableAmount: number | null;
   wmsReservedAmount: number | null;
   wmsReservationMatched: boolean;
+  wmsReservationRequired?: boolean;
   wmsReservationReleased: boolean;
   wmsError?: string | null;
   sourceIds?: Record<string, unknown>;
@@ -363,6 +366,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
           fbsWarehouseId: true,
           fbsWarehouseName: true,
           fbsExecutionWarehouseId: true,
+          fbsAutoRouteNewWarehouses: true,
         },
       }),
       this.prisma.sku.findMany({
@@ -377,6 +381,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
       }),
       this.prisma.fbsStockMonitorConfig.findMany({ where: { connectionId: { in: connectionIds } } }),
     ]);
+    const routes = fbsMonitorRoutingEnabled() ? await this.prisma.fbsWarehouseRoutingRule.findMany({ where: { connectionId: { in: connectionIds } } }) : [];
     const connectionById = new Map(connections.map((item) => [item.id, item]));
     const skuById = new Map(skus.map((item) => [item.id, item]));
     const configByConnection = new Map(storedConfigs.map((item) => [item.connectionId, item]));
@@ -384,6 +389,8 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
     const candidates = eligible.flatMap((order) => {
       const connection = connectionById.get(order.connectionId);
       if (!connection || connection.clientId !== order.clientId) return [];
+      const executionWarehouseId = fbsMonitorRoutingEnabled() ? fbsMonitorRoute(connection, order.marketplaceWarehouseId, routes) : connection.fbsExecutionWarehouseId;
+      if (fbsMonitorRoutingEnabled() && !executionWarehouseId) return [];
       const config = this.configFor(order.clientId, order.connectionId, configByConnection.get(order.connectionId));
       if (!config.enabled) return [];
       const sku = skuById.get(order.skuId);
@@ -395,7 +402,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
         order,
         eventType,
         config,
-        connection,
+        connection: { ...connection, fbsExecutionWarehouseId: executionWarehouseId },
         sku,
         nmId: ids?.nmId ?? null,
         chrtId: ids?.chrtId ?? null,
@@ -565,7 +572,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
       clientId: clientFilter,
       // FIX: numeric WB zeroes are excluded in SQL before count/skip/take.
       // NULL remains visible because it means that the current stock is unknown.
-      AND: [fbsStockMonitorVisibleWbWhere()],
+      AND: [fbsStockMonitorVisibleWbWhere(), await fbsMonitorScopeWhere(this.prisma, clientFilter)],
       ...(query.connectionId?.trim() ? { connectionId: query.connectionId.trim() } : {}),
       ...(query.warehouseId?.trim() ? { marketplaceWarehouseId: query.warehouseId.trim() } : {}),
       ...(dateFrom || dateTo ? { saleAt: { ...(dateFrom ? { gte: dateFrom } : {}), ...(dateTo ? { lte: dateTo } : {}) } } : {}),
@@ -992,6 +999,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
       const candidates = await this.prisma.fbsStockMonitorEvent.findMany({
         where: {
           ...options.where,
+          ...(fbsMonitorRoutingEnabled() ? { AND: [options.where, await fbsMonitorScopeWhere(this.prisma, options.where.clientId)] } : {}),
           ...(options.force ? {} : { overallStatus: { in: ['PENDING', 'UNAVAILABLE'] } }),
           ...(options.force ? {} : { nextCheckAt: { lte: new Date() } }),
           OR: [{ processingAt: null }, { processingAt: { lt: staleProcessingAt } }],
@@ -1074,7 +1082,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
               temporarilyUnavailable: Boolean(probeResult.wbError),
               unavailableMessage: probeResult.wbError,
             });
-        const wmsResult = event.wmsStatus === 'SUCCESS'
+        const wmsResult = event.wmsStatus === 'SUCCESS' && !probeResult.wmsReservationRequired
           ? { status: 'SUCCESS' as const, expectedAfterAmount: event.wmsExpectedAfterAmount, observedDelta: null, message: event.wmsMessage }
           : evaluateFbsStockMonitorWms({
               eventType,
@@ -1084,6 +1092,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
               currentAmount: probeResult.wmsSellableAmount,
               exactOrderMatched: probeResult.wbOrderMatched,
               exactReservationMatched: probeResult.wmsReservationMatched,
+              exactReservationRequired: probeResult.wmsReservationRequired,
               exactReservationReleased: probeResult.wmsReservationReleased,
               nowMs: now.getTime(),
               deadlineMs: event.deadlineAt.getTime(),
@@ -1114,6 +1123,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
               wbAttempts: wbAttempt,
               wbMessage: wbResult.message,
               wmsCurrentAmount: probeResult.wmsCurrentAmount,
+              executionWarehouseId: probeResult.executionWarehouseId ?? event.executionWarehouseId,
               wmsAfterAmount: wmsResult.status === 'SUCCESS'
                 ? probeResult.wmsSellableAmount
                 : event.wmsAfterAmount,

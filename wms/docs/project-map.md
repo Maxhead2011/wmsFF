@@ -1,3 +1,5 @@
+Prepared 2026-10-15 (not published): [WB monitor routing and reservation proof](wb-monitor-routing-proof.md). Opt-in WMS_FBS_MONITOR_ROUTING_ENABLED; four API modules, 13 source/runtime regression scenarios. Includes routed stock audit and approved Balandin 3 → 0 correction.
+
 Published PR608 / 2026-10-15: Ozon TSD closed-carton top-up before cargo submission. LOGOFF APK233, explicit REOPEN_BOX, existing destination/quota/KIZ guards and idempotent audit. API3446/web442/Android263 per flavor passed;155/2 skipped; five actual-runtime cases and public file hashes verified. Three API modules and three download files only; WMS_OZON_REOPEN_BOX_ENABLED=true. Baseline `2026-10-15-ozon-reopen-233`, sourceParityVerified=false. [Evidence](releases/ozon-reopen-233.json).
 
 
