@@ -56,3 +56,25 @@ describe('Ozon cargo throttling',()=>{
   const x=setup();x.shipment.integration.operations['42']={state:'UNKNOWN',error:'Ozon: HTTP 429. limit'};x.call.mockResolvedValue({supplies_cargoes:[{supply_id:42,cargoes_without_transport_cargoes:[{cargo_id:1}]}]});await x.svc.status('r',x.user);expect(x.shipment.integration.operations['42'].state).toBe('UNKNOWN');
  });
 });
+
+// TEST: adjacent int64 cargo IDs must stay distinct in both HTTP directions.
+describe('Ozon cargo int64 identity',()=>{
+ afterEach(()=>vi.unstubAllGlobals());
+ it('retains exact remote IDs and serializes numeric label IDs without Number conversion',async()=>{
+  const ids=['1000000000064215122','1000000000064215123','1000000000064215124'];
+  const fetcher=vi.fn().mockResolvedValueOnce(new Response('{"cargoes":['+ids.map(id=>'{"cargo_id":'+id+'}').join(',')+']}')).mockResolvedValueOnce(new Response('{}'));
+  vi.stubGlobal('fetch',fetcher);
+  const svc=new OzonAssemblySupplyService({} as any,{} as any);
+  const result=await svc.call({},'/v2/cargoes/create/info',{});
+  expect(result.cargoes.map((x:any)=>x.cargo_id)).toEqual(ids);
+  await svc.call({},'/v1/cargoes-label/create',{cargoes:result.cargoes},false);
+  expect(fetcher.mock.calls[1][1].body).toBe('{"cargoes":['+ids.map(id=>'{"cargo_id":'+id+'}').join(',')+']}');
+ });
+ it('passes stored cargo IDs to label creation as exact strings',async()=>{
+  const x=setup();x.shipment.integration.operations['42']={state:'SUCCESS',cargoes:[{key:'b',cargoId:'1000000000064215122'}]};
+  x.call.mockResolvedValueOnce({operation_id:'label-op'}).mockResolvedValueOnce({result:{file_url:'https://example.com/labels.pdf'}});
+  await x.svc.labels('r','42',x.user);
+  expect(x.call.mock.calls[0][2].cargoes[0].cargo_id).toBe('1000000000064215122');
+  expect(x.shipment.integration.operations['42'].labelUrl).toBe('https://example.com/labels.pdf');
+ });
+});

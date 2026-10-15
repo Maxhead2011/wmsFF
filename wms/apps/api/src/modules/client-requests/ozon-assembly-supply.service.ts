@@ -31,7 +31,11 @@ export class OzonAssemblySupplyService {
  // FIX: retry only explicit rate-limit rejection for cargo creation, never an ambiguous write.
  async call(c:any,path:string,body:any,read=true):Promise<any>{
   for(let attempt=0;attempt<3;attempt++){
-   let r:Response;try{r=await fetch('https://api-seller.ozon.ru'+path,{method:'POST',headers:{'Content-Type':'application/json','Client-Id':c.sellerId,'Api-Key':c.apiKey},body:JSON.stringify(body),signal:AbortSignal.timeout(30000)});}catch{throw new BadGatewayException('Нет подтверждённого ответа Ozon. Проверьте статус; не отправляйте повторно.');}
+   let r:Response;try{r=await fetch('https://api-seller.ozon.ru'+path,{method:'POST',headers:{'Content-Type':'application/json','Client-Id':c.sellerId,'Api-Key':c.apiKey},body:JSON.stringify(body,(key,value)=>{
+    // FIX: Ozon int64 cargo IDs must be emitted as exact numeric tokens.
+    if(key==='cargo_id'&&typeof value==='string'&&/^[1-9]\d*$/.test(value))return (JSON as typeof JSON & {rawJSON:(s:string)=>unknown}).rawJSON(value);
+    return value;
+   }),signal:AbortSignal.timeout(30000)});}catch{throw new BadGatewayException('Нет подтверждённого ответа Ozon. Проверьте статус; не отправляйте повторно.');}
    if((read||path==='/v1/cargoes/create')&&r.status===429&&attempt<2){
     const retryAfter=r.headers.get('retry-after');
     const requested=retryAfter?(Number.isFinite(Number(retryAfter))?Number(retryAfter)*1000:Date.parse(retryAfter)-Date.now()):0;
@@ -39,7 +43,14 @@ export class OzonAssemblySupplyService {
     // Do not retry before a long server cooldown, or hold the incoming request indefinitely.
     if(delay<=10000){await r.body?.cancel();await new Promise(r=>setTimeout(r,delay));continue;}
    }
-   const p=await r.json().catch(()=>({}));if(!r.ok)throw new BadGatewayException(`Ozon: HTTP ${r.status}. ${String(p.message??'Ошибка запроса').slice(0,300)}`);return p;
+   // FIX: Node 22 supplies the original token before Number rounding.
+   const text=await r.text();
+   let p:any;try{p=JSON.parse(text,(key,value,context?:{source?:string})=>{
+    if(key==='cargo_id'&&typeof value==='number'){
+     if(context?.source&&/^[1-9]\d*$/.test(context.source))return context.source;
+     if(!Number.isSafeInteger(value))throw new Error('Unsafe cargo ID');
+    }return value;
+   });}catch{throw new BadGatewayException('Ozon вернул некорректный ответ или неточный номер грузоместа.');}if(!r.ok)throw new BadGatewayException(`Ozon: HTTP ${r.status}. ${String(p.message??'Ошибка запроса').slice(0,300)}`);return p;
   }
  }
  async snapshot(c:any,orderId:string):Promise<SupplyIntegration>{
@@ -166,7 +177,7 @@ export class OzonAssemblySupplyService {
   const c=await this.connection(l.connectionId,s.request.clientId);
   let operationId=op.labelOperationId;
   if(!operationId){
-   const created=await this.call(c,'/v1/cargoes-label/create',{supply_id:Number(supplyId),cargoes:op.cargoes.map(v=>({cargo_id:Number(v.cargoId)}))},false);
+   const created=await this.call(c,'/v1/cargoes-label/create',{supply_id:Number(supplyId),cargoes:op.cargoes.map(v=>({cargo_id:v.cargoId}))},false);
    operationId=String(created.operation_id??'');if(!operationId)throw new BadGatewayException('Ozon не вернул операцию подготовки этикеток.');
    await this.locked(id,user,async(cur,tx)=>{const link=cur.integration as SupplyIntegration;link.operations[supplyId].labelOperationId=operationId;await this.save(tx,id,link,user,'OZON_LABEL_REQUEST');});
   }
