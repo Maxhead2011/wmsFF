@@ -20,7 +20,8 @@ d('tag',v['base'],'logoff-api:before-reconciliation-tools-20261015');d('tag',v['
 apiSwitched=False;webSwitched=False
 try:
  network=next(iter(json.loads(d('inspect','infra-api-1','--format','{{json .NetworkSettings.Networks}}'))))
- command=['docker','run','--rm','--network',network,'--env-file',str(app/'.env'),'-w','/app/apps/api','-v',str(r)+':/test:ro','--entrypoint','node',v['candidate'],'/test/migrate.cjs']
+ # FIX: the mounted script resolves Prisma through the same module path as stage smoke.
+ command=['docker','run','--rm','--network',network,'--env-file',str(app/'.env'),'-e','NODE_PATH=/app/node_modules:/app/apps/api/node_modules','-w','/app/apps/api','-v',str(r)+':/test:ro','--entrypoint','node',v['candidate'],'/test/migrate.cjs']
  subprocess.run(command,check=True)
  d('run','--rm','--network',network,'--env-file',str(app/'.env'),'-w','/app/apps/api','--entrypoint','/app/apps/api/node_modules/.bin/prisma',v['candidate'],'migrate','resolve','--applied','20261015230000_reconciliation_queue')
  apiSwitched=True;switch('api',v['candidate']);assert json.loads(get('api/v1/health'))['status']=='ok'
