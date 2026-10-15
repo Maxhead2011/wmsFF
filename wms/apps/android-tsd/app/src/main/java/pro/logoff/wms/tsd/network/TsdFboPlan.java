@@ -9,6 +9,7 @@ public class TsdFboPlan {
     public static class DirectionItem { public String skuId, barcode; public int quantity, packed; }
     // FIX: absent capability keeps older servers and sold clients on the existing workflow.
     public boolean packingByProductSupported;
+    public boolean reopenPackingBoxSupported;
     public boolean packingUndoSupported;
     // FIX: physical source box is optional only when the server advertises loose storage.
     public boolean unboxedPickingSupported;
