@@ -3777,3 +3777,27 @@ model ReceiptStockIdentity {
 
   @@index([receiptAt])
 }
+
+// FIX: durable scheduler state; not shipment evidence.
+model WmsReconciliationCase {
+ key String @id
+ clientId String
+ requestId String
+ warehouseId String?
+ entityId String
+ cause String
+ label String
+ evidenceVersion String
+ leaseToken String?
+ leaseUntil DateTime? @db.Timestamptz
+ attempts Int @default(0)
+ nextAttemptAt DateTime @default(now()) @db.Timestamptz
+ reasonCode String?
+ assignedToId String?
+ lastAttemptAt DateTime? @db.Timestamptz
+ resolvedAt DateTime? @db.Timestamptz
+ createdAt DateTime @default(now()) @db.Timestamptz
+ updatedAt DateTime @default(now()) @db.Timestamptz
+ @@index([clientId,nextAttemptAt],map: "WmsReconciliationCase_client_due")
+ @@index([requestId],map: "WmsReconciliationCase_request")
+}

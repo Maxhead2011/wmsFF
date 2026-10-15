@@ -1,3 +1,5 @@
+import { reconcileWbBackground } from '../../common/reconciliation/wb-background';
+import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorReservation } from './fbs-monitor-routing';
 import { fbsStockReserveDisplay } from './fbs-stock-reserve-display';
 import { preserveLegacyProductLinks, linkedOrderSku, productLinksEnabled, wbSkuScope, wbLinkedSkus, syncProductLink, readProductLinks, confirmProductLink } from './marketplace-product-links';
@@ -17657,78 +17659,116 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  private async applyLocalWbShipments(clientId: string, orders: FbsOrderSummary[]) {
-    // FIX: recover a committed print acknowledgement if shipment/billing was interrupted afterwards.
-    // FIX: historical clients can exceed PostgreSQL's 32767 bind-parameter limit.
-    const recorded = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
-    const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
-      select: { id: true, requestId: true, connectionId: true, orderId: true, completedAt: true } });
-    const pendingIds = currentTasks.filter(task => !recorded.has(task.id)).map(task => task.id);
-    const printed: Array<{ assemblyId: string; printedAt: Date | null }> = [];
-    for (const ids of chunks(pendingIds, 10000)) printed.push(...await this.prisma.fbsPrintJob.findMany({
-      where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
-      select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' },
-    }));
-    for (const print of printed) {
-      if (recorded.has(print.assemblyId)) continue;
-      const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: print.assemblyId } });
-      try {
-        const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
-        const statusChanges: FbsAutoStatusChange[] = [];
-        await this.prisma.$transaction(async tx => {
-          await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined);
-          if (print.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId }, statusChanges);
-        }, { timeout: 30_000 });
-        await this.notifyFbsAutoStatusChanges(statusChanges);
-        recorded.add(task.id);
-      } catch (error) {
-        this.logger.warn(`Printed WB order ${task.orderId} needs stock reconciliation: ${error instanceof Error ? error.message : String(error)}`);
-      }
+  private async applyLocalWbShipments(clientId: string, orders: FbsOrderSummary[], readOnly = false, activeOnly = false) {
+        // FIX: screens never enqueue or retry physical reconciliation.
+        if (!readOnly && process.env.WMS_RECONCILIATION_QUEUE_ENABLED === 'true') {
+            await reconcileWbBackground(this.prisma, clientId, orders, task => this.localShipmentOrder(task), changes => this.notifyFbsAutoStatusChanges(changes));
+            readOnly = true;
+        }
+
+        // FIX: recover a committed print acknowledgement if shipment/billing was interrupted afterwards.
+        // FIX: historical clients can exceed PostgreSQL's 32767 bind-parameter limit.
+        const recorded = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
+        const currentTasks = await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, marketplace: MarketplaceType.WILDBERRIES },
+            select: { id: true, requestId: true, connectionId: true, orderId: true, completedAt: true } });
+        // FIX: screen reads keep recorded shipment facts below, without retrying old write-offs.
+        if (!readOnly) {
+            const pendingIds = currentTasks.filter(task => !recorded.has(task.id)).map(task => task.id);
+            const printed: Array<{assemblyId:string;printedAt:Date|null}> = [];
+            for (const ids of chunks(pendingIds, 10000))
+                printed.push(...await this.prisma.fbsPrintJob.findMany({
+                    where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
+                    select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' },
+                }));
+            for (const print of printed) {
+                if (recorded.has(print.assemblyId))
+                    continue;
+                const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: print.assemblyId } });
+                try {
+                    const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
+                    const statusChanges: FbsAutoStatusChange[] = [];
+                    await this.prisma.$transaction(async (tx) => {
+                        await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined);
+                        if (print.printedAt)
+                            await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId }, statusChanges);
+                    }, { timeout: 30_000 });
+                    await this.notifyFbsAutoStatusChanges(statusChanges);
+                    recorded.add(task.id);
+                }
+                catch (error) {
+                    this.logger.warn(`Printed WB order ${task.orderId} needs stock reconciliation: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+            const doneRequests: Array<{id:string}> = [];
+            for (const ids of chunks(uniqueStrings(currentTasks.map(task => task.requestId)), 10000)) {
+                doneRequests.push(...await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE', id: { in: ids } }, select: { id: true } }));
+            }
+            // FIX: a migrated shipment fact does not prove that its packing ledger was closed.
+            if (doneRequestPackingEnabled()) {
+                const residuals = await this.prisma.stockMovement.groupBy({ by: ['sourceDocument'],
+                    where: { clientId, status: 'PACKING', sourceDocument: { not: null } },
+                    _sum: { quantity: true }, having: { quantity: { _sum: { gt: 0 } } },
+                });
+                const residualIds = new Set(residuals.map(row => row.sourceDocument));
+                for (const request of doneRequests) {
+                    if (!residualIds.has(request.id))
+                        continue;
+                    try {
+                        await this.prisma.$transaction(tx => reconcileDoneRequestPacking(tx, request.id), { timeout: 30_000 });
+                    }
+                    catch (error) {
+                        this.logger.warn(`Done request ${request.id} needs packing reconciliation: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }
+            }
+            const doneIds = new Set(doneRequests.map(request => request.id));
+            const incomingShipped = new Set(orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped')
+                .map(order => selectionKey(order.connectionId, order.id)));
+            const reconcileIds = currentTasks.filter(task => !recorded.has(task.id) &&
+                (incomingShipped.has(selectionKey(task.connectionId, task.orderId)) || (doneIds.has(task.requestId) && task.completedAt))).map(task => task.id);
+            const tasks: FbsTsdAssemblyRecord[] = [];
+            for (const ids of chunks(reconcileIds, 10000))
+                tasks.push(...await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, id: { in: ids } } }));
+            for (const task of tasks) {
+                if (recorded.has(task.id))
+                    continue;
+                const manuallyShipped = doneRequests.some(request => request.id === task.requestId);
+                const incoming = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId && order.category === 'shipped');
+                const order = incoming ?? (manuallyShipped ? await this.localShipmentOrder(task) : null);
+                if (!order)
+                    continue;
+                try {
+                    await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, manuallyShipped ? 'WMS_REQUEST_SHIPPED' : 'WB_SHIPMENT_CONFIRMED', cleanJson(order)), { timeout: 30_000 });
+                }
+                catch (error) {
+                    // FIX: missing physical evidence cannot manufacture a stock write-off; next sync retries.
+                    this.logger.warn(`WB shipment ${task.orderId} needs reconciliation: ${error instanceof Error ? error.message : String(error)}`);
+                }
+            }
+        }
+        const byOrder = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
+        // FIX: an explicit repeat is current physical work; an older shipment must not hide it.
+        const currentByOrder = new Map(currentTasks.map(task => [selectionKey(task.connectionId, task.orderId), task.id]));
+        const shippedAssemblies = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
+        // FIX: bound JSON decoding memory independently of accumulated shipment history.
+        for (let skip = 0;; skip += 1000) {
+            const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId, ...(activeOnly ? { OR: orders.map(order => ({ connectionId: order.connectionId, orderId: order.id })) } : {}) }, skip, take: 1000,
+                orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
+                select: { assemblyId: true, connectionId: true, orderId: true, orderSnapshot: true, shippedAt: true } });
+            for (const fact of facts) {
+                const currentId = currentByOrder.get(selectionKey(fact.connectionId, fact.orderId));
+                if (currentId && currentId !== fact.assemblyId && !shippedAssemblies.has(currentId))
+                    continue;
+                const frozen = fact.orderSnapshot as unknown as FbsOrderSummary;
+                // FIX: migrated shipment snapshots can omit identity; durable shipment columns are authoritative.
+                byOrder.set(selectionKey(fact.connectionId, fact.orderId), { ...byOrder.get(selectionKey(fact.connectionId, fact.orderId)), ...frozen, id: fact.orderId, connectionId: fact.connectionId, marketplace: MarketplaceType.WILDBERRIES, category: 'shipped', supplierStatus: 'complete',
+                    statusLabel: 'Отгружен из ВМС', deliveryDate: fact.shippedAt.toISOString() });
+            }
+            if (facts.length < 1000)
+                break;
+        }
+        return [...byOrder.values()];
     }
-    const doneRequests: Array<{ id: string }> = [];
-    for (const ids of chunks(uniqueStrings(currentTasks.map(task => task.requestId)), 10000)) {
-      doneRequests.push(...await this.prisma.clientRequest.findMany({ where: { clientId, status: 'DONE', id: { in: ids } }, select: { id: true } }));
-    }
-    const doneIds = new Set(doneRequests.map(request => request.id));
-    const incomingShipped = new Set(orders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.category === 'shipped')
-      .map(order => selectionKey(order.connectionId, order.id)));
-    const reconcileIds = currentTasks.filter(task => !recorded.has(task.id) &&
-      (incomingShipped.has(selectionKey(task.connectionId, task.orderId)) || (doneIds.has(task.requestId) && task.completedAt))).map(task => task.id);
-    const tasks: FbsTsdAssemblyRecord[] = [];
-    for (const ids of chunks(reconcileIds, 10000)) tasks.push(...await this.prisma.fbsTsdAssembly.findMany({ where: { clientId, id: { in: ids } } }));
-    for (const task of tasks) {
-      if (recorded.has(task.id)) continue;
-      const manuallyShipped = doneRequests.some(request => request.id === task.requestId);
-      const incoming = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId && order.category === 'shipped');
-      const order = incoming ?? (manuallyShipped ? await this.localShipmentOrder(task) : null);
-      if (!order) continue;
-      try {
-        await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, manuallyShipped ? 'WMS_REQUEST_SHIPPED' : 'WB_SHIPMENT_CONFIRMED', cleanJson(order)), { timeout: 30_000 });
-      } catch (error) {
-        // FIX: missing physical evidence cannot manufacture a stock write-off; next sync retries.
-        this.logger.warn(`WB shipment ${task.orderId} needs reconciliation: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
-    const byOrder = new Map(orders.map(order => [selectionKey(order.connectionId, order.id), order]));
-    // FIX: an explicit repeat is current physical work; an older shipment must not hide it.
-    const currentByOrder = new Map(currentTasks.map(task => [selectionKey(task.connectionId, task.orderId), task.id]));
-    const shippedAssemblies = new Set((await this.prisma.wbOrderShipment.findMany({ where: { clientId }, select: { assemblyId: true } })).map(fact => fact.assemblyId));
-    // FIX: bound JSON decoding memory independently of accumulated shipment history.
-    for (let skip = 0; ; skip += 1000) {
-      const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId }, skip, take: 1000,
-        orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
-        select: { assemblyId: true, connectionId: true, orderId: true, orderSnapshot: true, shippedAt: true } });
-      for (const fact of facts) {
-      const currentId = currentByOrder.get(selectionKey(fact.connectionId, fact.orderId));
-      if (currentId && currentId !== fact.assemblyId && !shippedAssemblies.has(currentId)) continue;
-      const frozen = fact.orderSnapshot as unknown as FbsOrderSummary;
-      byOrder.set(selectionKey(fact.connectionId, fact.orderId), { ...frozen, category: 'shipped', supplierStatus: 'complete',
-        statusLabel: 'Отгружен из ВМС', deliveryDate: fact.shippedAt.toISOString() });
-      }
-      if (facts.length < 1000) break;
-    }
-    return [...byOrder.values()];
-  }
   async webOrderAssemblyHistory(user: AuthUser, orderIdValue?: string) {
     // FIX: exact order lookup happens before the history limit; it never assembles or prints an order.
     const orderId = typeof orderIdValue === 'string' ? orderIdValue.trim() : '';

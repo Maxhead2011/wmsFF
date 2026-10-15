@@ -146,3 +146,5 @@ PR604: personal login welcome correction published; see [details and tests](pers
 
 
 Published PR606 Eleonora account correction: legacy Elya ID differed from actual login. [Details and regression](eleonora-account-welcome.md).
+
+Prepared: [reconciliation queue and request tools](reconciliation-tools.md). New own-WMS flags default off; additive scheduler table; publication evidence pending.

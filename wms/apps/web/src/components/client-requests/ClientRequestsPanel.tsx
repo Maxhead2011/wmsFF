@@ -1,3 +1,4 @@
+import { OperationsTools } from './OperationsTools';
 import { startVisiblePolling } from '../../lib/visiblePolling';
 import { onlineRequestToolbar } from './onlineRequestToolbar';
 import { isSkuCollectionRequest } from './skuCollectionRow';
@@ -1941,6 +1942,7 @@ export function ClientRequestsPanel({
 
   return (
     <section ref={onlineRoot} className="client-requests-panel" aria-label="Клиентские заявки">
+      <OperationsTools token={session.accessToken} userId={session.user.id} permissions={session.user.permissionCodes} onOpen={canPickOutbound ? (request)=>void openOnlineExecution(request) : undefined} />
       {returnReceipt ? <FbsReturnReceiptDialog key={returnReceipt.assemblyId}
         orderId={returnReceipt.orderId} productName={returnReceipt.productName} requiresKiz={returnReceipt.requiresKiz}
         busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
