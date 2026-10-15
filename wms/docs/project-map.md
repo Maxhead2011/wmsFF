@@ -1,3 +1,5 @@
+Prepared, NOT published (2026-10-15): [Ozon TSD closed-carton top-up](ozon-tsd-reopen-box.md). Explicit REOPEN_BOX, destination and cargo-freeze guards, ordinary item packing; separate opt-in capability for LOGOFF APK.
+
 Published PR601 / 2026-10-14: readable section count in la_panthera Light. White badge text, contrast12.19 (was1.20); Dark6.01 unchanged. Web431 passed,2 skipped; source/candidate/published CSS browser checks passed. Only index.html and one hashed CSS asset changed over current live web; API/APK232 unchanged. Baseline `2026-10-14-sidebar-contrast`, sourceParityVerified=false. [Evidence](releases/sidebar-contrast-20261014.json).
 
 Prepared, NOT published (2026-10-14): [Winx / Disney in la_panthera](panthera-magic-themes.md). 33 supplied wallpapers, cursors and personal welcome; our web-WMS only. Web440/API3437 passed; 2/150 skipped, dedicated KIZ DB suites excluded.

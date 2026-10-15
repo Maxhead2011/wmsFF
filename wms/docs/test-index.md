@@ -1,3 +1,5 @@
+Prepared, NOT published (2026-10-15): [Ozon TSD closed-carton top-up](ozon-tsd-reopen-box.md). Explicit REOPEN_BOX, destination and cargo-freeze guards, ordinary item packing; separate opt-in capability for LOGOFF APK.
+
 PR601: `scripts/sidebar-count-contrast.browser.test.cjs` verifies actual Light/Dark badge contrast; WMS_TEST_CSS supports candidate and published styles.
 
 Prepared, NOT published (2026-10-14): [Winx / Disney in la_panthera](panthera-magic-themes.md). 33 supplied wallpapers, cursors and personal welcome; our web-WMS only. Web440/API3437 passed; 2/150 skipped, dedicated KIZ DB suites excluded.

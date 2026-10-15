@@ -742,6 +742,53 @@ public class FboTwoStageScreenTest {
  return s;}Thread.sleep(10);}
         fail("Plan did not load");return s;
     }
+    // TEST: closed Ozon cartons expose explicit top-up only when the server permits it.
+    @Test public void ozonClosedCartonHasTopUpAction() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.marketplace="OZON";
+            p.directions=new ArrayList<>();p.reopenPackingBoxSupported=true;
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="CLOSED";box.direction="Москва";box.closed=true;box.quantity=1;p.boxes.add(box);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try{
+                TextView action=find(a.findViewById(android.R.id.content),"Добавить в закрытый короб");
+                if("logoff".equals(BuildConfig.FLAVOR)){
+                    assertNotNull(action);action.performClick();assertEquals(0,writes.get());
+                    android.app.AlertDialog dialog=org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog();
+                    assertNotNull(dialog);dialog.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();assertEquals(0,writes.get());
+                }else assertNull(action);
+            }finally{screen.close();}
+            p.reopenPackingBoxSupported=false;screen=open(a,p,true,writes);
+            try{assertNull(find(a.findViewById(android.R.id.content),"Добавить в закрытый короб"));}finally{screen.close();}
+        }
+    }
+    // TEST: reopening submits one durable command, then ordinary unmarked packing in the same direction.
+    @Test public void ozonTopUpReopensThenUsesNormalPacking() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.marketplace="OZON";p.reopenPackingBoxSupported=true;
+            p.directions=new ArrayList<>();TsdFboPlan.Direction direction=new TsdFboPlan.Direction();direction.name="Москва";direction.needed=2;direction.packed=1;
+            TsdFboPlan.Line line=new TsdFboPlan.Line();line.skuId="sku";line.barcode="123";line.needed=2;line.picked=2;line.packed=1;p.lines.add(line);
+            direction.items=new ArrayList<>();
+            TsdFboPlan.DirectionItem item=new TsdFboPlan.DirectionItem();item.skuId="sku";item.barcode="123";item.quantity=2;item.packed=1;direction.items.add(item);p.directions.add(direction);
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="CLOSED";box.direction="Москва";box.closed=true;box.quantity=1;p.boxes.add(box);
+            java.util.List<Map<String,String>> calls=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
+                if(m.getName().equals("actFbo")){
+                    Map<String,String> payload=new java.util.LinkedHashMap<>((Map<String,String>)args[2]);calls.add(payload);
+                    if("REOPEN_BOX".equals(payload.get("action")))box.closed=false;
+                }
+                return Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->method.getName().equals("execute")?Response.success(p):null);
+            });
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",true,()->{},()->{});
+            try{
+                waitIdle(screen);find(a.findViewById(android.R.id.content),"Добавить в закрытый короб").performClick();
+                org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog().getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick();waitIdle(screen);
+                assertEquals(1,calls.size());assertEquals("REOPEN_BOX",calls.get(0).get("action"));assertEquals("CLOSED",calls.get(0).get("targetBoxCode"));assertEquals("Москва",calls.get(0).get("direction"));
+                screen.scannerField().setText("123");screen.submit();waitIdle(screen);
+                assertEquals(2,calls.size());assertEquals("PACK_UNIT",calls.get(1).get("action"));assertEquals("CLOSED",calls.get(1).get("targetBoxCode"));assertEquals("Москва",calls.get(1).get("direction"));
+            }finally{screen.close();}
+        }
+    }
     private TextView find(View v,String text){
         if(v instanceof TextView && ((TextView)v).getText().toString().contains(text))return (TextView)v;
         if(v instanceof ViewGroup)for(int i=0;i<((ViewGroup)v).getChildCount();i++){TextView r=find(((ViewGroup)v).getChildAt(i),text);if(r!=null)return r;}return null;
