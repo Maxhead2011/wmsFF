@@ -1,3 +1,4 @@
+import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorReservation } from './fbs-monitor-routing';
 import { fbsStockReserveDisplay } from './fbs-stock-reserve-display';
 import { preserveLegacyProductLinks, linkedOrderSku, productLinksEnabled, wbSkuScope, wbLinkedSkus, syncProductLink, readProductLinks, confirmProductLink } from './marketplace-product-links';
 import { filterReceiptOrderBoxes, receiptPublicationPolicy, receiptBlockedBoxes, receiptBlockedByTasks, assertReceiptFbsBox } from '../warehouse/receipt-channel-policy';
@@ -922,8 +923,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         apiKey: true,
         fbsWarehouseId: true,
         fbsExecutionWarehouseId: true,
+        fbsAutoRouteNewWarehouses: true,
       },
     });
+    const routed = fbsMonitorRoutingEnabled();
+    const routes = routed ? await this.prisma.fbsWarehouseRoutingRule.findMany({ where: { connectionId: { in: connectionIds } } }) : [];
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
     const assemblies = await this.prisma.fbsTsdAssembly.findMany({
       where: {
@@ -939,6 +943,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         itemCount: true,
         status: true,
         reservedAt: true,
+        stockWarehouseId: true,
         completedAt: true,
       },
     });
@@ -960,6 +965,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (!first) continue;
       const connection = connectionById.get(first.connectionId);
       const warehouseId = first.marketplaceWarehouseId || connection?.fbsWarehouseId || '';
+      const routedWarehouseId = connection && routed ? fbsMonitorRoute(connection, warehouseId, routes) : null;
+      if (routed && !routedWarehouseId) {
+        for (const event of group) resultById.set(event.eventId, {
+          eventId: event.eventId, wbCurrentAmount: null, wbOrderMatched: false,
+          wbError: 'Склад вне действующей маршрутизации WMS.',
+          wmsCurrentAmount: null, wmsSellableAmount: null, wmsReservedAmount: null,
+          wmsReservationMatched: false, wmsReservationReleased: false,
+          wmsError: 'Склад вне действующей маршрутизации WMS.',
+        });
+        continue;
+      }
       let wbAmounts = new Map<number, number>();
       let wbError: string | null = null;
       if (!connection) {
@@ -988,7 +1004,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         try {
           executionWarehouseId = await this.resolveFbsExecutionWarehouseId(
             connection.clientId,
-            connection.fbsExecutionWarehouseId,
+            routed ? routedWarehouseId : connection.fbsExecutionWarehouseId,
           );
           if (!executionWarehouseId) {
             wmsError = 'Не определён филиал WMS для этого подключения.';
@@ -1028,16 +1044,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           wbOrderMatched: true,
           wbError,
           wmsCurrentAmount: quantity?.available ?? null,
+          executionWarehouseId: routed ? executionWarehouseId : undefined,
           wmsSellableAmount: quantity?.sellable ?? null,
           wmsReservedAmount: quantity?.reserved ?? null,
-          wmsReservationMatched: Boolean(
+          wmsReservationRequired: routed,
+          wmsReservationMatched: routed ? fbsMonitorReservation(assembly, event.skuId, event.quantity, executionWarehouseId) : Boolean(
             assembly &&
             assembly.skuId === event.skuId &&
             !terminalAssembly &&
             // FIX: a partial reservation must not confirm a multi-unit order.
             Math.max(1, assembly.itemCount) >= event.quantity,
           ),
-          wmsReservationReleased: terminalAssembly,
+          wmsReservationReleased: routed ? Boolean(assembly && ['RELEASED', 'CANCELLED', 'RETURNED'].includes(assembly.status) && assembly.stockWarehouseId === executionWarehouseId) : terminalAssembly,
           wmsError,
           sourceIds: {
             connectionId: event.connectionId,

@@ -1,3 +1,5 @@
+Prepared 2026-10-15 (not published): [WB monitor routing and reservation proof](wb-monitor-routing-proof.md). Opt-in WMS_FBS_MONITOR_ROUTING_ENABLED; four API modules, 13 source/runtime regression scenarios. Full API: 3459 passed / 155 skipped (two dedicated KIZ DB suites excluded); web: 442 passed / 2 skipped; API TypeScript and baseline verification passed. Includes routed stock audit and approved Balandin 3 → 0 correction.
+
 Published PR616 / 2026-10-15: bounded API request timing and compact TSD replay receipt reads. API3462/web443, TypeScript, actual-image7 and live read-only SQL verification passed;150/2 skipped, dedicated KIZ DB suites excluded. Three runtime files; two own-WMS flags enabled. Web/APK233/print agent/schema/stock/sold WMS unchanged. Baseline `2026-10-15-operation-reads`, sourceParityVerified=false. [Details](operation-read-diagnostics.md). [Evidence](releases/operation-reads-20261015.json).
 
 Prepared: [request diagnostics and compact TSD replay reads](operation-read-diagnostics.md). Three API runtime files only; API3462/web443 and actual-image7 passed. Queue/schema excluded; sold WMS unchanged.
