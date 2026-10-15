@@ -4,12 +4,15 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { timingMiddleware } from './common/diagnostics/operation-timing';
 
 async function bootstrap() {
   const requestBodyLimit = process.env.API_REQUEST_BODY_LIMIT?.trim() || '10mb';
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
   });
+  // FIX: own-WMS opt-in timing, with request-local correlation and no business payloads.
+  app.use(timingMiddleware());
   app.useBodyParser('json', { limit: requestBodyLimit });
   app.useBodyParser('urlencoded', {
     limit: requestBodyLimit,
