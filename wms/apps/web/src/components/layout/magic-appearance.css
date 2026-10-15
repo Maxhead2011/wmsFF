@@ -1,0 +1,24 @@
+/* FIX: viewport background is independent of scrollable workspaces. Opaque controls retain light-theme contrast. */
+@media screen {
+ :root[data-ui-magic] body {isolation:isolate;background:#eee8f4!important;}
+ .magic-wallpaper {position:fixed;inset:0;z-index:-1;background-color:#eee8f4;background-size:cover;background-position:center;background-repeat:no-repeat;pointer-events:none;}
+ :root[data-ui-magic][data-ui-variant="la_panthera"] :is(#root,.app-layout,.workspace-shell,.workspace-content,.panthera-window-surface) {background:transparent!important;}
+ :root[data-ui-magic][data-ui-variant="la_panthera"] :is(.workspace-header,.workspace-sidebar,.workspace-nav,.panel,.workspace-panel,.panthera-window-dock) {background-color:#fff!important;}
+ .magic-cursor {position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;overflow:hidden;will-change:transform;}
+ .magic-cursor:not([data-ready="true"]), .magic-cursor[hidden] {display:none;}
+ .magic-cursor img {position:absolute;max-width:none;}
+ .magic-cursor--winx {width:42px;height:68px;mix-blend-mode:multiply;clip-path:polygon(0 0,60% 0,78% 29%,57% 42%,92% 100%,67% 100%,30% 46%,0 38%);}
+ .magic-cursor--winx img {width:54px;height:77px;left:-12px;top:-5px;}
+ .magic-cursor--disney {width:37px;height:46px;}
+ .magic-cursor--disney img {width:110px;height:56px;left:-10px;top:-5px;}
+ :root[data-ui-magic][data-magic-cursor] body, :root[data-ui-magic][data-magic-cursor] body * {cursor:none!important;}
+ .magic-dust {position:fixed;inset:0;z-index:2147483646;pointer-events:none;overflow:hidden;}
+ .magic-dust i {position:absolute;width:5px;height:5px;border-radius:50%;background:#ffb8ec;box-shadow:0 0 5px #c586ff;animation:magic-dust-fade .6s ease-out forwards;}
+ .magic-welcome {position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1000;width:min(560px,calc(100vw - 32px))!important;max-width:560px!important;margin:auto!important;flex:none!important;padding:20px;box-sizing:border-box;display:grid;justify-items:center;gap:14px;text-align:center;background:#fff;color:#342848;border-radius:22px;}
+ .magic-welcome h1 {font-size:clamp(18px,3vw,25px);margin:0;}
+ .magic-welcome :is(video,img) {display:block;width:100%;height:auto;max-height:45vh;object-fit:contain;border-radius:14px;}
+ .magic-welcome button {padding:10px 22px;border:1px solid #a582b7;border-radius:10px;background:#f3eafa;color:#342848;cursor:pointer;}
+}
+@keyframes magic-dust-fade {to {opacity:0;transform:translateY(14px) scale(.2);}}
+@media (prefers-reduced-motion:reduce) {.magic-dust {display:none;}}
+@media print {.magic-wallpaper,.magic-cursor,.magic-dust,.magic-welcome {display:none!important;}}

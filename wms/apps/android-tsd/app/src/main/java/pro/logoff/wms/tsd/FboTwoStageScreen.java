@@ -362,6 +362,21 @@ final class FboTwoStageScreen {
                     text(root,"Упаковка по товару сейчас недоступна. Сохранённый товар не вложен.");
                     button(root,"Отложить товар и вернуться к направлениям",ready(),()->{state.barcode="";state.productKiz="";state.productReady=false;chooseProductMode(false);});
                 }
+                // FIX: explicit Ozon top-up keeps ordinary barcode/KIZ packing and destination checks.
+                if(packing&&"logoff".equals(BuildConfig.FLAVOR)&&plan.reopenPackingBoxSupported&&"PACKING".equals(screenPhase())&&state.target.isEmpty()&&state.barcode.isEmpty()){
+                    for(TsdFboPlan.Box box:plan.boxes)if(box.closed&&!box.wholeBox){
+                        button(root,"Добавить в закрытый короб · "+box.code+" · "+box.direction,ready(),()->{
+                            new AlertDialog.Builder(activity).setTitle("Открыть короб для догруза?")
+                                .setMessage(box.code+" · "+box.direction+"\nПосле добавления товара закройте и проверьте короб снова.")
+                                .setNegativeButton("Отмена",null).setPositiveButton("Открыть",(dialog,which)->{
+                                    if(!ready())return;
+                                    state.productMode=false;state.productReady=false;state.productKiz="";
+                                    state.direction=box.direction;state.target=box.code;state.source="";
+                                    send("REOPEN_BOX",null);
+                                }).show();
+                        });
+                    }
+                }
                 if(!productActive())directionContents(root);
             }
             if(plan.parallelPackingSupported)text(root,"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438: "+Math.max(0,plan.picked-plan.packed));
@@ -561,7 +576,7 @@ final class FboTwoStageScreen {
     private void acceptReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){
         if(closed||!validReceipt(ack,payload))return;
         Map<String,String> position=state.confirmedPosition(payload);
-        if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))position.put("targetBoxCode",payload.get("targetBoxCode"));
+        if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))position.put("targetBoxCode",payload.get("targetBoxCode"));
         if(!prefs.edit().remove(pendingKey).remove(pendingKey+":fast").putString(pendingKey+":position",new JSONObject(position).toString()).commit()){
             busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
         }
@@ -581,7 +596,7 @@ final class FboTwoStageScreen {
             if(res.isSuccessful()&&validReceipt(res.body(),payload)){handler.post(()->acceptReceipt(res.body(),payload));return;}
             if(!res.isSuccessful()&&FboFeedback.definitiveRejection(res.code())&&res.code()!=404&&res.code()!=405){
                 String detail=error(res);handler.post(()->{if(closed)return;busy=false;
-                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit()){rejectConfirmedScan(payload);if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}
+                    if(prefs.edit().remove(pendingKey).remove(pendingKey+":fast").commit()){rejectConfirmedScan(payload);if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}
                     message=detail;packingErrorSpeech=true;feedbackColor=Color.rgb(254,202,202);if(res.code()==409&&state.pending()==null&&!packingScanRecovery())refresh();else render();});return;
             }
         }catch(Exception e){android.util.Log.w("FboConfirmation","Acknowledgement unavailable: "+e.getClass().getSimpleName());}
@@ -610,7 +625,7 @@ final class FboTwoStageScreen {
         if(fast){sendAcknowledged(payload);return;}
         busy=true;message="";render();executor.execute(()->{try{
             Response<TsdFboPlan> res=api.actFbo(session.authorizationHeader(),id,payload).execute();
-            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){rejectConfirmedScan(payload);if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
+            if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){rejectConfirmedScan(payload);if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
             TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
@@ -621,7 +636,7 @@ final class FboTwoStageScreen {
                 if(!confirmation.commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
                 state.accepted();state.restoreCheckpoint(position);if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message="UNDO_PACK_UNIT".equals(payload.get("action"))?"Последняя единица отменена. Возвращена в отобранные.":FboFeedback.accepted(payload,plan);
                 if("PACK_PRODUCT".equals(payload.get("action")))message="Упаковано: 1 шт. · "+payload.get("direction")+" · "+payload.get("targetBoxCode");
-                if("OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);reconcilePickingMode();packingAccepted(payload);
+                if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);reconcilePickingMode();packingAccepted(payload);
                 // FIX: preserve confirmed state persistence before announcing closure.
                 if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
                 if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});

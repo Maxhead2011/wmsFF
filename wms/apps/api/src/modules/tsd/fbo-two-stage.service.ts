@@ -1,3 +1,4 @@
+import { ozonReopenSupported, reopenOzonBox } from './ozon-reopen-box';
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
 import { confirmedUnplacedFboBoxes } from './fbo-unplaced-picking';
 import { fboBarcodeAliases, fboBarcodeMatches } from './fbo-barcode-aliases';
@@ -188,6 +189,7 @@ export class FboTwoStageService {
             marketplace: shipment ? 'OZON' : 'WILDBERRIES',
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
             unboxedPickingSupported: unboxed,
+            reopenPackingBoxSupported: ozonReopenSupported(shipment),
             packingByProductSupported: !!shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
             packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
             packingSuggestions: shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
@@ -340,6 +342,14 @@ export class FboTwoStageService {
                 if (lines.some(l => l.remaining))
                     throw new ConflictException('Сначала отберите все единицы заявки.');
                 await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
+            }
+            // FIX: reopen only an existing Ozon carton; ordinary PACK_UNIT still enforces quotas and marks.
+            else if (dto.action === 'REOPEN_BOX') {
+                requirePacking();
+                const target = await this.box(tx, r, dto.targetBoxCode);
+                await this.requireIdleBox(tx, target.id, id);
+                const parcel = await tx.fboAssemblyBox.findUnique({where:{activeBoxId:target.id}});
+                await reopenOzonBox(tx, shipment, id, parcel, dto.direction);
             }
             else if (dto.action === 'OPEN_BOX') {
                 requirePacking();

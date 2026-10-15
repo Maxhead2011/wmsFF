@@ -1,0 +1,20 @@
+{
+  "published": true,
+  "at": 1791988970.372719,
+  "pr": 606,
+  "api": "sha256:853c97dfaa475a33eedcb14c1d1c746dbbbb06602707f361983fef060e6b6838",
+  "web": "sha256:54403d3ab398e68c8f33116b73da54073f197d75e1216be255998449e5ac7fc7",
+  "webBase": "sha256:d84c5629fe4fbe73c81ffa0fca9d71577134a8ee12fb54c5484d228f38352db0",
+  "apk": {
+    "versionCode": 232,
+    "versionName": "0.1.232-fbo-restore",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-restore-232.apk",
+    "sha256": "788a56c65d2f06072d2c93989483ae0149375bb2a00fc1c9c8b7264cc76cf348",
+    "size": 5398935,
+    "releasedAt": "2026-10-14T11:36:28.053276+00:00",
+    "releaseNotes": "FBO: clear stale unmarked picking checkpoints after update; preserve pending commands."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "rollback": "logoff-web:before-eleonora-account-20261014"
+}
