@@ -56,3 +56,50 @@ describe('Ozon cargo throttling',()=>{
   const x=setup();x.shipment.integration.operations['42']={state:'UNKNOWN',error:'Ozon: HTTP 429. limit'};x.call.mockResolvedValue({supplies_cargoes:[{supply_id:42,cargoes_without_transport_cargoes:[{cargo_id:1}]}]});await x.svc.status('r',x.user);expect(x.shipment.integration.operations['42'].state).toBe('UNKNOWN');
  });
 });
+
+// TEST: adjacent int64 cargo IDs must stay distinct in both HTTP directions.
+describe('Ozon cargo int64 identity',()=>{
+ afterEach(()=>vi.unstubAllGlobals());
+ it('retains exact remote IDs and serializes numeric label IDs without Number conversion',async()=>{
+  const ids=['1000000000064215122','1000000000064215123','1000000000064215124'];
+  const fetcher=vi.fn().mockResolvedValueOnce(new Response('{"cargoes":['+ids.map(id=>'{"cargo_id":'+id+'}').join(',')+']}')).mockResolvedValueOnce(new Response('{}'));
+  vi.stubGlobal('fetch',fetcher);
+  const svc=new OzonAssemblySupplyService({} as any,{} as any);
+  const result=await svc.call({},'/v2/cargoes/create/info',{});
+  expect(result.cargoes.map((x:any)=>x.cargo_id)).toEqual(ids);
+  await svc.call({},'/v1/cargoes-label/create',{cargoes:result.cargoes},false);
+  expect(fetcher.mock.calls[1][1].body).toBe('{"cargoes":['+ids.map(id=>'{"cargo_id":'+id+'}').join(',')+']}');
+ });
+ it('passes stored cargo IDs to label creation as exact strings',async()=>{
+  const x=setup();x.shipment.integration.operations['42']={state:'SUCCESS',cargoes:[{key:'b',cargoId:'1000000000064215122'}]};
+  x.call.mockResolvedValueOnce({operation_id:'label-op'}).mockResolvedValueOnce({result:{file_url:'https://example.com/labels.pdf'}});
+  await x.svc.labels('r','42',x.user);
+  expect(x.call.mock.calls[0][2].cargoes[0].cargo_id).toBe('1000000000064215122');
+  expect(x.shipment.integration.operations['42'].labelUrl).toBe('https://example.com/labels.pdf');
+ });
+});
+
+// TEST: retry only a confirmed failed operation with no remote cargoes.
+describe('Ozon failed cargo retry',()=>{
+ afterEach(()=>{vi.unstubAllEnvs();vi.restoreAllMocks();});
+ it('retains object-form error details',async()=>{const x=setup();x.shipment.integration.operations['42']={state:'ACCEPTED',operationId:'old'};
+ x.call.mockResolvedValue({status:'FAILED',errors:{error_reasons:['OPERATION_FAILED'],items_validation:[]}});
+ await x.svc.status('r',x.user);expect(x.shipment.integration.operations['42'].error).toContain('OPERATION_FAILED');});
+ it('retries failed only once and keeps successful directions untouched',async()=>{
+ const x=setup();x.shipment.integration.operations['42']={state:'FAILED',operationId:'old'};
+ x.shipment.integration.operations['99']={state:'SUCCESS',cargoes:[{key:'other',cargoId:'123'}]};
+ const original=x.call.getMockImplementation()!;
+ x.call.mockImplementation(async(c,p,b,r)=>p==='/v2/cargoes/create/info'&&b.operation_id==='old'?{status:'FAILED',errors:{error_reasons:['OPERATION_FAILED']}}:original(c,p,b,r));
+ await x.svc.upload('r',true,x.user);await x.svc.upload('r',true,x.user);
+ expect(x.call.mock.calls.filter(c=>c[1]==='/v1/cargoes/create')).toHaveLength(1);
+ expect(x.shipment.integration.operations['99'].state).toBe('SUCCESS');
+ expect(x.db.auditLog.create.mock.calls.some(([a]:any)=>a.data.action==='OZON_CARGO_RETRY_PREVIOUS')).toBe(true);
+ });
+ it.each(['occupied','incomplete','unknown','success'])('blocks unsafe retry: %s',async(mode)=>{
+ const x=setup();x.shipment.integration.operations['42']={state:'FAILED',operationId:'old'};
+ x.call.mockImplementation(async(_c,p)=>p==='/v2/cargoes/create/info'?{status:mode==='success'?'SUCCESS':'FAILED'}:{supplies_cargoes:mode==='unknown'?[]:[{supply_id:42,...(mode==='incomplete'?{}:{transport_cargoes:[],cargoes_without_transport_cargoes:mode==='occupied'?[{cargo_id:'123'}]:[]})}]});
+ await expect(x.svc.upload('r',true,x.user)).rejects.toThrow();
+ expect(x.call.mock.calls.some(c=>c[1]==='/v1/cargoes/create')).toBe(false);
+ expect(x.shipment.integration.operations['42'].operationId).toBe('old');
+ });
+});

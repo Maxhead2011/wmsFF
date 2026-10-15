@@ -41,8 +41,10 @@ At 22:16:31 MSK the existing `updateFbsStockPublication` service recorded `enabl
 
 ## Verification and release preparation
 
-Four regression tests failed before the fix (WAITING_STOCK, BRANCH, EXCLUDED, wrong-branch reservation). All 13 new scenarios pass on source and the fresh production candidate, including historical SUCCESS recheck. Full API: 3,459 passed / 155 skipped (two dedicated KIZ DB suites excluded); web: 442 passed / 2 skipped. API TypeScript and baseline verification passed.
+Four regression tests failed before the fix (WAITING_STOCK, BRANCH, EXCLUDED, wrong-branch reservation). All 13 new scenarios pass on source and the fresh production candidate, including historical SUCCESS recheck. After merging the current release: full API 3,475 passed / 155 skipped (two dedicated KIZ DB suites excluded); web: 443 passed / 2 skipped. API TypeScript and baseline verification passed.
 
 Fresh production captured during this work: API `sha256:c1f2ad806419a71c1cdc51393804705eaa6afdde6e5268dec42cda36a675c078`, web `sha256:80a153ed4e09f7d6dc00310aac8bcc85910ca8d4974fd37239d62fa8d607c5ee`, APK233. Source parity remains false.
 
 `scripts/releases/wb-monitor-routing/patch.cjs` asserts unchanged live methods before applying exactly four API-module changes. It preserves production BigInt adapters and all unrelated code. [Prepared delta](releases/wb-monitor-routing-prepared.json). This script does not deploy. Before publication: combine through a reviewed PR, recapture the latest production, rerun assertions/runtime tests, enable the flag only in our API image, and recheck selected historical monitor events. No full local API replacement is permitted.
+
+Release candidate also passed six isolated Docker runtime scenarios; baseline check-candidate confirmed exactly four changed modules. Approved documentation conflicts preserve both release histories.

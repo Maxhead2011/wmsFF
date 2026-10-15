@@ -1,0 +1,37 @@
+{
+  "published": true,
+  "at": 1792088733.8119538,
+  "pr": 614,
+  "api": "sha256:997ba99e69cc980180b6efbe480b1fe5634e5096df5bffe733620b94de5d3090",
+  "web": "sha256:80a153ed4e09f7d6dc00310aac8bcc85910ca8d4974fd37239d62fa8d607c5ee",
+  "webBase": "sha256:ad35a0f6873b0d5dc0bca58a82307a05484153595e986851cb4a961bce3c7e68",
+  "apk": {
+    "versionCode": 233,
+    "versionName": "0.1.233-ozon-reopen",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-ozon-reopen-233.apk",
+    "sha256": "3ecee8c27d1fc3380585381ee85b81d40196451615c7a863324e5995f2c98b9e",
+    "size": 5398935,
+    "releasedAt": "2026-10-15T11:37:57.379781+00:00",
+    "releaseNotes": "Ozon: reopen a closed carton for top-up before cargo submission."
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChanged": false,
+  "rollback": "logoff-web:before-ozon-combined-20261015",
+  "publicGraphFilesVerified": 94,
+  "publicGraphBrowserPassed": true,
+  "tests": {
+    "passed": true,
+    "web": 443,
+    "api": 3454,
+    "skipped": {
+      "web": 2,
+      "api": 150
+    },
+    "excluded": "dedicated KIZ DB integration suites",
+    "typescript": true,
+    "baselineTests": 8,
+    "combinedBrowser": true,
+    "legacyBrowser": true,
+    "beforeFixFailure": true
+  }
+}

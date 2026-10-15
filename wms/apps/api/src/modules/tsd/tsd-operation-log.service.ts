@@ -14,6 +14,11 @@ export class TsdOperationLogService {
   ) {}
 
   findExisting(operationKey: string) {
+    // FIX: replay uses the durable receipt, not screenshot/payload history.
+    if (process.env.WMS_COMPACT_OPERATION_RECEIPTS_ENABLED === 'true') {
+      return this.prisma.tsdOperation.findUnique({ where: { operationKey },
+        select: { status: true, serverMessage: true, reviewReason: true, resolutionMessage: true } });
+    }
     return this.prisma.tsdOperation.findUnique({ where: { operationKey } });
   }
 
