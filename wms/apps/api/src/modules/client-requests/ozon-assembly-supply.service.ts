@@ -125,18 +125,28 @@ export class OzonAssemblySupplyService {
   if(confirm!==true)throw new BadRequestException('Подтвердите передачу проверенных коробов.');
   await this.refresh(id,user);
   const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration,c=await this.connection(l.connectionId,s.request.clientId);
-  if(supplyOrders(l).some(o=>o.state!=='DATA_FILLING'&&o.supplies.some(s=>!l.operations[s.id])))throw new ConflictException('Не все неотправленные заявки Ozon в статусе заполнения данных.');
+  if(supplyOrders(l).some(o=>o.state!=='DATA_FILLING'&&o.supplies.some(s=>!l.operations[s.id]||l.operations[s.id].state==='FAILED')))throw new ConflictException('Не все неотправленные заявки Ozon в статусе заполнения данных.');
   const cargoes=packedCargoes(s.directions,l,s.request.fboAssembly);
   for(const supplyId of Object.keys(cargoes)){
-   if(l.operations[supplyId])continue;
+   // FIX: retry only a durable, freshly confirmed terminal failure.
+   const previous=l.operations[supplyId],previousJson=JSON.stringify(previous);
+   if(previous&&previous.state!=='FAILED')continue;
+   if(previous){
+    if(!previous.operationId)throw new ConflictException('Нет номера отклонённой операции. Повтор заблокирован.');
+    const checked=await this.call(c,'/v2/cargoes/create/info',{operation_id:previous.operationId});
+    if(checked.status!=='FAILED')throw new ConflictException('Статус операции Ozon изменился. Проверьте результат отправки.');
+   }
    const existing=await this.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supplyId)]});
    const remote=existing.supplies_cargoes?.find((v:any)=>String(v.supply_id)===supplyId);
    if(!remote||remote.transport_cargoes?.length||remote.cargoes_without_transport_cargoes?.length)throw new ConflictException('В Ozon уже есть грузоместа или их состав не подтверждён. Автоматическая замена запрещена.');
+   if(previous&&(!Array.isArray(remote.transport_cargoes)||!Array.isArray(remote.cargoes_without_transport_cargoes)))throw new ConflictException('Ozon не подтвердил отсутствие грузомест. Повтор заблокирован.');
    const claimed=await this.locked(id,user,async(cur,tx)=>{
-    const link=cur.integration as SupplyIntegration;if(link.operations[supplyId])return false;
+    const link=cur.integration as SupplyIntegration;if(JSON.stringify(link.operations[supplyId])!==previousJson)return false;
     if(bindingIdentity(link)!==bindingIdentity(l))throw new ConflictException('Привязка изменилась.');
     const now=packedCargoes(cur.directions,link,cur.request.fboAssembly),hash=cargoHash(now);
     if(hash!==cargoHash(cargoes)||(link.frozenHash&&link.frozenHash!==hash))throw new ConflictException('Состав изменился. Повторите сверку.');
+    // FIX: retain the previous operation in audit before the atomic replacement claim.
+    if(previous)await this.save(tx,id,link,user,'OZON_CARGO_RETRY_PREVIOUS');
     link.frozenHash=hash;link.operations[supplyId]={state:'SENDING'};await this.save(tx,id,link,user,'OZON_CARGO_SENDING');return true;
    });if(!claimed)continue;
    try{
@@ -166,7 +176,7 @@ export class OzonAssemblySupplyService {
    const r=await this.call(c,'/v2/cargoes/create/info',{operation_id:op.operationId});
    const state=r.status==='SUCCESS'?'SUCCESS':r.status==='FAILED'?'FAILED':'ACCEPTED';
    await this.locked(id,user,async(cur,tx)=>{const link=cur.integration as SupplyIntegration;const current=link.operations[supplyId];if(current.operationId!==op.operationId)return;
-    current.state=state;current.error=r.errors?.length?JSON.stringify(r.errors):undefined;
+    current.state=state;current.error=r.errors&&(Array.isArray(r.errors)?r.errors.length:Object.keys(r.errors).length)?JSON.stringify(r.errors):undefined;
     if(state==='SUCCESS')current.cargoes=(r.result?.cargoes??[]).map((v:any)=>({key:String(v.key),cargoId:String(v.value?.cargo_id??'')}));
     await this.save(tx,id,link,user,'OZON_CARGO_STATUS');});
   }return this.view(id,user);
