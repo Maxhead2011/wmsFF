@@ -1,6 +1,6 @@
 # WB monitoring: routed warehouse and reservation proof
 
-Prepared 2026-10-15; **not published**. Branch `fix/wb-monitor-routing-proof`, proposed PR target `feature/wb-print-check`.
+Published 2026-10-15 through PR618 into `feature/wb-print-check`. API `sha256:281ffa096853fd3cb84ec8daca92ef9b31a47e3e065ddc859d943a8b03e91ff6`. Web and APK233 unchanged.
 
 ## Problem and change
 
@@ -48,3 +48,5 @@ Fresh production captured during this work: API `sha256:c1f2ad806419a71c1cdc5139
 `scripts/releases/wb-monitor-routing/patch.cjs` asserts unchanged live methods before applying exactly four API-module changes. It preserves production BigInt adapters and all unrelated code. [Prepared delta](releases/wb-monitor-routing-prepared.json). This script does not deploy. Before publication: combine through a reviewed PR, recapture the latest production, rerun assertions/runtime tests, enable the flag only in our API image, and recheck selected historical monitor events. No full local API replacement is permitted.
 
 Release candidate also passed six isolated Docker runtime scenarios; baseline check-candidate confirmed exactly four changed modules. Approved documentation conflicts preserve both release histories.
+
+Published verification: uncached read-only probes matched routing. Explicit recheck of the screenshot rows confirmed the Moscow reservation for 6046060321 and corrected 6046082259 to missing reservation in the Noginsk branch. Excluded Krasnodar was not checked. No stock/reservation mutations during publication; only monitor check/history records updated afterward.
