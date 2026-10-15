@@ -1,6 +1,6 @@
 # Сборки Ozon: объединённый макет
 
-Статус: реализовано и проверено локально, **не опубликовано**. Ветка `feature/ozon-combined-layout`, база `5afd563d`, предполагаемый PR в `feature/wb-print-check`.
+Статус: **опубликовано 15.10.2026**, [PR614](https://github.com/Maxhead2011/wmsFF/pull/614) в `feature/wb-print-check`.
 
 ## Поведение
 
@@ -31,6 +31,10 @@
 
 Считанный 15.10.2026 live API: `sha256:997ba99e69cc980180b6efbe480b1fe5634e5096df5bffe733620b94de5d3090`.
 Live web: `sha256:ad35a0f6873b0d5dc0bca58a82307a05484153595e986851cb4a961bce3c7e68`.
-Текущий production baseline остаётся `2026-10-15-ozon-retry`, `sourceParityVerified=false`.
+База перед выпуском: `2026-10-15-ozon-retry`, `sourceParityVerified=false`.
 
 `scripts/ozon-workspace-combined-runtime.cjs <release-dir>` читает свежий `web-base`, заменяет только workspace и два экземпляра import-композиции, сохраняет существующий online/cargo код, формирует 34-файловый cache-safe web delta и `web-changes.json`. Полная локальная сборка не предназначена для публикации. Перед выпуском повторно сверить live images и подготовить проверку точного delta под блокировкой выпуска; после публикации обновить паспорт и baseline.
+
+## Опубликованный выпуск
+
+Web `sha256:80a153ed4e09f7d6dc00310aac8bcc85910ca8d4974fd37239d62fa8d607c5ee`. Новый baseline `2026-10-15-ozon-combined`. Проверены health, 34 изменённых файла, 94 файла публичного графа и браузерные сценарии на скачанном публичном графе (API подменён, бизнес-записей нет). API, APK233, конфигурация и остальные контейнеры сохранены. Откат: `logoff-web:before-ozon-combined-20261015`.
