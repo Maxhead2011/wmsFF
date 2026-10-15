@@ -1,0 +1,21 @@
+{
+  "published": true,
+  "at": 1792096775.6990163,
+  "web": "sha256:1393f26ad7c5c6abc14f12b079ddcd9e7bda5586dec394e97fc601bd31eaae33",
+  "api": "sha256:428dc21ca7fa2d74bd95a999e1c941bbdc072c0c2b9c2b7e4ae4516bb308b2e5",
+  "pr": 623,
+  "otherContainersUnchanged": true,
+  "apkUnchanged": true,
+  "tests": {
+    "passed": true,
+    "api": 3487,
+    "apiSkipped": 155,
+    "web": 445,
+    "webSkipped": 2,
+    "browser": 5,
+    "beforeFix": "actual published graph fails hidden-window assertion",
+    "typescript": true,
+    "baseline": true
+  },
+  "liveBrowser": 5
+}
