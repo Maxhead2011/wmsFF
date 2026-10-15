@@ -1,3 +1,5 @@
+Published PR610 / 2026-10-15: exact int64 Ozon cargo IDs retained on response parsing and label serialization. Two regressions fail before/pass after; API3448/web442, TypeScript and actual-image smoke passed;150/2 skipped, dedicated KIZ DB suite excluded. One API module, only call/labels methods; web/APK233/flags/stock/sold WMS unchanged. Request2059 cargo IDs restored through audited status check, existing submission preserved; labels generated with 3 correct pages. Baseline `2026-10-15-ozon-ids`, sourceParityVerified=false.
+
 PR608: Ozon closed-carton reopen dispatcher/DTO runtime cases5; source tests9; Android263 per flavor. UI cancellation, ordinary packing after reopening, feature guards and durable replay verified.
 
 
