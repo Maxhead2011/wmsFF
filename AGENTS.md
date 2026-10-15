@@ -197,3 +197,5 @@ Latest verified PR531: baseline2026-10-09-print-agent; only public Windows agent
 Latest verified PR533: baseline2026-10-09-ozon-multiple. Multiple Ozon orders per assembly; request1861 reconciled393/11. APK222 and PR531 print agent preserved. Source parity false. See current-production.md.
 
 Latest verified PR535: baseline2026-10-09-kiz-route; LOGOFF APK223 corrects found-KIZ API prefix. Three download files only; API/flags/Ozon/printing/sold unchanged. sourceParityVerified=false.
+
+Latest verified PR620/621: baseline 2026-10-15-reconciliation-tools. Durable WB queue and scoped request tools; own-WMS flags only. PR618 monitor retained. APK233/printing/sold WMS unchanged; source parity false. See current-production.md.
