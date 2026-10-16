@@ -3,6 +3,7 @@ import { MarketplaceConnectionsService } from '../marketplace-connections/market
 import { BadRequestException, Body, Controller, Get, Logger, Post, Query, ForbiddenException, NotFoundException, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import ExcelJS from 'exceljs';
+import { receiptExportBarcodes } from './receipt-export-barcode';
 import { RequireAnyPermissions } from '../auth/decorators/require-permissions.decorator';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -51,9 +52,11 @@ export class ReceiptChannelsController {
     const doc=await this.readReceipt(user,clientId,warehouseId,id);
     const boxes=new Map(doc.boxes.map(b=>[b.id,b.code]));
     const rows=await this.prisma.stockMovement.findMany({where:{clientId,warehouseId,type:'RECEIPT',quantity:{gt:0},OR:doc.boxes.map(b=>({boxId:b.id,sourceDocument:b.receiptDocument?.startsWith('BOX:')?null:b.receiptDocument})),createdAt:{gte:new Date(doc.date.slice(0,4)+'-01-01T00:00:00Z'),lt:new Date((Number(doc.date.slice(0,4))+1)+'-01-01T00:00:00Z')}},include:{sku:{include:{barcodes:true}}},orderBy:{createdAt:'asc'}});
+    // FIX: select the barcode recorded by the receipt operation, not the first catalog alias.
+    const barcodes=await receiptExportBarcodes(this.prisma,rows,boxes);
     const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('Приёмка');
     sheet.columns=[{header:'Дата приёмки (МСК)',key:'date',width:23},{header:'Короб',key:'box',width:24},{header:'Товар',key:'name',width:45},{header:'Артикул',key:'article',width:28},{header:'Размер',key:'size',width:16},{header:'Штрихкод',key:'barcode',width:20},{header:'Принято, шт.',key:'quantity',width:16}];
-    for(const r of rows)sheet.addRow({date:r.createdAt.toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}),box:boxes.get(r.boxId!),name:r.sku.name,article:r.sku.article,size:r.sku.size,barcode:r.sku.barcodes[0]?.value??'',quantity:r.quantity});
+    for(const r of rows)sheet.addRow({date:r.createdAt.toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}),box:boxes.get(r.boxId!),name:r.sku.name,article:r.sku.article,size:r.sku.size,barcode:barcodes.get(r.id)??'',quantity:r.quantity});
     sheet.getRow(1).font={bold:true};sheet.views=[{state:'frozen',ySplit:1}];
     response.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');response.setHeader('Content-Disposition',`attachment; filename="receipt-${id}.xlsx"`);response.send(Buffer.from(await workbook.xlsx.writeBuffer()));
   }
