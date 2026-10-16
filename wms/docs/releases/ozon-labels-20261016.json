@@ -1,0 +1,30 @@
+{
+  "published": false,
+  "tests": {
+    "passed": true,
+    "api": 3509,
+    "apiSkipped": 155,
+    "web": 445,
+    "webSkipped": 2,
+    "tsc": true,
+    "excluded": "kiz-duplicate.integration.spec.ts",
+    "initialRun": "one unrelated PDF timeout; complete constrained rerun passed"
+  },
+  "verification": {
+    "passed": true,
+    "base": {
+      "infra-api-1": "sha256:ee47f20b7f2ab2acf7fbd3acb50a515ce8c3e5d2b9887cab455198450bcc32ab",
+      "infra-web-1": "sha256:1393f26ad7c5c6abc14f12b079ddcd9e7bda5586dec394e97fc601bd31eaae33"
+    },
+    "candidate": "sha256:8f515aaab6861c75d7ff479f6110d27dec6f15997165fdad428fc5b47aeca186",
+    "changed": [
+      "modules/client-requests/ozon-assembly-supply.service.js"
+    ],
+    "hashes": {
+      "modules/client-requests/ozon-assembly-supply.service.js": "b69a237dda9316ede1bf8e7074ff57cbe1bfd5dcb3befa08aa777cd120932701"
+    },
+    "proof": {
+      "passed": 4
+    }
+  }
+}

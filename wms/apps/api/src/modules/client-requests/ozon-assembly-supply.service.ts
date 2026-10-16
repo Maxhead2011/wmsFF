@@ -36,7 +36,8 @@ export class OzonAssemblySupplyService {
     if(key==='cargo_id'&&typeof value==='string'&&/^[1-9]\d*$/.test(value))return (JSON as typeof JSON & {rawJSON:(s:string)=>unknown}).rawJSON(value);
     return value;
    }),signal:AbortSignal.timeout(30000)});}catch{throw new BadGatewayException('Нет подтверждённого ответа Ozon. Проверьте статус; не отправляйте повторно.');}
-   if((read||path==='/v1/cargoes/create')&&r.status===429&&attempt<2){
+   // FIX: retry explicitly rejected label creation too; network/5xx ambiguity is never retried.
+   if((read||path==='/v1/cargoes/create'||path==='/v1/cargoes-label/create')&&r.status===429&&attempt<2){
     const retryAfter=r.headers.get('retry-after');
     const requested=retryAfter?(Number.isFinite(Number(retryAfter))?Number(retryAfter)*1000:Date.parse(retryAfter)-Date.now()):0;
     const delay=Math.max(1500*(attempt+1),Number.isFinite(requested)?requested:0);

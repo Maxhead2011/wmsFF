@@ -103,3 +103,17 @@ describe('Ozon failed cargo retry',()=>{
  expect(x.shipment.integration.operations['42'].operationId).toBe('old');
  });
 });
+
+// TEST: explicit label throttling is recoverable; ambiguous writes are never retried.
+describe('Ozon label throttling',()=>{
+ afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();});
+ it('retries label creation after explicit HTTP 429',async()=>{
+  vi.useFakeTimers();const fetcher=vi.fn().mockResolvedValueOnce(new Response('{"message":"limit"}',{status:429})).mockResolvedValueOnce(new Response('{"operation_id":"labels"}'));vi.stubGlobal('fetch',fetcher);
+  const result=new OzonAssemblySupplyService({} as any,{} as any).call({},'/v1/cargoes-label/create',{},false);
+  const settled=result.then(value=>({value}),error=>({error}));await vi.runAllTimersAsync();expect(await settled).toEqual({value:{operation_id:'labels'}});expect(fetcher).toHaveBeenCalledTimes(2);
+ });
+ it('does not retry ambiguous label transport failure',async()=>{
+  const fetcher=vi.fn().mockRejectedValue(Error('timeout'));vi.stubGlobal('fetch',fetcher);
+  await expect(new OzonAssemblySupplyService({} as any,{} as any).call({},'/v1/cargoes-label/create',{},false)).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(1);
+ });
+});
