@@ -32,3 +32,5 @@ TypeScript API. Исключён прежний KIZ integration suite без о�
 количество наблюдений и операции без сканов. Время ответа сервера не включает
 распознавание камерой ТСД и весь сетевой путь устройства. Детализация ожиданий БД
 и внешнего API остаётся отдельным этапом, этот выпуск её не подменяет.
+
+Published PR625. First production summary:199 responses/20 route templates. API `sha256:d4736fb76077e02f9dbf69036d848c69a121533b457f71b27719e48259d2f5b1`. Baseline `2026-10-16-shift-latency`.
