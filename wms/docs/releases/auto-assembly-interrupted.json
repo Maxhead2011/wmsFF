@@ -1,0 +1,51 @@
+{
+  "published": false,
+  "base": "sha256:d4736fb76077e02f9dbf69036d848c69a121533b457f71b27719e48259d2f5b1",
+  "candidate": "sha256:f53038936988e87df3d657981b1aa09336940faf750de0fcbdf1df42be2f0be6",
+  "web": "sha256:1393f26ad7c5c6abc14f12b079ddcd9e7bda5586dec394e97fc601bd31eaae33",
+  "changedApiFiles": [
+    "modules/administration/auto-assembly.service.js",
+    "modules/marketplace-connections/marketplace-connections.service.js",
+    "modules/marketplace-connections/auto-assembly-recovery.js",
+    "modules/marketplace-connections/auto-assembly-durable.js"
+  ],
+  "validation": {
+    "apiPassed": 3501,
+    "apiSkipped": 155,
+    "webPassed": 445,
+    "webSkipped": 2,
+    "sourceCases": 11,
+    "dockerCases": 8,
+    "postgresCases": 4,
+    "typeScript": true,
+    "baselineCases": 8,
+    "exactDelta": true
+  },
+  "request2082": {
+    "readOnly": true,
+    "result": {
+      "requestNumber": 2082,
+      "count": 5,
+      "stage": "PREVIEW",
+      "supplyId": "WB-GI-294262613",
+      "newOrders": 0,
+      "confirmedMembers": 5
+    },
+    "calls": [
+      {
+        "path": "/api/v3/orders/status",
+        "method": "POST"
+      },
+      {
+        "path": "/api/marketplace/v3/supplies/WB-GI-294262613/order-ids",
+        "method": "GET"
+      },
+      {
+        "path": "/api/v3/supplies/WB-GI-294262613",
+        "method": "GET"
+      }
+    ]
+  },
+  "sourceParityVerified": false,
+  "rollback": "logoff-api:before-auto-assembly-interrupted"
+}
