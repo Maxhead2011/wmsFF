@@ -1,6 +1,6 @@
 # Interrupted WB automatic assembly
 
-Prepared on 2026-10-16 for `feature/wb-print-check`; publication pending.
+Published on 2026-10-16 through PR627 into `feature/wb-print-check`. API `sha256:f53038936988e87df3d657981b1aa09336940faf750de0fcbdf1df42be2f0be6`.
 
 Request 2082 was committed on 2026-10-15 at 12:01:40 UTC. Its scheduled run
 remained RUNNING without groups. The previous recovery selected only groups with
@@ -69,3 +69,5 @@ stock, quantities, KIZs, request status or reservation fields.
 Publication uses release locks, fresh API/web image equality, exact four-file delta,
 health/hash/flag checks and rollback to `logoff-api:before-auto-assembly-interrupted`.
 No manual recreation or new WB supply is needed for request 2082.
+
+After publication: public health and exact hashes passed, eight tests ran against live runtime with mocked external calls. Request2082 read-only WB check remains5/5 in WB-GI-294262613; no duplicate supply created.
