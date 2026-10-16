@@ -1,0 +1,4 @@
+const fs=require('fs'),path=require('path'),ts=require('../../../node_modules/typescript'),assert=require('assert/strict');
+const file=path.join(process.argv[2],'modules/marketplace-connections/marketplace-connections.service.js');let s=fs.readFileSync(file,'utf8');const source=ts.createSourceFile(file,s,99,true),names=require('./methods.json'),edits=[];
+function visit(node){if(ts.isMethodDeclaration(node)&&names[node.name?.getText(source)])edits.push({start:node.body.getStart(source)+1,end:node.body.end-1,label:names[node.name.getText(source)]});ts.forEachChild(node,visit)}visit(source);assert.equal(edits.length,Object.keys(names).length);
+for(const e of edits.sort((a,b)=>b.start-a.start))s=s.slice(0,e.start)+"\nreturn require('../../common/diagnostics/operation-timing').measureOperation('"+e.label+"',async()=>{"+s.slice(e.start,e.end)+"\n});\n"+s.slice(e.end);fs.writeFileSync(file,s);

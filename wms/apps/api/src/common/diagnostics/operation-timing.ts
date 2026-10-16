@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import type { Request, Response, NextFunction } from 'express';
 import { createOperationHistogram } from './operation-histogram';
 
-type Stage = 'database' | 'external' | 'calculation';
+type Stage = 'database' | 'external' | 'calculation' | 'fbs_task_load' | 'fbs_wb_preflight' | 'fbs_stock_reserve' | 'fbs_response' | 'fbs_request_status' | 'fbs_notifications' | 'fbs_sticker' | 'fbs_complete' | 'fbs_scan';
 type Timing = { count: number; totalMs: number; maxMs: number };
 type Context = { traceId: string; stages: Partial<Record<Stage, Timing>> };
 export type OperationReport = Context & { operation: string; durationMs: number; failed: boolean; statusCode?: number };

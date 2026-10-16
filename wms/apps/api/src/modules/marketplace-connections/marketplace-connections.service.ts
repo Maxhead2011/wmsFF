@@ -1,3 +1,4 @@
+import { measureOperation } from '../../common/diagnostics/operation-timing';
 import { reconcileWbBackground } from '../../common/reconciliation/wb-background';
 import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorReservation } from './fbs-monitor-routing';
@@ -10446,6 +10447,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_scan', async () => {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
@@ -11121,6 +11124,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ? 'КИЗ принят Wildberries и записан в WMS без изменения количества товара. Подтвердите сборку заказа.'
         : 'КИЗ принят Wildberries. Подтвердите сборку заказа.',
     );
+
+    });
   }
 
   async resolveFbsKizConflict(
@@ -14164,6 +14169,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async completeFbsTsdAssembly(taskId: string, user: AuthUser) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_complete', async () => {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
     await this.requireFbsOrderStillCollectable(task);
     // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
@@ -14296,6 +14303,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (fbsRequestAutoStatusEnabled()) this.fbsOrdersCache.delete(completed.clientId);
     await this.notifyFbsAutoStatusChanges(statusChanges);
     return this.formatFbsTsdAssembly(completed, user, 'Готово. Заказ собран и записан в заявку.');
+
+    });
   }
 
   private async reserveCompletedWildberriesStock(
@@ -14515,6 +14524,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async reserveAcceptedWildberriesStock(task: FbsTsdAssemblyRecord) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_stock_reserve', async () => {
     if (
       task.marketplace !== MarketplaceType.WILDBERRIES ||
       !task.kiz ||
@@ -14543,6 +14554,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         request?.warehouseId ?? null,
       );
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    });
   }
 
   private async returnCompletedWildberriesStockReservation(
@@ -14960,6 +14973,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async loadOwnedFbsTsdAssembly(taskId: string, user: AuthUser) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_task_load', async () => {
     const task = await this.prisma.fbsTsdAssembly.findUnique({ where: { id: taskId } });
     if (!task) throw new NotFoundException('Задание FBS не найдено. Обновите очередь.');
     this.clientScopes.requireClientAccess(user, task.clientId, 'write');
@@ -14968,6 +14983,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.throwFbsTsdTaskStale(task, user);
     }
     return task;
+
+    });
   }
 
   // FIX: printing inside FBS assembly must use the worker's current, source-scanned task.
@@ -15439,6 +15456,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     orderId: string,
     kiz: string,
   ) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_wb_preflight', async () => {
     const numericOrderId = numericWbOrderId(orderId);
     const signal = AbortSignal.timeout(FBS_TSD_WB_READ_TIMEOUT_MS);
     let statusPayload: Record<string, unknown>;
@@ -15482,6 +15501,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         (value) => normalizedFbsKizValue(value) === normalizedKiz,
       ),
     };
+
+    });
   }
 
   private async parkFbsTsdOrderAfterWbKizConflict(
@@ -15855,6 +15876,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async reconcileFbsTaskRequestStatus(task: FbsTsdAssemblyRecord) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_request_status', async () => {
     if (!fbsRequestAutoStatusEnabled() || !task.startedAt || !task.workerUserId || task.deviceCode.startsWith('AUTO:')) return;
     const statusChanges: FbsAutoStatusChange[] = [];
     const changed = await this.prisma.$transaction(tx => reconcileFbsRequestStatus(tx, task.requestId, {
@@ -15863,9 +15886,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }, statusChanges), { timeout: 30_000 });
     if (changed) this.fbsOrdersCache.delete(task.clientId);
     await this.notifyFbsAutoStatusChanges(statusChanges);
+
+    });
   }
 
   private async notifyFbsAutoStatusChanges(changes: FbsAutoStatusChange[]) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_notifications', async () => {
     const labels: Partial<Record<ClientRequestStatus, string>> = { SUBMITTED: 'Подана', IN_REVIEW: 'На рассмотрении', APPROVED: 'Согласована', IN_WORK: 'В работе', PACKED: 'Упаковано', DONE: 'Сдано' };
     for (const change of changes) {
       try {
@@ -15897,9 +15924,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         this.logger.warn(`Telegram notification failed for FBS request ${change.number}; status remains committed.`);
       }
     }
+
+    });
   }
 
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_response', async () => {
     const excludedReceiptBoxes=await receiptBlockedBoxes(this.prisma,task.clientId,'fbs',task.id);
     const multiline = await handleOzonPickLines(this, task, user, 'view', {}, message);
     if (multiline) return multiline;
@@ -16225,6 +16256,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         recentStickers,
       },
     };
+
+    });
   }
 
   private async remainingRequestBoxesOnStoragePallet(
@@ -17402,6 +17435,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   private async loadFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
+    // FIX: bounded timing only; preserve the existing result, error and call order.
+    return measureOperation('fbs_sticker', async () => {
     if (task.marketplace === MarketplaceType.OZON) {
       return this.loadOzonFbsTsdOrderSticker(task);
     }
@@ -17457,6 +17492,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.logger.warn(`WB sticker is temporarily unavailable for FBS TSD order ${task.orderId}: ${reason}`);
       return null;
     }
+
+    });
   }
 
   async scanWebOrderAssembly(codeValue: unknown, user: AuthUser, stationIdValue?: unknown, deviceCodeValue?: unknown) {

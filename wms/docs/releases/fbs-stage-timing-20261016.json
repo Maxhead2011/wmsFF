@@ -1,0 +1,29 @@
+{
+  "published": false,
+  "tests": {
+    "passed": true,
+    "api": 3512,
+    "web": 445,
+    "apiSkipped": 155,
+    "webSkipped": 2,
+    "tsc": true,
+    "excluded": "kiz-duplicate.integration.spec.ts"
+  },
+  "verification": {
+    "passed": true,
+    "base": {
+      "infra-api-1": "sha256:8f515aaab6861c75d7ff479f6110d27dec6f15997165fdad428fc5b47aeca186",
+      "infra-web-1": "sha256:1393f26ad7c5c6abc14f12b079ddcd9e7bda5586dec394e97fc601bd31eaae33"
+    },
+    "candidate": "sha256:f91615a1ae1b64f6ee99a1595061463977eff193dc036f74263ccf105e1ca6de",
+    "changed": [
+      "modules/marketplace-connections/marketplace-connections.service.js"
+    ],
+    "hashes": {
+      "modules/marketplace-connections/marketplace-connections.service.js": "17a7b1ea10f19d98d1a55cdd9b5acfd5f401707f5bb78401872702fff8a26864"
+    },
+    "proof": {
+      "passed": 3
+    }
+  }
+}
