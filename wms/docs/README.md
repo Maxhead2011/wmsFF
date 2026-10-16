@@ -1,4 +1,4 @@
-Prepared: [all-response shift latency summaries](shift-latency-summary.md). Two diagnostic API modules, own-WMS opt-in. No backup, disk retention, business data or sold-WMS changes.
+Published PR625: [all-response shift latency summaries](shift-latency-summary.md). Two diagnostic API modules, WMS_OPERATION_HISTOGRAM_ENABLED=true only here. API3490/web445, TypeScript, actual-runtime4 and first live minute verified;155/2 skipped. Web/APK233/printing/backup settings/sold unchanged. Baseline `2026-10-16-shift-latency`, sourceParityVerified=false.
 
 Published PR623: [FBS hidden-window polling](fbs-window-polling.md). Four recurring reads and two synchronization retries pause in hidden/minimized windows; refresh on restore. API3487/web445, TypeScript, candidate/live browser5 and exact33-file overlay passed;155/2 skipped. API/APK233/printing/sold unchanged. Baseline `2026-10-15-fbs-window-polling`, sourceParityVerified=false.
 
