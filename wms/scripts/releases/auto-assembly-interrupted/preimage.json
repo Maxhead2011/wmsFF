@@ -1,0 +1,5 @@
+{
+  "modules/administration/auto-assembly.service.js": "207e6549a99e138a3e4cce63f938c4d225740dd55d3caa28e5881ec388590999",
+  "modules/marketplace-connections/marketplace-connections.service.js": "72068d3e070cab2bd62f056eaec2ac68aa830984c6e1e84732427a7bb3ea3796",
+  "modules/marketplace-connections/auto-assembly-recovery.js": "183cd6cc38858dc55c15df7d9d27dffc61aeb494ceb9fa288c0eb9709827ba7b"
+}
