@@ -1,6 +1,6 @@
 # Receipt export: recorded label barcode
 
-Prepared on 2026-10-16 in `fix/receipt-scanned-barcode`; not published.
+Published on 2026-10-16 through PR629 into `feature/wb-print-check`. API `sha256:051621eb2e32534f8f5e385aa0b02e0c0fb676c11795b251759d3ba9a06ad851`.
 
 The series receipt XLSX endpoint selected `sku.barcodes[0]` without ordering.
 An alternate GTIN could therefore replace the product label barcode. The
@@ -46,3 +46,5 @@ full preimage hash and changes only its export call plus the new helper module.
 `check-candidate` confirms exactly those two files. Source parity remains false.
 Deploy only through the usual reviewed PR/release process into our installation;
 the sold installation must not receive this shared controller overlay.
+
+After publication: public health, exact hashes and unchanged flags verified. Native live export with persisted administrator permissions confirmed 4474 rows/units and no missing barcodes.
