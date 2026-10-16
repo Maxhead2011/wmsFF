@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { Request, Response, NextFunction } from 'express';
+import { createOperationHistogram } from './operation-histogram';
 
 type Stage = 'database' | 'external' | 'calculation';
 type Timing = { count: number; totalMs: number; maxMs: number };
@@ -28,7 +29,12 @@ export function boundedTimingSink(log: (record: object) => void, now = Date.now)
     log({event:'wms_operation',...report});
   };
 }
-const defaultSink = boundedTimingSink(record => console.info(JSON.stringify(record)));
+const detailSink = boundedTimingSink(record => console.info(JSON.stringify(record)));
+// FIX: own-WMS opt-in; one bounded summary per minute counts fast responses too.
+const histogram = process.env.WMS_OPERATION_HISTOGRAM_ENABLED === 'true'
+  ? createOperationHistogram(record => console.info(JSON.stringify(record))) : null;
+if (histogram) setInterval(() => histogram.flush(), 60_000).unref();
+const defaultSink: Sink = report => { histogram?.record(report); detailSink(report); };
 const rounded = (n: number) => Math.round(n * 100) / 100;
 function publish(sink: Sink, report: OperationReport) {
   // FIX: diagnostics must never change an operation's result; no payload, SQL or credentials.
