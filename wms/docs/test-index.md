@@ -1,3 +1,5 @@
+Prepared: [FBS stage timing](fbs-stage-timing.md), preserves scan/completion behavior; latency cause still under investigation.
+
 Published PR631 / 2026-10-16: Ozon label creation retries explicit HTTP429 with bounded delay. Ambiguous writes are not retried. API3509/web445 and TypeScript passed;155/2 skipped, dedicated KIZ DB suite excluded. Four actual-image checks; one runtime module only. Live client receipt visibility correction preserved. Web/APK233/flags unchanged. Baseline `2026-10-16-ozon-labels`, sourceParityVerified=false. [Details](ozon-label-throttling.md). FBS latency diagnosis remains open.
 
 Prepared: Ozon label explicit 429 regression (fails before fix); transport failure, HTTP500 and long cooldown runtime guards. See [scope](ozon-label-throttling.md).
