@@ -1,6 +1,6 @@
 # FBS stage timing
 
-Prepared 16 October 2026. Existing all-response histograms remain unchanged. Named timings cover owned-task lookup, WB KIZ preflight, stock reservation after acceptance, response formatting, request-status reconciliation, Telegram notification, sticker retrieval, the whole KIZ scan and the whole completion. They preserve call order, return identity and rejection identity.
+Published via PR633 on 16 October 2026. Existing all-response histograms remain unchanged. Named timings cover owned-task lookup, WB KIZ preflight, stock reservation after acceptance, response formatting, request-status reconciliation, Telegram notification, sticker retrieval, the whole KIZ scan and the whole completion. They preserve call order, return identity and rejection identity.
 
 Stage totals are nested and may overlap. Do not add them or treat them as a full decomposition. Remaining scan time may include KIZ validation, WB submission and database work; a short preflight alone does not prove WB is fast. Completion includes transactional work plus response formatting and notification. These measurements identify which narrower path requires the next investigation.
 
