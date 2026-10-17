@@ -1,0 +1,3 @@
+FROM sha256:7ff2c21d01327774b1ff328cc9c842ec25b02eef031dbda79753050676dbbd3e
+ENV WMS_KIZ_INVENTORY_ADMIN_REUSE_ENABLED=true
+COPY candidate.js /app/apps/api/dist/common/kiz-cancelled-reuse.js
