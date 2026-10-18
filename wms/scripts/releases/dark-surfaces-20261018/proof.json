@@ -1,0 +1,11 @@
+{
+  "indexBeforeSha": "7069eca7adf08dd1bb5da50dee68222640a6c4dcd1e8e94e5a1e88cb0cf05529",
+  "indexAfterSha": "8bc0dd53cc979bcff4a72235899e2224e674a301ad508100f21e5d61441dd565",
+  "cssName": "dark-surfaces-20261018.css",
+  "cssSha": "28ddb7c455fe9259a6001ab8a9f60a4a75f1217867b00da882948c860c87900d",
+  "files": {
+    "relabel-layout-20261018.css": {
+      "sha256": "7d1c38a03ba9d4d48ca58710385645d43708375a1826dc1146c6634f0de2dbca"
+    }
+  }
+}

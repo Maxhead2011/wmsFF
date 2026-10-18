@@ -14,6 +14,7 @@ import {
 } from '../../lib/api';
 import { RelabelReconciliationPanel } from './RelabelReconciliationPanel';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import './directories.css'; // FIX: standalone relabel route owns its layout styles.
 
 type ArticleMappingPanelProps = {
   session: AuthSession;
