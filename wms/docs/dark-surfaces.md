@@ -1,6 +1,6 @@
 # Dark surfaces and standalone relabel layout
 
-Prepared 2026-10-18. Dark FBS, catalog and client cabinet containers now override legacy Modern white backgrounds. Scanner status uses readable dark neutral/success colors. ArticleMappingPanel imports its existing directory layout directly so standalone navigation does not depend on first visiting DirectoryPanel.
+Published PR635 on 2026-10-18. Web image sha256:17d48a4b29beb5f889db8aa0ae233e5ef8bc5b5c219024ac09d01c083c2ddefc. Dark FBS, catalog and client cabinet containers now override legacy Modern white backgrounds. Scanner status uses readable dark neutral/success colors. ArticleMappingPanel imports its existing directory layout directly so standalone navigation does not depend on first visiting DirectoryPanel.
 
 Runtime delta: prepend the existing directories.css before the current stylesheets and append the scoped Dark override. Only index.html and two new CSS assets change; all previous assets and JavaScript remain intact. Published web base: sha256:1393f26ad7c5c6abc14f12b079ddcd9e7bda5586dec394e97fc601bd31eaae33. API pinned at sha256:f91615a1ae1b64f6ee99a1595061463977eff193dc036f74263ccf105e1ca6de. sourceParityVerified remains false. Shared CSS classes are affected only in the deployed own-WMS image; no sold deployment.
 

@@ -1,0 +1,7 @@
+{
+  "web": "sha256:17d48a4b29beb5f889db8aa0ae233e5ef8bc5b5c219024ac09d01c083c2ddefc",
+  "apiUnchanged": "690eb98d741b4a66707b5aeba11a6111d3351f687e881367047688974bd490e2",
+  "oldAssetsPreserved": 3005,
+  "newAssets": 2,
+  "rollback": "logoff-web:before-dark-surfaces-20261018"
+}
