@@ -3139,3 +3139,20 @@
  :root[data-ui-theme][data-ui-variant] .client-request-table__actions-cell .client-request-actions--main { display: flex; flex-direction: column; align-items: flex-start; width: 100%; }
  :root[data-ui-theme][data-ui-variant] .client-request-combined-process { width: 100%; }
 }
+
+/* FIX: Dark must override the legacy Modern white panel surfaces. Screen-only
+   and style-scoped so Light and printed documents retain their own palette. */
+@media screen {
+  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='dark'] :is(.fbs-panel, .catalog-panel, .client-cabinet-panel, .order-assembly__status) {
+    background: #191a1e;
+    color: #f3f3f6;
+    border-color: #414149;
+  }
+  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='dark'] .order-assembly__status.is-ok {
+    background: #19352a;
+    color: #7bdeb0;
+  }
+  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='dark'] .order-assembly__rule {
+    color: #b5b5c2;
+  }
+}

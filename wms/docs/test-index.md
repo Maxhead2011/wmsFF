@@ -1,3 +1,7 @@
+Pending: standalone relabel layout — ArticleMappingPanel.tsx now imports directories.css directly; no dependency on opening DirectoryPanel first. Regression ArticleMappingStyles.test.ts fails before and passes after the import fix. Business logic unchanged; not published.
+
+Pending: Dark panel surfaces — scoped fixes for FBS, catalog, client cabinet and order-assembly status in la-panthera-theme.css. Browser regression: scripts/dark-panel-surfaces.test.cjs (Chromium/Edge via playwright); reproduces white background before fix, checks Dark foreground/background, success status and Light isolation. Not published.
+
 Published PR633 / 2026-10-16: bounded named timings for FBS KIZ scan, completion, preflight, reservation, response, request status, notifications, sticker and task load. Existing behavior preserved; this is diagnosis, not a latency fix. API3512/web445 and TypeScript passed;155/2 skipped, dedicated KIZ DB suite excluded. Three actual-image checks; one runtime module only. Web/APK233/flags unchanged. Baseline `2026-10-16-fbs-stage-timing`, sourceParityVerified=false. [Details](fbs-stage-timing.md).
 
 Prepared: [FBS stage timing](fbs-stage-timing.md), preserves scan/completion behavior; latency cause still under investigation.
