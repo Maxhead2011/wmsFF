@@ -1,0 +1,22 @@
+{
+  "published": true,
+  "at": 1792343110.8198986,
+  "api": "sha256:cc67e61c67e7b91b57103ab2f7822d46acf6a9da7f340f80fdd20a70b7744b04",
+  "web": "sha256:17d48a4b29beb5f889db8aa0ae233e5ef8bc5b5c219024ac09d01c083c2ddefc",
+  "pr": 637,
+  "otherContainersUnchanged": true,
+  "apkUnchanged": true,
+  "hashes": {
+    "modules/marketplace-connections/marketplace-connections.service.js": "e821ef90969b5d3b660320e422aa04f50a993b8243c07bcb526362619342e33b",
+    "modules/marketplace-connections/wb-first-publication.js": "cb7089ebc1e6c46602d4d59f1aa842ea68d8e77b4549fe3ce7211ad813798b45"
+  },
+  "kubrin": {
+    "warehouseId": "2271741",
+    "verifiedPositions": 41,
+    "positivePositions": 40,
+    "publishedUnits": 968,
+    "physicalUnits": 1090,
+    "orderReserve": 1,
+    "safetyReserve": 121
+  }
+}
