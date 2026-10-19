@@ -1,0 +1,14 @@
+{
+  "published": true,
+  "at": 1792409424.124953,
+  "api": "sha256:229080b629ff2b804b23532ff7b38b355268bf2625957a0ced839e2162cfdbfb",
+  "web": "sha256:e94cccea09657f7e3cbcb0174a8ec5a5177e8929b4685d689bcb04d2d9745e10",
+  "pr": 639,
+  "configurationUnchanged": true,
+  "apkUnchanged": true,
+  "otherContainersUnchanged": true,
+  "rollback": {
+    "api": "logoff-api:before-sorting-cancel-20261019",
+    "web": "logoff-web:before-sorting-cancel-20261019"
+  }
+}

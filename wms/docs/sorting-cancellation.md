@@ -1,6 +1,6 @@
 # Снятие пустых сортировок из администрирования
 
-Подготовлено 19.10.2026, не опубликовано.
+Опубликовано 19.10.2026, PR639.
 
 Администрирование → «Незавершённые сортировки» → «Снять сортировку». Доступ только ADMIN и OWNER, исключая демонстрационные аккаунты, при существующем флаге сортировки. Ограниченный администратор не получает доступ к API собственника.
 
@@ -12,7 +12,7 @@ API: `pallet-sorting.service.ts`, `dto/pallet-sorting.dto.ts`. Web: `Administrat
 
 Проверки: `apps/api/test/pallet-sorting-cancel.spec.ts` (13), `apps/web/src/components/administration/AdministrationSortingCancellation.spec.tsx` (7). До исправления 3 новых API-теста воспроизводили отсутствие операции.
 
-Для публикации требуется сверить актуальный runtime и подготовить overlay: исходники пока не являются полным эквивалентом production. Текущий проверенный baseline до этой работы — 2026-10-18-wb-first-publication.
+Выпущен проверенный overlay от 2026-10-18-wb-first-publication; новый baseline 2026-10-19-sorting-cancel. Исходники пока не являются полным эквивалентом production.
 
 Локальная регрессия: API 3535 passed / 155 skipped, web 453 passed / 2 skipped. Обе проверки TypeScript успешны. Отдельный kiz-duplicate.integration.spec.ts исключён из повторного API-прогона: локальная KIZ_DUPLICATE_TEST_DATABASE_URL не настроена; первоначальный общий прогон остановился на создании PrismaClient этого набора, остальные тесты прошли.
 
