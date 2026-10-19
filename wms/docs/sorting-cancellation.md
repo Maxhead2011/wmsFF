@@ -15,3 +15,5 @@ API: `pallet-sorting.service.ts`, `dto/pallet-sorting.dto.ts`. Web: `Administrat
 Для публикации требуется сверить актуальный runtime и подготовить overlay: исходники пока не являются полным эквивалентом production. Текущий проверенный baseline до этой работы — 2026-10-18-wb-first-publication.
 
 Локальная регрессия: API 3535 passed / 155 skipped, web 453 passed / 2 skipped. Обе проверки TypeScript успешны. Отдельный kiz-duplicate.integration.spec.ts исключён из повторного API-прогона: локальная KIZ_DUPLICATE_TEST_DATABASE_URL не настроена; первоначальный общий прогон остановился на создании PrismaClient этого набора, остальные тесты прошли.
+
+Проверен overlay действующей версии: ровно два API-модуля; 13 проверок candidate runtime. Браузер: 5 сценариев — ADMIN/OWNER, подтверждение, повтор с тем же operationId, блокировка непустой сессии и отсутствие кнопки у OPERATOR. Web сохраняет прежние ресурсы и единственный React. Скрипты выпуска: scripts/releases/sorting-cancel-20261019/.

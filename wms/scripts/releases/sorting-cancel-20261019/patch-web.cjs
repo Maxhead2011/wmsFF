@@ -1,0 +1,12 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict'),ts=require('../../../node_modules/typescript');
+const esbuild=require('module').createRequire(require.resolve('../../../apps/web/node_modules/vite/package.json'))('esbuild');const{repair}=require('../../single-react-graph.cjs');
+const root=process.argv[2],input=path.join(root,'web-base'),output=path.join(root,'web');const cache={};const files=new Proxy(cache,{get(t,n){if(!(n in t)){const f=path.join(input,n);t[n]=fs.existsSync(f)?fs.readFileSync(f,'utf8'):undefined;}return t[n];}});
+const entry=/src="\/assets\/([^"/]+\.js)"/.exec(files['index.html'])[1];const admin='assets/fbs-polling-20261015-25.js';let s=files[admin];
+const src=p=>fs.readFileSync(path.join(__dirname,'../../../apps/web/src',p),'utf8').replace(/^import .*;\r?\n/gm,'');
+let code='const React=a;const {useRef,useState}=a;\n'+src('lib/pallet-sorting-api.ts')+'\n'+src('components/administration/AdministrationSortingCancellation.tsx');
+code=code.replaceAll("import.meta.env.VITE_PALLET_SORTING_ENABLED",'"true"').replaceAll("import.meta.env.VITE_API_URL",'"/api/v1"');
+const bundle=esbuild.transformSync(code,{loader:'tsx',format:'iife',globalName:'__SortingCancel',target:'es2020',jsxFactory:'a.createElement',jsxFragment:'a.Fragment'}).code;
+const old='function __ReceiptProblemsPanel(props){return a.createElement(__ReceiptProblems.Panel,props);}';assert.equal(s.split(old).length,2);s=s.replace(old,'function __ReceiptProblemsPanel(props){return a.createElement(a.Fragment,null,a.createElement(__SortingCancel.AdministrationSortingCancellation,{...props,key:props.session.user.id+":"+props.session.user.activeWarehouseId}),a.createElement(__ReceiptProblems.Panel,props));}');cache[admin]=s+'\n'+bundle;
+s=files['assets/'+entry];const marker='function a2(t,n){';assert.equal(s.split(marker).length,2);cache['assets/'+entry]=s.replace(marker,marker+'if(n.id==="administration"&&!t.isDemo&&t.roleCodes.some(r=>r==="ADMIN"||r==="OWNER"))return true;');
+const result=repair(files,entry,entry,'sorting-cancel-20261019');for(const[n,v]of Object.entries(result)){if(n.endsWith('.js'))assert.equal(ts.createSourceFile(n,v,99,true).parseDiagnostics.length,0,n);const p=path.join(output,n);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,v);}
+fs.writeFileSync(path.join(root,'web-changes.json'),JSON.stringify(Object.keys(result)));console.log('single React graph:',Object.keys(result).length);
