@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AuthSession } from '../../lib/api';
 import { sortingRequest, SortingHttpError, type SortingState } from '../../lib/pallet-sorting-api';
 
@@ -9,13 +9,12 @@ export function cancellationBlock(state: SortingState) {
   return state.moves.length || state.targets.length || state.activeTargetId || state.pendingRoutes.length || state.sources.some(b => b.archived)
     ? 'Есть перемещения, целевые короба, архивирование или незавершённые маршруты. Требуется отдельная проверка.' : '';
 }
-export function AdministrationSortingCancellation({ session }: { session: AuthSession }) {
-  const [open, setOpen] = useState(false), [rows, setRows] = useState<SortingState[]>([]);
+export function AdministrationSortingCancellation({ session, embedded = false }: { session: AuthSession; embedded?: boolean }) {
+  const [open, setOpen] = useState(embedded), [rows, setRows] = useState<SortingState[]>([]);
   const [selected, setSelected] = useState<SortingState | null>(null), [reason, setReason] = useState(''), [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false), [message, setMessage] = useState('');
   const gate = useRef(false);
   const [pending, setPending] = useState<{ id: string; body: Record<string, unknown> } | null>(null);
-  if (!canCancelSorting(session)) return null;
   const run = async (fn: () => Promise<void>) => {
     if (gate.current) return; gate.current = true; setBusy(true); setMessage('');
     try { await fn(); } catch (e) { setMessage(e instanceof Error ? e.message : 'Не удалось выполнить действие'); }
@@ -35,8 +34,11 @@ export function AdministrationSortingCancellation({ session }: { session: AuthSe
     setRows(current => current.filter(r => r.id !== request.id));
     setMessage('Сортировка снята. Остатки, КИЗы и размещение сохранены.');
   });
-  return <section className="admin-card" aria-label="Снятие незавершённых сортировок">
-    <button type="button" disabled={busy || !!pending} onClick={() => { if (open) { setOpen(false); return; } setOpen(true); void run(refresh); }}>Незавершённые сортировки</button>
+  // FIX: the selected tile opens content directly; no blank collapsed card.
+  useEffect(() => { if (embedded && canCancelSorting(session)) void run(refresh); }, [embedded, session.accessToken, session.user.activeWarehouseId]);
+  if (!canCancelSorting(session)) return null;
+  return <section className={embedded ? 'admin-sorting-content' : 'admin-card'} aria-label="Снятие незавершённых сортировок">
+    {!embedded && <button type="button" disabled={busy || !!pending} onClick={() => { if (open) { setOpen(false); return; } setOpen(true); void run(refresh); }}>Незавершённые сортировки</button>}
     {open && <>
       <h3>Снятие незавершённой сортировки</h3>
       <p>Только текущий филиал. Снять можно сессию без перемещений и целевых коробов. Товар остаётся на своих местах.</p>
