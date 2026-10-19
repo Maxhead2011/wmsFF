@@ -1,0 +1,9 @@
+{
+  "published": true,
+  "at": 1792410831.1176064,
+  "api": "sha256:229080b629ff2b804b23532ff7b38b355268bf2625957a0ced839e2162cfdbfb",
+  "web": "sha256:5fc2e34e8f69eeb7251feacc239ee07833eefcd40d9d98302328b7a3ebfccbb7",
+  "pr": 641,
+  "rollback": "logoff-web:before-admin-tiles-20261019",
+  "otherContainersUnchanged": true
+}
