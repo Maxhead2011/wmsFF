@@ -490,6 +490,9 @@ export function buildFboNavigation(items: WorkspaceNavItem[], enabled: boolean) 
 export const workspaceNav=buildFboNavigation(workspaceDefinitions,import.meta.env.VITE_FBO_WORKSPACE_ENABLED==='true');
 
 export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
+  // FIX: scoped empty-sorting administration, without granting owner API access.
+  if (item.id === 'administration' && import.meta.env.VITE_PALLET_SORTING_ENABLED === 'true'
+    && !user.isDemo && user.roleCodes.some(r => r === 'ADMIN' || r === 'OWNER')) return true;
   // FIX: grants only the operational problems panel, not owner-only administration APIs.
   if (item.id === 'administration' && import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED === 'true'
     && !user.isDemo && user.roleCodes.some(r => r === 'ADMIN' || r === 'OWNER') && user.permissionCodes.includes('stock:write')) return true;

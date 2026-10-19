@@ -1,3 +1,4 @@
+import { AdministrationSortingCancellation, canCancelSorting } from './AdministrationSortingCancellation';
 import { OperationalProblemsPanel, canUseOperationalProblems } from './OperationalProblemsPanel';
 import {
   Activity,
@@ -104,11 +105,16 @@ const metricLabels: Record<string, string> = {
 
 const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]));
 
+// FIX: limited admins receive only authorized tools, never owner administration APIs.
 export function AdministrationPanel(props: AdministrationPanelProps) {
-  if (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED === 'true' && canUseOperationalProblems(props.session) && !props.session.user.administrationEnabled) {
-    return <OperationalProblemsPanel session={props.session}/>;
+  const cancellation = <AdministrationSortingCancellation key={`${props.session.user.id}:${props.session.user.activeWarehouseId}`} session={props.session}/>;
+  if (!props.session.user.administrationEnabled) {
+    if (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED === 'true' && canUseOperationalProblems(props.session)) {
+      return <>{cancellation}<OperationalProblemsPanel session={props.session}/></>;
+    }
+    if (canCancelSorting(props.session)) return cancellation;
   }
-  return <OwnerAdministrationPanel {...props}/>;
+  return <>{cancellation}<OwnerAdministrationPanel {...props}/></>;
 }
 function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
