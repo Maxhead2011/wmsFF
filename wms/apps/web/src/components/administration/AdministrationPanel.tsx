@@ -1,3 +1,6 @@
+import { AdministrationOperationalTiles, canReviewReceipts, type OperationalTool } from './AdministrationOperationalTiles';
+import { ReceiptBarcodeProblems } from './ReceiptBarcodeProblems';
+import { AdministrationFboProblems } from './AdministrationFboProblems';
 import { AdministrationSortingCancellation, canCancelSorting } from './AdministrationSortingCancellation';
 import { OperationalProblemsPanel, canUseOperationalProblems } from './OperationalProblemsPanel';
 import {
@@ -72,10 +75,9 @@ type AdministrationPanelProps = {
   onOpenWorkspace: (id: WorkspaceId) => void;
 };
 
-type TabId = 'operational-problems' | 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
+type TabId = OperationalTool | 'operational-problems' | 'overview' | 'technical-work' | 'error-correction' | 'tsd-workloads' | 'phantom-stock' | 'stock-check' | 'marketplace-stock-control' | 'settings' | 'integrations' | 'visibility' | 'assistant' | 'documentation' | 'audit';
 
 const tabs: Array<{ id: TabId; label: string; icon: typeof Crown }> = [
-  { id: 'operational-problems', label: 'Проблемы приёмки и ФБО', icon: AlertTriangle },
   { id: 'overview', label: 'Центр управления', icon: Crown },
   // ADDED: One entry point for diagnostics and verified repair actions.
   { id: 'technical-work', label: 'Тех. работы', icon: Wrench },
@@ -105,16 +107,25 @@ const metricLabels: Record<string, string> = {
 
 const workspaceLabels = new Map(workspaceNav.map((item) => [item.id, item.title]));
 
-// FIX: limited admins receive only authorized tools, never owner administration APIs.
+// FIX: no tool content or requests are mounted before its tile is selected.
 export function AdministrationPanel(props: AdministrationPanelProps) {
-  const cancellation = <AdministrationSortingCancellation key={`${props.session.user.id}:${props.session.user.activeWarehouseId}`} session={props.session}/>;
-  if (!props.session.user.administrationEnabled) {
-    if (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED === 'true' && canUseOperationalProblems(props.session)) {
-      return <>{cancellation}<OperationalProblemsPanel session={props.session}/></>;
-    }
-    if (canCancelSorting(props.session)) return cancellation;
+  if (!props.session.user.administrationEnabled && (canReviewReceipts(props.session) || canCancelSorting(props.session))) {
+    return <LimitedAdministrationTools key={`${props.session.user.id}:${props.session.user.activeWarehouseId}`} session={props.session}/>;
   }
-  return <>{cancellation}<OwnerAdministrationPanel {...props}/></>;
+  return <OwnerAdministrationPanel {...props}/>;
+}
+function LimitedAdministrationTools({ session }: { session: AuthSession }) {
+  const [active, setActive] = useState<OperationalTool | undefined>();
+  return <section className="administration"><h2>Администрирование</h2>
+    <nav className="admin-topic-grid" aria-label="Разделы администрирования"><AdministrationOperationalTiles session={session} active={active} onSelect={setActive} includeFbo /></nav>
+    <OperationalToolContent session={session} active={active}/>
+  </section>;
+}
+function OperationalToolContent({ session, active }: { session: AuthSession; active?: string }) {
+  if (active === 'receipt-problems' && canReviewReceipts(session)) return <ReceiptBarcodeProblems session={session}/>;
+  if (active === 'sorting-cancellation' && canCancelSorting(session)) return <AdministrationSortingCancellation session={session} embedded/>;
+  if (active === 'fbo-problems' && canReviewReceipts(session)) return <AdministrationFboProblems session={session}/>;
+  return null;
 }
 function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPanelProps) {
   const [activeTab, setActiveTab] = useState<TabId>('overview');
@@ -331,8 +342,8 @@ function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPa
         </button>
       </section>
 
-      <nav className="admin-tabs" aria-label="Разделы администрирования">
-        {tabs.map((tab) => {
+      <nav className="admin-topic-grid" aria-label="Разделы администрирования">
+        {tabs.map((tab, index) => {
           if (tab.id === 'operational-problems' && (import.meta.env.VITE_ADMIN_PROBLEMS_ENABLED !== 'true' || !canUseOperationalProblems(session))) return null;
           if (tab.id === 'marketplace-stock-control' && !canManageMarketplaceStockControl(session)) return null;
           const Icon = tab.icon;
@@ -340,10 +351,11 @@ function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPa
             <button
               type="button"
               key={tab.id}
-              className={activeTab === tab.id ? 'active' : ''}
+              className={`admin-topic-tile admin-topic-tile--${index % 5}`}
+              aria-current={activeTab === tab.id ? 'page' : undefined}
               onClick={() => setActiveTab(tab.id)}
             >
-              <Icon size={17} /><span>{tab.label}</span>
+              <span className="admin-topic-tile__icon"><Icon size={24} /></span><span className="admin-topic-tile__content"><small>{String(index + 1).padStart(2, '0')}</small><strong>{tab.label}</strong></span>
               {tab.id === 'operational-problems' && receiptProblemCount !== null && receiptProblemCount > 0 ? <b className="admin-tabs__badge">{receiptProblemCount}</b> : null}
               {tab.id === 'phantom-stock' && phantomCount > 0 ? (
                 <b className="admin-tabs__badge">{phantomCount}</b>
@@ -351,6 +363,7 @@ function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPa
             </button>
           );
         })}
+        <AdministrationOperationalTiles session={session} active={activeTab} onSelect={setActiveTab} includeFbo offset={tabs.length}/>
       </nav>
 
       {phantomCount > 0 && activeTab !== 'phantom-stock' ? (
@@ -373,7 +386,7 @@ function OwnerAdministrationPanel({ session, onOpenWorkspace }: AdministrationPa
           onOpenWorkspace={onOpenWorkspace}
         />
       ) : null}
-      {activeTab === 'operational-problems' ? <OperationalProblemsPanel session={session}/> : null}
+      <OperationalToolContent key={`${session.user.id}:${session.user.activeWarehouseId}:${activeTab}`} session={session} active={activeTab}/>
       {activeTab === 'stock-check' ? <AdministrationStockCheck session={session} /> : null}
       {activeTab === 'marketplace-stock-control' ? <AdministrationMarketplaceStockControl session={session} /> : null}
       {activeTab === 'technical-work' ? <AdministrationTechnicalWork session={session} /> : null}
