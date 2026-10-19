@@ -19,6 +19,7 @@ type ProblemSource = { code: string; scanned: boolean; reason: 'BOX_NOT_FOUND' }
 export type PalletSortingState = {
   id: string; clientId: string; warehouseId: string; sourceCode: string; sourcePalletId: string | null;
   stage: 'CHECKING' | 'FORMING' | 'COMPLETED'; version: number;
+  cancelledAt?: string; cancellationReason?: string;
   sources: Source[]; targets: Target[]; activeTargetId?: string | null;
   problemSources?: ProblemSource[];
   moves: Array<{ identity: string; barcode: string; sourceBoxId: string | null; targetBoxId: string; sourceBoxCode?: string; recovered?: boolean; recoveryReason?: 'BOX_NOT_FOUND' | 'SKU_STOCK_MISSING' | 'WRITTEN_OFF_KIZ';
@@ -145,6 +146,23 @@ export class PalletSortingService {
       }
       if (state.version !== dto.version) throw new ConflictException('Сессия изменилась. Обновите её перед следующим действием.');
       if (state.stage === 'COMPLETED') throw new ConflictException('Сортировка уже завершена.');
+      // FIX: cancel only untouched sessions; COMPLETE would archive/write off sources.
+      if (dto.action === 'CANCEL_EMPTY') {
+        const reason = dto.reason?.trim();
+        if (!reason || reason.length > 500) throw new BadRequestException('Укажите причину снятия сортировки (до 500 символов).');
+        if (state.moves.length || state.targets.length || state.activeTargetId || state.pendingRoutes.length || state.sources.some(b => b.archived)) {
+          throw new ConflictException('Снять можно только сортировку без перемещений, целевых коробов, архивирования и незавершённых маршрутов.');
+        }
+        const previousStage = state.stage;
+        state.stage = 'COMPLETED';
+        state.cancelledAt = new Date().toISOString();
+        state.cancellationReason = reason;
+        state.version++;
+        await this.save(tx, state);
+        await tx.auditLog.create({ data: { id: logId, userId: user.id, action: 'PALLET_SORTING_CANCELLED', entity: 'PalletSortingSession', entityId: id,
+          payload: { inputHash, command: dto.action, reason, previousStage, version: state.version, stockChanged: false } } });
+        return state;
+      }
       // FIX: forming checks the actual moved source below, not every old checklist box.
       const checkSources = !['MOVE', 'OPEN_TARGET', 'CLOSE_TARGET'].includes(dto.action);
       await this.assertMovementAllowed(tx, [...(checkSources ? state.sources.filter(b => !b.archived && (!b.preservedOnPallet || b.retainedReason)).map(b => b.id) : []), ...state.targets.map(b => b.id)], state, user);

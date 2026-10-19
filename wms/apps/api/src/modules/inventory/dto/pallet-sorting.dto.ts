@@ -8,8 +8,10 @@ export class StartPalletSortingDto {
 export class PalletSortingActionDto {
   @IsUUID() operationId!: string;
   @IsInt() @Min(1) version!: number;
-  @IsIn(['SCAN_SOURCE', 'ARCHIVE_MISSING', 'BEGIN_FORMING', 'OPEN_TARGET', 'MOVE', 'CLOSE_TARGET', 'COMPLETE'])
+  @IsIn(['SCAN_SOURCE', 'ARCHIVE_MISSING', 'BEGIN_FORMING', 'OPEN_TARGET', 'MOVE', 'CLOSE_TARGET', 'COMPLETE', 'CANCEL_EMPTY'])
   action!: string;
+  // FIX: audited reason for administrative empty-session cancellation.
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
   @IsOptional() @IsString() @MaxLength(160) code?: string;
   @IsOptional() @IsString() @MaxLength(160) sourceBoxCode?: string;
   @IsOptional() @IsString() @MaxLength(160) palletCode?: string;

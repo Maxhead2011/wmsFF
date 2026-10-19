@@ -1,0 +1,10 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict');
+const ts=require('../../../node_modules/typescript');
+const root=process.argv[2];
+const source=fs.readFileSync(path.join(__dirname,'../../../apps/api/src/modules/inventory/pallet-sorting.service.ts'),'utf8');
+let block=source.slice(source.indexOf('      // FIX: cancel only untouched sessions;'),source.indexOf('      // FIX: forming checks'));
+block=block.replaceAll('new BadRequestException','new common_1.BadRequestException').replaceAll('new ConflictException','new common_1.ConflictException');
+const f=path.join(root,'modules/inventory/pallet-sorting.service.js');let s=fs.readFileSync(f,'utf8');const marker='            // FIX: forming checks';assert.equal(s.split(marker).length,2);s=s.replace(marker,block+'\n'+marker);fs.writeFileSync(f,s);
+const d=path.join(root,'modules/inventory/dto/pallet-sorting.dto.js');s=fs.readFileSync(d,'utf8');const old="'CLOSE_TARGET', 'COMPLETE']";assert.equal(s.split(old).length,2);s=s.replace(old,"'CLOSE_TARGET', 'COMPLETE', 'CANCEL_EMPTY']");s+='\n__decorate([(0,class_validator_1.IsOptional)(),(0,class_validator_1.IsString)(),(0,class_validator_1.MaxLength)(500),__metadata("design:type",String)],PalletSortingActionDto.prototype,"reason",void 0);\n';fs.writeFileSync(d,s);
+for(const file of [f,d])assert.equal(ts.createSourceFile(file,fs.readFileSync(file,'utf8'),99,true).parseDiagnostics.length,0);
+console.log('Patched two runtime files');
