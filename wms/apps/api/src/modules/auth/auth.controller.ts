@@ -40,6 +40,18 @@ export class AuthController {
     return user;
   }
 
+  @Get('me/panthera-favorites')
+  @ApiBearerAuth()
+  readPantheraFavorites(@CurrentUser() user: AuthUser) {
+    return this.auth.readPantheraFavorites(user);
+  }
+
+  @Post('me/panthera-favorites')
+  @ApiBearerAuth()
+  savePantheraFavorites(@CurrentUser() user: AuthUser, @Body() body: unknown) {
+    return this.auth.savePantheraFavorites(user, body);
+  }
+
   private extractBearerToken(authorization?: string) {
     const [scheme, token] = authorization?.split(' ') ?? [];
     return scheme === 'Bearer' && token ? token : '';
