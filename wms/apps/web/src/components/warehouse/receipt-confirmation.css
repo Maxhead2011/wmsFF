@@ -41,3 +41,41 @@
 .receipt-confirmation button:focus-visible { outline: 3px solid #a899cf; outline-offset: 3px; }
 .receipt-confirmation button:disabled { opacity: .55; cursor: wait; }
 .receipt-confirmation__progress { font-size: .9em; font-weight: 600; }
+
+/* FIX: receipt panel controls; exclude modal descendants to preserve confirmation styling. */
+.receipt-directions button:not(.receipt-confirmation button) {
+  appearance: none;
+  min-height: 44px;
+  padding: 11px 18px;
+  border: 1px solid var(--line, #dce3eb);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  color: var(--text, #334155);
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: box-shadow .15s, background-color .15s;
+}
+.receipt-directions button[aria-pressed="true"]:not(.receipt-confirmation button) {
+  background: #eee8f6;
+  color: #51416f;
+  border-color: #cfc0e4;
+}
+.receipt-directions td button:not(.receipt-confirmation button) {
+  margin: 8px 0;
+  background: #f0ebf7;
+  color: #51416f;
+  border-color: #ded4ed;
+}
+.receipt-directions button:not(.receipt-confirmation button):hover:not(:disabled) {
+  box-shadow: 0 3px 12px #7460a830;
+}
+.receipt-directions button:not(.receipt-confirmation button):focus-visible {
+  outline: 3px solid #a899cf;
+  outline-offset: 3px;
+}
+.receipt-directions button:not(.receipt-confirmation button):disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
