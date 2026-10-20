@@ -1,0 +1,36 @@
+{
+  "baseApi": "sha256:3c5b5fb80636201167d0c80ce8f286bc6f14e12d76a2a0ca2abf7f38b918f459",
+  "baseWeb": "sha256:88566809fce505f160ef66bb109a5ae5f37b3aebc4b50610c6c8d857a8ba2cec",
+  "api": {
+    "image": "sha256:bba911ad88300347e3290bd18af70db1d13e7c782c439175f30db19e06b74f65",
+    "hashes": {
+      "modules/auth/auth.service.js": "007d4e20b2f6a31d7c9a2029ff3b13dee2456ffc778c0a70d0bce7ee6c4dfcbb",
+      "modules/auth/auth.controller.js": "757c638a3fc0b9412e562e8cfdbcc6a13b67195c95cb38e97b99cb1faa240581",
+      "modules/auth/panthera-favorites.js": "c4550a33a26f5641b26cbe07919b3c129eaf46bd332a2993fc8a6c2731950499",
+      "modules/administration/administration-internal-api.service.js": "ec878b708b3bc7a9cbe84aad47aa6515e7ba3125fd64e1153f2856892c4340fb"
+    }
+  },
+  "web": {
+    "image": "sha256:2c1a0164ba1d0883246d7d8c39d1430557bfd03956733986d3e76b0c5b2a4898",
+    "hashes": {
+      "index.html": "49284fac65173754f1f99d1aecb1ac3be3130d415c9025b2ad77fe10a39b3763",
+      "assets/panthera-sync-20261020.js": "7baaaaf10bafc1335d0d2dcaf6000e2155ec8e041d1ec6adfc54c7c34ecd0e4b"
+    }
+  },
+  "proof": {
+    "passed": true,
+    "concurrentWinnerCount": 1,
+    "isolatedUsers": true,
+    "emptyList": true,
+    "routeMetadata": true
+  },
+  "browser": {
+    "passed": true,
+    "devices": 3,
+    "migration": true,
+    "focusSync": true,
+    "userIsolation": true,
+    "offlineRetainsCache": true
+  },
+  "sourceParityVerified": false
+}
