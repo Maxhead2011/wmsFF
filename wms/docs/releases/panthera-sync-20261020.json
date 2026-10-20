@@ -32,5 +32,9 @@
     "userIsolation": true,
     "offlineRetainsCache": true
   },
-  "sourceParityVerified": false
+  "sourceParityVerified": false,
+  "published": true,
+  "pr": 657,
+  "publicBrowserRegression": true,
+  "unauthenticatedStatus": 401
 }
