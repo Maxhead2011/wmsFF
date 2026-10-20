@@ -1,0 +1,19 @@
+.receipt-confirmation {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  box-sizing: border-box;
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line, #dce3eb);
+  border-radius: 16px;
+  background: var(--surface, white);
+  color: var(--text, #334155);
+  box-shadow: 0 24px 80px #0f172a40;
+}
+.receipt-confirmation::backdrop { background: #0f172a80; }
+.receipt-confirmation h3 { margin: 0 0 12px; }
+.receipt-confirmation p { line-height: 1.5; overflow-wrap: anywhere; }
+.receipt-confirmation button { margin: 8px 8px 0 0; min-height: 44px; }
