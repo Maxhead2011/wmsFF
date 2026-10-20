@@ -25,7 +25,10 @@ walk(ast);assert.equal(edits.length,2);
 for(const[a,b,v]of edits.sort((a,b)=>b[0]-a[0]))s=s.slice(0,a)+v+s.slice(b);
 let src=fs.readFileSync(path.join(__dirname,'../../../apps/web/src/components/warehouse/ReceiptConfirmation.tsx'),'utf8');
 src=src.replace(/^import .*;\r?\n/gm,'').replace('export function ReceiptConfirmation','function __ReceiptConfirmation');
-s+='\n'+esbuild.transformSync('const __receiptHooks=e;\n'+src.replace('const ref = useRef','const ref = __receiptHooks.useRef').replace('const titleId = useId','const titleId = __receiptHooks.useId').replace('  useEffect(', '  __receiptHooks.useEffect('),{loader:'tsx',jsxFactory:'e.createElement',target:'es2020'}).code;
+const helper=esbuild.transformSync('const __receiptHooks=e;\n'+src.replace('const ref = useRef','const ref = __receiptHooks.useRef').replace('const titleId = useId','const titleId = __receiptHooks.useId').replace('  useEffect(', '  __receiptHooks.useEffect('),{loader:'tsx',jsxFactory:'e.createElement',target:'es2020'}).code;
+// FIX: React alias e belongs to the receipt IIFE, not to the entry module.
+assert.equal(s.split('function X({ session, fixedClientId })').length,2);
+s=s.replace('function X({ session, fixedClientId })',helper+'\nfunction X({ session, fixedClientId })');
 assert.equal(ts.createSourceFile('x.js',s,99,true).parseDiagnostics.length,0);
 fs.mkdirSync(path.join(out,'assets'),{recursive:true});fs.writeFileSync(path.join(out,'assets',next),s);
 let html=fs.readFileSync(path.join(base,'index.html'),'utf8');
