@@ -23,3 +23,14 @@ it('renders a labelled dialog containing the save error and controls', () => {
   expect(html).toContain('role="status"');
   expect(html).toContain('Не удалось сохранить');
 });
+
+// TEST: pending validation and saving must be visibly distinguishable.
+it('explains the pending preflight before confirmation is available', () => {
+  const checking = renderToStaticMarkup(<ReceiptConfirmation title="Доступ" busy checking
+    message="" onCancel={() => {}}><button disabled>Подтвердить</button></ReceiptConfirmation>);
+  expect(checking).toContain('Проверяем доступность…');
+  expect(checking).toContain('disabled=""');
+  const saving = renderToStaticMarkup(<ReceiptConfirmation title="Доступ" busy
+    message="" onCancel={() => {}}>Состав</ReceiptConfirmation>);
+  expect(saving).toContain('Сохраняем…');
+});
