@@ -18,5 +18,12 @@
     "batches": 19,
     "units": 50001
   },
-  "sourceParityVerified": false
+  "sourceParityVerified": false,
+  "published": true,
+  "pr": 655,
+  "live": {
+    "ms": 2178,
+    "batches": 19,
+    "units": 50001
+  }
 }
