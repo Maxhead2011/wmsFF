@@ -1,0 +1,22 @@
+{
+  "baseApi": "sha256:1a961e8f56c6ad3ee53fb8caf0230841fd8e353954ef1bb5a75920e867770c85",
+  "candidateApi": "sha256:3c5b5fb80636201167d0c80ce8f286bc6f14e12d76a2a0ca2abf7f38b918f459",
+  "web": "sha256:88566809fce505f160ef66bb109a5ae5f37b3aebc4b50610c6c8d857a8ba2cec",
+  "changed": [
+    "common/receipt-batches.js",
+    "modules/warehouse/warehouse.service.js"
+  ],
+  "proof": {
+    "passed": true,
+    "formatterConstructions": 1,
+    "rows": 1000
+  },
+  "benchmark": {
+    "beforeMs": 10339,
+    "afterMs": 2101,
+    "identical": true,
+    "batches": 19,
+    "units": 50001
+  },
+  "sourceParityVerified": false
+}

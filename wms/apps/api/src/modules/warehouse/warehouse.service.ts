@@ -578,8 +578,12 @@ export class WarehouseService {
       take: 50000,
     });
     const groups = new Map<string, { date: string; boxCodes: Set<string>; quantity: number; kizCount: number }>();
+    // FIX: construct one formatter per list, not up to 50,000 during the synchronous grouping loop.
+    const receiptDateFormatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit',
+    });
     for (const movement of movements) {
-      const date = receiptDateFromBoxCode(movement.box?.code ?? '', movement.createdAt, receiptPrefix);
+      const date = receiptDateFromBoxCode(movement.box?.code ?? '', movement.createdAt, receiptPrefix, value => receiptDateFormatter.format(value));
       const group = groups.get(date) ?? { date, boxCodes: new Set<string>(), quantity: 0, kizCount: 0 };
       if (movement.box?.code) group.boxCodes.add(movement.box.code);
       group.quantity += movement.quantity;

@@ -4,6 +4,7 @@ export function receiptDateFromBoxCode(
   boxCode: string,
   fallback: Date,
   receiptPrefix = DEFAULT_RECEIPT_BOX_PREFIX,
+  formatDate: (value: Date) => string = moscowDateKey,
 ) {
   const escapedPrefix = receiptPrefix
     .trim()
@@ -12,9 +13,9 @@ export function receiptDateFromBoxCode(
   const match = boxCode
     .toLocaleUpperCase('ru-RU')
     .match(new RegExp(`^${escapedPrefix}(\\d{2})(\\d{2})(\\d{2})?(?:_|$)`));
-  if (!match) return moscowDateKey(fallback);
+  if (!match) return formatDate(fallback);
 
-  const fallbackYear = Number(moscowDateKey(fallback).slice(0, 4));
+  const fallbackYear = Number(formatDate(fallback).slice(0, 4));
   const year = match[3] ? 2000 + Number(match[3]) : fallbackYear;
   const month = Number(match[2]);
   const day = Number(match[1]);
@@ -22,7 +23,7 @@ export function receiptDateFromBoxCode(
 
   return candidate.getUTCFullYear() === year && candidate.getUTCMonth() === month - 1 && candidate.getUTCDate() === day
     ? candidate.toISOString().slice(0, 10)
-    : moscowDateKey(fallback);
+    : formatDate(fallback);
 }
 
 export function receiptBoxCodePrefixForDate(
