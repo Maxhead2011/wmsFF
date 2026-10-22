@@ -50,6 +50,7 @@ import {
 import { StorageOptimizationPanel } from './StorageOptimizationPanel';
 import { WbPrintCheckPanel } from './WbPrintCheckPanel';
 import './service-center.css';
+import './service-tiles-modern.css';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 
 type LoadState<T> = {

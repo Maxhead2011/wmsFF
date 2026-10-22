@@ -1,0 +1,47 @@
+/* FIX: scoped service navigation cards, preserving handlers and permissions. */
+:root .workspace-content .service-panel { --service-card: var(--surface, #fff); --service-ink: var(--ink, #25364b); }
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 14px;
+}
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]) {
+  --tile-accent: #376bdd; position: relative; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start;
+  gap: 16px; min-width: 0; min-height: 150px; height: auto; padding: 20px; border: 1px solid var(--line, #dce5ee); border-radius: 20px;
+  background: var(--service-card); background-image: none; color: var(--service-ink); text-align: left; cursor: pointer;
+  box-shadow: 0 4px 16px rgb(25 47 77 / 5%); transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:nth-child(3n+2) { --tile-accent: #8660c2; }
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:nth-child(3n) { --tile-accent: #178b81; }
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]) > svg {
+  box-sizing: border-box; width: 50px; height: 50px; flex: 0 0 50px; padding: 12px; border-radius: 15px;
+  background: color-mix(in srgb, var(--tile-accent) 12%, transparent); color: var(--tile-accent); stroke-width: 1.8;
+}
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]) > span {
+  font-size: 16px; line-height: 1.4; font-weight: 750; color: inherit; overflow-wrap: anywhere;
+}
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"])::after {
+  content: "\2197"; position: absolute; right: 20px; top: 23px; font-size: 20px; color: var(--tile-accent); opacity: .6;
+}
+@media (hover: hover) {
+  :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]):hover:not(:disabled) {
+    background: var(--service-card); border-color: var(--tile-accent); box-shadow: 0 8px 24px rgb(25 47 77 / 12%); transform: translateY(-2px);
+  }
+}
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]):focus-visible { outline: 3px solid var(--tile-accent); outline-offset: 3px; }
+:root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button[aria-selected="true"] { border-color: var(--tile-accent); box-shadow: inset 0 0 0 1px var(--tile-accent); }
+:root .workspace-content .service-panel .service-mobile-app { border-radius: 18px; padding: 16px 18px; gap: 14px; }
+:root .workspace-content .service-panel .service-mobile-app__icon { border-radius: 13px; }
+:root .workspace-content .service-panel .service-mobile-app > a { display: inline-flex; justify-content: center; align-items: center; gap: 8px; padding: 12px 18px; min-height: 44px; border-radius: 12px; border: 1px solid var(--line); text-decoration: none; font-weight: 700; }
+@media (max-width: 600px) {
+ :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+ :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]) { padding: 15px; min-height: 148px; gap: 12px; border-radius: 16px; }
+ :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]) > span { font-size: 14px; }
+ :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"])::after { right: 14px; top: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+ :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]),
+ :root .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]):hover:not(:disabled) { transition: none; transform: none; }
+}
+
+:root[data-ui-style="dark"] .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:is(.service-tile, [role="tab"]) { --tile-accent: #8badff; }
+:root[data-ui-style="dark"] .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:nth-child(3n+2) { --tile-accent: #c4a3f5; }
+:root[data-ui-style="dark"] .workspace-content .service-panel :is(.service-tiles, .service-tabs) > button:nth-child(3n) { --tile-accent: #70d3c6; }
