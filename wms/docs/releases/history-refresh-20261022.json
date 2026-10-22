@@ -1,0 +1,27 @@
+{
+  "published": {
+    "published": true,
+    "at": 1792691952.3238742,
+    "api": "sha256:a44fc2fbb1641fb022ae3902495c3057393d3de737518b7d4cccb33e9ea0ee91",
+    "web": "sha256:0c70ec6c971bc061ee516eace82da463570b06baf5b1998b5363f1410964d344",
+    "pr": 669,
+    "rollback": "logoff-web:before-history-refresh-20261022",
+    "otherContainersUnchanged": true
+  },
+  "verification": {
+    "base": "sha256:dac4d0cbbd175917bac89a3a97b54417b2392d7186d5f3c70514b5363e397a33",
+    "api": "sha256:a44fc2fbb1641fb022ae3902495c3057393d3de737518b7d4cccb33e9ea0ee91",
+    "web": "sha256:0c70ec6c971bc061ee516eace82da463570b06baf5b1998b5363f1410964d344",
+    "hashes": {
+      "index.html": "f8a6d992b0930ba1e9e4aa4bf2c9513a420b5890019fd486995f905a07e39d49",
+      "assets/history-refresh-20261022.js": "b4a2dd9c4a439df53b1212cf71eb3aa15d26aa80780e4c900c76600d80d22561"
+    },
+    "oldFilesPreserved": 3093
+  },
+  "browser": {
+    "passed": 5,
+    "actualRuntime": true,
+    "scroll": 850,
+    "pollCycles": 3
+  }
+}
