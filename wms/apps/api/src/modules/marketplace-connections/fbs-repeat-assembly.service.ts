@@ -1,3 +1,4 @@
+import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, type OriginalRepeatSticker } from './fbs-original-sticker';
 import { pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { createHash, randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
@@ -24,11 +25,12 @@ export class FbsRepeatAssemblyService {
   ) {}
 
   capabilities(user: AuthUser) {
-    return { enabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true' };
+    return { enabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true', originalStickerEnabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true' && process.env.WMS_FBS_ORIGINAL_STICKER_ENABLED === 'true' };
   }
 
   private authorize(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
     assertRepeatAssemblyEnabled();
+    if(dto.preserveOriginalSticker){assertOriginalStickerEnabled();if(dto.orders.length!==1)throw new BadRequestException('Выберите один прежний заказ.');}
     if (!allowed(user)) throw new ForbiddenException('Повторную физическую сборку создаёт администратор или владелец.');
     this.scopes.requireClientAccess(user, dto.clientId, 'write');
     const warehouseId = user.activeWarehouseId;
@@ -45,6 +47,24 @@ export class FbsRepeatAssemblyService {
     return warehouseId;
   }
 
+  async lookupOriginal(dto:{clientId:string;orderId:string},user:AuthUser) {
+    assertRepeatAssemblyEnabled();assertOriginalStickerEnabled();
+    if(!allowed(user))throw new ForbiddenException('Доступно администратору и собственнику.');
+    this.scopes.requireClientAccess(user,dto.clientId,'write');
+    if(!/^\d{1,20}$/.test(dto.orderId.trim()))throw new BadRequestException('Введите номер заказа WB.');
+    const tasks=await this.prisma.fbsTsdAssembly.findMany({where:{clientId:dto.clientId,marketplace:'WILDBERRIES',orderId:dto.orderId.trim()},take:2});
+    if(tasks.length!==1)throw new BadRequestException('Заказ не найден или найден в нескольких кабинетах клиента.');
+    const task=tasks[0];
+    const selection={clientId:dto.clientId,preserveOriginalSticker:true,orders:[{id:task.orderId,connectionId:task.connectionId,assemblyId:task.id}]};
+    const preview=await this.preview(selection,user);
+    return {...preview,selection};
+  }
+  private async originalStickers(dto:PreviewFbsRepeatAssemblyDto,user:AuthUser) {
+    const labels=new Map<string,OriginalRepeatSticker>();
+    if(dto.preserveOriginalSticker)for(const order of dto.orders)labels.set(order.id,await this.connections.readOriginalRepeatSticker(dto.clientId,order.connectionId,order.id,user));
+    return labels;
+  }
+
   private async wb(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
     return this.connections.readRepeatAssemblyWbStatuses(dto.clientId, dto.orders[0].connectionId, dto.orders.map(row => row.id), user);
   }
@@ -52,8 +72,9 @@ export class FbsRepeatAssemblyService {
   async preview(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
     const warehouseId = this.authorize(dto, user);
     const statuses = await this.wb(dto, user);
+    const stickers = await this.originalStickers(dto,user);
     return this.prisma.$transaction(async tx => {
-      const plan = await this.plan(tx, dto, warehouseId, statuses);
+      const plan = await this.plan(tx, dto, warehouseId, statuses, stickers);
       return this.describe(plan);
     }, { isolationLevel: 'RepeatableRead', timeout: 30_000 });
   }
@@ -62,10 +83,12 @@ export class FbsRepeatAssemblyService {
     const warehouseId = this.authorize(dto, user);
     if (dto.confirmAdditionalStockConsumption !== true) throw new BadRequestException('Подтвердите дополнительное физическое списание.');
     if (dto.orders.some(order => !order.assemblyId)) throw new BadRequestException('Сначала выполните предварительную проверку сборок.');
-    const fingerprint = repeatSelectionFingerprint(dto.clientId, warehouseId, dto.orders);
+    const selectionFingerprint = repeatSelectionFingerprint(dto.clientId, warehouseId, dto.orders);
+    const fingerprint = dto.preserveOriginalSticker ? createHash('sha256').update('original-sticker:'+selectionFingerprint).digest('hex') : selectionFingerprint;
     const previous = await this.existing(fingerprint);
     if (previous) return previous;
     const statuses = await this.wb(dto, user);
+    const stickers = await this.originalStickers(dto,user);
     const checkedAt = Date.now();
     try {
       const request = await this.prisma.$transaction(async tx => {
@@ -74,7 +97,7 @@ export class FbsRepeatAssemblyService {
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${fingerprint}))::text`;
         const same = await tx.fbsRepeatAssemblyRun.findUnique({ where: { fingerprint } });
         if (same) return tx.clientRequest.findUniqueOrThrow({ where: { id: same.requestId } });
-        const plan = await this.plan(tx, dto, warehouseId, statuses);
+        const plan = await this.plan(tx, dto, warehouseId, statuses, stickers);
         if (Date.now() - checkedAt > 60_000 || this.describe(plan).previewToken !== dto.previewToken) {
           throw new ConflictException('Данные изменились. Повторите предварительную проверку; новая заявка не создана.');
         }
@@ -92,10 +115,10 @@ export class FbsRepeatAssemblyService {
         }
         const created = await tx.clientRequest.create({ data: {
           clientId: dto.clientId, warehouseId, type: 'OUTBOUND', status: 'IN_WORK', priority: 'HIGH',
-          title: `Повторная сборка WB — ${plan.rows.length} заказов`, destinationCity: 'Повторный довоз WB',
+          title: `${dto.preserveOriginalSticker ? "Повтор со старым стикером" : "Повторная сборка WB"} — ${plan.rows.length} заказов`, destinationCity: 'Повторный довоз WB',
           comment: `ОТДЕЛЬНАЯ ПОВТОРНАЯ СБОРКА. Дополнительный физический расход подтверждён ${user.name}. ` +
             `Исходные заявки: ${sourceNumbers.join(', ')}. Поставки: ${sourceSupplies.join(', ')}. ` +
-            'Прежние КИЗ, печать, списания и выработка сохранены. Статусы и КИЗ в WB не изменяются.',
+            'Прежние КИЗ, печать, списания и выработка сохранены. Статусы и КИЗ в WB не изменяются.' + (dto.preserveOriginalSticker ? ' Печать прежнего стикера; новая физическая единица и новый КИЗ.' : ''),
           createdByUserId: user.id, fbsEmergencyAssemblyAt: now,
           fbsEmergencyAssemblyByUserId: user.id, fbsEmergencyAssemblyByName: user.name,
           items: { create: [...itemGroups.values()] },
@@ -119,6 +142,7 @@ export class FbsRepeatAssemblyService {
             where: { id: row.task.id, updatedAt: row.task.updatedAt, status: 'COMPLETED', requestId: row.task.requestId },
             data: {
               ...createRepeatAttemptData(row.task, successorId, created.id, item.id, now),
+              ...(row.originalSticker ? {marketplaceLabelBase64:row.originalSticker.imageBase64,marketplaceLabelContentType:'image/png; purpose=original-repeat'} : {}),
               status: 'RESERVED', reservedBoxId: allocation.boxId, reservedBoxCode: allocation.box!.code, reservedAt: now,
               sourceSkuId: relabel ? source.id : null, sourceProductName: relabel ? source.name : null,
               sourceArticle: relabel ? source.article : null,
@@ -145,7 +169,7 @@ export class FbsRepeatAssemblyService {
           entity: 'ClientRequest', entityId: created.id,
           payload: { runId, fingerprint, clientId: dto.clientId, warehouseId,
             orderIds: plan.rows.map(row => row.task.orderId), previousAttemptIds: plan.rows.map(row => row.task.id),
-            additionalStockConsumptionApproved: true, wbMutationPerformed: false },
+            additionalStockConsumptionApproved: true, originalStickerPreserved: dto.preserveOriginalSticker===true, wbMutationPerformed: false },
         } });
         await tx.clientRequestEvent.create({ data: { requestId: created.id, clientId: dto.clientId,
           eventType: 'CREATED', title: 'Создана отдельная повторная сборка',
@@ -172,7 +196,7 @@ export class FbsRepeatAssemblyService {
     return { status: 'ALREADY_EXISTS', request: await this.prisma.clientRequest.findUniqueOrThrow({ where: { id: run.requestId } }) };
   }
 
-  private async plan(db: Prisma.TransactionClient, dto: PreviewFbsRepeatAssemblyDto, warehouseId: string, wb: WbStatuses) {
+  private async plan(db: Prisma.TransactionClient, dto: PreviewFbsRepeatAssemblyDto, warehouseId: string, wb: WbStatuses, stickers=new Map<string,OriginalRepeatSticker>()) {
     const [client, tasks, links, skus, mappings, warehouse] = await Promise.all([
       db.client.findUniqueOrThrow({ where: { id: dto.clientId } }),
       db.fbsTsdAssembly.findMany({ where: { clientId: dto.clientId, marketplace: 'WILDBERRIES',
@@ -191,6 +215,8 @@ export class FbsRepeatAssemblyService {
         throw new ConflictException(`Заказ ${order.id} изменился или относится к другому филиалу.`);
       }
       assertRepeatCandidate(task, wb.get(order.id) ?? null);
+      const originalSticker=stickers.get(order.id);
+      if(dto.preserveOriginalSticker){if(!originalSticker)throw new BadRequestException('Прежний стикер не найден.');assertOriginalStickerIdentity(task,originalSticker);}
       const target = skus.find(sku => sku.id === task.skuId);
       if (!target) throw new BadRequestException(`Карточка товара заказа ${order.id} не найдена.`);
       const rules = client.relabelingEnabled ? mappings.filter(mapping =>
@@ -198,7 +224,7 @@ export class FbsRepeatAssemblyService {
       const candidateSkuIds = [target.id, ...skus.filter(sku => key(sku.size) === key(target.size) && rules.some(mapping =>
         [sku.article, sku.clientSku, sku.internalSku].map(key).includes(key(mapping.sourceArticle)) ||
         key(sku.internalSku).startsWith(`${key(mapping.sourceArticle)}-`))).map(sku => sku.id)];
-      return { task, link, candidateSkuIds };
+      return { task, link, candidateSkuIds, originalSticker };
     });
     const skuIds = [...new Set(selected.flatMap(row => row.candidateSkuIds))];
     const pendingBoxes=await pendingReceiptBoxIds(db,[dto.clientId],warehouseId);
@@ -240,9 +266,10 @@ export class FbsRepeatAssemblyService {
       assemblyId: row.task.id, productName: row.task.productName, article: row.task.article,
       sourceRequestNumber: row.link.request.number, sourceSupplyId: row.task.supplyId,
       boxCode: row.allocation.box!.code, palletCode: row.palletCode, sourceSkuId: row.source.id,
+      originalStickerNumber:row.originalSticker ? row.originalSticker.partA+row.originalSticker.partB : null,
     }));
     const revision = plan.rows.map(row => [row.task.id, row.task.updatedAt, row.link.updatedAt,
-      row.allocation.id, row.allocation.updatedAt, row.source.id]);
+      row.allocation.id, row.allocation.updatedAt, row.source.id, row.originalSticker ? [row.originalSticker.partA,row.originalSticker.partB,row.originalSticker.barcode] : null]);
     return { orders, orderCount: orders.length, additionalUnits: orders.length,
       previewToken: createHash('sha256').update(JSON.stringify(revision)).digest('hex'),
       warning: 'Это дополнительная физическая сборка с новым расходом остатков. Прежняя сборка и её списания сохраняются. КИЗ и статусы в WB не изменяются.' };
