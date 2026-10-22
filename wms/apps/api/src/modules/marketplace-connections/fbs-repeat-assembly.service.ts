@@ -214,7 +214,7 @@ export class FbsRepeatAssemblyService {
       if (!task || !link || link.request.warehouseId !== warehouseId || ['REMOVED', 'MOVING', 'RETURN_REQUIRED'].includes(link.syncStatus)) {
         throw new ConflictException(`Заказ ${order.id} изменился или относится к другому филиалу.`);
       }
-      assertRepeatCandidate(task, wb.get(order.id) ?? null);
+      assertRepeatCandidate(task, wb.get(order.id) ?? null, dto.preserveOriginalSticker === true);
       const originalSticker=stickers.get(order.id);
       if(dto.preserveOriginalSticker){if(!originalSticker)throw new BadRequestException('Прежний стикер не найден.');assertOriginalStickerIdentity(task,originalSticker);}
       const target = skus.find(sku => sku.id === task.skuId);
