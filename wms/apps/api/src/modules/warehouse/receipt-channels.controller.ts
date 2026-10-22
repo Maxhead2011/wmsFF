@@ -1,3 +1,4 @@
+import { canManageReceiptDirections } from './receipt-direction-access';
 import { ModuleRef } from '@nestjs/core';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
 import { BadRequestException, Body, Controller, Get, Logger, Post, Query, ForbiddenException, NotFoundException, Res } from '@nestjs/common';
@@ -30,7 +31,7 @@ export class ReceiptChannelsController {
     const docs=groups.flat(), approvals=(await Promise.all(warehouseIds.map(w=>receiptApprovalEntries(this.prisma,clientId,w,docs)))).flat();
     const approvalById=new Map(approvals.map(a=>[a.doc.id,a.approval]));
     const rules=new Map(saved.map(s=>{const r=s.value as any;return [r.id,r] as const;}));
-    return {enabled:true,canManageDirections:user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r)),rows:docs.filter(d=>(!receiptId||d.id===receiptId)&&(d.current||new Date(d.date)<=until)).map(d=>({...d,...(summary==='1'&&process.env.WMS_MENU_READS_ENABLED==='true'?{boxCount:d.boxes.length,boxes:[]}:{}),approvalEnabled:approvalById.has(d.id),approval:approvalById.get(d.id)??{available:true,revision:0},fbs:rules.get(d.id)?.fbs??true,fbo:rules.get(d.id)?.fbo??true,revision:rules.get(d.id)?.revision??0}))};
+    return {enabled:true,canManageDirections:await canManageReceiptDirections(this.prisma,user,clientId),rows:docs.filter(d=>(!receiptId||d.id===receiptId)&&(d.current||new Date(d.date)<=until)).map(d=>({...d,...(summary==='1'&&process.env.WMS_MENU_READS_ENABLED==='true'?{boxCount:d.boxes.length,boxes:[]}:{}),approvalEnabled:approvalById.has(d.id),approval:approvalById.get(d.id)??{available:true,revision:0},fbs:rules.get(d.id)?.fbs??true,fbo:rules.get(d.id)?.fbo??true,revision:rules.get(d.id)?.revision??0}))};
   }
   // FIX: the client can confirm only its own receipt; disabling remains an administrator action.
   @Post('approval')
@@ -82,14 +83,17 @@ export class ReceiptChannelsController {
     if(body.save)this.refresh(body.clientId);return result;
   }
   @Post('preview')
-  @RequirePermissions('warehouse:write')
   preview(@CurrentUser() user:AuthUser,@Body() body:any){return this.change(user,body,false);}
   @Post()
-  @RequirePermissions('warehouse:write')
   save(@CurrentUser() user:AuthUser,@Body() body:any){return this.change(user,body,true);}
   private async change(user:AuthUser,body:any,save:boolean){
     if(!body||typeof body.clientId!=='string'||!body.clientId.trim()||typeof body.id!=='string'||!/^[a-f0-9]{32}$/.test(body.id))throw new BadRequestException('Укажите клиента и приёмку.');
-    const warehouseId=requireReceiptChannelAdmin(user);this.scopes.requireClientAccess(user,body.clientId,'write');
+    this.scopes.requireClientAccess(user,body.clientId,'write');
+    if(!await canManageReceiptDirections(this.prisma,user,body.clientId))throw new ForbiddenException('Нет права изменять направления приёмки этого клиента.');
+    // FIX: clients choose the receipt's branch; administrators retain their active-branch guard.
+    const admin=user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r));
+    const warehouseId=admin?requireReceiptChannelAdmin(user):body.warehouseId;
+    if(typeof warehouseId!=='string'||!(await this.readWarehouses(user,body.clientId)).includes(warehouseId))throw new ForbiddenException('Нет доступа к приёмке этого филиала.');
     const result=await this.prisma.$transaction(async tx=>{
       // FIX: serialize policy changes with each other; serializable scans retry stale reads.
       if(save)await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))',`receipt-channels:${body.clientId}:${warehouseId}`);
