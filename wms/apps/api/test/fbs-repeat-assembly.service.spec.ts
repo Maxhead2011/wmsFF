@@ -66,6 +66,38 @@ describe('repeat assembly service safety', () => {
     const preview = await f.service.preview(f.dto, user);
     return { ...f.dto, previewToken: preview.previewToken, confirmAdditionalStockConsumption: true as const };
   }
+  // TEST: a replacement uses a new physical attempt and the original label, never the old KIZ.
+  it('creates a high-priority replacement retaining the verified original sticker', async () => {
+    vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED', 'true');
+    const f=fixture();
+    Object.assign(f.tasks[0],{stickerPartA:'5908010',stickerPartB:'9672',stickerBarcode:'*DcFy7mhD'});
+    const label={partA:'5908010',partB:'9672',barcode:'*DcFy7mhD',imageBase64:'iVBORw0KGgoAAA=='};
+    Object.assign(f.connections,{readOriginalRepeatSticker:vi.fn().mockResolvedValue(label)});
+    const dto={...f.dto,preserveOriginalSticker:true};
+    const preview=await f.service.preview(dto,user);
+    await f.service.create({...dto,previewToken:preview.previewToken,confirmAdditionalStockConsumption:true},user);
+    expect(f.db.clientRequest.create.mock.calls[0][0].data.priority).toBe('HIGH');
+    expect(f.db.fbsTsdAssembly.updateMany.mock.calls[0][0].data).toMatchObject({kiz:null,barcode:null,status:'RESERVED',stickerPartA:null,stickerPartB:null,stickerBarcode:null,marketplaceLabelBase64:label.imageBase64});
+    expect(f.db.fbsAssemblyAttemptHistory.create.mock.calls[0][0].data.taskSnapshot.kiz).toBe('old-kiz-0');
+  });
+  it('blocks original-label requests when disabled and rejects a changed original label',async()=>{
+    const f=fixture();const dto={...f.dto,preserveOriginalSticker:true};
+    await expect(f.service.preview(dto,user)).rejects.toThrow('не включена');
+    vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED','true');
+    Object.assign(f.tasks[0],{stickerPartA:'old',stickerPartB:'sticker',stickerBarcode:'old-code'});
+    Object.assign(f.connections,{readOriginalRepeatSticker:vi.fn().mockResolvedValue({partA:'changed',partB:'sticker',barcode:'old-code',imageBase64:'iVBORw0KGgoAAA=='})});
+    await expect(f.service.preview(dto,user)).rejects.toThrow('стикер');
+    expect(f.db.clientRequest.create).not.toHaveBeenCalled();expect(f.db.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+  });
+  it('lookup binds the current physical attempt and does not create a task',async()=>{
+    vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED','true');const f=fixture();
+    const preview=vi.spyOn(f.service,'preview').mockResolvedValue({orders:[],orderCount:1,additionalUnits:1,previewToken:'token',warning:''});
+    const result=await f.service.lookupOriginal({clientId:'client',orderId:'100'},user);
+    expect(result.selection).toMatchObject({preserveOriginalSticker:true,orders:[{id:'100',assemblyId:'attempt-0',connectionId:'wb'}]});
+    expect(preview).toHaveBeenCalledOnce();expect(f.db.clientRequest.create).not.toHaveBeenCalled();
+    f.db.fbsTsdAssembly.findMany.mockResolvedValue([]);
+    await expect(f.service.lookupOriginal({clientId:'client',orderId:'100'},user)).rejects.toThrow('не найден');
+  });
   it('previews without changing stock, tasks, links or requests', async () => {
     const f = fixture();
     const result = await f.service.preview(f.dto, user);

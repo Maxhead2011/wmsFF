@@ -35,7 +35,7 @@ describe('AdministrationInternalApiService', () => {
     expect(definition.prefixes).toContain('/marketplace-connection/fbs/reshipment');
     // TEST: manual assembly adds four gated handlers without losing existing routes.
     expect(definition.prefixes).toContain('/service/fbs-manual-assembly');
-    expect(definition.routeCount).toBe(113);
+    expect(definition.routeCount).toBe(114);
     const controller = readFileSync(join(__dirname, '../src/modules/marketplace-connections/fbs-reshipment.controller.ts'), 'utf8');
     expect([...controller.matchAll(/@(Get|Post)\('([^']+)'\)/g)].map((match) => `${match[1]} ${match[2]}`))
       .toEqual(['Get capabilities', 'Post check', 'Post preview', 'Post create', 'Post resume']);

@@ -12333,15 +12333,15 @@ export function revokeWmsApiCredential(accessToken: string, id: string) {
   );
 }
 
-export type FbsRepeatSelection = { clientId: string; orders: Array<{ id: string; connectionId: string; assemblyId?: string }> };
+export type FbsRepeatSelection = { clientId: string; preserveOriginalSticker?: boolean; orders: Array<{ id: string; connectionId: string; assemblyId?: string }> };
 export type FbsRepeatPreview = {
   previewToken: string; orderCount: number; additionalUnits: number; warning: string;
   orders: Array<{ id: string; connectionId: string; assemblyId: string; productName: string;
     article: string | null; sourceRequestNumber: number; sourceSupplyId: string | null;
-    boxCode: string; palletCode: string | null; sourceSkuId: string }>;
+    boxCode: string; palletCode: string | null; sourceSkuId: string; originalStickerNumber?: string | null }>;
 };
 export function fetchFbsRepeatCapabilities(accessToken: string) {
-  return request<{ enabled: boolean }>('/marketplace-connections/fbs/repeat-assembly/capabilities', { accessToken });
+  return request<{ enabled: boolean; originalStickerEnabled?: boolean }>('/marketplace-connections/fbs/repeat-assembly/capabilities', { accessToken });
 }
 export function previewFbsRepeatAssembly(accessToken: string, selection: FbsRepeatSelection) {
   return request<FbsRepeatPreview>('/marketplace-connections/fbs/repeat-assembly/preview', { method: 'POST', accessToken, body: selection });
@@ -12567,3 +12567,8 @@ export const ozonSync=(accessToken:string,id:string,action:'sync-preview'|'sync-
 export type OzonAdjustmentPreview={token:string;rows:OzonAdjustmentRow[];lines:FboPlan['lines'];needed:number;after:number};
 export type OzonAdjustmentState={operation:null|{id:string;state:string;rows:OzonAdjustmentRow[];operations:Array<{supplyId:string;state:string;error?:string}>}};
 export const ozonAdjustment=(accessToken:string,id:string,action:''|'preview'|'start'|'resume'|'cancel',body:unknown={})=>request<OzonAdjustmentPreview&OzonAdjustmentState>(`/tsd/requests/${encodeURIComponent(id)}/fbo/ozon-adjustment${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});
+
+// FIX: lookup is scoped and performs no stock/WB mutation.
+export function lookupFbsOriginalSticker(accessToken:string,clientId:string,orderId:string) {
+  return request<FbsRepeatPreview & {selection:FbsRepeatSelection}>('/marketplace-connections/fbs/repeat-assembly/original-sticker/lookup',{method:'POST',accessToken,body:{clientId,orderId}});
+}

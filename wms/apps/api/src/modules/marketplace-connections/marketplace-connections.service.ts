@@ -1,3 +1,4 @@
+import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, pinnedOriginalSticker } from './fbs-original-sticker';
 import { measureOperation } from '../../common/diagnostics/operation-timing';
 import { reconcileWbBackground } from '../../common/reconciliation/wb-background';
 import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
@@ -15126,6 +15127,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   // FIX: mirror every physical, marketplace, label and packing marker used by
   // the legacy-lease recovery. The automatic "no box" marker is not a scan.
   private isFbsTsdTaskUntouchedForAutoRelease(task: FbsTsdAssemblyRecord) {
+    // FIX: a pinned original image is preparation, not a physical scan.
+    const originalImage = task.marketplace === MarketplaceType.WILDBERRIES && task.marketplaceLabelContentType === 'image/png; purpose=original-repeat';
     return (
       !task.boxId &&
       (!task.boxCode || task.boxCode === FBS_TSD_NO_BOX_CODE) &&
@@ -15135,8 +15138,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       !task.relabelConfirmedAt &&
       ['PENDING', 'NOT_REQUIRED'].includes(task.wbMetaStatus) &&
       !task.marketplaceSubmittedAt &&
-      !task.marketplaceLabelBase64 &&
-      !task.marketplaceLabelContentType &&
+      (originalImage || (!task.marketplaceLabelBase64 && !task.marketplaceLabelContentType)) &&
       !task.marketplaceSubmitError &&
       !task.stickerPartA &&
       !task.stickerPartB &&
@@ -15208,8 +15210,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             relabelConfirmedAt: null,
             wbMetaStatus: { in: ['PENDING', 'NOT_REQUIRED'] },
             marketplaceSubmittedAt: null,
-            marketplaceLabelBase64: null,
-            marketplaceLabelContentType: null,
+            marketplaceLabelBase64: task.marketplaceLabelBase64,
+            marketplaceLabelContentType: task.marketplaceLabelContentType,
             marketplaceSubmitError: null,
             stickerPartA: null,
             stickerPartB: null,
@@ -17434,11 +17436,42 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: read/verify the old label before creating a replacement, without modifying WB.
+  async readOriginalRepeatSticker(clientId:string,connectionId:string,orderId:string,user:AuthUser) {
+    assertOriginalStickerEnabled();
+    if(user.isDemo||!user.roleCodes.some(r=>r==='ADMIN'||r==='OWNER'))throw new ForbiddenException('Доступно администратору и собственнику.');
+    this.clientScopes.requireClientAccess(user,clientId,'write');
+    const task=await this.prisma.fbsTsdAssembly.findFirst({where:{clientId,connectionId,orderId,marketplace:MarketplaceType.WILDBERRIES}});
+    if(!task)throw new NotFoundException('Прежняя сборка не найдена.');
+    const saved=await this.prisma.fbsPrintJob.findFirst({where:{assemblyId:task.id,orderId,stickerCode:task.stickerBarcode??'',stickerMime:'image/png'},orderBy:{createdAt:'desc'}});
+    let imageBase64=saved?.stickerBase64||'';
+    let label={partA:task.stickerPartA||'',partB:task.stickerPartB||'',barcode:task.stickerBarcode||'',imageBase64};
+    if(!imageBase64){
+      const connection=await this.prisma.clientMarketplaceConnection.findFirst({where:{id:connectionId,clientId,marketplace:MarketplaceType.WILDBERRIES,isActive:true},select:{apiKey:true}});
+      if(!connection)throw new BadRequestException('Кабинет WB недоступен.');
+      const response=await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40',{method:'POST',headers:wbHeaders(connection.apiKey),body:JSON.stringify({orders:[numericWbOrderId(orderId)]}),signal:AbortSignal.timeout(FBS_TSD_STICKER_TIMEOUT_MS)});
+      const row=asArray<Record<string,unknown>>(response.stickers).find(r=>textValue(r.orderId)===orderId);
+      label={partA:textValue(row?.partA),partB:textValue(row?.partB),barcode:textValue(row?.barcode),imageBase64:textValue(row?.file)};
+    }
+    assertOriginalStickerIdentity(task,label);return label;
+  }
+
   private async loadFbsTsdOrderSticker(task: FbsTsdAssemblyRecord) {
     // FIX: bounded timing only; preserve the existing result, error and call order.
     return measureOperation('fbs_sticker', async () => {
     if (task.marketplace === MarketplaceType.OZON) {
       return this.loadOzonFbsTsdOrderSticker(task);
+    }
+    // FIX: undo/reset may clear sticker fields, but cannot change the pinned original label.
+    if(task.marketplaceLabelContentType==='image/png; purpose=original-repeat') {
+      assertOriginalStickerEnabled();
+      const history=await this.prisma.fbsAssemblyAttemptHistory.findUnique({where:{successorId:task.id}});
+      const original=history ? restoreAttemptSnapshot(history.taskSnapshot) : null;
+      if(!original || original.clientId!==task.clientId || original.connectionId!==task.connectionId || original.orderId!==task.orderId)throw new BadRequestException('История прежнего стикера не подтверждена.');
+      const pinned=pinnedOriginalSticker({...task,stickerPartA:original.stickerPartA,stickerPartB:original.stickerPartB,stickerBarcode:original.stickerBarcode});
+      if(!pinned)throw new BadRequestException('Прежний стикер не найден.');
+      await this.persistFbsTsdOrderSticker(task.id,pinned);
+      return pinned;
     }
     const cacheKey = `${task.connectionId}:${task.orderId}`;
     const cached = this.fbsTsdStickerCache.get(cacheKey);

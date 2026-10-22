@@ -1,3 +1,4 @@
+import { FbsOriginalStickerPanel } from './FbsOriginalStickerPanel';
 import { FbsManualAssemblyPanel } from './FbsManualAssemblyPanel';
 import {
   AlertTriangle,
@@ -82,6 +83,7 @@ const telegramSectionOptions: Array<{ id: TelegramNotificationSection; label: st
 ];
 
 const tabs = [
+  { id: 'originalSticker', label: 'Повторная сборка со старым стикером', icon: Boxes },
   { id: 'manualFbs', label: 'Сборка ФБС по номерам', icon: Boxes },
   { id: 'wbPrintCheck', label: 'Проверка печати WB', icon: Search },
   { id: 'mode', label: 'Режим', icon: Lock },
@@ -374,7 +376,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
       </div>
 
       <div className="service-tabs" role="tablist" aria-label="Разделы сервисного меню">
-        {tabs.filter(tab => tab.id !== 'manualFbs' || (import.meta.env.VITE_FBS_MANUAL_ASSEMBLY_ENABLED === 'true' && !session.user.isDemo && session.user.roleCodes.some(r => ['ADMIN','OWNER'].includes(r)))).filter(tab => tab.id !== 'wbPrintCheck' || import.meta.env.VITE_WB_PRINT_CHECK_ENABLED === 'true').map((tab) => {
+        {tabs.filter(tab => tab.id !== 'originalSticker' || (!session.user.isDemo && session.user.roleCodes?.some(r=>['ADMIN','OWNER'].includes(r)))).filter(tab => tab.id !== 'manualFbs' || (import.meta.env.VITE_FBS_MANUAL_ASSEMBLY_ENABLED === 'true' && !session.user.isDemo && session.user.roleCodes.some(r => ['ADMIN','OWNER'].includes(r)))).filter(tab => tab.id !== 'wbPrintCheck' || import.meta.env.VITE_WB_PRINT_CHECK_ENABLED === 'true').map((tab) => {
           const Icon = tab.icon;
           return (
             <button
@@ -399,6 +401,7 @@ export function ServiceCenterPanel({ session }: ServiceCenterPanelProps) {
         onRefresh={() => void loadClients()}
       />}
 
+      {activeTab === 'originalSticker' && <FbsOriginalStickerPanel key={JSON.stringify([selectedClientId,session.accessToken,session.user.activeWarehouseId])} session={session} clientId={selectedClientId}/> }
       {activeTab === 'manualFbs' && <FbsManualAssemblyPanel key={selectedClientId + session.accessToken} session={session} clientId={selectedClientId}/>}
 
       {activeTab === 'wbPrintCheck' && <WbPrintCheckPanel accessToken={session.accessToken}/>}
