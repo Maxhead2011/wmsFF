@@ -12,6 +12,7 @@ import { LoginDto } from './dto/login.dto';
 import { PasswordService } from './password.service';
 import { UserSessionService } from './user-session.service';
 import { WarehouseAuthScopeService } from './warehouse-auth-scope.service';
+import { readPantheraFavorites, savePantheraFavorites } from './panthera-favorites';
 
 type UserWithAccess = {
   id: string;
@@ -49,6 +50,8 @@ type UserWithAccess = {
 
 @Injectable()
 export class AuthService {
+  readPantheraFavorites(user: AuthUser) { return readPantheraFavorites(this.prisma, user.id); }
+  savePantheraFavorites(user: AuthUser, body: unknown) { return savePantheraFavorites(this.prisma, user.id, body); }
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,

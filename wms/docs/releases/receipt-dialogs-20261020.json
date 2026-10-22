@@ -1,0 +1,27 @@
+{
+  "published": true,
+  "at": 1792506695.4761772,
+  "api": "sha256:1a961e8f56c6ad3ee53fb8caf0230841fd8e353954ef1bb5a75920e867770c85",
+  "web": "sha256:63354801a6b954ba25c89a5ec1c197dc6dcf5b1e0d0ace0da816259cd19df640",
+  "pr": 643,
+  "rollback": "logoff-web:before-receipt-dialogs-20261020",
+  "otherContainersUnchanged": true,
+  "verification": {
+    "base": "sha256:a0a44fb0e1e87b2be54446331ebf1e8edbd913af50c71dc79540444b97663048",
+    "api": "sha256:1a961e8f56c6ad3ee53fb8caf0230841fd8e353954ef1bb5a75920e867770c85",
+    "web": "sha256:63354801a6b954ba25c89a5ec1c197dc6dcf5b1e0d0ace0da816259cd19df640",
+    "hashes": {
+      "index.html": "1c3ca48fd2bb79f8839c64422bd5f498989ad0f01657abe6d3a9d3bc8407be72",
+      "assets/receipt-dialogs-20261020.js": "42867ba8aa8cf3cd23d32b5c1a71b2d689bcd3109f4cf3e968bb1e0b264419ae",
+      "assets/receipt-confirmation-20261020.css": "dbae90de99f50bf851e9b725789a762fb6a4bbacc17e3d752ec1ca633328acd3"
+    },
+    "oldFilesPreserved": 3077
+  },
+  "tests": {
+    "webPassed": 461,
+    "webSkipped": 2,
+    "browserPassed": 5,
+    "webTypesPassed": true
+  },
+  "sourceParityVerified": false
+}
