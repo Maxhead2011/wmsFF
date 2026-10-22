@@ -21,3 +21,5 @@
 Кандидат на базе PR661/662: API3558/web466, TypeScript, 4 браузерных сценария на фактическом JS. Изолированный PostgreSQL со схемой production и синтетическими данными: конкурентное создание одной заявки, HIGH, пустые физические поля, прежний PNG, дополнительный расход AVAILABLE ровно1 при повторном вызове и новый КИЗ в PACKING, сохранённый старый КИЗ. Runtime smoke8: сохранённая наклейка, права/флаги, маршрут контроллера, обычный WB cache и Ozon. API delta ровно6 модулей; web2 файла. Два флага задаются ENV только образа нашей WMS; .env и compose не меняются.
 
 API sha256:119999bed8e0baf53dd978b35987fe3bce79be95aa3e15c030b19b1ed10a9c92; web sha256:e8da9906ee5d3d5eeda56d91f47af8dfeeb8d530f8b5172bb291933f923b69e4. Health, public hashes and live owner capability passed. Physical printer was not used; server PNG and browser path verified.
+
+PR665: исправлена проверка complete/sorted; предпросмотр заказа6049802274 успешно выполнен на production без создания заявки. API sha256:a44fc2fbb1641fb022ae3902495c3057393d3de737518b7d4cccb33e9ea0ee91. Web прежний.
