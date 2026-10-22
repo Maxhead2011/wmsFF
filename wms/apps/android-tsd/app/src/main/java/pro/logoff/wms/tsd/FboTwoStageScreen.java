@@ -497,6 +497,8 @@ final class FboTwoStageScreen {
         if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
         if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking()){
             boolean accepted=state.scanLocation(pickingRoute(),value);
+            // FIX: like FBS, validate a different physical source instead of treating the route as an allow-list.
+            if(!accepted&&checkAlternativeLocation(value))return;
             feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);
             message=accepted?(state.source.isEmpty()?"Паллет найден":"Нужный короб"):"Короб или паллет не требуется для этой сборки.";
             if(!AssemblyScanVoice.isKiz(value))speakScan(accepted);if(accepted&&plan.localRouteEnabled){refresh();}else render();return;
@@ -564,6 +566,41 @@ final class FboTwoStageScreen {
         if("PICK_UNIT".equals(payload.get("action"))&&unmarkedLine(payload.get("barcode"),false)){
             state.barcode="";state.productKiz="";state.productReady=false;
         }
+    }
+    // FIX: keep scanner state unchanged until the scoped server route confirms the alternative.
+    private boolean checkAlternativeLocation(String value){
+        String kind=FboScanState.alternativeLocationKind(plan,value);
+        if(kind.isEmpty()||packing||!ready()||!state.source.isEmpty())return false;
+        final String code=value.toUpperCase(java.util.Locale.ROOT);
+        final String pallet=kind.equals("pallet")?code:state.pallet;
+        final String box=kind.equals("box")?code:"";
+        busy=true;message="Проверяю доступность…";render();
+        executor.execute(()->{try{
+            Response<TsdFboPlan> response=api.getFboPlanAtLocation(session.authorizationHeader(),id,pallet,box).execute();
+            if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
+            TsdFboPlan next=response.body();
+            handler.post(()->{
+                if(closed)return;busy=false;
+                if(!next.alternativePickingSupported||!"PICKING".equals(next.phase)||next.compositionChanged){
+                    message="Заявка изменилась. Обновите задание.";routeStale=true;render();return;
+                }
+                plan=next;
+                // A new pallet is a navigation choice. A box still requires its physical pallet scan.
+                FboScanState checked=new FboScanState();checked.pallet=kind.equals("pallet")?"":state.pallet;
+                boolean accepted=checked.scanLocation(pickingRoute(),code);
+                state.reconcile(plan,packing);
+                if(accepted){state.pallet=checked.pallet;state.source=checked.source;message=kind.equals("pallet")?"Паллет найден":"Нужный короб";}
+                else {
+                    message="Нет доступного товара для оставшегося отбора. Проверьте паллет, остаток и ограничения.";
+                    if(kind.equals("box"))for(TsdFboPlan.Route row:plan.route)if(code.equalsIgnoreCase(row.boxCode)){
+                        if(!row.pallet.equals(checked.pallet))message="Сначала отсканируйте паллет "+row.pallet+", затем этот короб.";
+                        else message="Короб доступен в другом режиме отбора. Выберите "+(FboPickingRoute.whole(plan,row)?"«Сборка целых коробов».":"«Частичный отбор».");
+                    }
+                }
+                feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);speakScan(accepted);render();
+            });
+        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message="Не удалось проверить короб или паллет: "+e.getMessage();feedbackColor=Color.rgb(254,202,202);render();});}});
+        return true;
     }
     private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);
                 // FIX: migrate stale unmarked picking checkpoints left by older APKs; pending commands are excluded above.

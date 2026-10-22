@@ -26,6 +26,46 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: an off-route box needs a successful read before scanning products; no stock command on location scans.
+    @Test public void alternativeBoxIsValidatedWithoutStockMutation() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        for(String outcome:new String[]{"accepted","unavailable","wrong-pallet","other-mode","network","disabled"})try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();AtomicInteger alternatives=new AtomicInteger(),writes=new AtomicInteger();List<Map<String,String>> commands=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->
+                Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
+                    if(!method.getName().equals("execute"))return null;
+                    if(m.getName().equals("actFbo")||m.getName().equals("acknowledgeFbo")){writes.incrementAndGet();commands.add(new LinkedHashMap<>((Map<String,String>)args[2]));}
+                    boolean alternative=args.length>3&&"FFL_OTHER".equals(args[3]);
+                    TsdFboPlan next=plan("PICKING");
+                    TsdFboPlan.Line line=new TsdFboPlan.Line();line.skuId="sku";line.barcode="123";line.needed=1;line.remaining=1;line.requiresKiz=true;next.lines.add(line);
+                    try { TsdFboPlan.class.getField("alternativePickingSupported").setBoolean(next,!outcome.equals("disabled")); } catch(NoSuchFieldException beforeFix) { }
+                    if(alternative){
+                        alternatives.incrementAndGet();if(outcome.equals("network"))throw new java.io.IOException("offline");
+                        if(!outcome.equals("unavailable")){next.route.get(0).boxCode="FFL_OTHER";if(outcome.equals("wrong-pallet"))next.route.get(0).pallet="PALET_SORT_012";}
+                        if(outcome.equals("other-mode"))next.route.get(0).wholeBox=true;
+                    }
+                    return Response.success(next);
+                }));
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{},()->{});
+            try{
+                waitIdle(screen);FboPickingModeTest.choose(a,false);
+                screen.scannerField().setText("PL_1");screen.submit();waitIdle(screen);
+                screen.scannerField().setText("FFL_OTHER");screen.submit();waitIdle(screen);
+                java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);FboScanState state=(FboScanState)field.get(screen);
+                assertEquals(outcome,outcome.equals("disabled")?0:1,alternatives.get());assertEquals(outcome,0,writes.get());assertNull(state.pending());
+                assertEquals(outcome,outcome.equals("accepted")?"FFL_OTHER":"",state.source);
+                if(outcome.equals("wrong-pallet"))assertNotNull(find(a.findViewById(android.R.id.content),"PALET_SORT_012"));
+                if(outcome.equals("network"))assertNotNull(find(a.findViewById(android.R.id.content),"offline"));
+                if(outcome.equals("other-mode"))assertNotNull(find(a.findViewById(android.R.id.content),"Выберите «Сборка целых коробов»"));
+                if(outcome.equals("accepted")){
+                    screen.scannerField().setText("123");screen.submit();assertEquals(0,writes.get());
+                    screen.scannerField().setText("test-kiz");screen.submit();waitIdle(screen);
+                    assertEquals(1,writes.get());assertEquals("PICK_UNIT",commands.get(0).get("action"));
+                    assertEquals("FFL_OTHER",commands.get(0).get("sourceBoxCode"));assertEquals("PL_1",commands.get(0).get("palletCode"));assertEquals("test-kiz",commands.get(0).get("kiz"));
+                }
+            }finally{screen.close();}
+        }
+    }
     // TEST: definitive rejection must not turn the next unmarked barcode into a KIZ.
     @Test public void rejectedUnmarkedPickClearsBarcodeForBothProtocols() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;

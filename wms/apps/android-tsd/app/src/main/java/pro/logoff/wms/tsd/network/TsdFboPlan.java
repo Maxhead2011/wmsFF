@@ -17,6 +17,8 @@ public class TsdFboPlan {
     public static class PackingSuggestion { public String skuId, barcode, direction, targetBoxCode; }
     public boolean parallelPackingSupported;
     public boolean localRouteEnabled;
+    // FIX: absence keeps old servers and sold applications on the original scanner flow.
+    public boolean alternativePickingSupported;
     public String requestId, title, phase;
     public int needed, picked, packed, looseRemaining, shortage;
     // FIX: accepted stock may be reserved while its storage location is still pending.
