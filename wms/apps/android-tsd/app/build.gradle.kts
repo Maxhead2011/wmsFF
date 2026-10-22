@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 233 // FIX: unmarked FBO picking and manual top-up, LOGOFF only.
-            versionName = "0.1.233-ozon-reopen"
+            versionCode = 234 // FIX: validate alternative FBO sources, LOGOFF only.
+            versionName = "0.1.234-fbo-alternative"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

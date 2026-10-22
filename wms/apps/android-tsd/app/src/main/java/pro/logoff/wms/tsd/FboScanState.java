@@ -108,6 +108,13 @@ final class FboScanState {
     boolean scanLocation(TsdFboPlan plan,String code) {
         return scanLocation(plan.route,code);
     }
+    // FIX: a syntactically valid location is only a read request, never permission to pick.
+    static String alternativeLocationKind(TsdFboPlan plan,String code) {
+        if(!"logoff".equals(BuildConfig.FLAVOR)||plan==null||!plan.alternativePickingSupported||!"PICKING".equals(plan.phase)||code==null)return "";
+        if(code.matches("(?i)^FFL[\\w-]{1,96}$"))return "box";
+        if(code.matches("(?i)^(PALET|PALLET)[\\w-]{1,96}$"))return "pallet";
+        return "";
+    }
     // FIX: accept only locations in the active picking route; legacy callers retain the full route.
     boolean scanLocation(java.util.List<TsdFboPlan.Route> route,String code) {
         if(pallet.isEmpty())for(TsdFboPlan.Route r:route)if(!r.pallet.isEmpty()&&r.pallet.equalsIgnoreCase(code.trim())){pallet=r.pallet;source="";return true;}

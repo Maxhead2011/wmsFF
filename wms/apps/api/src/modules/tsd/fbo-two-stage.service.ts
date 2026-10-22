@@ -1,3 +1,4 @@
+import { alternativeFboPickingEnabled, prioritizeAlternativeFboBox } from './fbo-alternative-picking';
 import { ozonReopenSupported, reopenOzonBox } from './ozon-reopen-box';
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
 import { confirmedUnplacedFboBoxes } from './fbo-unplaced-picking';
@@ -57,24 +58,24 @@ export class FboTwoStageService {
     // FIX: share only in-flight read calculations; authorize every caller before joining.
     private readonly pendingPlans = new Map<string, ReturnType<FboTwoStageService['calculatePlan']>>();
     async plan(id: string, user: AuthUser, context: Record<string, unknown> = {}) {
-        if (process.env.WMS_FBO_PLAN_COALESCE_ENABLED !== 'true') return this.calculatePlan(id, user);
+        if (process.env.WMS_FBO_PLAN_COALESCE_ENABLED !== 'true') return this.calculatePlan(id, user, context);
         if (!fboTwoStageEnabled()) throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
         await this.load(this.prisma, id, user, 'read');
         const key = JSON.stringify([id, context]);
         const existing = this.pendingPlans.get(key);
         if (existing) return existing;
-        const calculation = this.calculatePlan(id, user);
+        const calculation = this.calculatePlan(id, user, context);
         this.pendingPlans.set(key, calculation);
         try { return await calculation; }
         finally { if (this.pendingPlans.get(key) === calculation) this.pendingPlans.delete(key); }
     }
-    private async calculatePlan(id: string, user: AuthUser) {
+    private async calculatePlan(id: string, user: AuthUser, context: Record<string, unknown> = {}) {
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
         return this.prisma.$transaction(async (tx) => {
             const r = await this.load(tx, id, user, 'read');
             this.requireFbo(r);
-            return this.snapshot(tx, r);
+            return this.snapshot(tx, r, context);
         }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 30000 });
     }
     private requireFbo(r: Request) {
@@ -92,7 +93,7 @@ export class FboTwoStageService {
         const request=await this.load(tx,id,user,'write');this.requireFbo(request);
         return {request,plan:await this.snapshot(tx,request)};
     }
-    private async snapshot(tx: Prisma.TransactionClient, r: Request) {
+    private async snapshot(tx: Prisma.TransactionClient, r: Request, context: Record<string, unknown> = {}) {
         const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
@@ -135,7 +136,7 @@ export class FboTwoStageService {
         const ordered = preference ? orderFboRequestBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand,
             cacheFboBoxDecision((box: (typeof boxes)[number], remaining) => wholeBoxDecision(box.balances, remaining, box.productMarks.map(m => ({ ...m, identity: identity(m.value) })),
                 box.productMarks.length > 0 || lines.some(l => l.requiresKiz && box.balances.some(b => b.quantity > 0 && b.skuId === l.skuId)))), preference) : boxes;
-        for (const box of ordered) {
+        for (const box of prioritizeAlternativeFboBox(ordered, context)) {
             if (busyBoxes.has(box.id)) continue;
             if (requiresPlacement && !box.storagePlacement && !confirmedUnplaced.has(box.id)) continue;
             const tasks: Array<{
@@ -185,7 +186,7 @@ export class FboTwoStageService {
             }
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
-        return { requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
+        return { alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: shipment ? 'OZON' : 'WILDBERRIES',
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
             unboxedPickingSupported: unboxed,

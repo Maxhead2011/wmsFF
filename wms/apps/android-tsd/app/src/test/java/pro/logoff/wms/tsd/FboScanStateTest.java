@@ -7,6 +7,18 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: alternative lookup is opt-in, picking-only, and never treats a product barcode/KIZ as a location.
+    @Test public void alternativeLocationIsScopedToOurPicker(){
+        TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";
+        assertEquals("",FboScanState.alternativeLocationKind(p,"FFL_LKB2709_527"));
+        p.alternativePickingSupported=true;
+        boolean ours="logoff".equals(BuildConfig.FLAVOR);
+        assertEquals(ours?"box":"",FboScanState.alternativeLocationKind(p,"FFL_LKB2709_527"));
+        assertEquals(ours?"pallet":"",FboScanState.alternativeLocationKind(p,"PALET_SORT_012"));
+        assertEquals("",FboScanState.alternativeLocationKind(p,"2056223937997"));
+        assertEquals("",FboScanState.alternativeLocationKind(p,"0104640684265133215xyz"));
+        p.phase="PACKING";assertEquals("",FboScanState.alternativeLocationKind(p,"FFL_LKB2709_527"));
+    }
     // TEST: aliases cannot cross SKUs or destination quotas.
     @Test public void aliasKeepsSkuAndDirectionBoundaries(){
         if(!"logoff".equals(BuildConfig.FLAVOR))return;

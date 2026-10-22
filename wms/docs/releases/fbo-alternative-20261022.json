@@ -1,0 +1,59 @@
+{
+  "passed": true,
+  "base": "sha256:0c70ec6c971bc061ee516eace82da463570b06baf5b1998b5363f1410964d344",
+  "api": "sha256:a44fc2fbb1641fb022ae3902495c3057393d3de737518b7d4cccb33e9ea0ee91",
+  "candidate": "sha256:bf530fdd6f34447e197e533b75e877f36674deedaf99b770e0e96f0c6dfbab9a",
+  "apiCandidate": "sha256:854abc7eca0b3930768b8fcbb7a783057960553a1c17af45aca516bbe1bbe4d2",
+  "changed": [
+    "downloads/logoff-tsd-fbo-alternative-234.apk",
+    "downloads/logoff-tsd.apk",
+    "downloads/logoff-tsd.json"
+  ],
+  "apiChanged": [
+    "modules/tsd/fbo-two-stage.service.js",
+    "modules/tsd/fbo-alternative-picking.js"
+  ],
+  "apk": {
+    "versionCode": 234,
+    "versionName": "0.1.234-fbo-alternative",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbo-alternative-234.apk",
+    "sha256": "df01f913d9203272271d4e6d045efef491ef8a781f14bce77718fec300300c96",
+    "size": 5398935,
+    "releasedAt": "2026-10-22T18:21:08.737546+00:00",
+    "releaseNotes": "FBO: validate another source box before picking; protect reservations and KIZ ownership."
+  },
+  "proof": {
+    "passed": true,
+    "cases": 8,
+    "network": false
+  },
+  "published": false,
+  "tests": {
+    "apiPassed": 3564,
+    "apiSkipped": 155,
+    "apiExcluded": "kiz-duplicate.integration.spec.ts: missing dedicated DB URL; initial full run failed initialization",
+    "webPassed": 470,
+    "webSkipped": 2,
+    "androidEachFlavorPassed": 265,
+    "androidFlavors": [
+      "logoff",
+      "ffullhab",
+      "platform"
+    ],
+    "typeScriptApi": "passed",
+    "beforeFixRegression": [
+      "API alternative route selected original box",
+      "Android alternative scan made no server check"
+    ],
+    "readOnlyRequest2284": "526/527/528 accepted, foreign code rejected; picked/needed/shortage unchanged"
+  },
+  "apiHashes": {
+    "modules/tsd/fbo-two-stage.service.js": "7ff02f27b1aab8b610e7ce4cf2273163b2fc47e5805f1c5588accf7acff0b18c",
+    "modules/tsd/fbo-alternative-picking.js": "f3f5b0253b20839d90ff57e64ab8e8b67907973c57ccca2018b84339e42aee78"
+  },
+  "webHashes": {
+    "downloads/logoff-tsd-fbo-alternative-234.apk": "df01f913d9203272271d4e6d045efef491ef8a781f14bce77718fec300300c96",
+    "downloads/logoff-tsd.apk": "df01f913d9203272271d4e6d045efef491ef8a781f14bce77718fec300300c96",
+    "downloads/logoff-tsd.json": "4f36f97c6eb4c5a1a1681dbb586a45c53f4b57156cc8a3488703a57aa6c77143"
+  }
+}
