@@ -67,9 +67,10 @@ describe('repeat assembly service safety', () => {
     return { ...f.dto, previewToken: preview.previewToken, confirmAdditionalStockConsumption: true as const };
   }
   // TEST: a replacement uses a new physical attempt and the original label, never the old KIZ.
-  it('creates a high-priority replacement retaining the verified original sticker', async () => {
+  it('creates a high-priority sorted replacement retaining the verified original sticker', async () => {
     vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED', 'true');
     const f=fixture();
+    f.connections.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([[f.tasks[0].orderId,{supplierStatus:'complete',wbStatus:'sorted'}]]));
     Object.assign(f.tasks[0],{stickerPartA:'5908010',stickerPartB:'9672',stickerBarcode:'*DcFy7mhD'});
     const label={partA:'5908010',partB:'9672',barcode:'*DcFy7mhD',imageBase64:'iVBORw0KGgoAAA=='};
     Object.assign(f.connections,{readOriginalRepeatSticker:vi.fn().mockResolvedValue(label)});

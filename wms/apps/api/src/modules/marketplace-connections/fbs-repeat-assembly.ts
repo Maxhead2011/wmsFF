@@ -23,6 +23,7 @@ type CompletedAttempt = {
 export function assertRepeatCandidate(
   task: CompletedAttempt,
   wb: { supplierStatus: string; wbStatus: string } | null,
+  preserveOriginalSticker = false,
 ) {
   if (task.status !== 'COMPLETED' || !task.completedAt || !task.barcode ||
       (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED'))) {
@@ -34,8 +35,10 @@ export function assertRepeatCandidate(
   if (task.cargoPackingId) {
     throw new BadRequestException('Заказ уже включён в грузокороб. Отдельная повторная упаковка грузомест пока не поддерживается; прежний грузокороб не изменён.');
   }
-  if (!wb || wb.supplierStatus !== 'complete' || wb.wbStatus !== 'waiting') {
-    throw new BadRequestException('WB не подтверждает состояние complete/waiting. Отменённый или уже доставленный заказ нельзя собирать повторно.');
+  // FIX: sorted is allowed only for the enabled original-sticker replacement.
+  const allowSorted = preserveOriginalSticker && process.env.WMS_FBS_ORIGINAL_STICKER_ENABLED === 'true';
+  if (!wb || wb.supplierStatus !== 'complete' || !(wb.wbStatus === 'waiting' || (allowSorted && wb.wbStatus === 'sorted'))) {
+    throw new BadRequestException(`Повторная сборка недоступна при статусе WB ${wb ? wb.supplierStatus + '/' + wb.wbStatus : 'не получен'}. Ожидается complete/waiting${allowSorted ? ' или complete/sorted' : ''}.`);
   }
 }
 

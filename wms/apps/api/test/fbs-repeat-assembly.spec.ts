@@ -28,6 +28,18 @@ describe('independent FBS repeat assembly', () => {
     }
     expect(() => assertRepeatCandidate(candidate, { supplierStatus: 'complete', wbStatus: 'waiting' })).not.toThrow();
   });
+  // TEST: WB sorted is eligible only for the explicitly enabled original-sticker replacement.
+  it('accepts sorted only in original sticker mode and still blocks final/unknown statuses', () => {
+    vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED', 'true');
+    const sorted = { supplierStatus: 'complete', wbStatus: 'sorted' };
+    expect(() => assertRepeatCandidate(candidate, sorted, true)).not.toThrow();
+    expect(() => assertRepeatCandidate(candidate, sorted)).toThrow();
+    for (const wbStatus of ['sold', 'canceled', 'declined', 'unknown']) {
+      expect(() => assertRepeatCandidate(candidate, {supplierStatus:'complete',wbStatus}, true)).toThrow();
+    }
+    vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED', 'false');
+    expect(() => assertRepeatCandidate(candidate, sorted, true)).toThrow();
+  });
   it('does not take an order away from an active picker or reuse an unfinished attempt', () => {
     expect(() => assertRepeatCandidate({ ...candidate, status: 'IN_PROGRESS' },
       { supplierStatus: 'complete', wbStatus: 'waiting' })).toThrow();
