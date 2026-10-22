@@ -1390,7 +1390,7 @@ export class TurnoverService {
   }
 
   async getStockXlsx(query: TurnoverStockExportDto, user: AuthUser) {
-    this.requireInternalStatisticsAccess(user);
+    // FIX: stock:read is enforced by the controller; client/warehouse scope stays mandatory.
 
     const clientId = query.clientId?.trim();
     if (!clientId) {

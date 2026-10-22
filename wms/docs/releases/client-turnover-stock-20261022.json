@@ -1,0 +1,21 @@
+{
+  "base": {
+    "infra-api-1": "sha256:b80f78efc3f6b571a3b80c6c4addbf4ed705145f6a3aea38d3a92a9f79ba8de0",
+    "infra-web-1": "sha256:38bd8dad29fabe58bef92704fcc74a9692094b2fbd0b0f7e085023b04e90dcea"
+  },
+  "api": "sha256:5c63b72b85fd416960409369cb3799d9e8bcb0998dcb73d7e5e8d825dceb95a3",
+  "apiHashes": {
+    "modules/turnover/turnover.service.js": "49debb291b173d058e253d884e6f1a1964de653b635e1c9955822ecb8275ca67"
+  },
+  "web": "sha256:df00b7ec0382ab6e7e7c30aa04d4b20b24fa04a4105566c695170da43bb538d1",
+  "webHashes": {
+    "index.html": "8a7e195a146b5853b3b2802cafebd5a19c7fc80bc8d32bec7067381942fc7732",
+    "assets/client-turnover-stock-20261022.js": "c9af029239039d63079b2feb99501b9e8c9275d8aa0c98a712c8a65eb6438adf"
+  },
+  "proof": {
+    "passed": 3,
+    "clientIsolation": true,
+    "ownExport": true,
+    "statisticsBlocked": true
+  }
+}
