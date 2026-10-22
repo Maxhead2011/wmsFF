@@ -1,3 +1,5 @@
+Prepared service menu card styling: scoped CSS only, colored icon backgrounds, compact responsive grid, keyboard focus and reduced-motion support. Web466 passed/2 skipped; TypeScript passed. Actual navigation fixture tested at1440/768/390 in light/dark, six scenarios pass; baseline fails style regression. Runtime changes only index.html and new CSS; API and all JavaScript preserved. Sold WMS unchanged.
+
 Published PR665 / 2026-10-22: original-sticker replacement accepts WB complete/sorted; ordinary repeat still requires complete/waiting. Final/unknown states blocked, actual state shown in errors. API3559/web466, TypeScript, runtime11 passed;155/2 skipped, dedicated KIZ DB suite excluded. Live read-only preview6049802274 succeeded: BOX0205, original sticker59080109672. Exact two-module API overlay; no web/flags/schema/stock/sold changes. Baseline `2026-10-22-original-sorted`, sourceParityVerified=false; rollback logoff-api:before-original-sticker-sorted-20261022.
 
 
