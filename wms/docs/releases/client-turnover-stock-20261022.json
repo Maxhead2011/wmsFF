@@ -17,5 +17,8 @@
     "clientIsolation": true,
     "ownExport": true,
     "statisticsBlocked": true
-  }
+  },
+  "published": true,
+  "pr": 661,
+  "publicRuntimePassed": true
 }
