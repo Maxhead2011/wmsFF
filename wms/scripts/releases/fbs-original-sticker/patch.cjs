@@ -1,0 +1,23 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict'),ts=require('../../../node_modules/typescript');
+const root=path.resolve(process.argv[2]),src=path.resolve(__dirname,'../../../apps/api/src');
+const opts={module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true};
+function compile(n){return ts.transpileModule(fs.readFileSync(src+'/'+n+'.ts','utf8'),{compilerOptions:opts}).outputText;}
+function write(n,s){const p=root+'/api/'+n+'.js';fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s);}
+function cls(s){const a=ts.createSourceFile('x.js',s,99,true);let c;function visit(n){if(ts.isClassDeclaration(n)||ts.isClassExpression(n))c=n;else ts.forEachChild(n,visit)}visit(a);assert(c);return {a,c};}
+function methods(old,fresh,names){for(const name of names){let o=cls(old),f=cls(fresh),x=o.c.members.find(m=>m.name?.getText(o.a)===name),y=f.c.members.find(m=>m.name?.getText(f.a)===name);assert(y,name);const t=y.getText(f.a);old=x?old.slice(0,x.getStart(o.a))+t+old.slice(x.end):old.slice(0,o.c.members.pos)+'\n'+t+'\n'+old.slice(o.c.members.pos);}return old;}
+const pre='modules/marketplace-connections/';
+for(const n of ['fbs-original-sticker','dto/fbs-repeat-assembly.dto','fbs-repeat-assembly.controller'])write(pre+n,compile(pre+n));
+for(const [n,names] of [['fbs-repeat-assembly.service',['capabilities','authorize','lookupOriginal','originalStickers','preview','create','plan','describe']],['marketplace-connections.service',['readOriginalRepeatSticker','loadFbsTsdOrderSticker','isFbsTsdTaskUntouchedForAutoRelease','releaseOfflineFbsTsdTask']]]){
+ let old=fs.readFileSync(root+'/api-base-v2/'+pre+n+'.js','utf8');
+ // Method name below is discovered from the known source containing the offline CAS.
+ if(n==='marketplace-connections.service'){const f=cls(compile(pre+n));names[names.length-1]=f.c.members.find(m=>m.getText(f.a).includes('marketplaceLabelBase64: task.marketplaceLabelBase64')).name.getText(f.a);}
+ old=methods(old,compile(pre+n),names);if(n==='marketplace-connections.service')old='const operation_timing_1 = require("../../common/diagnostics/operation-timing");\n'+old;old='const fbs_original_sticker_1 = require("./fbs-original-sticker");\n'+old;write(pre+n,old);
+}
+let registry=fs.readFileSync(root+'/api-base-v2/modules/administration/administration-internal-api.service.js','utf8');assert(registry.includes('routeCount: 133'));registry=registry.replace('routeCount: 133','routeCount: 134');write('modules/administration/administration-internal-api.service',registry);
+const oldName='client-turnover-stock-20261022.js',next='original-sticker-20261022.js';let web=fs.readFileSync(root+'/web-base-v2/assets/'+oldName,'utf8');
+function replace(a,b){assert.equal(web.split(a).length,2,a);web=web.replace(a,b);}
+replace('[{id:"manualFbs",label:"Сборка ФБС по номерам",icon:gl}]','[{id:"originalSticker",label:"Повторная сборка со старым стикером",icon:gl},{id:"manualFbs",label:"Сборка ФБС по номерам",icon:gl}]');
+replace('r==="manualFbs"&&e.jsx','r==="originalSticker"&&e.jsx(__OriginalSticker.FbsOriginalStickerPanel,{session:t,clientId:d},JSON.stringify([d,t.accessToken,t.user.activeWarehouseId])),r==="manualFbs"&&e.jsx');
+const esbuild=require('module').createRequire(require.resolve('../../../apps/web/node_modules/vite/package.json'))('esbuild');
+(async()=>{const built=await esbuild.build({entryPoints:[path.resolve(__dirname,'../../../apps/web/src/components/service/FbsOriginalStickerPanel.tsx')],bundle:true,write:false,format:'iife',globalName:'__OriginalSticker',jsx:'automatic',minify:true,define:{'import.meta.env':'{}'},plugins:[{name:'react-host',setup(b){b.onResolve({filter:/^react(\/jsx-runtime)?$/},a=>({path:a.path,namespace:'host'}));b.onLoad({filter:/.*/,namespace:'host'},a=>({contents:a.path==='react'?'export const useState=x.useState,useEffect=x.useEffect,useRef=x.useRef;':'export const jsx=e.jsx,jsxs=e.jsxs,Fragment=e.Fragment;',loader:'js'}));}}]});web+='\n'+built.outputFiles[0].text;assert.equal(ts.createSourceFile('x.js',web,99,true).parseDiagnostics.length,0);fs.mkdirSync(root+'/web/assets',{recursive:true});fs.writeFileSync(root+'/web/assets/'+next,web);let html=fs.readFileSync(root+'/web-base-v2/index.html','utf8');html=html.replaceAll('/assets/'+oldName,'/assets/'+next).replace('{"imports":{','{"imports":{"/assets/'+oldName+'":"/assets/'+next+'",');fs.writeFileSync(root+'/web/index.html',html);fs.writeFileSync(root+'/web-changes.json',JSON.stringify(['index.html','assets/'+next]));console.log('Patched candidate');})().catch(e=>{console.error(e);process.exitCode=1});
+

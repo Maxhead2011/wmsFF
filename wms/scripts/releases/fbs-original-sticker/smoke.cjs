@@ -1,0 +1,11 @@
+const assert=require('assert/strict');require('reflect-metadata');
+const {MarketplaceConnectionsService:S}=require('/app/apps/api/dist/modules/marketplace-connections/marketplace-connections.service');
+const {FbsRepeatAssemblyService:R}=require('/app/apps/api/dist/modules/marketplace-connections/fbs-repeat-assembly.service');
+const {FbsRepeatAssemblyController:C}=require('/app/apps/api/dist/modules/marketplace-connections/fbs-repeat-assembly.controller');
+(async()=>{const label={partA:'5908010',partB:'9672',barcode:'*DcFy7mhD',imageBase64:'iVBORw0KGgoAAA=='};let reads=0;const task={id:'old',marketplace:'WILDBERRIES',clientId:'c',connectionId:'conn',orderId:'123',stickerPartA:label.partA,stickerPartB:label.partB,stickerBarcode:label.barcode};
+const context={clientScopes:{requireClientAccess(){reads++}},prisma:{fbsTsdAssembly:{findFirst:async()=>task},fbsPrintJob:{findFirst:async()=>({stickerBase64:label.imageBase64})}}};
+const user={roleCodes:['ADMIN']};assert.deepEqual(await S.prototype.readOriginalRepeatSticker.call(context,'c','conn','123',user),label);assert.equal(reads,1);await assert.rejects(S.prototype.readOriginalRepeatSticker.call(context,'c','conn','123',{roleCodes:['WORKER']}));
+const cacheContext={fbsTsdStickerCache:new Map([['conn:123',{value:label,expiresAt:Date.now()+10000}]]),persistFbsTsdOrderSticker:async()=>{}};assert.deepEqual(await S.prototype.loadFbsTsdOrderSticker.call(cacheContext,task),label);assert.equal(await S.prototype.loadFbsTsdOrderSticker.call({loadOzonFbsTsdOrderSticker:async()=>42},{marketplace:'OZON'}),42);
+assert.equal(Reflect.getMetadata('path',C.prototype.lookupOriginal),'original-sticker/lookup');assert.equal(new R({}, {}, {}).capabilities(user).originalStickerEnabled,true);
+process.env.WMS_FBS_ORIGINAL_STICKER_ENABLED='false';assert.equal(new R({}, {}, {}).capabilities(user).originalStickerEnabled,false);await assert.rejects(S.prototype.readOriginalRepeatSticker.call(context,'c','conn','123',user));
+console.log(JSON.stringify({passed:8,ordinaryWbCachePreserved:true,ozonPreserved:true,controllerRoute:true,roleAndFlagGate:true}));})().catch(e=>{console.error(e);process.exitCode=1});
