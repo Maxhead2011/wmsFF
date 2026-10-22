@@ -1,10 +1,11 @@
+import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { ClientRequestStatus, StockStatus } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/modules/auth/auth.types';
 import { TurnoverService } from '../src/modules/turnover/turnover.service';
 
 describe('TurnoverService stock export reservations', () => {
-  it('subtracts only outbound requests that are in work', async () => {
+  it.each(['ADMIN','CLIENT'])('subtracts outbound reservations for %s readers', async role => {
     const prisma = {
       client: {
         findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CL-1', name: 'Client' }),
@@ -43,21 +44,25 @@ describe('TurnoverService stock export reservations', () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
-    const clientScopes = {
-      requireClientAccess: vi.fn(),
-    };
+    const clientScopes = new ClientScopeService();
     const service = new TurnoverService(prisma as never, clientScopes as never);
     const user: AuthUser = {
       id: 'admin-1',
       email: 'admin@example.test',
       name: 'Admin',
-      roleCodes: ['ADMIN'],
-      permissionCodes: ['system:admin'],
-      clientScopeMode: 'ALL',
-      clientIds: [],
+      roleCodes: [role],
+      permissionCodes: role === 'ADMIN' ? ['system:admin'] : ['stock:read'],
+      clientScopeMode: role === 'ADMIN' ? 'ALL' : 'LIMITED',
+      clientIds: ['client-1'],
       writableClientIds: [],
     };
 
+    // TEST: a read-only client can export its own stock, never another client's.
+    if (role === 'CLIENT') {
+      await expect(service.getStockXlsx({ clientId: 'foreign' }, user)).rejects.toThrow();
+      expect(prisma.client.findUnique).not.toHaveBeenCalled();
+      expect(prisma.stockBalance.findMany).not.toHaveBeenCalled();
+    }
     await service.getStockXlsx({ clientId: 'client-1' }, user);
 
     expect(prisma.clientRequest.findMany).toHaveBeenCalledWith(

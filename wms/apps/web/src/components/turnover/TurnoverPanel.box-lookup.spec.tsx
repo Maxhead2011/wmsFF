@@ -119,3 +119,22 @@ describe('current location balances', () => {
     expect(elements(locations).filter(n=>n.type==='button')).toHaveLength(2);
   });
 });
+
+// TEST: client stock reading is independent of internal statistics and mutations.
+describe('client stock access', () => {
+  beforeEach(() => { hooks.values=[]; hooks.effects=[]; hooks.cursor=0; });
+  it('opens stock export for a read-only client without exposing statistics or actions', () => {
+    const session={accessToken:'token',user:{id:'client',roleCodes:['CLIENT'],permissionCodes:['stock:read']}} as any;
+    const home=TurnoverPanel({session});
+    const tiles=elements(home);
+    const stock=tiles.find(n=>n.props?.index===6);
+    expect(stock).toBeTruthy();
+    expect(tiles.some(n=>n.props?.index===9)).toBe(false);
+    expect(tiles.some(n=>n.props?.index===8)).toBe(false);
+    stock.props.onClick();hooks.cursor=0;hooks.effects=[];
+    const screen=TurnoverPanel({session});
+    expect(elements(screen).some(n=>n.type?.name==='StockExportSection')).toBe(true);
+    hooks.effects.forEach(fn=>{ if(String(fn).includes('setActiveTile')) fn(); });
+    expect(hooks.values[0]).toBe('stockExport');
+  });
+});
