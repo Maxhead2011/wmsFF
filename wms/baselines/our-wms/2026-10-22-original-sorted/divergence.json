@@ -1,0 +1,4 @@
+{
+  "sourceParityVerified": false,
+  "reason": "Exact six-module overlay over PR661; unrelated runtime preserved. Source-only full deployment prohibited."
+}
