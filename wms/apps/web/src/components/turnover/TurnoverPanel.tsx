@@ -119,6 +119,8 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [ignoreActiveStockRequests, setIgnoreActiveStockRequests] = useState(false);
 
   const canSeeStatistics = useMemo(() => canUseStatistics(session.user.roleCodes, session.user.permissionCodes), [session.user]);
+  // FIX: scoped stock reads do not require internal statistics privileges.
+  const canReadStock = canSeeStatistics || session.user.permissionCodes.includes('stock:read');
   const canUseActions = useMemo(() => canUseTurnoverActions(session.user.roleCodes, session.user.permissionCodes), [session.user]);
   const selectedReportItem = useMemo(() => {
     const items = report.data?.items ?? [];
@@ -171,11 +173,12 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   useEffect(() => {
     if (
       ((activeTile === 'actions' || activeTile === 'storage') && !canUseActions) ||
-      ((activeTile === 'stats' || activeTile === 'stockExport') && !canSeeStatistics)
+      (activeTile === 'stats' && !canSeeStatistics) ||
+      (activeTile === 'stockExport' && !canReadStock)
     ) {
       setActiveTile('movement');
     }
-  }, [activeTile, canSeeStatistics, canUseActions]);
+  }, [activeTile, canSeeStatistics, canUseActions, canReadStock]);
 
   useEffect(() => {
     if (boxDetails.status === 'idle') {
@@ -731,7 +734,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
           tone="stock"
           onClick={() => setActiveTile('fbsReports')}
         />
-        {canSeeStatistics ? (
+        {canReadStock ? (
           <TurnoverTile
             active={false}
             index={6}
@@ -834,7 +837,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
           onClientChange={setSelectedClientId}
         />
       ) : null}
-      {activeTile === 'stockExport' && canSeeStatistics ? (
+      {activeTile === 'stockExport' && canReadStock ? (
         <StockExportSection
           client={selectedClient}
           items={report.data?.items ?? []}
