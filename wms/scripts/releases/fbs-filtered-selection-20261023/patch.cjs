@@ -1,0 +1,31 @@
+// FIX: scoped delta against the verified live graph; preserve every other FBS function.
+const fs = require('node:fs'), path = require('node:path'), assert = require('node:assert/strict');
+const ts = require('../../../node_modules/typescript');
+const root = path.resolve(process.argv[2]), oldName = 'admin-tiles-20261019-28.js', nextName = 'fbs-filtered-selection-20261023.js';
+const original = fs.readFileSync(path.join(root, 'web-base/assets', oldName), 'utf8');
+const ast = ts.createSourceFile(oldName, original, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+const functions = ast.statements.filter(n => ts.isFunctionDeclaration(n) && n.getText(ast).includes('Выбрать все товары с положительным'));
+assert.equal(functions.length, 1);
+const fn = functions[0], prefix = original.slice(0, fn.getStart(ast)), suffix = original.slice(fn.end);
+let s = fn.getText(ast);
+function replace(a, b) { assert.equal(s.split(a).length, 2, 'Unique runtime anchor: ' + a); s = s.replace(a, b); }
+replace('gs=N.size>0;function ze', 'gs=N.size>0;const filteredSkuIds=He.map(item=>item.skuId),selectedFilteredCount=filteredSkuIds.filter(id=>N.has(id)).length,allFilteredSelected=filteredSkuIds.length>0&&selectedFilteredCount===filteredSkuIds.length,partlyFilteredSelected=selectedFilteredCount>0&&!allFilteredSelected,hiddenSelectedCount=N.size-selectedFilteredCount;function toggleFilteredSelection(){w(current=>{const next=new Set(current),allSelected=filteredSkuIds.every(id=>current.has(id));filteredSkuIds.forEach(id=>allSelected?next.delete(id):next.add(id));return next})}function ze');
+replace('const M=[...N],z=_.trim()','const M=[...N];if(!b&&!window.confirm(`Остановить продажу выбранных товаров: ${M.length.toLocaleString("ru-RU")}?\nСклад WB: ${me?.name||H}.\nСкрыто поиском и фильтрами: ${hiddenSelectedCount.toLocaleString("ru-RU")}.\nДля всех выбранных товаров в этот склад Wildberries будет передано 0. Товар в WMS останется на складе.`))return;const z=_.trim()');
+const oldLabel = 'e.jsxs("label",{className:"fbs-stocks__select-all",children:[e.jsx("input",{type:"checkbox",checked:ts,onChange:Fe,disabled:ge.length===0||O!==null||i!==null||u}),e.jsx("span",{children:gs?`Выбрано товаров: ${N.size.toLocaleString("ru-RU")}`:`Выбрать все товары с положительным свободным остатком (${ge.length.toLocaleString("ru-RU")})`})]})';
+replace(oldLabel, 'e.jsxs("div",{children:[e.jsxs("label",{className:"fbs-stocks__select-all",children:[e.jsx("input",{type:"checkbox",checked:ts,onChange:Fe,disabled:ge.length===0||O!==null||i!==null||u}),e.jsx("span",{children:`Выбрать все товары с положительным свободным остатком (${ge.length.toLocaleString("ru-RU")}) - весь магазин, независимо от поиска`})]}),e.jsxs("p",{role:"status","aria-live":"polite",children:[e.jsxs("strong",{children:["Выбрано: ",N.size.toLocaleString("ru-RU")]})," Скрыто поиском и фильтрами: ",hiddenSelectedCount.toLocaleString("ru-RU"),"."]}),e.jsxs("small",{children:["Галочка в заголовке таблицы выбирает только найденные товары на всех страницах (",filteredSkuIds.length.toLocaleString("ru-RU"),")."]})]})');
+replace('e.jsx("th",{className:"fbs-stocks__select-cell","aria-label":"Выбрать товары",children:e.jsx("input",{type:"checkbox",checked:ts,onChange:Fe,disabled:ge.length===0||O!==null||i!==null||u})})', 'e.jsx("th",{className:"fbs-stocks__select-cell",children:e.jsx("input",{type:"checkbox",checked:allFilteredSelected,ref:element=>{if(element)element.indeterminate=partlyFilteredSelected},"aria-checked":partlyFilteredSelected?"mixed":allFilteredSelected,"aria-label":`Выбрать найденные товары на всех страницах (${filteredSkuIds.length.toLocaleString("ru-RU")})`,title:"Выбрать только товары по текущему поиску и фильтрам на всех страницах",onChange:toggleFilteredSelection,disabled:filteredSkuIds.length===0||O!==null||i!==null||u})})');
+const next = prefix + s + suffix;
+assert.equal(ts.createSourceFile(nextName, next, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS).parseDiagnostics.length, 0);
+assert.equal(next.slice(0, prefix.length), prefix); assert.equal(next.slice(-suffix.length), suffix);
+const payload = path.join(root, 'web/payload'); fs.mkdirSync(path.join(payload, 'assets'), { recursive: true });
+fs.writeFileSync(path.join(payload, 'assets', nextName), next);
+const cssName = 'fbs-filtered-selection-20261023.css';
+fs.writeFileSync(path.join(payload, 'assets', cssName), '.fbs-stocks__select-all input,.fbs-stocks__select-cell input{flex-shrink:0}\n');
+let html = fs.readFileSync(path.join(root, 'web-base/index.html'), 'utf8');
+assert(!html.includes('"/assets/' + oldName + '":'));
+html = html.replace('{"imports":{', '{"imports":{"/assets/' + oldName + '":"/assets/' + nextName + '",');
+assert(html.includes('</head>')); html = html.replace('</head>', '<link rel="stylesheet" href="/assets/' + cssName + '">\n</head>');
+fs.writeFileSync(path.join(payload, 'index.html'), html);
+fs.writeFileSync(path.join(root, 'web-changes.json'), JSON.stringify(['index.html', 'assets/' + nextName, 'assets/' + cssName]));
+fs.writeFileSync(path.join(root, 'patch-proof.json'), JSON.stringify({ function: fn.name.text, unchangedPrefixBytes: prefix.length, unchangedSuffixBytes: suffix.length, changedFunctions: 1 }));
+console.log('Patched only stock selection/confirmation in live FBS function; 3-file web overlay.');

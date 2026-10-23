@@ -3,7 +3,8 @@
 const fs = require('node:fs'), path = require('node:path'), http = require('node:http');
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'C:/Users/La_pa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
-const dist = path.resolve(__dirname, '../../apps/web/dist');
+const dist = path.resolve(process.env.WEB_DIST || path.resolve(__dirname, '../../apps/web/dist'));
+const overlay = process.env.WEB_OVERLAY && path.resolve(process.env.WEB_OVERLAY);
 const out = path.resolve(process.argv[2]); fs.mkdirSync(out, { recursive: true });
 const user = { id: 'test-client', email: 'client@example.test', name: 'Учебный клиент', roleCodes: ['CLIENT'], permissionCodes: ['stock:read', 'client-requests:read', 'client-requests:write', 'billing:read', 'catalog:read', 'receipts:read'], clientScopeMode: 'LIMITED', clientIds: ['demo'], writableClientIds: ['demo'], warehouseIds: [], writableWarehouseIds: [] };
 const client = { id: 'demo', code: 'CL-DEMO', name: 'Учебный клиент', legalName: 'Учебный клиент', status: 'ACTIVE' };
@@ -22,13 +23,18 @@ const stocks = () => ({ client, connected: true, connections, selectedConnection
 const mutations = [], errors = [];
 const server = http.createServer((req, res) => {
   let file = path.resolve(dist, '.' + new URL(req.url, 'http://localhost').pathname);
-  if (!file.startsWith(dist + path.sep) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(dist, 'index.html');
+  if (!file.startsWith(dist + path.sep)) file = path.join(dist, 'index.html');
+  if (overlay) {
+    const candidate = path.join(overlay, path.relative(dist, file));
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) file = candidate;
+  }
+  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) file = path.join(overlay || dist, 'index.html');
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2' };
   res.setHeader('Content-Type', types[path.extname(file)] || 'application/octet-stream'); res.end(fs.readFileSync(file));
 });
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const origin = 'http://127.0.0.1:' + server.address().port;
+  const origin = process.env.WEB_ORIGIN || 'http://127.0.0.1:' + server.address().port;
   const browser = await chromium.launch({ channel: 'msedge', headless: true });
   try {
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
