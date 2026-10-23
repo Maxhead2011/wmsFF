@@ -4469,6 +4469,8 @@
 
 .fbs-stocks__select-all input,
 .fbs-stocks__select-cell input {
+  /* FIX: long selection-scope labels must not shrink the checkbox on mobile. */
+  flex-shrink: 0;
   width: 17px;
   height: 17px;
   accent-color: #2563eb;
