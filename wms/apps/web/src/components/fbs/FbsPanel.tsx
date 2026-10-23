@@ -3938,7 +3938,7 @@ function RecoveryOrderGroup({
   );
 }
 
-function FbsStocksView({
+export function FbsStocksView({
   clientId,
   session,
   search,
@@ -4188,6 +4188,12 @@ function FbsStocksView({
     .map((item) => item.skuId);
   const selectedPositiveFreeCount = positiveFreeSkuIds.filter((skuId) => selectedSkuIds.has(skuId)).length;
   const allPositiveFreeSelected = positiveFreeSkuIds.length > 0 && selectedPositiveFreeCount === positiveFreeSkuIds.length;
+  // FIX: the table selects the complete search/filter result, not the whole shop or just this page.
+  const filteredSkuIds = filteredItems.map((item) => item.skuId);
+  const selectedFilteredCount = filteredSkuIds.filter((skuId) => selectedSkuIds.has(skuId)).length;
+  const allFilteredSelected = filteredSkuIds.length > 0 && selectedFilteredCount === filteredSkuIds.length;
+  const partlyFilteredSelected = selectedFilteredCount > 0 && !allFilteredSelected;
+  const hiddenSelectedCount = selectedSkuIds.size - selectedFilteredCount;
   const hasSelection = selectedSkuIds.size > 0;
 
   function getSaleLimitValue(item: FbsStocksResponse['items'][number]) {
@@ -4225,6 +4231,16 @@ function FbsStocksView({
       const next = new Set(current);
       if (allPositiveFreeSelected) positiveFreeSkuIds.forEach((skuId) => next.delete(skuId));
       else positiveFreeSkuIds.forEach((skuId) => next.add(skuId));
+      return next;
+    });
+  }
+
+  // FIX: preserve deliberate selections outside the filter; show their count before any bulk action.
+  function toggleFilteredSelection() {
+    setSelectedSkuIds((current) => {
+      const next = new Set(current);
+      const allSelected = filteredSkuIds.every((skuId) => current.has(skuId));
+      filteredSkuIds.forEach((skuId) => allSelected ? next.delete(skuId) : next.add(skuId));
       return next;
     });
   }
@@ -4318,6 +4334,13 @@ function FbsStocksView({
   async function setPublicationBulk(enabled: boolean) {
     if (!selectedConnectionId || !selectedWarehouseId || !warehouseConnected || selectedSkuIds.size === 0) return;
     const skuIds = [...selectedSkuIds];
+    // FIX: no stock publication request is sent until the user confirms the full selected scope.
+    if (!enabled && !window.confirm(
+      `Остановить продажу выбранных товаров: ${skuIds.length.toLocaleString('ru-RU')}?\n` +
+      `Склад WB: ${selectedWarehouse?.name || selectedWarehouseId}.\n` +
+      `Скрыто поиском и фильтрами: ${hiddenSelectedCount.toLocaleString('ru-RU')}.\n` +
+      'Для всех выбранных товаров в этот склад Wildberries будет передано 0. Товар в WMS останется на складе.',
+    )) return;
     const requestedLimit = bulkSaleLimit.trim() === '' ? null : Number(bulkSaleLimit);
     if (requestedLimit !== null && (!Number.isFinite(requestedLimit) || requestedLimit < 0)) {
       setState((current) => ({
@@ -4683,19 +4706,24 @@ function FbsStocksView({
       </div>
 
       <div className="fbs-stocks__bulkbar">
-        <label className="fbs-stocks__select-all">
-          <input
-            type="checkbox"
-            checked={allPositiveFreeSelected}
-            onChange={toggleAllPositiveFreeSelection}
-            disabled={positiveFreeSkuIds.length === 0 || bulkAction !== null || actionSkuId !== null || syncing}
-          />
-          <span>
-            {hasSelection
-              ? `Выбрано товаров: ${selectedSkuIds.size.toLocaleString('ru-RU')}`
-              : `Выбрать все товары с положительным свободным остатком (${positiveFreeSkuIds.length.toLocaleString('ru-RU')})`}
-          </span>
-        </label>
+        <div>
+          <label className="fbs-stocks__select-all">
+            <input
+              type="checkbox"
+              checked={allPositiveFreeSelected}
+              onChange={toggleAllPositiveFreeSelection}
+              disabled={positiveFreeSkuIds.length === 0 || bulkAction !== null || actionSkuId !== null || syncing}
+            />
+            <span>
+              {`Выбрать все товары с положительным свободным остатком (${positiveFreeSkuIds.length.toLocaleString('ru-RU')}) - весь магазин, независимо от поиска`}
+            </span>
+          </label>
+          <p role="status" aria-live="polite">
+            <strong>Выбрано: {selectedSkuIds.size.toLocaleString('ru-RU')}</strong>
+            {' '}Скрыто поиском и фильтрами: {hiddenSelectedCount.toLocaleString('ru-RU')}.
+          </p>
+          <small>Галочка в заголовке таблицы выбирает только найденные товары на всех страницах ({filteredSkuIds.length.toLocaleString('ru-RU')}).</small>
+        </div>
         <div className="fbs-stocks__bulk-actions">
           <label className="fbs-stocks__bulk-limit">
             <span>По сколько шт. каждого товара</span>
@@ -4738,12 +4766,16 @@ function FbsStocksView({
         <table className="fbs-table fbs-stocks__table">
           <thead>
             <tr>
-              <th className="fbs-stocks__select-cell" aria-label="Выбрать товары">
+              <th className="fbs-stocks__select-cell">
                 <input
                   type="checkbox"
-                  checked={allPositiveFreeSelected}
-                  onChange={toggleAllPositiveFreeSelection}
-                  disabled={positiveFreeSkuIds.length === 0 || bulkAction !== null || actionSkuId !== null || syncing}
+                  checked={allFilteredSelected}
+                  ref={(element) => { if (element) element.indeterminate = partlyFilteredSelected; }}
+                  aria-checked={partlyFilteredSelected ? 'mixed' : allFilteredSelected}
+                  aria-label={`Выбрать найденные товары на всех страницах (${filteredSkuIds.length.toLocaleString('ru-RU')})`}
+                  title="Выбрать только товары по текущему поиску и фильтрам на всех страницах"
+                  onChange={toggleFilteredSelection}
+                  disabled={filteredSkuIds.length === 0 || bulkAction !== null || actionSkuId !== null || syncing}
                 />
               </th>
               <th>Товар</th>
