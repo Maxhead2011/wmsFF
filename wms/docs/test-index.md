@@ -1,4 +1,6 @@
-Prepared / 2026-10-24: FBS menu reduced to8 tiles: stock management, history, cost settings and problem orders grouped; cargo tile removed. Existing live5-section stock hub retained. Web485/API3564 and source/runtime browser checks passed; sold/default unchanged. Not published. [Scope and verification](fbs-compact-menu.md).
+Prepared / 2026-10-24: FBS menu reduced to8 tiles: stock management, history, cost settings and problem orders grouped; cargo tile removed. Existing live5-section stock hub retained. Web485/API3590 and source/runtime browser checks passed; sold/default unchanged. Not published. [Scope and verification](fbs-compact-menu.md).
+
+Published PR677 / 2026-10-24: administrative removal of untouched FBO/FBS requests for ADMIN/OWNER. Mandatory reason/number/confirmation, atomic audit, preserved composition and Ozon bindings, durable FBS recreation block. Own-image WMS_REQUEST_REMOVAL_ENABLED=true. API3590/web476, TypeScript, compiled-UI8, isolated PostgreSQL9 and module-graph2 passed;155/2 skipped, unconfigured dedicated KIZ DB suite excluded. Seven-module API/four-file web delta; physical stock, KIZs, other containers and sold WMS unchanged. Baseline `2026-10-24-request-removal`, sourceParityVerified=false. [Details](request-removal.md).
 
 Published PR673 / 2026-10-23: FBS WB table checkbox selects all current search/filter results across pages; shop-wide positive-free selection remains separate. Selected/hidden counts and bulk-stop confirmation. Web476/API3564 passed,2/155 skipped; existing dedicated KIZ DB suite unavailable. Nine candidate and public browser scenarios passed with educational API fixtures. Three-file web overlay; all old assets except index retained. API/APK/config/business data/sold WMS unchanged. Baseline `2026-10-23-fbs-filtered-selection`, sourceParityVerified=false. Rollback `logoff-web:before-fbs-filtered-selection-20261023`. [Scope and validation](fbs-filtered-selection.md).
 
@@ -297,3 +299,6 @@ PR604: personal login welcome correction published; see [details and tests](pers
 
 
 Published PR606 Eleonora account correction: legacy Elya ID differed from actual login. [Details and regression](eleonora-account-welcome.md).
+
+
+Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal.spec.ts (15), scripts/releases/request-removal-20261024/browser.cjs (8 compiled UI) and postgres.cjs (9 isolated DB). API3590/web476; TypeScript passed. See [scope and limitations](request-removal.md).

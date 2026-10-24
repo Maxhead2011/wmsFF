@@ -1,3 +1,4 @@
+import {lockOrderLinks,assertOrdersNotRemoved,withoutRemovedOrders,ADMIN_REMOVED,requestRemovalEnabled} from '../client-requests/request-removal-policy';
 import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, pinnedOriginalSticker } from './fbs-original-sticker';
 import { measureOperation } from '../../common/diagnostics/operation-timing';
 import { reconcileWbBackground } from '../../common/reconciliation/wb-background';
@@ -23261,6 +23262,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     user: AuthUser,
     responseOverride?: FbsOrdersResponse,
   ) {
+    // FIX: administrative removal survives manual and scheduled reconstruction.
+    await assertOrdersNotRemoved(this.prisma,dto.clientId,dto.orders);
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
     const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders, responseOverride);
@@ -23351,6 +23354,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const requestWarehouseId = await this.resolveFbsRequestWarehouseId(clientId, user, orders);
     try {
       const request = await this.prisma.$transaction(async (tx) => {
+        await lockOrderLinks(tx,clientId,dto.orders);
+        await assertOrdersNotRemoved(tx,clientId,dto.orders);
         const created = await tx.clientRequest.create({
           data: {
             clientId,
@@ -24717,6 +24722,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     orders: FbsOrderSummary[],
     extraRequestIds: string[] = [],
   ) {
+    orders = await withoutRemovedOrders(this.prisma,clientId,orders);
     const links = await this.prisma.fbsOrderRequestLink.findMany({
       // Completed requests never change their composition. Reading thousands
       // of their links on every minute-long FBS refresh delayed live WB calls.
@@ -24860,6 +24866,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       // of every order that later appears in one of its original WB supplies.
       if (!explicitBatch && FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
         for (const order of additions) {
+          await lockOrderLinks(tx,clientId,[order]);
           const existing = await tx.fbsOrderRequestLink.findUnique({
             where: {
               marketplace_connectionId_orderId: {
@@ -24870,6 +24877,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             },
             include: { request: { select: { status: true } } },
           });
+          // FIX: keep the tombstone even when another supply owns the incoming order.
+          if(requestRemovalEnabled() && existing?.syncStatus===ADMIN_REMOVED)continue;
           if (
             existing &&
             existing.requestId !== requestId &&
@@ -25410,6 +25419,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     clientId: string,
     orders: FbsOrderSummary[],
   ) {
+    orders = await withoutRemovedOrders(this.prisma,clientId,orders);
     const result = new Map<
       string,
       NonNullable<FbsOrderSummary['reservation']>

@@ -1,3 +1,4 @@
+import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MarketplaceType, MovementType, Prisma, StockStatus } from '@prisma/client';
@@ -1399,6 +1400,7 @@ export class ClientRequestsService {
   }
 
   async updateStatus(id: string, dto: UpdateClientRequestStatusDto, user: AuthUser) {
+    await assertRequestNotRemoved(this.prisma,id);
     const request = await this.prisma.clientRequest.findUnique({
       where: { id },
       select: {
@@ -1440,6 +1442,7 @@ export class ClientRequestsService {
     const updated = shouldFinalizeStockRequest
       ? await this.finalizeOutboundByManualStatus(request, dto, user)
       : await this.prisma.$transaction(async (tx) => {
+      await lockRequestNotRemoved(tx,id);
       const updated = await tx.clientRequest.update({
         where: { id },
         data: {

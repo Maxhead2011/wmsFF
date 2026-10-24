@@ -1,3 +1,4 @@
+import {RequestRemovalProvider} from './RequestRemoval';
 import { OperationsTools } from './OperationsTools';
 import { startVisiblePolling } from '../../lib/visiblePolling';
 import { onlineRequestToolbar } from './onlineRequestToolbar';
@@ -2175,7 +2176,7 @@ export function ClientRequestsPanel({
 
       {batch.controls}
       <div className="client-requests-panel__list">
-        <RequestZoneProvider items={displayedRequests.data} token={session.accessToken} fetchOrders={fetchFbsOrders}>
+        <RequestRemovalProvider token={session.accessToken} onRemoved={()=>void loadData()}><RequestZoneProvider items={displayedRequests.data} token={session.accessToken} fetchOrders={fetchFbsOrders}>
         {renderRequests(
           displayedRequests,
           batch.active ? batch.selectable : selectableFbsTailRequestIds,
@@ -2221,7 +2222,7 @@ export function ClientRequestsPanel({
           (request) => void shipOutboundRequest(request),
           compactMobile,
         )}
-        </RequestZoneProvider>
+        </RequestZoneProvider></RequestRemovalProvider>
       </div>
 
       {fbsRoutePanel ? (

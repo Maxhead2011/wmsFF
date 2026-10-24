@@ -60,10 +60,11 @@
   "tests": {
     "webPassed": 485,
     "webSkipped": 2,
-    "apiPassed": 3564,
+    "apiPassed": 3590,
     "apiSkipped": 155,
     "apiExcluded": "kiz-duplicate.integration.spec.ts: dedicated DB URL unavailable",
-    "typescript": true
+    "typescript": true,
+    "mergedIntegrationRetested": true
   },
   "businessDataChanged": false,
   "soldChanged": false
