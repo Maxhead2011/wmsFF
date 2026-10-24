@@ -1,0 +1,28 @@
+// TEST: disposable database, synthetic clients; never use production credentials/data.
+const assert=require('assert/strict');assert.equal(process.env.NODE_ENV,'test');assert.equal(new URL(process.env.DATABASE_URL).hostname,'request-removal-test-pg');
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient();
+const dir='/app/apps/api/dist/modules/';
+const {ClientRequestRemovalService}=require(dir+'client-requests/client-request-removal.service');
+const policy=require(dir+'client-requests/request-removal-policy');
+const {ClientScopeService}=require(dir+'auth/client-scope.service');
+(async()=>{let passed=0;
+ const w=await p.warehouse.create({data:{code:'REMOVE_TEST',name:'Test'}}),c=await p.client.create({data:{code:'REMOVE_TEST',name:'Test'}}),u=await p.user.create({data:{email:'removal@test.invalid',passwordHash:'disabled',name:'Test'}}),sku=await p.sku.create({data:{clientId:c.id,internalSku:'TEST',name:'Test'}});
+ const conn=await p.clientMarketplaceConnection.create({data:{clientId:c.id,marketplace:'WILDBERRIES',apiKey:'SYNTHETIC'}});
+ const user={id:u.id,roleCodes:['OWNER'],permissionCodes:['system:admin'],clientIds:[],writableClientIds:[]};
+ const service=new ClientRequestRemovalService(p,new ClientScopeService());
+ const create=()=>p.clientRequest.create({data:{clientId:c.id,warehouseId:w.id,type:'OUTBOUND',status:'SUBMITTED',title:'FBO test',items:{create:{skuId:sku.id,name:'Test',quantity:2}}},include:{items:true}});
+ const input=async r=>({number:r.number,reason:'Ошибочная заявка',confirmed:true,revision:(await service.preview(r.id,user)).revision});
+ const r=await create();await p.ozonFboShipment.create({data:{requestId:r.id,importKey:'test-import',directions:[]}});const dto=await input(r);
+ const results=await Promise.allSettled([service.remove(r.id,dto,user),service.remove(r.id,dto,user)]);assert(results.some(x=>x.status==='fulfilled'));assert.equal(await p.auditLog.count({where:{entityId:r.id,action:policy.REMOVAL_ACTION}}),1);assert.equal(await p.clientRequestEvent.count({where:{requestId:r.id}}),1);assert.equal((await p.clientRequest.findUniqueOrThrow({where:{id:r.id}})).status,'CANCELLED');assert.equal(await p.clientRequestItem.count({where:{requestId:r.id}}),1);assert.equal(await p.ozonFboShipment.count({where:{requestId:r.id}}),1);passed++;
+ const f=await create();await p.fbsOrderRequestLink.create({data:{requestId:f.id,clientId:c.id,marketplace:'WILDBERRIES',connectionId:conn.id,orderId:'test-order'}});await p.fbsTsdAssembly.create({data:{requestId:f.id,clientId:c.id,connectionId:conn.id,marketplace:'WILDBERRIES',orderId:'test-order',requestItemId:f.items[0].id,skuId:sku.id,productName:'Test',barcodes:[],storageBoxes:[],status:'WAITING_STOCK',deviceCode:'AUTO:FBS:PALLET_SORT'}});await service.remove(f.id,await input(f),user);assert.equal((await p.fbsOrderRequestLink.findFirstOrThrow({where:{requestId:f.id}})).syncStatus,policy.ADMIN_REMOVED);assert.equal((await p.fbsTsdAssembly.findFirstOrThrow({where:{requestId:f.id}})).status,'CANCELLED');await assert.rejects(()=>policy.assertOrdersNotRemoved(p,c.id,[{connectionId:conn.id,id:'test-order'}]),/test-order/);passed++;
+ const changed=await create(),changedInput=await input(changed);await p.clientRequestItem.update({where:{id:changed.items[0].id},data:{quantity:3}});await assert.rejects(()=>service.remove(changed.id,changedInput,user),/изменилась/);passed++;
+ const picking=await create(),pickingInput=await input(picking);await p.stockMovement.create({data:{clientId:c.id,warehouseId:w.id,skuId:sku.id,sourceDocument:picking.id,type:'PICK',status:'PACKING',quantity:1}});await assert.rejects(()=>service.remove(picking.id,pickingInput,user),/фактический/);assert.equal((await p.clientRequest.findUniqueOrThrow({where:{id:picking.id}})).status,'SUBMITTED');passed++;
+ const rollback=await create(),rollbackInput=await input(rollback);const failing={...p,$transaction:fn=>p.$transaction(tx=>fn(new Proxy(tx,{get(target,key){if(key==='auditLog')return {...tx.auditLog,create:()=>{throw Error('TEST audit failure')}};return target[key]}})))};await assert.rejects(()=>new ClientRequestRemovalService(failing,new ClientScopeService()).remove(rollback.id,rollbackInput,user),/TEST audit/);assert.equal((await p.clientRequest.findUniqueOrThrow({where:{id:rollback.id}})).status,'SUBMITTED');assert.equal(await p.clientRequestEvent.count({where:{requestId:rollback.id}}),0);passed++;
+ await assert.rejects(()=>service.preview(rollback.id,{...user,roleCodes:['CLIENT']}),/администратору/);passed++;
+ process.env.WMS_REQUEST_REMOVAL_ENABLED='false';await assert.rejects(()=>service.remove(rollback.id,rollbackInput,user),/администратору/);process.env.WMS_REQUEST_REMOVAL_ENABLED='true';passed++;
+ assert.equal(await p.stockBalance.count(),0);assert.equal(await p.productMark.count(),0);assert.equal(await p.stockMovement.count(),1);passed++;
+ // Runtime guards are present in the actual overlaid marketplace module, not only TypeScript.
+ const {MarketplaceConnectionsService}=require(dir+'marketplace-connections/marketplace-connections.service');const proto=MarketplaceConnectionsService.prototype;
+ assert.match(proto.createFbsRequestUnlocked.toString(),/assertOrdersNotRemoved/);assert.match(proto.runAutoAssembly.toString(),/withoutRemovedOrders/);assert.match(proto.syncOneFbsRequest.toString(),/lockOrderLinks/);assert.match(proto.syncFbsPalletSortReservations.toString(),/withoutRemovedOrders/);passed++;
+ console.log(JSON.stringify({passed,isolated:true,stockAndMarksUnchanged:true}));
+})().finally(()=>p.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});
