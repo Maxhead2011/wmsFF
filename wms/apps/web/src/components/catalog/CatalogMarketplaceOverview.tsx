@@ -30,5 +30,5 @@ export function useCatalogMarketplaceOverview(token:string,clientId:string,conne
 }
 export function CatalogMarketplaceCell({rows,skuId}:{rows:CatalogLink[];skuId:string}){
  const links=linksForSku(rows,skuId);
- return <>{links.map(r=><div key={r.connectionId+':'+r.id} style={{marginBottom:8}}><strong>{label(r.marketplace)} · {r.account}</strong><span>Артикул: {r.offerId||'—'} · ID: {r.productId}</span><span>ШК: {r.barcodes?.length?r.barcodes.join(', '):'нет данных'}</span></div>)}</>;
+ return <>{links.map(r=><div key={r.connectionId+':'+r.id} style={{marginBottom:8}}><strong>{label(r.marketplace)} · {r.account}</strong><span style={{display:"block"}}>Артикул: {r.offerId||'—'} · ID: {r.productId}</span><span style={{display:"block"}}>ШК: {r.barcodes?.length?r.barcodes.join(', '):'нет данных'}</span></div>)}</>;
 }

@@ -32,3 +32,6 @@
 - Полные доступные наборы API/web и TypeScript; отдельные интеграционные проверки КИЗ с внешней БД исключены, штатные пропуски указаны в отчётах.
 
 Перед выпуском требуется свежая сверка production, точечный кандидат по `release-workflow.md`, проверка его runtime и UI. Полная локальная сборка не является копией production; текущий baseline не изменён.
+
+Release candidate 2026-10-24: merged PR683 baseline. API 3609 passed/155 skipped; web 496 passed/2 skipped; TypeScript passed. Exact runtime overlay: four API files and three web files. Eight isolated compiled API checks and six built-browser scenarios passed. API runtime route registry preserved at 134 + 1 = 135 (source registry remains separately tracked). Production publication pending.
+

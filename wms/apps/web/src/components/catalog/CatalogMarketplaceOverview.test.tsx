@@ -8,6 +8,7 @@ it('renders WB and Ozon identities side by side without losing leading zeros',()
  const html=renderToStaticMarkup(<CatalogMarketplaceCell rows={rows as CatalogLink[]} skuId="s"/>);
  for(const text of ['WB shop','Ozon shop','001','002, 003','wb-art','oz-art'])expect(html).toContain(text);
  expect(html).not.toContain('Продаётся');
+ expect(html.match(/display:block/g)).toHaveLength(4);
 });
 it('does not display unresolved or other-product links as a confirmed marketplace',()=>{
  const rows=[{id:'w',connectionId:'wc',marketplace:'WILDBERRIES',skuId:'s',status:'REVIEW'},{id:'o',connectionId:'oc',marketplace:'OZON',skuId:'other',status:'LINKED'}];

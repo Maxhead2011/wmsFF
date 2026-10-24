@@ -6,6 +6,7 @@ import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
 import {assertWarehouseAccess} from './client-request-warehouse-scope';
 import {ADMIN_REMOVED,REMOVAL_ACTION,canRemoveRequests,removalBlockers} from './request-removal-policy';
+import {hasVerifiedFboReturn} from './request-removal-return-proof';
 
 @Injectable()
 export class ClientRequestRemovalService {
@@ -20,7 +21,9 @@ export class ClientRequestRemovalService {
   const units=await tx.fboAssemblyUnit.count({where:{requestId:id,state:{not:'RETURNED'}}});
   const packages=await tx.clientRequestPackage.count({where:{requestId:id,items:{some:{quantity:{gt:0}}}}});
   const movements=await tx.stockMovement.count({where:{sourceDocument:id,type:{in:['PICK','PACK','SHIP']}}});
-  const scans=await tx.tsdOperation.count({where:{status:'ACCEPTED',payload:{path:['requestId'],equals:id},operationType:{in:['move_scan','assembly_stage','box_search_scan']}}});
+  let scans=await tx.tsdOperation.count({where:{status:'ACCEPTED',payload:{path:['requestId'],equals:id},operationType:{in:['move_scan','assembly_stage','box_search_scan']}}});
+  // FIX: keep all scan history; only verified completed FBO returns neutralise it.
+  if(scans&&!units&&!packages&&!movements&&!r.fbsOrderLinks.length&&await hasVerifiedFboReturn(tx,r))scans=0;
   const printed=await tx.fbsPrintJob.count({where:{requestId:id}});
   const activeWaves=await tx.pickWaveRequest.count({where:{requestId:id,wave:{status:{notIn:['CANCELLED','DONE']}}}});
   const physical=units+packages+movements+scans+printed+tasks.filter(t=>t.boxId||t.barcode||t.sourceBarcode||t.kiz||t.relabelConfirmedAt||t.completedAt||t.cargoPackedAt||t.marketplaceSubmittedAt||t.workerUserId||t.startedAt||t.sourceBoxPending||!['WAITING_STOCK','RESERVED','RELEASED','CANCELLED'].includes(t.status)).length;

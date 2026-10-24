@@ -1,5 +1,11 @@
 # Administrative removal of mistaken FBO/FBS requests
 
+## Published PR683: completed FBO disposition
+
+`request-removal-return-proof.ts` validates the `FBO_PICKED_UNITS_REDISTRIBUTED` audit before historical `assembly_stage` scans can stop blocking removal. Every source unit must be RETURNED with no active KIZ ownership or target carton; the holding box must contain no stock. Audit mappings must cover every unit and match its original SKU/KIZ. Returned marks must be AVAILABLE in the original scoped box; transferred marks must belong to a matching PICKED unit of an active request in the same client/warehouse and its holding box. Scans after the audit and legacy scan types remain blocking. Unsupported recovery audit formats remain blocking pending review.
+
+All previous guards for active units, stock movements, packaging, printing, FBS tasks, waves and deliveries remain. Preview and removal both execute this read-only proof. No history is deleted and this correction does not itself cancel any request. Existing installation flag isolates sold WMS. Regression reproduced before the fix; 14 return/transfer scenarios added to service tests. Read-only live proof for request2367 returns true. Validation: API 3604 passed /150 skipped; web 476 passed /2 skipped; API TypeScript passed. KIZ integration suites excluded because dedicated database configuration is unavailable. Published through PR683; public read-only preview2367 confirms allowed=true. Web suite after merge: 487 passed /2 skipped.
+
 Published through PR677 on 24 October 2026. ADMIN/OWNER only; default-off `WMS_REQUEST_REMOVAL_ENABLED` is enabled only in our deployment. CLIENT, workers, demo sessions and users outside writable client/warehouse scope cannot remove requests.
 
 The request list and Ozon unified-assembly list offer “Удалить заявку”. Preview shows quantity, blockers and external links. Commit requires a 5–2000 character reason, the exact request number, explicit confirmation and an unchanged preview revision. Removal sets CANCELLED, preserves request/items/Ozon bindings, records an event and a full before snapshot in AuditLog, cancels untouched FBS tasks and releases their box reservations. Physical stock and KIZ records are never changed. Cancelled requests remain in archive.
