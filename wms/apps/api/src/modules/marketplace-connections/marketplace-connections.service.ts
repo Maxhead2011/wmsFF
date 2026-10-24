@@ -6,6 +6,7 @@ import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../co
 import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorReservation } from './fbs-monitor-routing';
 import { fbsStockReserveDisplay } from './fbs-stock-reserve-display';
 import { preserveLegacyProductLinks, linkedOrderSku, productLinksEnabled, wbSkuScope, wbLinkedSkus, syncProductLink, readProductLinks, confirmProductLink } from './marketplace-product-links';
+import { catalogReconciliationEnabled, enableCatalogReconciliation, savedCatalogCards } from './catalog-reconciliation';
 import { filterReceiptOrderBoxes, receiptPublicationPolicy, receiptBlockedBoxes, receiptBlockedByTasks, assertReceiptFbsBox } from '../warehouse/receipt-channel-policy';
 import { boundedBoxScanEnabled, boxCandidateSkuIds, sharePendingBoxScan, boxReservationSnapshot } from './fbs-box-scan-search';
 import { handleOzonPickLines } from './ozon-fbs-pick-workflow';
@@ -28679,8 +28680,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const connection=await this.prisma.clientMarketplaceConnection.findUnique({where:{id}});
     if(!connection)throw new NotFoundException('Подключение не найдено.');
     this.clientScopes.requireClientAccess(user,connection.clientId,'read');
-    if(!productLinksEnabled(connection.clientId))return {enabled:false,items:[]};
-    const links=await readProductLinks(this.prisma,connection.clientId,id);
+    const operational=productLinksEnabled(connection.clientId);
+    if(!operational&&!await catalogReconciliationEnabled(this.prisma,connection.clientId))return {enabled:false,items:[]};
+    const links=operational?await readProductLinks(this.prisma,connection.clientId,id):await savedCatalogCards(this.prisma,connection);
     const all=await this.prisma.sku.findMany({where:{clientId:connection.clientId},select:{id:true,name:true,article:true,size:true,color:true,barcodes:{select:{value:true}}}});
     const ids=all.map(s=>s.id);
     const warehouseId=await this.resolveFbsExecutionWarehouseId(connection.clientId,connection.fbsExecutionWarehouseId);
@@ -28689,7 +28691,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       wbReservationQuantities(this.prisma,connection.clientId,ids,warehouseId??undefined),
     ]);
     // FIX: expose each marketplace's own barcodes, never substitute warehouse identifiers.
-    return {enabled:true,items:links.map(l=>({id:l.id,barcodes:l.barcodes,size:l.size,color:l.color,marketplace:l.marketplace,productId:l.productId,offerId:l.offerId,status:l.status,reason:l.reason,updatedAt:l.updatedAt,
+    return {enabled:true,readOnly:!operational,items:links.map(l=>({id:l.id,barcodes:l.barcodes,size:l.size,color:l.color,marketplace:l.marketplace,productId:l.productId,offerId:l.offerId,status:l.status,reason:l.reason,updatedAt:l.updatedAt,
       skuId:l.skuId,sku:all.find(s=>s.id===l.skuId)??null,
       available:balances.find(b=>b.skuId===l.skuId&&b.status==='AVAILABLE')?._sum.quantity??0,reserved:l.skuId?reserves.get(l.skuId)??0:0,
       candidates:l.status==='REVIEW'?all.filter(s=>s.barcodes.some(b=>l.barcodes.includes(b.value))):[]}))};
@@ -28701,6 +28703,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     this.clientScopes.requireClientAccess(user,connection.clientId,'write');
     await this.requireBranchOwnedClientConfiguration(user,connection.clientId);
     return confirmProductLink(this.prisma,connection.clientId,id,linkId,body.skuId,body.updatedAt,body.reason,user.id);
+  }
+
+  async enableCatalogReconciliation(id:string,user:AuthUser){
+    if(process.env.WMS_MARKETPLACE_PRODUCT_LINKS_ENABLED!=='true')throw new ForbiddenException('Сверка не доступна в этой установке WMS.');
+    const connection=await this.prisma.clientMarketplaceConnection.findUnique({where:{id}});
+    if(!connection)throw new NotFoundException('Подключение не найдено.');
+    this.clientScopes.requireClientAccess(user,connection.clientId,'write');
+    await this.requireBranchOwnedClientConfiguration(user,connection.clientId);
+    return enableCatalogReconciliation(this.prisma,connection.clientId,user);
   }
 
   async syncProducts(id: string, user: AuthUser) {

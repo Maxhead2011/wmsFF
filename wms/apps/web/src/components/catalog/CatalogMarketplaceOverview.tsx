@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fetchProductLinks, type MarketplaceConnectionSummary, type ProductLinkRow } from '../../lib/api';
+import { fetchProductLinks, enableCatalogReconciliation, type MarketplaceConnectionSummary, type ProductLinkRow } from '../../lib/api';
 import { auditLinks, linksForSku } from './marketplaceOverview';
 
 export type CatalogLink=ProductLinkRow & {account:string;connectionId:string};
@@ -9,6 +9,7 @@ export function useCatalogMarketplaceOverview(token:string,clientId:string,conne
  const [state,setState]=useState<{key:string;rows:CatalogLink[];error:string;busy:boolean;checked:boolean;disabled:number}>({key:'',rows:[],error:'',busy:false,checked:false,disabled:0});
  const [revision,setRevision]=useState(0);const checked=useRef(false);
  const key=JSON.stringify([token,clientId,connections.map(c=>[c.id,c.marketplace,c.accountName])]);
+ const currentKey=useRef(key);currentKey.current=key;
  useEffect(()=>{let active=true;const runCheck=checked.current;checked.current=false;
   setState({key,rows:[],error:'',busy:true,checked:false,disabled:0});
   const eligible=connections.filter(c=>c.clientId===clientId&&['WILDBERRIES','OZON'].includes(c.marketplace));
@@ -19,7 +20,13 @@ export function useCatalogMarketplaceOverview(token:string,clientId:string,conne
   return()=>{active=false;};
  },[key,revision]);
  const current=state.key===key?state:{key,rows:[],error:'',busy:true,checked:false,disabled:0};
- return {...current,issues:current.checked?auditLinks(current.rows):[],check:()=>{checked.current=true;setRevision(r=>r+1);}};
+ async function enable(){
+  const connection=connections.find(c=>c.clientId===clientId&&['WILDBERRIES','OZON'].includes(c.marketplace));if(!connection)return;
+  const started=key;setState(s=>({...s,busy:true,error:''}));
+  try{await enableCatalogReconciliation(token,connection.id);if(currentKey.current===started){checked.current=true;setRevision(r=>r+1);}}
+  catch(e){if(currentKey.current===started)setState(s=>({...s,busy:false,error:e instanceof Error?e.message:'Не удалось включить сверку'}));}
+ }
+ return {...current,issues:current.checked?auditLinks(current.rows):[],enable,check:()=>{checked.current=true;setRevision(r=>r+1);}};
 }
 export function CatalogMarketplaceCell({rows,skuId}:{rows:CatalogLink[];skuId:string}){
  const links=linksForSku(rows,skuId);

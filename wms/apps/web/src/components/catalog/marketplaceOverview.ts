@@ -6,7 +6,11 @@ export function auditLinks(rows:OverviewLink[]){
  const norm=(v?:string|null)=>(v??'').trim().toLocaleLowerCase('ru-RU');
  for(const r of rows){
   let message='';
-  if(r.status!=='LINKED'||!r.skuId||!r.sku)message='Связь требует ручной проверки';
+  if(r.status==='SAVED_CARD'){
+   const candidates=rows.filter(other=>other.marketplace!==r.marketplace&&other.barcodes?.some(b=>r.barcodes?.includes(b)));
+   message=candidates.length>1?'Несколько карточек другого маркетплейса с тем же ШК — требуется ручная проверка':candidates.length===1?'Найден кандидат другого маркетплейса по ШК — сверьте размер и цвет, связь не изменена':'Соответствие на другом маркетплейсе по сохранённым ШК не найдено';
+  }
+  else if(r.status!=='LINKED'||!r.skuId||!r.sku)message='Связь требует ручной проверки';
   else if(!r.barcodes?.length||!r.sku.barcodes?.length)message='Недостаточно данных ШК для проверки';
   else if(['size','color'].some(k=>{const f=k as 'size'|'color';return norm(r[f])&&norm(r.sku![f])&&norm(r[f])!==norm(r.sku![f]);}))message='Различаются размер или цвет — проверьте связь';
   else if(!r.barcodes.some(b=>r.sku!.barcodes!.some(s=>s.value===b)))message='ШК маркетплейса отличаются от складских — проверьте связь';

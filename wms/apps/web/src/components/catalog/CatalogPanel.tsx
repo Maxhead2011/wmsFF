@@ -360,6 +360,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
             <span>Выгрузка карточек из API добавляет товары в каталог, но не создаёт остатки</span>
           </div>
           <div className="catalog-marketplaces__actions">
+            {marketplaceOverview.disabled>0 ? <button className="icon-text-button" type="button" disabled={marketplaceOverview.busy || !canWrite || !session.user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r))} onClick={()=>void marketplaceOverview.enable()}>Включить сверку WB/Ozon</button> : <button className="icon-text-button" type="button" disabled={marketplaceOverview.busy || !connections.length} onClick={marketplaceOverview.check}>Проверить соответствия WB и Ozon</button>}
             {connections.length === 0 ? <span className="catalog-muted">API не подключено</span> : null}
             {connections.map((connection) => (
               <button
@@ -388,16 +389,16 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       )}
 
       {selectedClientId && <section aria-label="Автоматическая проверка соответствий">
-        <button type="button" className="icon-text-button" disabled={marketplaceOverview.busy || !connections.length} onClick={marketplaceOverview.check}>Проверить соответствия WB и Ozon</button>
         <p>Проверка сохранённых карточек по ШК, размеру и цвету. Связи и остатки не изменяются. Для новых данных сначала выполните выгрузку карточек из API.</p>
         {marketplaceOverview.busy && <p role="status">Загрузка связей…</p>}
         {marketplaceOverview.error && <p role="alert">{marketplaceOverview.error}</p>}
-        {marketplaceOverview.disabled>0 && <p>Сверка не включена для этого клиента. Данные связей недоступны.</p>}
+        {marketplaceOverview.disabled>0 && <p>Сверка не включена. Администратор или собственник может включить её кнопкой рядом с выгрузкой карточек.</p>}
+        {marketplaceOverview.rows.some(r=>r.status==='SAVED_CARD')&&<p>Проверка по сохранённым карточкам. Их присутствие не является подтверждением общей складской связи WB/Ozon; включение сверки не меняет обработку заказов и остатков.</p>}
         {marketplaceOverview.checked && !marketplaceOverview.disabled && <><p role="status">Проверено карточек: {marketplaceOverview.rows.length}. Требуют внимания: {marketplaceOverview.issues.length}.</p>
         {marketplaceOverview.issues.slice(0,100).map(issue=>{const row=marketplaceOverview.rows.find(r=>r.id===issue.id);return <p key={issue.id}>{row?.marketplace} · {row?.offerId} · {row?.productId}: {issue.message}</p>;})}
         {marketplaceOverview.issues.length>100 && <p>Показаны первые 100 замечаний. Остальные доступны в сверке карточек по кабинетам.</p>}</>}
       </section>}
-      {selectedClientId && <MarketplaceProductLinks session={session} connections={connections} canWrite={canWrite} />}
+      {selectedClientId && <MarketplaceProductLinks key={`${selectedClientId}:${marketplaceOverview.disabled}`} session={session} connections={connections} canWrite={canWrite} />}
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
 

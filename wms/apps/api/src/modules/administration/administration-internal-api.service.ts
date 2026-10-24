@@ -232,7 +232,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
       '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly'],
     // FIX: include four gated manual-assembly handlers; aliases count once.
-    routeCount: 114,
+    routeCount: 115,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сборка ФБС по номерам: администратор или собственник проверяет WB и доступные короба, создаёт одну обычную заявку в выбранном филиале с сохранением поставок WB; повторный запрос не дублирует заявку.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
