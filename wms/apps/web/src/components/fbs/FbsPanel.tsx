@@ -405,7 +405,7 @@ const ozonHiddenViews = new Set<FbsView>(['deadlines', 'reshipment', 'stocks', '
 
 // FIX: navigation grouping is opt-in for our WMS; original operation identifiers remain stable.
 function compactFbsViewGroup(view: FbsView): FbsView {
-  if (view === 'reshipment') return 'deadlines';
+  if (view === 'reshipment' || view === 'penalties') return 'deadlines';
   if (view === 'stocks') return 'allocation';
   if (view === 'cancelled' || view === 'archive') return 'shipped';
   if (view === 'calculator' || view === 'pricing') return 'cost';
@@ -750,8 +750,8 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const calculatorEnabled = canManagePricing || Boolean(selectedClient?.fbsCalculatorEnabled);
   const visibleViews = useMemo(() => {
     const menuViews = compactMenuEnabled
-      ? fbsViews.filter(view => !['stocks', 'cargo', 'cancelled', 'archive', 'calculator', 'pricing'].includes(view.id)).map(view => (
-          view.id === 'deadlines' ? { ...view, title: 'Проблемные заявки', description: 'Контроль автоотмены и повторный довоз WB.' }
+      ? fbsViews.filter(view => !['stocks', 'cargo', 'cancelled', 'archive', 'calculator', 'pricing', 'penalties'].includes(view.id)).map(view => (
+          view.id === 'deadlines' ? { ...view, title: 'Проблемные заявки', description: 'Контроль автоотмены, повторный довоз и штрафы FBS.' }
           : view.id === 'allocation' ? { ...view, title: 'Управление автоматическим распределением остатков', description: 'Товары, публикация в WB и правила распределения по складам.' }
           : view.id === 'shipped' ? { ...view, title: 'Архив заявок', description: 'Отгруженные, полученные покупателями и отменённые заказы.', icon: Archive }
           : view.id === 'cost' ? { ...view, title: 'Настройки стоимости', description: 'Стоимость обработки, калькулятор и назначение тарифов.' }
@@ -1724,7 +1724,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         </span>
       </header>
 
-      <div className="fbs-tiles" data-marketplace={marketplace} role="tablist" aria-label="Разделы FBS">
+      <div className="fbs-tiles" data-menu-layout={compactMenuEnabled && marketplace === 'WILDBERRIES' ? 'seven' : undefined} data-marketplace={marketplace} role="tablist" aria-label="Разделы FBS">
         {visibleViews.map((view, index) => {
           const Icon = view.icon;
           const isActive = (compactMenuEnabled ? compactFbsViewGroup(activeView) : activeView) === view.id;
@@ -2098,6 +2098,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           <nav className="fbs-section-tabs" aria-label="Проблемные заявки">
             <button type="button" aria-pressed={activeView === 'deadlines'} onClick={() => setActiveView('deadlines')}>Контроль автоотмены</button>
             <button type="button" aria-pressed={activeView === 'reshipment'} onClick={() => setActiveView('reshipment')}>Повторный довоз</button>
+            {marketplace === 'WILDBERRIES' ? <button type="button" aria-pressed={activeView === 'penalties'} onClick={() => setActiveView('penalties')}>Штрафы по FBS</button> : null}
           </nav>
         ) : null}
         {compactMenuEnabled && compactFbsViewGroup(activeView) === 'shipped' ? (
