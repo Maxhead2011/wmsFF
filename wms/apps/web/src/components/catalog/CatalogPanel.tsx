@@ -21,6 +21,8 @@ import {
 } from '../../lib/api';
 import { BulkVolumeEditor } from './BulkVolumeEditor';
 import { MarketplaceProductLinks } from './MarketplaceProductLinks';
+import { CatalogMarketplaceCell, useCatalogMarketplaceOverview } from './CatalogMarketplaceOverview';
+import { linksForSku } from './marketplaceOverview';
 import './catalog.css';
 import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
@@ -101,6 +103,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [skus, setSkus] = useState<SkuSummary[]>([]);
   const [skuState, setSkuState] = useState<LoadState>('idle');
   const [connections, setConnections] = useState<MarketplaceConnectionSummary[]>([]);
+  const marketplaceOverview = useCatalogMarketplaceOverview(session.accessToken, selectedClientId, connections);
   const [selectedSku, setSelectedSku] = useState<SkuDetail | null>(null);
   const [form, setForm] = useState<SkuForm | null>(null);
   const [manualForm, setManualForm] = useState<ManualSkuForm>(emptyManualSkuForm);
@@ -357,6 +360,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
             <span>Выгрузка карточек из API добавляет товары в каталог, но не создаёт остатки</span>
           </div>
           <div className="catalog-marketplaces__actions">
+            {marketplaceOverview.disabled>0 ? <button className="icon-text-button" type="button" disabled={marketplaceOverview.busy || !canWrite || !session.user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r))} onClick={()=>void marketplaceOverview.enable()}>Включить сверку WB/Ozon</button> : <button className="icon-text-button" type="button" disabled={marketplaceOverview.busy || !connections.length} onClick={marketplaceOverview.check}>Проверить соответствия WB и Ozon</button>}
             {connections.length === 0 ? <span className="catalog-muted">API не подключено</span> : null}
             {connections.map((connection) => (
               <button
@@ -384,7 +388,17 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
         </div>
       )}
 
-      {selectedClientId && <MarketplaceProductLinks session={session} connections={connections} canWrite={canWrite} />}
+      {selectedClientId && <section aria-label="Автоматическая проверка соответствий">
+        <p>Проверка сохранённых карточек по ШК, размеру и цвету. Связи и остатки не изменяются. Для новых данных сначала выполните выгрузку карточек из API.</p>
+        {marketplaceOverview.busy && <p role="status">Загрузка связей…</p>}
+        {marketplaceOverview.error && <p role="alert">{marketplaceOverview.error}</p>}
+        {marketplaceOverview.disabled>0 && <p>Сверка не включена. Администратор или собственник может включить её кнопкой рядом с выгрузкой карточек.</p>}
+        {marketplaceOverview.rows.some(r=>r.status==='SAVED_CARD')&&<p>Проверка по сохранённым карточкам. Их присутствие не является подтверждением общей складской связи WB/Ozon; включение сверки не меняет обработку заказов и остатков.</p>}
+        {marketplaceOverview.checked && !marketplaceOverview.disabled && <><p role="status">Проверено карточек: {marketplaceOverview.rows.length}. Требуют внимания: {marketplaceOverview.issues.length}.</p>
+        {marketplaceOverview.issues.slice(0,100).map(issue=>{const row=marketplaceOverview.rows.find(r=>r.id===issue.id);return <p key={issue.id}>{row?.marketplace} · {row?.offerId} · {row?.productId}: {issue.message}</p>;})}
+        {marketplaceOverview.issues.length>100 && <p>Показаны первые 100 замечаний. Остальные доступны в сверке карточек по кабинетам.</p>}</>}
+      </section>}
+      {selectedClientId && <MarketplaceProductLinks key={`${selectedClientId}:${marketplaceOverview.disabled}`} session={session} connections={connections} canWrite={canWrite} />}
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
 
@@ -471,8 +485,8 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
               <th>Фото</th>
               <th>Товар</th>
               <th>Клиент</th>
-              <th>Маркетплейс</th>
-              <th>Штрихкод</th>
+              <th>Связи WB / Ozon</th>
+              <th>Складской ШК</th>
               <th>Габариты</th>
               <th>Литраж</th>
               <th>Признаки</th>
@@ -490,8 +504,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                 </td>
                 <td>{sku.client ? `${sku.client.code} · ${sku.client.name}` : '-'}</td>
                 <td>
-                  <strong>{sku.marketplace ? marketplaceLabel(sku.marketplace) : 'WMS'}</strong>
-                  <span>{sku.marketplaceOfferId || sku.clientSku || '-'}</span>
+                  {linksForSku(marketplaceOverview.rows,sku.id).length ? <CatalogMarketplaceCell rows={marketplaceOverview.rows} skuId={sku.id}/> : <><strong>Источник: {sku.marketplace ? marketplaceLabel(sku.marketplace) : 'WMS'}</strong><span>{sku.marketplaceOfferId || sku.clientSku || '-'}</span><span>{!selectedClientId?'Выберите клиента для просмотра связей':marketplaceOverview.busy?'Загрузка связей…':marketplaceOverview.error?'Связи не загружены':marketplaceOverview.disabled?'Сверка не включена':'Подтверждённых связей WB/Ozon нет'}</span></>}
                 </td>
                 <td>{primaryBarcode(sku) || '-'}</td>
                 <td>{formatDimensions(sku)}</td>

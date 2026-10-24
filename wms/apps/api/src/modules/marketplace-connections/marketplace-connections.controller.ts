@@ -1013,6 +1013,12 @@ export class MarketplaceConnectionsController {
     return this.connections.confirmProductLink(id,linkId,body,user);
   }
 
+  @Post(':id/catalog-reconciliation/enable')
+  @RequireAnyPermissions('clients:write', 'marketplace-api:write')
+  enableCatalogReconciliation(@Param('id') id:string,@CurrentUser() user:AuthUser){
+    return this.connections.enableCatalogReconciliation(id,user);
+  }
+
   @Post(':id/sync-products')
   @RequireAnyPermissions('clients:write', 'marketplace-api:write')
   syncProducts(@Param('id') id: string, @CurrentUser() user: AuthUser) {
