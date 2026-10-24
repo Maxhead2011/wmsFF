@@ -1,0 +1,65 @@
+{
+  "publication": {
+    "base": {
+      "api": "sha256:84898792b3e6eb0261a8a3ac5a299694981ac383f10dbbbb8c1ce78e75498a60",
+      "web": "sha256:cf25544909fbe9e41fe219bead5cbc9a216bf60ea1d42cc7b6e7a609995a6e23"
+    },
+    "images": {
+      "api": "sha256:528e9a3a62a8cc4ad3c0e74bb8e9f52f288829a4d45be1e124273a6586d3d7b8",
+      "web": "sha256:b25e038eb05f7db2457dc0a1eba9c04df28cf3716a38cc0dcc2bb4b32d9f456c"
+    },
+    "hashes": {
+      "api": {
+        "modules/skus/skus.service.js": "5c5f849dd15793d965ad6c051ca1b10fdb7dce4e7bd32db709f747e52bcb2ade",
+        "modules/skus/catalog-list.js": "f5434e5458a4cd3909a8c7c35368c2fd2afd013172662a17b845e240e0f6cd9e",
+        "modules/skus/skus.controller.js": "87c631216f7fe1f449f181c5738e767f4e92aaf28bf8506a52751a33f197aca1",
+        "modules/administration/administration-internal-api.service.js": "958fe8359d47dc6266793bd8d2aadf8323d0e77e2bcfa4813498c6bfa62094d6"
+      },
+      "web": {
+        "index.html": "8158d9ab8c904084535f4a1ff364c3e30168fff533fcf9609a494c162e01fb92",
+        "assets/catalog-sorting-ui-20261024.js": "de8d69c0572b75cd8855ecbdbf5360e4046a011b3815119bb8dbd36f87d7324c",
+        "assets/catalog-sorting-host-20261024.js": "3c629e64497c7794888b27be7b7204dc1b45ecf542ec6c1f0ae529a72219d9e1",
+        "assets/catalog-sorting-20261024.css": "9b48a8c4bae4d5a130c71e51b3901b532d7bf5059f3e66eefa617a4cc0c31374"
+      }
+    },
+    "browser": {
+      "passed": 7,
+      "isolatedApi": true,
+      "mutations": 0
+    },
+    "runtime": {
+      "passed": 8,
+      "databaseUsed": false,
+      "moduleGraph": true
+    },
+    "published": true,
+    "pr": 687,
+    "at": 1792841826.799104,
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "validation": {
+    "apiPassed": 3617,
+    "apiSkipped": 155,
+    "webPassed": 497,
+    "webSkipped": 2,
+    "typeScript": true,
+    "dedicatedKizIntegration": "excluded: dedicated DB unavailable",
+    "candidateRuntime": {
+      "passed": 8,
+      "databaseUsed": false,
+      "moduleGraph": true
+    },
+    "candidateBrowser": {
+      "passed": 7,
+      "isolatedApi": true,
+      "mutations": 0
+    },
+    "publicBrowser": {
+      "passed": 7,
+      "isolatedApi": true,
+      "mutations": 0
+    }
+  }
+}
