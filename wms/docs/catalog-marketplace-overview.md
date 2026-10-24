@@ -31,7 +31,6 @@
 - Тест реального обработчика API с отдельными ШК WMS/Ozon и проверкой прав.
 - Полные доступные наборы API/web и TypeScript; отдельные интеграционные проверки КИЗ с внешней БД исключены, штатные пропуски указаны в отчётах.
 
-Перед выпуском требуется свежая сверка production, точечный кандидат по `release-workflow.md`, проверка его runtime и UI. Полная локальная сборка не является копией production; текущий baseline не изменён.
+Выпуск PR685 выполнен точечным наложением на свежую базу PR683. Проверены runtime, интерфейс, health и хеши опубликованных файлов. База обновлена до `2026-10-24-catalog-overview`; source/runtime parity остаётся false.
 
-Release candidate 2026-10-24: merged PR683 baseline. API 3609 passed/155 skipped; web 496 passed/2 skipped; TypeScript passed. Exact runtime overlay: four API files and three web files. Eight isolated compiled API checks and six built-browser scenarios passed. API runtime route registry preserved at 134 + 1 = 135 (source registry remains separately tracked). Production publication pending.
-
+Release candidate 2026-10-24: merged PR683 baseline. API 3609 passed/155 skipped; web 496 passed/2 skipped; TypeScript passed. Exact runtime overlay: four API files and three web files. Eight isolated compiled API checks and six built-browser scenarios passed. API runtime route registry preserved at 134 + 1 = 135 (source registry remains separately tracked). Published through PR685; public health, file hashes and six isolated browser scenarios passed.

@@ -1,0 +1,1 @@
+Published PR685: catalog marketplace barcodes, client audit enablement. Four API and three web files; exact overlays from PR683. Sold WMS, APK, configuration and business records unchanged. Source parity remains false.
