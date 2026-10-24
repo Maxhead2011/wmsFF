@@ -1,0 +1,14 @@
+{
+  "base": "sha256:027b57a6b6bed28d8188e72c8d5a463ba9f1615c06cd1e4266a420899a453d8f",
+  "candidate": "sha256:d0382f39ef4097feb528f41aaab9619e1aa08761d747a3ca8c87e18e3b00b9ad",
+  "hashes": {
+    "common/fbs-client-visibility.js": "a9354279eff6eab93cc079002484b0e502f990a30a187051d58cddf49503d163",
+    "modules/clients/clients.service.js": "322d797d1f9972b873b2688ce12e697cee487a005c3b4276bab2f43eea6987bd",
+    "modules/marketplace-connections/marketplace-connections.service.js": "79c29706b7586e51004170844ff0ff595266f529b9ab531073030e5b05a48820"
+  },
+  "published": true,
+  "pr": 675,
+  "at": 1792831658.5877657,
+  "otherContainersUnchanged": true,
+  "businessDataChanged": false
+}
