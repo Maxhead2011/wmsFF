@@ -1,0 +1,24 @@
+// TEST: execute the compiled candidate UI with synthetic API responses, never production data.
+const fs=require('fs'),path=require('path'),http=require('http'),assert=require('assert/strict');
+const {chromium}=require('C:/Users/La_pa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const esbuild=require('module').createRequire(require.resolve('../../../apps/web/node_modules/vite/package.json'))('esbuild');
+const root=path.resolve(process.argv[2]),web=path.resolve(__dirname,'../../../apps/web');
+(async()=>{
+ await esbuild.build({stdin:{contents:`import React from 'react';import{createRoot}from'react-dom/client';import{RequestRemovalProvider as Provider,RequestRemovalButton as Button}from'${(root+'/web/assets/request-removal-ui-20261024.js').replaceAll('\\','/')}';const root=createRoot(document.getElementById('root'));window.removed=0;window.render=(token='owner')=>root.render(<Provider token={token} onRemoved={()=>window.removed++}><Button request={{id:'r',number:100,title:'Тест ФБО',type:'OUTBOUND',status:'SUBMITTED'}}/></Provider>);window.render();`,loader:'tsx',resolveDir:web},bundle:true,write:true,outfile:root+'/browser.js',jsx:'automatic',plugins:[{name:'test-host',setup(b){b.onResolve({filter:/admin-tiles-20261019-0\.js$/},()=>({path:'host',namespace:'test'}));b.onLoad({filter:/.*/,namespace:'test'},()=>({contents:"import React from'react';import*as J from'react/jsx-runtime';export{React as r,J as j};",resolveDir:web,loader:'js'}));}}]});
+ const server=http.createServer((req,res)=>{if(req.url==='/browser.js'){res.setHeader('Content-Type','text/javascript');return res.end(fs.readFileSync(root+'/browser.js'))}res.end('<div id="root"></div><script src="/browser.js"></script>')}).listen(5196,'127.0.0.1');
+ const browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});
+ try{const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));let writes=0,body,blocked=false,fail=false,held=false,release;
+  await page.route('**/api/v1/client-request-removal/**',async route=>{
+   if(route.request().url().endsWith('/capability'))return route.fulfill({json:{enabled:route.request().headers().authorization==='Bearer owner'}});
+   if(route.request().method()==='GET'){if(held)await new Promise(r=>release=r);return route.fulfill({json:{id:'r',number:100,title:'Тест ФБО',revision:'a'.repeat(64),quantity:3,allowed:!blocked,blockers:blocked?['Есть фактический отбор']:[],ozonLinked:true,externalOrders:[]}});}
+   writes++;body=route.request().postDataJSON();return route.fulfill({status:fail?409:200,json:fail?{message:'Заявка изменилась'}:{removed:true}});
+  });
+  const open=()=>page.getByRole('button',{name:'Удалить заявку',exact:true}).first().click();
+  async function confirm(){await page.getByLabel('Причина удаления').fill('Ошибочная сборка');await page.getByLabel('Для подтверждения введите номер').fill('100');await page.getByRole('checkbox').check();}
+  await page.goto('http://127.0.0.1:5196');await open();await page.getByRole('note').waitFor();const button=page.getByRole('dialog').getByRole('button',{name:'Удалить заявку',exact:true});assert(await button.isDisabled());await confirm();await page.getByLabel('Для подтверждения введите номер').fill('101');assert(await button.isDisabled());await page.getByLabel('Для подтверждения введите номер').fill('100');await button.click();await page.waitForFunction(()=>window.removed===1);assert.equal(writes,1);assert.deepEqual(body,{reason:'Ошибочная сборка',number:100,revision:'a'.repeat(64),confirmed:true});
+  blocked=true;await open();await page.getByText('Есть фактический отбор',{exact:true}).waitFor();assert(await button.isDisabled());assert.equal(await page.getByRole('checkbox').count(),0);await page.getByRole('button',{name:'Закрыть',exact:true}).click();
+  blocked=false;fail=true;await open();await confirm();await button.click();await page.getByText('Заявка изменилась',{exact:true}).waitFor();assert(await button.isDisabled());assert.equal(await page.getByRole('checkbox').count(),0);await page.getByRole('button',{name:'Закрыть',exact:true}).click();
+  held=true;await open();await page.waitForFunction(()=>!!document.querySelector('[role=dialog]'));while(!release)await new Promise(r=>setTimeout(r,10));await page.evaluate(()=>window.render('client'));release();await page.waitForTimeout(100);assert.equal(await page.getByRole('dialog').count(),0);assert.equal(await page.getByRole('button',{name:'Удалить заявку',exact:true}).count(),0);assert.equal(writes,2);assert.deepEqual(errors,[]);
+  fs.writeFileSync(root+'/browser-proof.json',JSON.stringify({passed:8,actualCompiledUI:true,syntheticData:true,errors}));console.log('PASS 8 browser scenarios');
+ }finally{await browser.close();server.close();}
+})().catch(e=>{console.error(e);process.exitCode=1});

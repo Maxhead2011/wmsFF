@@ -1,3 +1,4 @@
+import {RequestRemovalButton} from './RequestRemoval';
 import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, MapPinned, PackageCheck, RefreshCw, Search, Send, ShieldCheck, Truck, Undo2, XCircle } from 'lucide-react';
 import {useContext, useState} from 'react';
 import {RequestZoneContext} from './RequestZoneProvider';
@@ -701,7 +702,7 @@ export function ClientRequestsTable({
               ) : null}
               {canCancelRequests ? (
                 <td className="client-request-table__actions-cell" data-label="Действия">
-                  <div className="client-request-actions client-request-actions--main">
+                  <div className="client-request-actions client-request-actions--main"><RequestRemovalButton request={request}/>
                   {!groupedActions ? <>
                   {!isSkuCollectionRequest(request) && canEditRequest(request, canEditAnyRequest) ? (
                     <button
