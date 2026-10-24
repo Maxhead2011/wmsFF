@@ -1,4 +1,4 @@
-# Сортировка и фильтры каталога — подготовлено, не опубликовано
+# Сортировка и фильтры каталога — опубликовано PR687
 
 Ветка `feature/catalog-sorting`, целевая ветка PR `feature/wb-print-check`.
 
@@ -22,3 +22,4 @@
 
 Проверено: API — 3617 passed / 155 skipped; web — 497 passed / 2 skipped. TypeScript API/web и локальная сборка прошли. Отдельные KIZ integration suite исключены: требуют отдельной БД. Семь браузерных сценариев на собранном интерфейсе с изолированными API-данными: параметры сортировки, пагинация, сброс страницы, наличие, соответствия, ширины 1440/768/390; записей в рабочие данные нет.
 
+Published PR687: exact four-file API/four-file web overlay, eight compiled runtime and seven public-browser scenarios passed. Baseline 2026-10-24-catalog-sorting.
