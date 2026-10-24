@@ -28688,7 +28688,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.stockBalance.groupBy({by:['skuId','status'],where:{clientId:connection.clientId,...(warehouseId?{warehouseId}:{}),skuId:{in:ids}},_sum:{quantity:true}}),
       wbReservationQuantities(this.prisma,connection.clientId,ids,warehouseId??undefined),
     ]);
-    return {enabled:true,items:links.map(l=>({id:l.id,marketplace:l.marketplace,productId:l.productId,offerId:l.offerId,status:l.status,reason:l.reason,updatedAt:l.updatedAt,
+    // FIX: expose each marketplace's own barcodes, never substitute warehouse identifiers.
+    return {enabled:true,items:links.map(l=>({id:l.id,barcodes:l.barcodes,size:l.size,color:l.color,marketplace:l.marketplace,productId:l.productId,offerId:l.offerId,status:l.status,reason:l.reason,updatedAt:l.updatedAt,
       skuId:l.skuId,sku:all.find(s=>s.id===l.skuId)??null,
       available:balances.find(b=>b.skuId===l.skuId&&b.status==='AVAILABLE')?._sum.quantity??0,reserved:l.skuId?reserves.get(l.skuId)??0:0,
       candidates:l.status==='REVIEW'?all.filter(s=>s.barcodes.some(b=>l.barcodes.includes(b.value))):[]}))};
