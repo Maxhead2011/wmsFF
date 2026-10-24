@@ -118,6 +118,7 @@ import {
 } from '../../lib/api';
 import { FbsCostCalculator } from './FbsCostCalculator';
 import { FbsStockAllocationView } from './FbsStockAllocationView';
+import { FbsStockAllocationSection } from './FbsStockAllocationSection';
 import {
   FBS_AUTO_CANCEL_HOURS,
   fbsActiveOrderAgeTone,
@@ -260,6 +261,7 @@ const FBS_HISTORY_STATE_KEY = '__wmsFbsMarketplace';
 type FbsView =
   | 'active'
   | 'deadlines'
+  | 'reshipment'
   | 'stocks'
   | 'allocation'
   | 'cargo'
@@ -399,9 +401,19 @@ const fbsViews = [
 ];
 
 // FIX: both WB-only reports stay hidden for Ozon and Yandex after merging their tiles.
-const ozonHiddenViews = new Set<FbsView>(['deadlines', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
+const ozonHiddenViews = new Set<FbsView>(['deadlines', 'reshipment', 'stocks', 'allocation', 'cargo', 'report', 'passes', 'penalties']);
+
+// FIX: navigation grouping is opt-in for our WMS; original operation identifiers remain stable.
+function compactFbsViewGroup(view: FbsView): FbsView {
+  if (view === 'reshipment' || view === 'penalties') return 'deadlines';
+  if (view === 'stocks') return 'allocation';
+  if (view === 'cancelled' || view === 'archive') return 'shipped';
+  if (view === 'calculator' || view === 'pricing') return 'cost';
+  return view;
+}
 
 export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
+  const compactMenuEnabled = import.meta.env.VITE_FBS_COMPACT_MENU_ENABLED === 'true';
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
   const [activeView, setActiveView] = useState<FbsView>('active');
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -737,24 +749,33 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   );
   const calculatorEnabled = canManagePricing || Boolean(selectedClient?.fbsCalculatorEnabled);
   const visibleViews = useMemo(() => {
-    const marketplaceViews = marketplace !== 'WILDBERRIES'
-      ? fbsViews.filter((view) => !ozonHiddenViews.has(view.id))
+    const menuViews = compactMenuEnabled
+      ? fbsViews.filter(view => !['stocks', 'cargo', 'cancelled', 'archive', 'calculator', 'pricing', 'penalties'].includes(view.id)).map(view => (
+          view.id === 'deadlines' ? { ...view, title: 'Проблемные заявки', description: 'Контроль автоотмены, повторный довоз и штрафы FBS.' }
+          : view.id === 'allocation' ? { ...view, title: 'Управление автоматическим распределением остатков', description: 'Товары, публикация в WB и правила распределения по складам.' }
+          : view.id === 'shipped' ? { ...view, title: 'Архив заявок', description: 'Отгруженные, полученные покупателями и отменённые заказы.', icon: Archive }
+          : view.id === 'cost' ? { ...view, title: 'Настройки стоимости', description: 'Стоимость обработки, калькулятор и назначение тарифов.' }
+          : view
+        ))
       : fbsViews;
+    const marketplaceViews = marketplace !== 'WILDBERRIES'
+      ? menuViews.filter((view) => !ozonHiddenViews.has(view.id))
+      : menuViews;
     const roleViews = canManagePricing
       ? marketplaceViews
       : marketplaceViews.filter((view) => view.id !== 'pricing');
     return calculatorEnabled
       ? roleViews
       : roleViews.filter((view) => view.id !== 'calculator');
-  }, [calculatorEnabled, canManagePricing, marketplace]);
+  }, [calculatorEnabled, canManagePricing, marketplace, compactMenuEnabled]);
 
   useEffect(() => {
-    if (!visibleViews.some((view) => view.id === activeView)) {
+    if (!visibleViews.some((view) => view.id === (compactMenuEnabled ? compactFbsViewGroup(activeView) : activeView)) || (activeView === 'pricing' && !canManagePricing) || (activeView === 'calculator' && !calculatorEnabled)) {
       setActiveView('active');
     }
-  }, [activeView, visibleViews]);
+  }, [activeView, visibleViews, compactMenuEnabled, canManagePricing, calculatorEnabled]);
 
-  const activeConfig = visibleViews.find((view) => view.id === activeView) ?? visibleViews[0];
+  const activeConfig = visibleViews.find((view) => view.id === (compactMenuEnabled ? compactFbsViewGroup(activeView) : activeView)) ?? visibleViews[0];
   const data = useMemo(
     () => filterFbsOrdersByMarketplace(ordersState.data, marketplace),
     [marketplace, ordersState.data],
@@ -993,13 +1014,14 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const tileCounts: Record<FbsView, number | string> = {
     active: activeOrdersTotal,
     deadlines: criticalOrdersTotal,
+    reshipment: 'WB',
     stocks: 'WMS → WB',
     allocation: '100%',
     cargo: cargoState.data?.supplies.filter((supply) => !supply.readyToDeliver && !supply.ignored).length ?? 0,
-    shipped: data?.counts.shipped ?? 0,
+    shipped: compactMenuEnabled ? (data?.counts.shipped ?? 0) + (data?.counts.archive ?? 0) + (data?.counts.cancelled ?? 0) : data?.counts.shipped ?? 0,
     cancelled: data?.counts.cancelled ?? 0,
     report: 'Excel',
-    cost: data?.counts.shipped ?? 0,
+    cost: compactMenuEnabled ? 'тарифы' : data?.counts.shipped ?? 0,
     calculator: '1–3000',
     archive: data?.counts.archive ?? 0,
     passes: '48 ч',
@@ -1702,10 +1724,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         </span>
       </header>
 
-      <div className="fbs-tiles" data-marketplace={marketplace} role="tablist" aria-label="Разделы FBS">
+      <div className="fbs-tiles" data-menu-layout={compactMenuEnabled && marketplace === 'WILDBERRIES' ? 'seven' : undefined} data-marketplace={marketplace} role="tablist" aria-label="Разделы FBS">
         {visibleViews.map((view, index) => {
           const Icon = view.icon;
-          const isActive = activeView === view.id;
+          const isActive = (compactMenuEnabled ? compactFbsViewGroup(activeView) : activeView) === view.id;
           return (
             <div
               className={`fbs-tile fbs-tile--${view.accent}${isActive ? ' is-active' : ''}${
@@ -1862,7 +1884,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           </div> : null}
         </div>
 
-        {marketplace === 'WILDBERRIES' && activeView === 'active' && selectedClientId ? (
+        {!compactMenuEnabled && marketplace === 'WILDBERRIES' && activeView === 'active' && selectedClientId ? (
           <FbsReshipmentPanel session={session} clientId={selectedClientId} onOpenRequest={onOpenRequest} />
         ) : null}
 
@@ -2072,6 +2094,27 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           </form>
         ) : null}
 
+        {compactMenuEnabled && compactFbsViewGroup(activeView) === 'deadlines' ? (
+          <nav className="fbs-section-tabs" aria-label="Проблемные заявки">
+            <button type="button" aria-pressed={activeView === 'deadlines'} onClick={() => setActiveView('deadlines')}>Контроль автоотмены</button>
+            <button type="button" aria-pressed={activeView === 'reshipment'} onClick={() => setActiveView('reshipment')}>Повторный довоз</button>
+            {marketplace === 'WILDBERRIES' ? <button type="button" aria-pressed={activeView === 'penalties'} onClick={() => setActiveView('penalties')}>Штрафы по FBS</button> : null}
+          </nav>
+        ) : null}
+        {compactMenuEnabled && compactFbsViewGroup(activeView) === 'shipped' ? (
+          <nav className="fbs-section-tabs" aria-label="Архив заявок">
+            <button type="button" aria-pressed={activeView !== 'cancelled'} onClick={() => { setActiveView('shipped'); setSelectedOrderKeys(new Set()); }}>Отгруженные</button>
+            <button type="button" aria-pressed={activeView === 'cancelled'} onClick={() => { setActiveView('cancelled'); setSelectedOrderKeys(new Set()); }}>Отменённые заказы</button>
+          </nav>
+        ) : null}
+        {compactMenuEnabled && compactFbsViewGroup(activeView) === 'cost' ? (
+          <nav className="fbs-section-tabs" aria-label="Настройки стоимости">
+            <button type="button" aria-pressed={activeView === 'cost'} onClick={() => setActiveView('cost')}>Стоимость обработки FBS</button>
+            {calculatorEnabled ? <button type="button" aria-pressed={activeView === 'calculator'} onClick={() => setActiveView('calculator')}>Калькулятор стоимости</button> : null}
+            {canManagePricing ? <button type="button" aria-pressed={activeView === 'pricing'} onClick={() => setActiveView('pricing')}>Назначение стоимости обработки</button> : null}
+          </nav>
+        ) : null}
+
         {activeView === 'calculator' ? (
           <FbsCostCalculator session={session} isAdmin={canManagePricing} />
         ) : !selectedClientId ? (
@@ -2085,8 +2128,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         ) : activeView === 'passes' ? (
           <FbsPassesView clientId={selectedClientId} session={session} />
         ) : activeView === 'stocks' ? (
-          <FbsStocksView clientId={selectedClientId} session={session} search={search} />
-        ) : activeView === 'allocation' ? (
+          <FbsStocksView key={compactMenuEnabled ? selectedClientId : undefined} clientId={selectedClientId} session={session} search={search} />
+        ) : activeView === 'allocation' ? compactMenuEnabled ? (
+          <FbsStocksView key={selectedClientId} clientId={selectedClientId} session={session} search={search} />
+        ) : (
           <FbsStockAllocationView
             clientId={selectedClientId}
             connectionId={data?.connections.find((connection) => connection.marketplace === 'WILDBERRIES')?.id ?? ''}
@@ -2137,12 +2182,14 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             title="Получаю заказы"
             text={`Проверяем подключённые кабинеты ${marketplaceLabel(marketplace)}.`}
           />
+        ) : activeView === 'reshipment' && compactMenuEnabled ? (
+          <FbsReshipmentPanel key={selectedClientId} session={session} clientId={selectedClientId} onOpenRequest={onOpenRequest} />
         ) : activeView === 'deadlines' ? (
           <FbsAutoCancelReportView data={data} session={session} onOpenRequest={onOpenRequest} />
         ) : activeView === 'cost' ? (
           <FbsCostView data={data} />
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
-          <FbsOrdersView
+          <FbsHistoryOrdersView
             data={data}
             session={session}
             view={activeView}
@@ -3985,6 +4032,7 @@ export function FbsStocksView({
     dropoffWarehouseId: '',
     autoRouteNewWarehouses: false,
   });
+  const compactMenuEnabled = import.meta.env.VITE_FBS_COMPACT_MENU_ENABLED === 'true';
   const canManageRouting =
     session.user.permissionCodes.includes('system:admin') ||
     session.user.roleCodes.some((role) => role === 'ADMIN' || role === 'OWNER');
@@ -4471,11 +4519,10 @@ export function FbsStocksView({
 
   if (!selectedWarehouseId) {
     return (
-      <FbsNotice
-        icon={Warehouse}
-        title="Склад Wildberries не найден"
-        text="Создайте склад FBS в кабинете продавца Wildberries, затем снова откройте раздел."
-      />
+      <>
+        {compactMenuEnabled ? <FbsStockAllocationSection key={`${clientId}:${selectedConnectionId}`} session={session} clientId={clientId} connectionId={selectedConnectionId} disabled={state.status === 'loading'} /> : null}
+        <FbsNotice icon={Warehouse} title="Склад Wildberries не найден" text="Создайте склад FBS в кабинете продавца Wildberries, затем снова откройте раздел." />
+      </>
     );
   }
 
@@ -4483,7 +4530,7 @@ export function FbsStocksView({
     <section className="fbs-stocks">
       <div className="fbs-stocks__intro">
         <div>
-          <p className="eyebrow">Товары FBS · WMS → Wildberries</p>
+          <p className="eyebrow">{compactMenuEnabled ? 'Автоматическое распределение остатков · WMS → Wildberries' : 'Товары FBS · WMS → Wildberries'}</p>
           <h3>Управление статусом «Продавать / Не продавать»</h3>
           <p>
             WMS передаёт только количество. Карточки, цены и другие настройки товара не изменяются.
@@ -4615,6 +4662,8 @@ export function FbsStocksView({
           <span>Показывать товары с нулевым остатком WMS</span>
         </label>
       </div>
+
+      {compactMenuEnabled ? <FbsStockAllocationSection key={`${clientId}:${selectedConnectionId}`} session={session} clientId={clientId} connectionId={selectedConnectionId} disabled={state.status === 'loading'} /> : null}
 
       <div className={`fbs-stocks__warehouse-status ${warehouseConnected ? 'is-connected' : ''}`}>
         <Warehouse size={18} aria-hidden="true" />
@@ -5577,6 +5626,21 @@ function FbsCargoPackingView({
   );
 }
 
+// FIX: completed orders remain in history with their original read-only controls.
+export function FbsHistoryOrdersView(props: Parameters<typeof FbsOrdersView>[0]) {
+  if (import.meta.env.VITE_FBS_COMPACT_MENU_ENABLED !== 'true' || !['shipped', 'archive'].includes(props.view)) {
+    return <FbsOrdersView {...props} />;
+  }
+  return (
+    <div className="fbs-history-orders">
+      <section aria-label="Переданные в доставку"><h3>Переданные в доставку</h3><FbsOrdersView {...props} view="shipped" /></section>
+      {props.data?.orders.some(order => order.category === 'archive') ? (
+        <section aria-label="Получены покупателями"><h3>Получены покупателями</h3><FbsOrdersView {...props} view="archive" /></section>
+      ) : null}
+    </div>
+  );
+}
+
 function FbsOrdersView({
   data,
   session,
@@ -5613,7 +5677,7 @@ function FbsOrdersView({
   session: AuthSession;
   search: string;
   // FIX: the allocation tile is not an orders-table view.
-  view: Exclude<FbsView, 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
+  view: Exclude<FbsView, 'reshipment' | 'deadlines' | 'stocks' | 'cargo' | 'cost' | 'calculator' | 'pricing' | 'passes' | 'report' | 'allocation' | 'penalties'>;
   selectedOrderKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   orderAction: 'assemble' | 'reship' | 'move' | 'deliver' | 'change-destination' | 'cancel' | 'remove-cancelled' | 'stickers' | 'cargo' | 'supply' | 'request' | 'recover-missing-requests' | 'pick-list' | 'emergency-assembly' | null;

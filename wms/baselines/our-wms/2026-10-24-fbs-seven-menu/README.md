@@ -1,0 +1,1 @@
+Production snapshot after PR681. API runtime and schema verified byte-for-byte against running server; only web navigation changed. sourceParityVerified=false; use exact runtime overlays, not a full source build. This is not a database or image backup.
