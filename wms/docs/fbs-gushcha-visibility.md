@@ -1,3 +1,5 @@
+Published via PR675 on 24 October 2026. API health and exact module hashes verified; other containers unchanged.
+
 # Gushcha FBS visibility exception
 
 Prepared, not published. Scope confirmed by Katerina: only Gushcha.
