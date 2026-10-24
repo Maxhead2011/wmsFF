@@ -5003,6 +5003,8 @@ export type StorageOverview = {
 };
 
 export type SkuSummary = {
+  stockQuantity?: number;
+  correspondence?: 'linked' | 'missing' | 'unknown';
   id: string;
   clientId: string;
   client?: Pick<ClientSummary, 'id' | 'code' | 'name'>;
@@ -8906,6 +8908,11 @@ export async function fetchSkus(accessToken: string, filter: { clientId?: string
   return request<SkuSummary[]>(withQuery('/skus', filter), {
     accessToken,
   });
+}
+
+export type CatalogFilter={clientId?:string;search?:string;sort:'updated'|'article'|'color'|'stock';direction:'asc'|'desc';inStock:boolean;correspondence:'all'|'linked'|'missing'|'unknown';page:number};
+export function fetchCatalogPage(accessToken:string,filter:CatalogFilter){
+ return request<{items:SkuSummary[];total:number;page:number;pageSize:number}>(withQuery('/skus/catalog',filter),{accessToken});
 }
 
 export async function fetchFactoryShipments(accessToken: string, clientId?: string) {

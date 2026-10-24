@@ -7,6 +7,7 @@ import {
   fetchMarketplaceConnections,
   fetchSku,
   fetchSkus,
+  fetchCatalogPage,
   syncMarketplaceProducts,
   updateSku,
   type AuthSession,
@@ -24,6 +25,7 @@ import { MarketplaceProductLinks } from './MarketplaceProductLinks';
 import { CatalogMarketplaceCell, useCatalogMarketplaceOverview } from './CatalogMarketplaceOverview';
 import { linksForSku } from './marketplaceOverview';
 import './catalog.css';
+import { CatalogSortControls, type CatalogSort } from './CatalogSortControls';
 import { WorkspaceTileGate } from '../common/WorkspaceTileGate';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
@@ -93,6 +95,11 @@ const emptyManualSkuForm: ManualSkuForm = {
 };
 
 export function CatalogPanel({ session }: CatalogPanelProps) {
+  const sortingEnabled=import.meta.env.VITE_CATALOG_SORT_ENABLED==='true';
+  const [sorting,setSorting]=useState<CatalogSort>({sort:'updated',direction:'desc',inStock:false,correspondence:'all'});
+  const [catalogPage,setCatalogPage]=useState(1);
+  const [catalogTotal,setCatalogTotal]=useState(0);
+  const [catalogPageSize,setCatalogPageSize]=useState(100);
   const canRead = canUse(session.user, 'skus:read');
   const canWrite = canUse(session.user, 'skus:write');
   const [clients, setClients] = useState<ClientSummary[]>([]);
@@ -100,6 +107,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
   const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id);
   const [search, setSearch] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
+  useEffect(()=>setCatalogPage(1),[selectedClientId,appliedSearch,session.user.activeWarehouseId]);
   const [skus, setSkus] = useState<SkuSummary[]>([]);
   const [skuState, setSkuState] = useState<LoadState>('idle');
   const [connections, setConnections] = useState<MarketplaceConnectionSummary[]>([]);
@@ -172,17 +180,18 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
       setError('');
       try {
         const [nextSkus, nextConnections] = await Promise.all([
-          fetchSkus(session.accessToken, { clientId: selectedClientId || undefined, search: appliedSearch || undefined }),
+          sortingEnabled?fetchCatalogPage(session.accessToken,{clientId:selectedClientId||undefined,search:appliedSearch||undefined,...sorting,page:catalogPage}):fetchSkus(session.accessToken, { clientId: selectedClientId || undefined, search: appliedSearch || undefined }),
           selectedClientId ? fetchMarketplaceConnections(session.accessToken, { clientId: selectedClientId }) : Promise.resolve([]),
         ]);
         if (!isActive) {
           return;
         }
-        setSkus(nextSkus);
+        if(Array.isArray(nextSkus)){setSkus(nextSkus);}else{setSkus(nextSkus.items);setCatalogTotal(nextSkus.total);setCatalogPage(nextSkus.page);setCatalogPageSize(nextSkus.pageSize);}
         setConnections(nextConnections);
         setSkuState('ready');
       } catch (caught) {
         if (isActive) {
+          setSkus([]);setCatalogTotal(0);
           setSkuState('error');
           setError(errorMessage(caught, 'Не удалось загрузить каталог.'));
         }
@@ -193,7 +202,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
     return () => {
       isActive = false;
     };
-  }, [appliedSearch, canRead, reloadKey, selectedClientId, session.accessToken]);
+  }, [appliedSearch, canRead, reloadKey, selectedClientId, session.accessToken,session.user.activeWarehouseId,sortingEnabled,sorting,catalogPage]);
 
   if (!canRead) {
     return null;
@@ -478,12 +487,18 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
         </section>
       ) : null}
 
-      <div className="catalog-table-wrap">
+      {sortingEnabled&&<>
+        <CatalogSortControls value={sorting} onChange={value=>{setSorting(value);setCatalogPage(1);}} busy={skuState==='loading'}/>
+        <p className="catalog-muted">На складе — физическое количество в доступном складском контуре, включая резерв; товар в пути не учитывается. Подтверждённая пара — связи с активными кабинетами WB и Ozon.</p>
+        <nav className="catalog-pagination" aria-label="Страницы каталога"><button type="button" disabled={catalogPage<=1||skuState==='loading'} onClick={()=>setCatalogPage(p=>p-1)}>Назад</button><span>Найдено: {catalogTotal}. Страница {catalogPage} из {Math.max(1,Math.ceil(catalogTotal/catalogPageSize))}</span><button type="button" disabled={catalogPage*catalogPageSize>=catalogTotal||skuState==='loading'} onClick={()=>setCatalogPage(p=>p+1)}>Далее</button></nav>
+      </>}
+      <div className="catalog-table-wrap" aria-busy={skuState==='loading'}>
         <table className="catalog-table">
           <thead>
             <tr>
               <th>Фото</th>
               <th>Товар</th>
+              {sortingEnabled&&<><th>Артикул</th><th>Цвет</th><th>На складе, шт.</th><th>Соответствия</th></>}
               <th>Клиент</th>
               <th>Связи WB / Ozon</th>
               <th>Складской ШК</th>
@@ -502,6 +517,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
                   <strong>{sku.name}</strong>
                   <span>{[sku.internalSku, sku.article, sku.brand].filter(Boolean).join(' · ') || '-'}</span>
                 </td>
+                {sortingEnabled&&<><td>{sku.article||'—'}</td><td>{sku.color||'—'}</td><td>{sku.stockQuantity??'Нет данных'}</td><td>{sku.correspondence==='linked'?'WB + Ozon':sku.correspondence==='missing'?'Нет подтверждённой пары':'Не проверено'}</td></>}
                 <td>{sku.client ? `${sku.client.code} · ${sku.client.name}` : '-'}</td>
                 <td>
                   {linksForSku(marketplaceOverview.rows,sku.id).length ? <CatalogMarketplaceCell rows={marketplaceOverview.rows} skuId={sku.id}/> : <><strong>Источник: {sku.marketplace ? marketplaceLabel(sku.marketplace) : 'WMS'}</strong><span>{sku.marketplaceOfferId || sku.clientSku || '-'}</span><span>{!selectedClientId?'Выберите клиента для просмотра связей':marketplaceOverview.busy?'Загрузка связей…':marketplaceOverview.error?'Связи не загружены':marketplaceOverview.disabled?'Сверка не включена':'Подтверждённых связей WB/Ozon нет'}</span></>}
@@ -514,7 +530,7 @@ export function CatalogPanel({ session }: CatalogPanelProps) {
             ))}
             {skus.length === 0 ? (
               <tr>
-                <td colSpan={8}>{skuState === 'loading' ? 'Загрузка каталога...' : 'Товары не найдены'}</td>
+                <td colSpan={sortingEnabled?12:8}>{skuState === 'loading' ? 'Загрузка каталога...' : 'Товары не найдены'}</td>
               </tr>
             ) : null}
           </tbody>

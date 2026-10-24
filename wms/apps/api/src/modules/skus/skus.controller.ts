@@ -27,6 +27,11 @@ export class SkusController {
     return this.skus.list({ clientId, search, draftsOnly: draftsOnly === 'true' }, user);
   }
 
+  @Get('catalog')
+  catalog(@CurrentUser() user:AuthUser,@Query() query:Record<string,string|undefined>){
+    return this.skus.catalog(query,user);
+  }
+
   @Get('nomenclature')
   listNomenclature(@Query('search') search?: string) {
     return this.skus.listNomenclature({ search });
