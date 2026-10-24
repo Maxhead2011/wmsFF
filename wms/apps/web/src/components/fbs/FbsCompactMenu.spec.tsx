@@ -60,3 +60,17 @@ it('allocation rules are lazy and retain drafts when collapsed',async()=>{
  nodes(t).find(n=>n.type==='details').props.onToggle({currentTarget:{open:true}});t=render();expect(nodes(t).find(n=>n.type?.name==='FbsStockAllocationView')?.props.connectionId).toBe('shop-2');
  nodes(t).find(n=>n.type==='details').props.onToggle({currentTarget:{open:false}});expect(nodes(render()).some(n=>n.type?.name==='FbsStockAllocationView')).toBe(true);
 });
+
+// TEST: seven-tile layout keeps penalties reachable from problems with the existing WB scope.
+it('groups penalties under problems and marks the seven-tile WB layout',()=>{
+ h.slots[0]='WILDBERRIES';h.slots[1]='deadlines';let t=panel();expect(tabs(t)).toHaveLength(7);
+ expect(nodes(t).find(n=>n.props?.className==='fbs-tiles')?.props['data-menu-layout']).toBe('seven');
+ expect(tabs(t).some(n=>text(n).includes('Штрафы'))).toBe(false);
+ const penalty=nodes(t).find(n=>n.type==='button'&&text(n)==='Штрафы по FBS');expect(penalty).toBeDefined();penalty.props.onClick();
+ t=panel();expect(tabs(t).find(n=>text(n).includes('Проблемные заявки'))?.props['aria-selected']).toBe(true);
+ expect(nodes(t).find(n=>n.type==='button'&&text(n)==='Штрафы по FBS')?.props['aria-pressed']).toBe(true);
+});
+it('keeps penalties WB-only and preserves the original layout with the flag off',()=>{
+ for(const marketplace of ['OZON','YANDEX_MARKET']){h.slots=[];h.slots[0]=marketplace;h.slots[1]='deadlines';const t=panel();expect(nodes(t).some(n=>n.type==='button'&&text(n)==='Штрафы по FBS')).toBe(false);expect(nodes(t).find(n=>n.props?.className==='fbs-tiles')?.props['data-menu-layout']).toBeUndefined();}
+ vi.stubEnv('VITE_FBS_COMPACT_MENU_ENABLED','false');h.slots=[];h.slots[0]='WILDBERRIES';const t=panel();expect(tabs(t).some(n=>text(n).includes('Штрафы по FBS'))).toBe(true);expect(nodes(t).find(n=>n.props?.className==='fbs-tiles')?.props['data-menu-layout']).toBeUndefined();
+});

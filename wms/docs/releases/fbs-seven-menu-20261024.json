@@ -1,0 +1,48 @@
+{
+  "changedFunctions": [
+    "ci",
+    "__fbsCompactGroup",
+    "__fbsCompactViews",
+    "__FbsCompactSubnav"
+  ],
+  "otherStatementsPreserved": true,
+  "baseModuleSha256": "773f129dd9021f20aa541c6972666d44b59d3ab0a95ae7945ddeee2aaa3fc877",
+  "candidateHashes": {
+    "index.html": "17fc00f31abab331bff678b229c69cbc44a71c80c174af92334d2785b4341e9b",
+    "assets/fbs-seven-menu-20261024.js": "7c6b8b4eca7f58a31b6067061b438c025fa2651d9272ef93e3674c429b6fe75d",
+    "assets/fbs-seven-menu-20261024.css": "7bd8ce49d1ff7099f91379680c78cf6b85b634c14419e3fd2960f2ea434626dc"
+  },
+  "published": false,
+  "baseWeb": "sha256:c1d8fc05d23f8ed0914a74bf5cd4429cbc889940cd00b2c1a90511b3cb539cdc",
+  "apiObserved": "sha256:e1b84e9e5cd46892eafb5d0810334092da7e4a97a535ce82974e4bacc918de05",
+  "sourceParityVerified": false,
+  "runtimeBrowser": {
+    "builtWeb": true,
+    "isolatedApi": true,
+    "passed": [
+      "7 tiles",
+      "all 5 existing allocation sections",
+      "existing stocks/cabinet selector",
+      "existing warehouse settings",
+      "history tabs + received order read-only",
+      "problem tabs",
+      "restricted tariffs",
+      "calculator",
+      "3 widths",
+      "Panthera light/dark",
+      "penalties within problems",
+      "two-row desktop geometry"
+    ],
+    "mutations": 0
+  },
+  "tests": {
+    "webPassed": 487,
+    "webSkipped": 2,
+    "apiPassed": 3590,
+    "apiSkipped": 155,
+    "apiExcluded": "kiz-duplicate.integration.spec.ts: dedicated DB unavailable",
+    "newRegressionTests": 2
+  },
+  "soldChanged": false,
+  "businessDataChanged": false
+}

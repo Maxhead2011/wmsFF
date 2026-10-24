@@ -5648,3 +5648,19 @@
 .fbs-stock-management .fbs-allocation { margin:0 16px 16px; }
 .fbs-stock-management:disabled { opacity:.65; }
 .fbs-history-orders > section + section { margin-top:28px; }
+
+/* FIX: seven WB sections: large client tile and two rows of three; own-menu marker only. */
+@media screen {
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] { display:grid!important; grid-template-columns:minmax(220px,1.25fr) repeat(3,minmax(0,1fr))!important; grid-template-rows:repeat(2,minmax(160px,auto)); gap:12px!important; align-items:stretch; }
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] > .fbs-tile { grid-row:auto!important; grid-column:auto; aspect-ratio:auto!important; min-width:0!important; height:auto!important; }
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] > .fbs-tile--has-clients { grid-column:1; grid-row:1 / span 2!important; max-height:none; }
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] .fbs-tile__content strong { font-size:clamp(14px,1vw,17px)!important; line-height:1.3!important; }
+}
+@media screen and (max-width:900px) {
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] { grid-template-columns:repeat(3,minmax(0,1fr))!important; grid-template-rows:auto; grid-auto-rows:minmax(140px,auto); }
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] > .fbs-tile--has-clients { grid-column:1 / -1; grid-row:auto!important; max-height:300px; }
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] > .fbs-tile--has-clients > .fbs-tile__clients { flex-basis:auto; max-height:170px; }
+}
+@media screen and (max-width:600px) {
+ :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] { grid-template-columns:repeat(2,minmax(0,1fr))!important; }
+}
