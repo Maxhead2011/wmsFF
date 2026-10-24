@@ -1,0 +1,30 @@
+{
+  "published": true,
+  "at": 1792832694.6238582,
+  "api": "sha256:e1b84e9e5cd46892eafb5d0810334092da7e4a97a535ce82974e4bacc918de05",
+  "web": "sha256:e3c50c050224df1e513cd36ab95baa98ceb94edf294699906095c45062b37613",
+  "pr": 677,
+  "otherContainersUnchanged": true,
+  "db": {
+    "passed": 9,
+    "isolated": true,
+    "stockAndMarksUnchanged": true
+  },
+  "browser": {
+    "passed": 8,
+    "actualCompiledUI": true,
+    "syntheticData": true,
+    "errors": []
+  },
+  "graph": {
+    "passed": 2,
+    "wholeGraph": true,
+    "errors": []
+  },
+  "apiTests": 3590,
+  "webTests": 476,
+  "apiSkipped": 155,
+  "webSkipped": 2,
+  "dedicatedKizDatabaseSuite": "excluded: not configured",
+  "businessDataChanged": false
+}
