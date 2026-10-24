@@ -1,0 +1,37 @@
+{
+  "publication": {
+    "published": true,
+    "at": 1792835797.5232081,
+    "api": "sha256:6c684dd449ec2fed17aeece99b2d81d2af314cac3ee057103a0094f18556cd1c",
+    "web": "sha256:7d080d9153aa1b43d765946c35764872788be6f7a3e09420741c55361b3231ec",
+    "pr": 683,
+    "otherContainersUnchanged": true,
+    "businessRecordsChanged": false,
+    "rollback": "logoff-api:before-returned-fbo-removal-20261024"
+  },
+  "validation": {
+    "apiPassed": 3604,
+    "apiSkipped": 150,
+    "webPassed": 487,
+    "webSkipped": 2,
+    "kizIntegration": "excluded: dedicated DB unavailable",
+    "candidateRuntime2367": true,
+    "publicRuntime2367Allowed": true,
+    "typeScript": true
+  },
+  "publicPreview": {
+    "id": "3deb7c94-148a-4cab-8201-5381d8997ef6",
+    "number": 2367,
+    "title": "ФБО Ozon · 134571176-1",
+    "status": "SUBMITTED",
+    "clientId": "c401202c-be57-4310-9939-2ea36767da37",
+    "warehouseId": "afb244a1-50ae-4ae6-9111-afe85949fa58",
+    "updatedAt": "2026-10-24T08:23:59.882Z",
+    "quantity": 261,
+    "externalOrders": [],
+    "ozonLinked": true,
+    "blockers": [],
+    "revision": "6160c1a9d9a9139cd87f44ddc60b30abc1005e0572f449d59f832fe5d16716e5",
+    "allowed": true
+  }
+}
