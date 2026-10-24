@@ -286,7 +286,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'skus',
     name: 'Товары и SKU',
     prefixes: ['/skus'],
-    routeCount: 16,
+    routeCount: 17,
     description: 'Карточки товаров, штрихкоды, характеристики и связи маркетплейсов.',
     logic: ['Создаёт и обновляет SKU.', 'Управляет штрихкодами и заменой ошибочного ШК.', 'Связывает товар с артикулом и идентификатором маркетплейса.'],
     dependencies: ['Основная БД'],

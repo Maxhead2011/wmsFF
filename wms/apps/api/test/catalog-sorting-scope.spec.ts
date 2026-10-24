@@ -1,0 +1,10 @@
+import {afterEach,it,expect,vi} from 'vitest';
+import {SkusService} from '../src/modules/skus/skus.service';
+vi.mock('../src/modules/marketplace-connections/marketplace-product-links',()=>({productLinksEnabled:()=>false}));
+afterEach(()=>vi.unstubAllEnvs());
+function setup(){const findMany=vi.fn(async(args:any)=>args.select?[{id:'s',clientId:'c',name:'Product',article:'A',color:null,updatedAt:new Date()}]:[]);const db={sku:{findMany},stockBalance:{groupBy:vi.fn(async()=>[{skuId:'s',_sum:{quantity:7}}])},systemSetting:{findUnique:vi.fn(async()=>null)}};const scope={resolveClientFilter:vi.fn(()=> 'c')};return {db,scope,service:new SkusService(db as never,scope as never,{} as never)};}
+const user={roleCodes:['ADMIN'],permissionCodes:['skus:read'],warehouseIds:['wh'],activeWarehouseId:'wh'};
+// TEST: new view must preserve client and warehouse boundaries and never query on disabled installations.
+it('does not touch storage when feature is disabled',async()=>{vi.stubEnv('WMS_CATALOG_SORT_ENABLED','false');const {service,db}=setup();await expect(service.catalog({},user as never)).rejects.toThrow();expect(db.sku.findMany).not.toHaveBeenCalled();});
+it('scopes all metadata, detail and stock queries to authorized client/warehouse',async()=>{vi.stubEnv('WMS_CATALOG_SORT_ENABLED','true');const {service,db,scope}=setup();await service.catalog({clientId:'c',inStock:'true'},user as never);expect(scope.resolveClientFilter).toHaveBeenCalledWith(user,'c');expect(db.sku.findMany.mock.calls[0][0].where.clientId).toBe('c');expect(db.sku.findMany.mock.calls[1][0].where.AND[0].clientId).toBe('c');expect(db.stockBalance.groupBy).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({warehouseId:'wh',sku:expect.objectContaining({clientId:'c'}),status:{not:'IN_TRANSIT'}})}));});
+it('rejects a warehouse outside the user scope',async()=>{vi.stubEnv('WMS_CATALOG_SORT_ENABLED','true');const {service,db}=setup();await expect(service.catalog({},{...user,activeWarehouseId:'other'} as never)).rejects.toThrow();expect(db.sku.findMany).not.toHaveBeenCalled();});
