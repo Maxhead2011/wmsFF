@@ -15,6 +15,38 @@ describe('administrative removal',()=>{
   db.$transaction=vi.fn(async(fn:any)=>fn(db));service=new ClientRequestRemovalService(db,new ClientScopeService());
  });
  async function input(){const p=await service.preview('r',user);return {number:100,reason:'Ошибочная сборка',confirmed:true,revision:p.revision};}
+ // TEST: completed audited return must not be blocked by historical TSD scans.
+ it.each(['returned','transferred','missing audit','incomplete','active unit','holding stock','new scan','legacy scan','wrong mark','wrong warehouse','wrong target','packing','printing','new pick after preview'])('checks audited disposition: %s',async scenario=>{
+  db.tsdOperation.count.mockResolvedValue(1);
+  db.tsdOperation.findMany=vi.fn(async()=>[{operationType:'assembly_stage',createdAt:new Date('2026-10-23')}]);
+  db.fboAssemblyUnit.findMany=vi.fn(async()=>[{id:'u',state:'RETURNED',activeMarkId:null,markId:'m',skuId:'s',kiz:'k',sourceBoxId:'box',sourceBoxCode:'BOX'}]);
+  db.fboAssembly={findUnique:vi.fn(async()=>({phase:'PICKING'}))};
+  db.stockBalance={count:vi.fn(async()=>0)};
+  db.productMark={findMany:vi.fn(async()=>[{id:'m',skuId:'s',clientId:'c',value:'k',status:'AVAILABLE',boxId:'box'}])};
+  db.box={findUnique:vi.fn(async()=>({id:'box',clientId:'c',warehouseId:'w'}))};
+  db.auditLog.findFirst.mockResolvedValue({createdAt:new Date('2026-10-24'),payload:{result:{mappings:[{oldUnitId:'u',newUnitId:null,markId:'m',destination:'BOX'}]},before:{requests:[{id:'r',fboAssembly:{units:[{id:'u',markId:'m',skuId:'s',kiz:'k'}]}}]}}});
+  if(scenario==='missing audit')db.auditLog.findFirst.mockResolvedValue(null);
+  if(scenario==='incomplete')db.fboAssemblyUnit.findMany.mockResolvedValue([]);
+  if(scenario==='active unit')db.fboAssemblyUnit.count.mockResolvedValue(1);
+  if(scenario==='holding stock')db.stockBalance.count.mockResolvedValue(1);
+  if(scenario==='new scan')db.tsdOperation.findMany.mockResolvedValue([{operationType:'assembly_stage',createdAt:new Date('2026-10-25')}]);
+  if(scenario==='legacy scan')db.tsdOperation.findMany.mockResolvedValue([{operationType:'move_scan',createdAt:new Date('2026-10-23')}]);
+  if(scenario==='wrong mark')db.productMark.findMany.mockResolvedValue([]);
+  if(scenario==='wrong warehouse')db.box.findUnique.mockResolvedValue({clientId:'c',warehouseId:'other'});
+  if(scenario==='packing')db.clientRequestPackage.count.mockResolvedValue(1);
+  if(scenario==='printing')db.fbsPrintJob.count.mockResolvedValue(1);
+  if(scenario==='transferred'||scenario==='wrong target'){
+   const audit=await db.auditLog.findFirst();audit.payload.result.mappings[0]={oldUnitId:'u',newUnitId:'new',markId:'m',destination:101};
+   db.fboAssemblyUnit.findUnique=vi.fn(async()=>({requestId:'target',state:'PICKED',activeMarkId:'m',markId:'m',skuId:'s',kiz:'k',assembly:{request:{number:101,clientId:scenario==='wrong target'?'other':'c',warehouseId:'w',status:'IN_WORK'}}}));
+   db.productMark.findMany.mockResolvedValue([{id:'m',skuId:'s',clientId:'c',value:'k',status:'PACKING',boxId:'box'}]);
+  }
+  if(scenario==='new pick after preview'){
+   const data=await input();db.fboAssemblyUnit.count.mockResolvedValue(1);
+   await expect(service.remove('r',data,user)).rejects.toThrow('фактический');expect(db.clientRequest.update).not.toHaveBeenCalled();return;
+  }
+  expect((await service.preview('r',user)).allowed).toBe(['returned','transferred'].includes(scenario));
+  expect(db.tsdOperation.deleteMany).toBeUndefined();
+ });
  it('preserves composition and history, cancels only WMS work',async()=>{
   const data=await input();expect(await service.remove('r',data,user)).toMatchObject({removed:true});
   expect(db.clientRequest.update).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({status:'CANCELLED'})}));
