@@ -1,5 +1,5 @@
 {
-  "published": false,
+  "published": true,
   "baseWeb": "sha256:e3c50c050224df1e513cd36ab95baa98ceb94edf294699906095c45062b37613",
   "apiObserved": "sha256:e1b84e9e5cd46892eafb5d0810334092da7e4a97a535ce82974e4bacc918de05",
   "sourceParityVerified": false,
@@ -67,5 +67,62 @@
     "mergedIntegrationRetested": true
   },
   "businessDataChanged": false,
-  "soldChanged": false
+  "soldChanged": false,
+  "publication": {
+    "published": true,
+    "at": 1792834498.0329406,
+    "api": "sha256:e1b84e9e5cd46892eafb5d0810334092da7e4a97a535ce82974e4bacc918de05",
+    "web": "sha256:c1d8fc05d23f8ed0914a74bf5cd4429cbc889940cd00b2c1a90511b3cb539cdc",
+    "pr": 679,
+    "rollback": "logoff-web:before-fbs-compact-menu-20261024",
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "publicHashesVerified": true,
+  "publicBrowser": {
+    "builtWeb": true,
+    "isolatedApi": true,
+    "passed": [
+      "8 tiles",
+      "all 5 existing allocation sections",
+      "existing stocks/cabinet selector",
+      "existing warehouse settings",
+      "history tabs + received order read-only",
+      "problem tabs",
+      "restricted tariffs",
+      "calculator",
+      "3 widths",
+      "Panthera light/dark"
+    ],
+    "mutations": 0
+  },
+  "verification": {
+    "base": "sha256:e3c50c050224df1e513cd36ab95baa98ceb94edf294699906095c45062b37613",
+    "api": "sha256:e1b84e9e5cd46892eafb5d0810334092da7e4a97a535ce82974e4bacc918de05",
+    "web": "sha256:c1d8fc05d23f8ed0914a74bf5cd4429cbc889940cd00b2c1a90511b3cb539cdc",
+    "hashes": {
+      "index.html": "dd49c2b3c6153d39d870dbd22a61f5298ca74f33c1df04124d81e1bedc2ab239",
+      "assets/fbs-compact-menu-20261024.css": "ecbe841b172b2edef8a3f1213162de2845887abaa35926a626ebc251bd97ae13",
+      "assets/fbs-compact-menu-20261024.js": "773f129dd9021f20aa541c6972666d44b59d3ab0a95ae7945ddeee2aaa3fc877"
+    },
+    "oldFilesPreserved": 3101,
+    "browserProof": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "passed": [
+        "8 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark"
+      ],
+      "mutations": 0
+    }
+  }
 }
