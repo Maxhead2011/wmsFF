@@ -1,6 +1,6 @@
 # Administrative removal of mistaken FBO/FBS requests
 
-Prepared 24 October 2026. ADMIN/OWNER only; default-off `WMS_REQUEST_REMOVAL_ENABLED` is enabled only in our deployment. CLIENT, workers, demo sessions and users outside writable client/warehouse scope cannot remove requests.
+Published through PR677 on 24 October 2026. ADMIN/OWNER only; default-off `WMS_REQUEST_REMOVAL_ENABLED` is enabled only in our deployment. CLIENT, workers, demo sessions and users outside writable client/warehouse scope cannot remove requests.
 
 The request list and Ozon unified-assembly list offer “Удалить заявку”. Preview shows quantity, blockers and external links. Commit requires a 5–2000 character reason, the exact request number, explicit confirmation and an unchanged preview revision. Removal sets CANCELLED, preserves request/items/Ozon bindings, records an event and a full before snapshot in AuditLog, cancels untouched FBS tasks and releases their box reservations. Physical stock and KIZ records are never changed. Cancelled requests remain in archive.
 
@@ -27,3 +27,5 @@ Shared modules have default-off guards; sold WMS receives neither images nor fla
 26 new policy/service tests; full API 3590 passed /155 skipped (dedicated KIZ database suite excluded because it is not configured); web 476 passed /2 skipped. API and web TypeScript passed. Eight compiled-UI browser scenarios cover confirmation, wrong number, physical blockers, stale preview and account change. Nine isolated PostgreSQL scenarios exercise exact candidate runtime: concurrent duplicate removal, FBS tombstones, changed composition, physical evidence, atomic rollback on failed audit, permissions, feature flag and unchanged stock/KIZs. No production business data is used.
 
 Fresh staging base: API `sha256:d0382f39ef4097feb528f41aaab9619e1aa08761d747a3ca8c87e18e3b00b9ad`, web `sha256:75e52dd5feab388fb5441b104601844928251c8c04dd0b94ccd5224177696396`. `release_baseline.py check-candidate` verified precisely seven API modules; web overlay has four files and preserves all existing assets. Recheck both live images under deployment locks before publication. PR target: `feature/wb-print-check`.
+
+Published API `sha256:e1b84e9e5cd46892eafb5d0810334092da7e4a97a535ce82974e4bacc918de05`, web `sha256:e3c50c050224df1e513cd36ab95baa98ceb94edf294699906095c45062b37613`. Public file hashes and health passed. Live capability: ADMIN/OWNER true, CLIENT/demo false; unauthenticated endpoint401. Both candidate screen modules loaded without browser exceptions. Rollback tags `logoff-api:before-request-removal-20261024-v2`, `logoff-web:before-request-removal-20261024-v2`. No business requests removed during deployment.
