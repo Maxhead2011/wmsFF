@@ -1,11 +1,11 @@
 // TEST: exact public runtime + Lamoda overlay, all API calls intercepted with synthetic fixtures.
 const fs=require('fs'),path=require('path'),http=require('http'),assert=require('node:assert/strict');
 const {chromium}=require('C:/Users/La_pa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
-const root=path.resolve(process.argv[2]),out=root+'/browser';fs.mkdirSync(out,{recursive:true});
+const root=path.resolve(process.argv[2]),out=root+(process.env.WEB_ORIGIN?'/public-browser':'/browser');fs.mkdirSync(out,{recursive:true});
 const user={id:'lamoda-test',email:'test@example.invalid',name:'Тест',roleCodes:['CLIENT'],permissionCodes:['client-requests:read','client-requests:write','catalog:read','stock:read','marketplace-api:read','marketplace-api:write'],clientScopeMode:'LIMITED',clientIds:['demo','second'],writableClientIds:['demo','second'],warehouseIds:[],writableWarehouseIds:[]};
 let accounts=[],writes=[];const errors=[];let passed=0;
 const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://test').pathname;let file=path.resolve(root+'/web','.'+name);if(!file.startsWith(root+path.sep))return res.end();if(!fs.existsSync(file))file=path.resolve(root+'/web-base','.'+name);if(!fs.existsSync(file)||fs.statSync(file).isDirectory())file=root+'/web/index.html';res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});
-(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;const browser=await chromium.launch({channel:'msedge',headless:true});
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=process.env.WEB_ORIGIN||'http://127.0.0.1:'+server.address().port;const browser=await chromium.launch({channel:'msedge',headless:true});
 try{const context=await browser.newContext({viewport:{width:1440,height:1050}});await context.route('**/*',async route=>{const req=route.request(),url=new URL(req.url());if(!url.pathname.startsWith('/api/'))return url.origin===origin?route.continue():route.abort();const p=url.pathname.replace(/^\/api(?:\/v1)?/,'');let data=[];
  if(p==='/auth/me')data=user;
  else if(p==='/clients')data=[{id:'demo',code:'TEST',name:'Учебный клиент'},{id:'second',code:'TEST2',name:'Второй клиент'}];
