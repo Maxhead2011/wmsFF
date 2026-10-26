@@ -119,6 +119,8 @@ import {
 import { FbsCostCalculator } from './FbsCostCalculator';
 import { FbsStockAllocationView } from './FbsStockAllocationView';
 import { FbsStockAllocationSection } from './FbsStockAllocationSection';
+import { MultishopStockGroupsEntry } from './MultishopStockGroupsEntry';
+import './multishop-stock-groups.css';
 import {
   FBS_AUTO_CANCEL_HOURS,
   fbsActiveOrderAgeTone,
@@ -2129,7 +2131,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           <FbsPassesView clientId={selectedClientId} session={session} />
         ) : activeView === 'stocks' ? (
           <FbsStocksView key={compactMenuEnabled ? selectedClientId : undefined} clientId={selectedClientId} session={session} search={search} />
-        ) : activeView === 'allocation' ? compactMenuEnabled ? (
+        ) : activeView === 'allocation' ? <><MultishopStockGroupsEntry key={selectedClientId} session={session} clientId={selectedClientId} />{compactMenuEnabled ? (
           <FbsStocksView key={selectedClientId} clientId={selectedClientId} session={session} search={search} />
         ) : (
           <FbsStockAllocationView
@@ -2137,7 +2139,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             connectionId={data?.connections.find((connection) => connection.marketplace === 'WILDBERRIES')?.id ?? ''}
             session={session}
           />
-        ) : activeView === 'cargo' ? (
+        )}</> : activeView === 'cargo' ? (
           <FbsCargoPackingView
             state={cargoState}
             search={search}

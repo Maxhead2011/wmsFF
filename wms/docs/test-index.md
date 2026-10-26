@@ -1,4 +1,4 @@
-In development / 2026-10-26: multi-shop groups, canonical SKU assignment and publication-phase algorithm; not registered or published. [Scope and release blockers](multishop-stock-groups.md).
+Prepared / 2026-10-26: opt-in multi-shop group editor and canonical SKU assignments; drafts only, external stock writers unchanged. [Scope and validation](multishop-stock-groups.md).
 
 Published PR687 / 2026-10-24: catalog sorting by article/color/physical stock, in-stock and confirmed WB/Ozon-pair filters, scoped pagination. API3617/web497 passed;155/2 skipped; dedicated KIZ DB suites excluded. TypeScript, eight compiled API checks and seven candidate/public-browser scenarios passed with isolated data. Four API/four web files only; stock, operational linking rules, APK, configuration and sold WMS unchanged. Baseline `2026-10-24-catalog-sorting`, sourceParityVerified=false. Rollback tags `logoff-api:before-catalog-sorting-20261024` / `logoff-web:before-catalog-sorting-20261024`. [Details](catalog-sorting.md).
 

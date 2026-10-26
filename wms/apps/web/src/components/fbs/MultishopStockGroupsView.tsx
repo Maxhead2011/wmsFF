@@ -72,8 +72,8 @@ function Editor({ session, clientId }: { session: AuthSession; clientId: string 
   const canEdit = session.user.permissionCodes.includes('system:admin') || session.user.writableClientIds.includes(clientId);
   return <section className="multishop-groups">
     <h3>Между магазинами</h3>
-    <p>Общий остаток товара распределяется только между магазинами его группы. Например: первая пара WB/Ozon и вторая пара WB/Ozon.</p>
-    <p className="multishop-groups__notice">Настройка групп. Сохранение не включает отправку остатков в магазины.</p>
+    <p>Назначьте товары группам магазинов: например, первой или второй паре WB/Ozon. Для каждой группы задайте доли общего остатка.</p>
+    <p className="multishop-groups__notice">Сейчас сохраняется только схема распределения. Эти настройки пока не меняют действующую отправку остатков в магазины.</p>
     {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
     {!state ? <p role="status">{error ? 'Раздел не загружен.' : 'Загрузка групп…'} <button type="button" onClick={() => setReload(v => v + 1)}>Повторить</button></p> : <>
       {state.invalidReason && <p role="alert">Проверьте сохранённые группы: {state.invalidReason}</p>}
