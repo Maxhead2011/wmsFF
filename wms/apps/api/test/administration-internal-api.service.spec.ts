@@ -83,7 +83,8 @@ describe('AdministrationInternalApiService', () => {
     // TEST: attendance-device adds the tablet and branch-scoped admin endpoints.
     // TEST: receipt directions add four branch-scoped routes.
     // TEST: suspicious receipt review adds one independently gated group.
-    expect(INTERNAL_API_DEFINITIONS).toHaveLength(35);
+    // TEST: Lamoda preparation is registered without being advertised as a shipping connector.
+    expect(INTERNAL_API_DEFINITIONS).toHaveLength(36);
   });
 
   it('не рисует ложный зелёный статус при ошибке основной БД', async () => {

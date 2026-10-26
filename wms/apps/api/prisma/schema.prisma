@@ -784,7 +784,92 @@ model RolePermission {
   @@id([roleId, permissionId])
 }
 
+// FIX: isolated Lamoda preparation contour; no stock or legacy connection ownership.
+model LamodaAccount {
+  id String @id @default(uuid())
+  clientId String
+  name String
+  sellerId String
+  oauthClientId String
+  encryptedSecret String
+  isActive Boolean @default(true)
+  fboEnabled Boolean @default(true)
+  fbsEnabled Boolean @default(false)
+  syncLeaseUntil DateTime?
+  syncToken String?
+  checkedAt DateTime?
+  ordersSyncedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  products LamodaProduct[]
+  documents LamodaDocument[]
+  plans LamodaPlan[]
+  exchanges LamodaExchange[]
+  @@unique([clientId, sellerId])
+}
+
+model LamodaProduct {
+  id String @id @default(uuid())
+  accountId String
+  remoteSku String
+  externalSku String?
+  barcode String?
+  size String?
+  name String
+  skuId String?
+  linkState String @default("UNLINKED")
+  isPresent Boolean @default(true)
+  checkedAt DateTime @default(now())
+  account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  sku Sku? @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  @@unique([accountId, remoteSku])
+  @@index([skuId])
+}
+
+model LamodaDocument {
+  id String @id @default(uuid())
+  accountId String
+  kind String
+  remoteId String
+  number String
+  status String
+  // Only operational fields; never store recipient addresses, phones or OAuth responses.
+  payload Json
+  syncedAt DateTime @default(now())
+  account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@unique([accountId, kind, remoteId])
+}
+
+model LamodaPlan {
+  id String @id @default(uuid())
+  accountId String
+  warehouseId String
+  title String
+  remoteShipmentId String?
+  importHash String
+  items Json
+  createdAt DateTime @default(now())
+  account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  @@unique([accountId, warehouseId, importHash])
+}
+
+model LamodaExchange {
+  id String @id @default(uuid())
+  accountId String
+  operation String
+  status String @default("RUNNING")
+  itemCount Int @default(0)
+  errorCode String?
+  createdAt DateTime @default(now())
+  finishedAt DateTime?
+  account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@index([accountId, createdAt])
+}
+
 model Client {
+  lamodaAccounts               LamodaAccount[]
   id                           String                         @id @default(uuid())
   ownCompanyId                 String?
   code                         String                         @unique
@@ -979,6 +1064,7 @@ model ClientDbsIntegration {
 }
 
 model Warehouse {
+  lamodaPlans             LamodaPlan[]
   id                      String                        @id @default(uuid())
   code                    String                        @unique
   name                    String
@@ -1146,6 +1232,7 @@ model Zone {
 }
 
 model Sku {
+  lamodaProducts       LamodaProduct[]
   id                   String                      @id @default(uuid())
   clientId             String
   internalSku          String

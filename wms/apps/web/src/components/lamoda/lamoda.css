@@ -1,0 +1,13 @@
+.lamoda-workspace{display:grid;gap:16px;padding:20px;border:1px solid var(--border-color,#dce4eb);border-radius:18px;background:var(--surface,#fff);color:var(--text-primary,#243444)}
+.lamoda-workspace h2,.lamoda-workspace h3,.lamoda-workspace p{margin:0 0 10px}
+.lamoda-note{padding:14px;background:#f1f5fb;border-radius:10px;color:#243444}
+.lamoda-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+.lamoda-workspace label{display:grid;gap:6px;margin:8px 0}
+.lamoda-workspace input:not([type=checkbox]),.lamoda-workspace select{width:100%;min-height:42px;padding:8px;border:1px solid #ccd6df;border-radius:8px}
+.lamoda-workspace button{padding:10px 14px;margin:4px;border:1px solid #ccd6df;border-radius:9px;cursor:pointer}
+.lamoda-workspace button:disabled{opacity:.5;cursor:not-allowed}
+.lamoda-workspace button:focus-visible{outline:3px solid #3777ef;outline-offset:2px}
+.lamoda-tabs{display:flex;gap:6px;flex-wrap:wrap}.lamoda-tabs [aria-pressed=true]{background:#243444;color:white}
+.lamoda-card{padding:16px;border:1px solid #dce4eb;border-radius:12px}
+.lamoda-scroll{overflow:auto}.lamoda-workspace table{width:100%;border-collapse:collapse}.lamoda-workspace th,.lamoda-workspace td{text-align:left;padding:10px;border-bottom:1px solid #dce4eb;vertical-align:top}
+.lamoda-workspace small{display:block}.lamoda-error{color:#b42318}
