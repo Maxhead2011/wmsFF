@@ -25,6 +25,13 @@ export type InternalApiDefinition = {
 // ADDED: Explicit registry documents every controller group loaded by AppModule.
 // Keeping it declarative avoids a global interceptor and therefore does not touch normal API traffic.
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
+  // FIX: isolated, opt-in Lamoda preparation routes; business writes are not exposed.
+  {
+    id: 'lamoda', name: 'Lamoda — подготовка подключения', prefixes: ['/lamoda'], routeCount: 12,
+    description: 'Подключение, каталог и соответствия, загрузка документов, черновики FBO и предварительная доступность.',
+    logic: ['Доступ по клиенту и правам API; планы ограничены филиалом.', 'Секрет зашифрован, токены только в памяти процесса.', 'Загрузка не создаёт остатки и резервы. Отправка остатков, запуск сборки и отгрузок не реализованы.'],
+    dependencies: ['Основная БД', 'Lamoda Seller REST API v2', 'WMS_LAMODA_ENABLED', 'WMS_LAMODA_SECRET_KEY'],
+  },
   // FIX: scoped suspicious receipt barcode review endpoints.
   {
     id: 'receipt-barcode-review', name: 'Подозрительные ШК приёмки',

@@ -25,6 +25,8 @@ import { ClientRequestsService } from './client-requests.service';
 @Module({
   imports: [AuthModule, CommonModule, ClientNotificationsModule, StockModule, LogisticsModule, MarketplaceConnectionsModule],
   controllers: [ClientRequestRemovalController, OzonAssemblySupplyController, ClientRequestsController, OzonFboImportController],
+  // FIX: Lamoda preview reuses scoped availability; no duplicate stock calculator.
+  exports: [ClientRequestsService],
   providers: [
     ClientRequestRemovalService,
     OzonLinkImportService,

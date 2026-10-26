@@ -1,3 +1,29 @@
+// FIX: isolated Lamoda preparation API; no stock publication or shipment write endpoint.
+export type LamodaResource = 'CATALOG'|'ORDERS'|'FBO_SHIPMENTS'|'FBS_SHIPMENTS'|'RETURNS';
+export type LamodaAccount = {id:string;clientId:string;name:string;sellerId:string;oauthClientId:string;isActive:boolean;fboEnabled:boolean;fbsEnabled:boolean;checkedAt:string|null;ordersSyncedAt:string|null};
+export type LamodaCandidate = {id:string;name:string;internalSku:string;size:string|null;color:string|null};
+export type LamodaOverview = {
+  products:{id:string;name:string;remoteSku:string;externalSku:string|null;barcode:string|null;size:string|null;skuId:string|null;linkState:string;isPresent:boolean;sku:{id:string;name:string;internalSku:string}|null}[];
+  documents:{id:string;kind:LamodaResource;remoteId:string;number:string;status:string;syncedAt:string}[];
+  plans:{id:string;title:string;createdAt:string;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
+  exchanges:{id:string;operation:string;status:string;errorCode:string|null;createdAt:string;itemCount:number}[];
+  externalWritesEnabled:false;assemblyEnabled:false;limits:{products:number;documents:number;plans:number};
+};
+export type LamodaPreview = {unresolvedRows:number[];canAssemble:false;message:string;availability:{lines:{name:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
+const lamodaPath=(id:string)=>'/lamoda/accounts/'+encodeURIComponent(id);
+export const fetchLamodaAccounts=(accessToken:string,clientId:string)=>request<LamodaAccount[]>('/lamoda/accounts?clientId='+encodeURIComponent(clientId),{accessToken});
+export const createLamodaAccount=(accessToken:string,body:{clientId:string;name:string;sellerId:string;oauthClientId:string;secret:string;fboEnabled:boolean;fbsEnabled:boolean})=>request<LamodaAccount>('/lamoda/accounts',{accessToken,method:'POST',body});
+export const updateLamodaAccount=(accessToken:string,id:string,body:{secret?:string;isActive?:boolean})=>request<LamodaAccount>(lamodaPath(id),{accessToken,method:'PATCH',body});
+export const fetchLamodaOverview=(accessToken:string,id:string)=>request<LamodaOverview>(lamodaPath(id),{accessToken});
+export const fetchLamodaWarehouses=(accessToken:string,id:string)=>request<{id:string;name:string}[]>(lamodaPath(id)+'/warehouses',{accessToken});
+export const checkLamodaAccount=(accessToken:string,id:string)=>request<{message:string}>(lamodaPath(id)+'/check',{accessToken,method:'POST'});
+export const syncLamoda=(accessToken:string,id:string,kind:LamodaResource)=>request<{message:string;count:number}>(lamodaPath(id)+'/sync',{accessToken,method:'POST',body:{kind}});
+export const fetchLamodaCandidates=(accessToken:string,id:string,productId:string)=>request<LamodaCandidate[]>(lamodaPath(id)+'/products/'+encodeURIComponent(productId)+'/candidates',{accessToken});
+export const linkLamodaProduct=(accessToken:string,id:string,productId:string,skuId:string)=>request<unknown>(lamodaPath(id)+'/products/'+encodeURIComponent(productId)+'/link',{accessToken,method:'POST',body:{skuId}});
+export const downloadLamodaTemplate=(accessToken:string,id:string)=>requestBlob(lamodaPath(id)+'/template',accessToken);
+export const importLamodaPlan=(accessToken:string,id:string,body:{title:string;warehouseId:string;remoteShipmentId?:string},file:File)=>{const data=new FormData();Object.entries(body).forEach(([key,value])=>{if(value)data.append(key,value);});data.append('file',file);return requestMultipart<{id:string}>(lamodaPath(id)+'/plans/import',data,accessToken);};
+export const previewLamodaPlan=(accessToken:string,id:string,planId:string)=>request<LamodaPreview>(lamodaPath(id)+'/plans/'+encodeURIComponent(planId)+'/availability',{accessToken,method:'POST'});
+
 export type ReceiptBarcodeProblem = {
  id:string;deviceId:string;status:string;createdAt:string;reviewedAt:string|null;
  payload:Record<string,string>;client:{id:string;name:string;code:string}|null;
