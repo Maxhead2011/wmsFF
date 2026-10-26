@@ -39,7 +39,7 @@ def stage():
     expected = json.loads((root / 'release-proof.json').read_text())['candidateHashes']
     names = list(expected)
     assert all(after[n] == h for n, h in expected.items())
-    # TEST: no old asset can disappear/change; only index.html and two new assets differ.
+    # TEST: no old asset can disappear/change; only index.html and the four explicitly listed new assets differ.
     assert set(before) <= set(after)
     assert {n for n in after if before.get(n) != after[n]} == set(names)
     assert all(before[n] == after[n] for n in before if n != 'index.html')
