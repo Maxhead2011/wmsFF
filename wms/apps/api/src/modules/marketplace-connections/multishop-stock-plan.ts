@@ -1,4 +1,4 @@
-export type ShopShare = { connectionId: string; percent: number; priority: number };
+export type ShopShare = { connectionId: string; percent: number; priority: number; marketplaceWarehouseId?: string };
 export type ShopStockMode = 'ALLOCATED' | 'SHARED';
 export type ShopGroup = { id: string; name: string; warehouseId: string; lowStockThreshold: number; members: ShopShare[]; mode?: ShopStockMode; safetyReserve?: number };
 export type ShopAssignment = { skuId: string; groupId: string };
@@ -26,6 +26,7 @@ function validateGroup(group: ShopGroup) {
     identity(member.connectionId, 'Магазин');
     integer(member.percent, 'Доля');
     integer(member.priority, 'Приоритет');
+    if (member.marketplaceWarehouseId !== undefined && (!/^\d+$/.test(member.marketplaceWarehouseId) || !Number.isSafeInteger(Number(member.marketplaceWarehouseId)) || Number(member.marketplaceWarehouseId) <= 0)) throw new Error('Неверный ID склада маркетплейса.');
     if (member.percent > 100 || seen.has(member.connectionId) || priorities.has(member.priority)) throw new Error('Магазины и приоритеты не должны повторяться; доля не больше 100%.');
     seen.add(member.connectionId);
     priorities.add(member.priority);

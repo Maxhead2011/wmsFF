@@ -14,7 +14,7 @@ const keyFor = (clientId: string) => `marketplace.multishop.draft.v1:${clientId}
 export class MultishopStockGroupsService {
   constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService) {}
 
-  capabilities() { return { enabled: process.env.WMS_MULTISHOP_STOCK_ENABLED === 'true', publicationEnabled: false }; }
+  capabilities() { return { enabled: process.env.WMS_MULTISHOP_STOCK_ENABLED === 'true', publicationEnabled: process.env.WMS_MULTISHOP_PUBLICATION_ENABLED === 'true' }; }
 
   authorize(clientId: string, user: AuthUser, write = false) {
     if (!this.capabilities().enabled || user.isDemo) throw new ForbiddenException('Группы магазинов недоступны.');
@@ -67,7 +67,7 @@ export class MultishopStockGroupsService {
       const config: ShopConfiguration = {
         groups: body.config.groups.map(g => ({ id: g.id, name: g.name, warehouseId: g.warehouseId, lowStockThreshold: g.lowStockThreshold,
           mode: g.mode ?? 'ALLOCATED', safetyReserve: g.safetyReserve ?? 0,
-          members: g.members.map(m => ({ connectionId: m.connectionId, percent: m.percent, priority: m.priority })) })),
+          members: g.members.map(m => ({ connectionId: m.connectionId, percent: m.percent, priority: m.priority, ...(m.marketplaceWarehouseId ? { marketplaceWarehouseId: m.marketplaceWarehouseId } : {}) })) })),
         assignments: body.config.assignments.map(a => ({ skuId: a.skuId, groupId: a.groupId })),
       };
       const value = { revision: randomUUID(), config };
@@ -75,7 +75,7 @@ export class MultishopStockGroupsService {
         update: { value: value as unknown as Prisma.InputJsonValue, updatedByUserId: user.id } });
       await tx.auditLog.create({ data: { userId: user.id, action: 'MULTISHOP_GROUPS_SAVED', entity: 'Client', entityId: clientId,
         payload: { before: previous?.value ?? null, after: value as unknown as Prisma.InputJsonValue } } });
-      return { ...value, publicationEnabled: false };
+      return { ...value, publicationEnabled: this.capabilities().publicationEnabled };
     });
   }
 

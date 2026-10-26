@@ -1,5 +1,3 @@
-In progress / 2026-10-26: shared and allocated shop stock modes, one safety reserve, reservation deduplication contract and editor. Not published; automatic sender and production data reader remain unfinished. [Implementation and remaining integration](multishop-shared-stock.md).
-
 Published PR691 / 2026-10-26: isolated Lamoda preparation workspace (FBO → Lamoda), encrypted OAuth, read-only sync, manual product links, Excel drafts and availability preview. Assembly/TSD, stock publication and shipment writes remain unimplemented. API3682/web502 passed;150/2 skipped; dedicated KIZ suites excluded. Real PostgreSQL migration,10 candidate DB scenarios, full isolated API health,10 candidate/public browser scenarios and read-only production checks passed. Nine API/four web delta, five additive tables, server-only encryption key. Baseline `2026-10-26-lamoda-preparation`, sourceParityVerified=false; sold WMS/APK unchanged. [Scope](lamoda-contour.md).
 
 Modules / PR691: Lamoda preparation lives in `apps/api/src/modules/lamoda/`, five additive Prisma tables, `apps/web/src/components/lamoda/`, and the gated FBO workspace entry. Existing request service is exported only for scoped availability preview. Registry: `administration-internal-api.service.ts`. No marketplace stock/assembly workflow is enabled or completed by this stage. [Details](lamoda-contour.md).
@@ -341,3 +339,5 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: [request removal](request-removal.md). Additive ADMIN/OWNER API, shared ownership guards, request/Ozon buttons; default-off own-WMS flag; no schema or physical stock changes.
+
+Prepared / 2026-10-26: shared/allocated WB-Ozon stock publication, persistent per-SKU queue, real stock/order reader, explicit preview/activation/stop, old-writer fencing. Deployment uses default-off WMS_MULTISHOP_PUBLICATION_ENABLED for our installation only. [Implementation, safeguards and tests](multishop-shared-stock.md).

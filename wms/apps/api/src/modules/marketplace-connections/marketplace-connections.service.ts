@@ -1,3 +1,4 @@
+import { assertNotMultishopOwned } from './multishop-stock-ownership';
 import {lockOrderLinks,assertOrdersNotRemoved,withoutRemovedOrders,ADMIN_REMOVED,requestRemovalEnabled} from '../client-requests/request-removal-policy';
 import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, pinnedOriginalSticker } from './fbs-original-sticker';
 import { measureOperation } from '../../common/diagnostics/operation-timing';
@@ -8122,6 +8123,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (stocks.length === 0) return {};
     // FIX: every writer (automatic, allocation, manual and reconciliation) shares this gate.
     await this.stockControl.assertEnabled(clientId);
+    await assertNotMultishopOwned(this.prisma, clientId, apiKey, stocks.map(s => s.chrtId));
     // ADDED: callers may persist the real WB acknowledgement in an audit
     // history; existing callers can continue ignoring the return value.
     return marketplaceJsonUncached(
@@ -8136,7 +8138,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })),
         }),
       },
-      () => this.stockControl.assertEnabled(clientId),
+      async () => { await this.stockControl.assertEnabled(clientId); await assertNotMultishopOwned(this.prisma, clientId, apiKey, stocks.map(s => s.chrtId)); },
     );
   }
 
@@ -26893,6 +26895,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       orders,
     };
+  }
+
+  // FIX: internal read-only input for the common stock pool; no billing or request mutation.
+  async readMultishopWildberriesOrders(connectionId: string, clientId: string) {
+    const connection = await this.prisma.clientMarketplaceConnection.findFirstOrThrow({ where: { id: connectionId, clientId, marketplace: 'WILDBERRIES', isActive: true }, include: { client: true } });
+    return this.fetchWildberriesFbsOrders(connection, 'full');
   }
 
   private async fetchWildberriesFbsOrders(
