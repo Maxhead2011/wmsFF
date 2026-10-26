@@ -96,6 +96,8 @@ const server = http.createServer((req, res) => {
     await page.getByRole('button',{name:'Назначить выбранным (1)',exact:true}).click();await page.getByRole('button',{name:'Сохранить изменения',exact:true}).click();
     await page.getByRole('status').filter({hasText:'Группы и назначения сохранены'}).waitFor();
     assert.equal(multishopWrites,1);assert.equal(multishopSaved.config.assignments[0].skuId,'sku-group');
+    // TEST: import-map overlays must load the new editor while retaining current marketplace branding.
+    assert(await page.evaluate(()=>performance.getEntriesByType('resource').some(r=>r.name.includes('multishop-auto-ui-20261026.js'))));
     await page.locator('.multishop-groups').screenshot({path:path.join(out,'groups-desktop.png')});
     await page.getByText('Прежняя настройка одной пары WB/Ozon',{exact:true}).click();
     await page.getByRole('button',{name:'Все разделы',exact:true}).click();await hub.waitFor();

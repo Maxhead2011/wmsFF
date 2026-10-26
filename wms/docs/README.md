@@ -230,3 +230,5 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 [Administrative FBO/FBS request removal](request-removal.md): scoped preview/confirmation, preserved audit and prevention of automatic recreation.
+
+Prepared / 2026-10-26: shared/allocated WB-Ozon stock publication, persistent per-SKU queue, real stock/order reader, explicit preview/activation/stop, old-writer fencing. Deployment uses default-off WMS_MULTISHOP_PUBLICATION_ENABLED for our installation only. [Implementation, safeguards and tests](multishop-shared-stock.md).

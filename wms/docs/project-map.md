@@ -343,3 +343,5 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: [request removal](request-removal.md). Additive ADMIN/OWNER API, shared ownership guards, request/Ozon buttons; default-off own-WMS flag; no schema or physical stock changes.
+
+Prepared / 2026-10-26: shared/allocated WB-Ozon stock publication, persistent per-SKU queue, real stock/order reader, explicit preview/activation/stop, old-writer fencing. Deployment uses default-off WMS_MULTISHOP_PUBLICATION_ENABLED for our installation only. [Implementation, safeguards and tests](multishop-shared-stock.md).

@@ -318,3 +318,5 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal.spec.ts (15), scripts/releases/request-removal-20261024/browser.cjs (8 compiled UI) and postgres.cjs (9 isolated DB). API3590/web476; TypeScript passed. See [scope and limitations](request-removal.md).
+
+Prepared / 2026-10-26: shared/allocated WB-Ozon stock publication, persistent per-SKU queue, real stock/order reader, explicit preview/activation/stop, old-writer fencing. Deployment uses default-off WMS_MULTISHOP_PUBLICATION_ENABLED for our installation only. [Implementation, safeguards and tests](multishop-shared-stock.md).
