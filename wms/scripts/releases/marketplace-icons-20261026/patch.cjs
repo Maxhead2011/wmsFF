@@ -1,0 +1,11 @@
+// FIX: replace only badge children in the exact published FBS/FBO hosts.
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),crypto=require('crypto');
+const root=path.resolve(process.argv[2]),base=path.resolve(process.argv[3]),out=root+'/web';fs.mkdirSync(out+'/assets',{recursive:true});fs.mkdirSync(out+'/brand',{recursive:true});
+let html=fs.readFileSync(base+'/web/index.html','utf8');const match=html.match(/<script type="importmap">(.*?)<\/script>/s),map=JSON.parse(match[1]);
+const hosts=[['multishop-groups-host-20261026.js','marketplace-icons-fbs-20261026.js',['WB','OZON','Я']],['lamoda-icon-host-20261026.js','marketplace-icons-fbo-20261026.js',['WB','OZON']]];
+const files={'WB':'wb.svg','OZON':'ozon.png','Я':'yandex-market.png'},names=['index.html','assets/marketplace-icons-20261026.css'];
+for(const [old,name,labels] of hosts){let file=base+'/web/assets/'+old;if(!fs.existsSync(file))file=base+'/web-base/assets/'+old;let s=fs.readFileSync(file,'utf8');for(const label of labels){const a='className:"fbs-marketplace-card__brand",children:'+JSON.stringify(label),b='className:"fbs-marketplace-card__brand","aria-hidden":"true",children:e.jsx("img",{src:"/brand/'+files[label]+'",alt:""})';assert.equal(s.split(a).length,2);s=s.replace(a,b);}fs.writeFileSync(out+'/assets/'+name,s);let hits=0;for(const k of Object.keys(map.imports))if(map.imports[k]==='/assets/'+old){map.imports[k]='/assets/'+name;hits++;}assert(hits>0);map.imports['/assets/'+old]='/assets/'+name;names.push('assets/'+name);}
+html=html.replace(match[1],JSON.stringify(map)).replace('</head>','<link rel="stylesheet" href="/assets/marketplace-icons-20261026.css">\n</head>');fs.writeFileSync(out+'/index.html',html);
+fs.writeFileSync(out+'/assets/marketplace-icons-20261026.css','.fbs-marketplace-card__brand img { display:block; width:100%; height:100%; object-fit:contain; border-radius:inherit; }\n');
+for(const f of Object.values(files)){fs.copyFileSync(path.resolve(__dirname,'../../../apps/web/public/brand/'+f),out+'/brand/'+f);names.push('brand/'+f);}
+fs.writeFileSync(root+'/release-proof.json',JSON.stringify({candidateHashes:Object.fromEntries(names.map(n=>[n,crypto.createHash('sha256').update(fs.readFileSync(out+'/'+n)).digest('hex')]))}));
