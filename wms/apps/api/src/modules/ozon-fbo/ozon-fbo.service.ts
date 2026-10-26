@@ -1,3 +1,4 @@
+import {ozonEditDeadline} from '../client-requests/ozon-supply-policy';
 import { productLinksEnabled, readProductLinks } from '../marketplace-connections/marketplace-product-links';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -440,6 +441,8 @@ export class OzonFboService {
       data: {
         ozonOrderNumber: order?.order_number ? String(order.order_number) : plan.ozonOrderNumber,
         ozonOrderState: order?.state ? String(order.state) : plan.ozonOrderState,
+        // FIX: preserve import metadata while retaining the explicit API deadline.
+        importSummary: this.json({...((plan.importSummary as any)??{}),editDeadlineAt:ozonEditDeadline(order)}),
         status: 'SUPPLY_CREATED',
         lastSyncAt: new Date(),
       },
@@ -695,7 +698,7 @@ export class OzonFboService {
   private async findPlan(id: string) {
     const plan = await this.prisma.ozonFboPlan.findUnique({ where: { id }, include: this.fullInclude() });
     if (!plan) throw new NotFoundException('План FBO Ozon не найден.');
-    return plan;
+    return {...plan,editDeadlineAt:((plan.importSummary as any)?.editDeadlineAt as string|null)??null};
   }
 
   private fullInclude() {
@@ -731,6 +734,7 @@ export class OzonFboService {
       draftId: plan.draftId,
       ozonOrderId: plan.ozonOrderId,
       ozonOrderNumber: plan.ozonOrderNumber,
+      editDeadlineAt:plan.importSummary?.editDeadlineAt??null,
       slotFrom: plan.slotFrom,
       slotTo: plan.slotTo,
       dropOffWarehouseName: plan.dropOffWarehouseName,

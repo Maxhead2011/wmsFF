@@ -3,7 +3,7 @@ import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
 import {assertWarehouseAccess} from './client-request-warehouse-scope';
-import {assertNoOzonAdjustment,bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
+import {ozonEditDeadline,assertNoOzonAdjustment,bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
 import {cargoMappingWorkbook} from './ozon-cargo-export';
 
@@ -72,7 +72,7 @@ export class OzonAssemblySupplyService {
    const cluster=clusters.clusters?.find((v:any)=>String(v.macrolocal_cluster_id??v.id)===String(s.macrolocal_cluster_id));
    supplies.push({id:String(s.supply_id),name:cluster?.name??s.storage_warehouse?.name??String(s.macrolocal_cluster_id),items:items.map(i=>({barcode:String(i.barcode??''),offerId:String(i.offer_id??''),quantity:Number(i.quantity),quant:Number(i.quant)||1,...(i.sku?{sku:String(i.sku)}:{})}))});
   }
-  return {connectionId:c.id,orderId,orderNumber:String(o.order_number??orderId),place:o.drop_off_warehouse?.name??'',date:o.timeslot?.timeslot?.from??'',state:o.state,supplies,mapping:{},operations:{},checkedAt:new Date().toISOString()};
+  return {connectionId:c.id,orderId,orderNumber:String(o.order_number??orderId),place:o.drop_off_warehouse?.name??'',date:o.timeslot?.timeslot?.from??'',state:o.state,editDeadlineAt:ozonEditDeadline(o),supplies,mapping:{},operations:{},checkedAt:new Date().toISOString()};
  }
  private async locked(id:string,user:AuthUser,fn:(s:any,tx:any)=>Promise<any>){
   return this.db.$transaction(async tx=>{await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;const s=await this.load(id,user,'write',tx);assertNoOzonAdjustment(s.integration);return fn(s,tx);});

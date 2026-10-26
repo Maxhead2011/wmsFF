@@ -8780,7 +8780,8 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 }
 
 export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
-export type OzonCustomerRequest={id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export type OzonEditDeadline={orderId:string;orderNumber:string;editDeadlineAt?:string|null;checkedAt?:string};
+export type OzonCustomerRequest={editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
 export type OzonCustomerWarehouse = {id:string;name:string};
 // FIX: use the same explicit branch for the list and both multipart import steps.
 export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}
@@ -12013,6 +12014,7 @@ export type OzonFboConnection = {
 };
 
 export type OzonFboPlanSummary = {
+  editDeadlineAt?: string|null;
   id: string;
   title: string;
   status: string;
@@ -12539,7 +12541,7 @@ export type OzonSupplyView = {
  requestId:string;connections:Array<{id:string;accountName:string|null;sellerId:string|null}>;
  directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>;
  differences:string[];packingError:string;
- link:null|{orders?:Array<{orderId:string;orderNumber:string;place:string;date:string;state:string;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>}>;connectionId:string;orderId:string;orderNumber:string;place:string;date:string;state:string;frozenHash?:string;mapping:Record<string,string>;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>;operations:Record<string,{state:string;error?:string;labelOperationId?:string;labelUrl?:string}>};
+ link:null|{editDeadlineAt?:string|null;checkedAt?:string;orders?:Array<{editDeadlineAt?:string|null;checkedAt?:string;orderId:string;orderNumber:string;place:string;date:string;state:string;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>}>;connectionId:string;orderId:string;orderNumber:string;place:string;date:string;state:string;frozenHash?:string;mapping:Record<string,string>;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>;operations:Record<string,{state:string;error?:string;labelOperationId?:string;labelUrl?:string}>};
 };
 export function ozonAssemblySupply(accessToken:string,id:string,action?:string,body:unknown={}){
  return request<OzonSupplyView>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});

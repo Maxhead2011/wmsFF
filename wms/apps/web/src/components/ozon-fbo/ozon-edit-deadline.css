@@ -1,0 +1,8 @@
+/* FIX: scoped semantic colours remain legible in light and dark themes. */
+.ozfbo-edit-deadlines { display:grid; gap:6px; margin:8px 0; }
+.ozfbo-edit-deadline { display:grid; gap:3px; padding:8px 10px; border:1px solid currentColor; border-radius:10px; font-size:13px; text-align:left; font-variant-numeric:tabular-nums; }
+.ozfbo-edit-deadline.is-normal { color:#14532d; background:#dcfce7; }
+.ozfbo-edit-deadline.is-warning { color:#713f12; background:#fef3c7; }
+.ozfbo-edit-deadline.is-urgent,.ozfbo-edit-deadline.is-expired { color:#991b1b; background:#fee2e2; }
+.ozfbo-edit-deadline.is-unknown { color:#334155; background:#e2e8f0; }
+.ozfbo-edit-deadline small { color:inherit; font-size:12px; }
