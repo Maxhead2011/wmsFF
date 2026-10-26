@@ -1,3 +1,5 @@
+Published PR697 on 2026-10-26. Live health, exact hashes and15 public-browser scenarios passed. No client activated; Kubrin legacy settings retained.
+
 # Общий остаток и автоматическая отправка WB/Ozon
 
 Реализовано в feature/multishop-shared-stock, PR в feature/wb-print-check.
