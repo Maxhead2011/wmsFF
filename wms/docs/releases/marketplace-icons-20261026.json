@@ -1,0 +1,48 @@
+{
+  "publication": {
+    "published": true,
+    "at": 1793015209.4783788,
+    "api": "sha256:45cf6266d5595c95eea3bd1243cfd726fd47dba296502a23edae3e8b6c7db7a5",
+    "web": "sha256:35a52c864ef7548e408af8c56c66df958de8b628b63a5c8578146348eaa8da7a",
+    "pr": 695,
+    "rollback": "logoff-web:before-marketplace-icons-20261026",
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "verification": {
+    "base": "sha256:46a9d1e31b56cbb6d2fe9b4a84d64cd01896dda5135a0cd0f88a559f04744e8e",
+    "api": "sha256:45cf6266d5595c95eea3bd1243cfd726fd47dba296502a23edae3e8b6c7db7a5",
+    "web": "sha256:35a52c864ef7548e408af8c56c66df958de8b628b63a5c8578146348eaa8da7a",
+    "hashes": {
+      "index.html": "2bcc9a51a01c3e3d429b34695bb2a3a117f25f331e3e04f880e1dd94ffb9e989",
+      "assets/marketplace-icons-20261026.css": "9a4122f3cf522fcf22231619f750730bb3697aaaf30f77740bac4668fd7d637d",
+      "assets/marketplace-icons-fbs-20261026.js": "3d9a424e81eb195642aab7ce436334a85416f37a8392c124651f870f515107b5",
+      "assets/marketplace-icons-fbo-20261026.js": "66bfb6f299af6d6d7bc3ce4ed9ca47a7ba574eaf0c6e0d67a9dbcf815e8fa5fb",
+      "brand/wb.svg": "c085aff6bd5ac4eb1a2ee887f81498e16e4317a10dc8491c0fc8e97494744e95",
+      "brand/ozon.png": "c7bbc6c309982426e7f4d7fbec0890026f2edbfc9ddf348cfd76d6c14ef8603f",
+      "brand/yandex-market.png": "df20f8a5648f638627814dc6e1dc3e409ed563014b0d078bc8267f0f26d5c17e"
+    },
+    "oldFilesPreserved": 3120,
+    "browserProof": {
+      "passed": 14,
+      "isolatedApi": true,
+      "writes": [
+        "account",
+        "check",
+        "CATALOG"
+      ],
+      "errors": []
+    }
+  },
+  "publicBrowser": {
+    "passed": 14,
+    "isolatedApi": true,
+    "writes": [
+      "account",
+      "check",
+      "CATALOG"
+    ],
+    "errors": []
+  }
+}
