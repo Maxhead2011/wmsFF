@@ -1,0 +1,1 @@
+Published PR691: Lamoda preparation only. Nine API/four web file delta, five additive tables and regenerated Prisma client against deployed schema. Existing stock writers and TSD unchanged. A server-only encryption key is passed to API via compose. Source parity remains false. Exact runtime verified against candidate.

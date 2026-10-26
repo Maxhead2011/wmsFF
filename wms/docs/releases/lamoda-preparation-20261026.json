@@ -1,0 +1,97 @@
+{
+  "publication": {
+    "base": {
+      "api": "sha256:3a6b672cd7644e6ad0ea000bce8b43ecfe16ee52587a01485d8a77943aea89fa",
+      "web": "sha256:15b2a4a23627b701cafcb2dfeda6ab5ed7c093830bc9822eb30b11b5ddf91887"
+    },
+    "images": {
+      "api": "sha256:45cf6266d5595c95eea3bd1243cfd726fd47dba296502a23edae3e8b6c7db7a5",
+      "web": "sha256:8d3eae55423831c40e2020ccfadcd68345896d85d8f73bc4620fa11a424b2b28"
+    },
+    "hashes": {
+      "api": {
+        "modules/lamoda/lamoda-client.js": "ee8cc33b2f06481af6a8283b42bafafb3146f311080aa03a96b851cfa3a6ef2e",
+        "modules/lamoda/lamoda-policy.js": "30c2e42e6e0be9536f6f482c969ffd93bc429e244aedd00e0c86cf5b559631ea",
+        "modules/lamoda/lamoda.dto.js": "ebf1f06341b8231fcfa416c1738cd04681873140738d4b052edb412496418a6f",
+        "modules/lamoda/lamoda.service.js": "ff5acfa8a56e8cc81395df99e8f333d4326fec302e219b63d12844c0188001b3",
+        "modules/lamoda/lamoda.controller.js": "66b0f0c0943d50fb7be4927df80b0035824d6c4cfc07c74644c0f8f59b61ed00",
+        "modules/lamoda/lamoda.module.js": "fe5ba34786dde47d1c5b60d127880c95738c7585ffeab042fec7ef0dd1f9e723",
+        "app.module.js": "41bc637be5eb03da9de99d99ce66a8fe177970f24eb32001578128c705116b78",
+        "modules/client-requests/client-requests.module.js": "05a0ee00f08416e24a74c944175ca5e1a50191ac46d3b3b623965bb46ed9eddb",
+        "modules/administration/administration-internal-api.service.js": "8f0031207d14af6a1ecbc17338a65954a39e70f2649bd4c5b96f989a0e6d95b5"
+      },
+      "web": {
+        "index.html": "eb665ab29ad079db7b334880114a5b1982ad5c92c7546458ae6cd9a8190d1d23",
+        "assets/lamoda-ui-20261026.js": "b96d6326c060e0dc3a4da04d2e977727098295f2992dab4e71cca1891cb42a51",
+        "assets/lamoda-fbo-host-20261026.js": "66d883b45924e674a82e6826912a48da86647349b78f57eaf5752ae173f5c369",
+        "assets/lamoda-ui-20261026.css": "a3648033e86fc72d1fed768bd2abc1511a07c53e567c4c1123a70f82a90e00cb"
+      }
+    },
+    "readOnlyCheck": {
+      "noBusinessWrites": true,
+      "enabled": true,
+      "tables": 5
+    },
+    "published": true,
+    "pr": 691,
+    "at": 1793006575.525414,
+    "dbProof": {
+      "passed": 10,
+      "isolated": true,
+      "noStockOrAssemblyChanges": true,
+      "fullApiHealth": true
+    },
+    "browser": {
+      "passed": 10,
+      "isolatedApi": true,
+      "writes": [
+        "account",
+        "check",
+        "CATALOG"
+      ],
+      "errors": []
+    },
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "validation": {
+    "apiPassed": 3682,
+    "apiSkipped": 150,
+    "webPassed": 502,
+    "webSkipped": 2,
+    "typeScript": true,
+    "dedicatedKizIntegration": "excluded: requires dedicated database",
+    "candidateDatabase": {
+      "passed": 10,
+      "isolated": true,
+      "noStockOrAssemblyChanges": true,
+      "fullApiHealth": true
+    },
+    "candidateBrowser": {
+      "passed": 10,
+      "isolatedApi": true,
+      "writes": [
+        "account",
+        "check",
+        "CATALOG"
+      ],
+      "errors": []
+    },
+    "publicBrowser": {
+      "passed": 10,
+      "isolatedApi": true,
+      "writes": [
+        "account",
+        "check",
+        "CATALOG"
+      ],
+      "errors": []
+    },
+    "readOnlyLive": {
+      "noBusinessWrites": true,
+      "enabled": true,
+      "tables": 5
+    }
+  }
+}
