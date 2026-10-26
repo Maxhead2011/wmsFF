@@ -1,6 +1,8 @@
 // FIX: isolated, opt-in manual FBS assembly in the service menu.
 import { FbsManualAssemblyService } from './fbs-manual-assembly.service';
 import { FbsManualAssemblyController } from './fbs-manual-assembly.controller';
+import { MultishopStockGroupsController } from './multishop-stock-groups.controller';
+import { MultishopStockGroupsService } from './multishop-stock-groups.service';
 import { Module } from '@nestjs/common';
 // FIX: restore client Telegram routing for committed FBS status transitions.
 import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
@@ -22,8 +24,10 @@ import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
   imports: [AuthModule, LogisticsModule, ClientNotificationsModule],
-  controllers: [FbsManualAssemblyController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
+  controllers: [MultishopStockGroupsController, FbsManualAssemblyController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [
+    // FIX: default-off draft configuration; no publication worker is registered.
+    MultishopStockGroupsService,
     FbsManualAssemblyService,
     MarketplaceStockControlService,
     // FIX: keep current stock-control registration when adding independent repeats.
