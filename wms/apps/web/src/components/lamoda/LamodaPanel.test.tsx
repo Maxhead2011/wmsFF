@@ -6,6 +6,13 @@ import { FboWorkspace } from '../client-requests/FboWorkspace';
 import { createLamodaAccount, fetchLamodaOverview, syncLamoda, type AuthSession } from '../../lib/api';
 const session: AuthSession = { accessToken: 'test-token', tokenType: 'Bearer', user: { id: 'user', name: 'Test', email: 'test@example.invalid', roleCodes: ['OWNER'], permissionCodes: ['system:admin'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [] } };
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+// TEST: all marketplace tiles have the same brand/content structure, including Lamoda.
+it('renders a Lamoda brand badge alongside its tile content', () => {
+  vi.stubEnv('VITE_LAMODA_ENABLED', 'true');
+  const html = renderToStaticMarkup(<FboWorkspace session={session} />);
+  expect(html).toMatch(/class="fbs-marketplace-card fbs-marketplace-card--lamoda"[^>]*><span class="fbs-marketplace-card__brand" aria-hidden="true">lamoda<\/span><span class="fbs-marketplace-card__content">/);
+  expect(html.match(/class="fbs-marketplace-card__brand"/g)).toHaveLength(3);
+});
 // TEST: the staged contour never advertises working stock publication or TSD assembly.
 it('shows preparation limits and independent account credentials', () => {
   const html = renderToStaticMarkup(<LamodaPanel session={session} />);

@@ -51,3 +51,6 @@
   opacity: .55;
   cursor: not-allowed;
 }
+
+/* FIX: Lamoda uses the shared marketplace badge geometry with its own monochrome color. */
+.fbs-marketplace-card.fbs-marketplace-card--lamoda { --marketplace-accent:#111; --marketplace-soft:#f3f4f6; }
