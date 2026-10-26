@@ -1,3 +1,5 @@
+In progress / 2026-10-26: feature/lamoda-operations adds gated validated commands, bounded PDF labels and a durable command-journal component. Not published or connected to warehouse actions; external writes remain disabled. See [Lamoda scope](lamoda-contour.md).
+
 Published PR695 / 2026-10-26: official local WB/Ozon/Yandex Market icons in FBS and WB/Ozon in FBO. Web504 passed/2 skipped, TypeScript,14 candidate/public browser scenarios and8 baseline guard tests passed. Seven-file web overlay; API/schema/APK/business records/sold WMS unchanged. Baseline `2026-10-26-marketplace-icons`, sourceParityVerified=false. Rollback `logoff-web:before-marketplace-icons-20261026`.
 
 Published PR693 / 2026-10-26: Lamoda tile uses the supplied la icon and official lowercase SVG wordmark, local assets and shared 84px badge. Web503 passed/2 skipped, TypeScript and11 candidate/public browser scenarios passed. Exact five-file web overlay; API/schema/APK/business records/sold WMS unchanged. Baseline `2026-10-26-lamoda-icon`, sourceParityVerified=false. Rollback `logoff-web:before-lamoda-icon-20261026`. Sources: `apps/web/public/brand/README.md`.

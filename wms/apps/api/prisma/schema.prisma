@@ -786,6 +786,7 @@ model RolePermission {
 
 // FIX: isolated Lamoda preparation contour; no stock or legacy connection ownership.
 model LamodaAccount {
+  operations LamodaOperation[]
   id String @id @default(uuid())
   clientId String
   name String
@@ -807,6 +808,21 @@ model LamodaAccount {
   plans LamodaPlan[]
   exchanges LamodaExchange[]
   @@unique([clientId, sellerId])
+}
+
+// FIX: an external mutation claim must survive process restarts and ambiguous responses.
+model LamodaOperation {
+  id String @id
+  accountId String
+  operationKey String
+  payloadHash String
+  status String @default("PENDING")
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@unique([accountId, operationKey])
+  @@index([accountId, status])
 }
 
 model LamodaProduct {
