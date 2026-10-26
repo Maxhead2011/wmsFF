@@ -66,6 +66,7 @@ export class MultishopStockGroupsService {
       // Copy only supported fields; no caller-supplied activation or published state can persist here.
       const config: ShopConfiguration = {
         groups: body.config.groups.map(g => ({ id: g.id, name: g.name, warehouseId: g.warehouseId, lowStockThreshold: g.lowStockThreshold,
+          mode: g.mode ?? 'ALLOCATED', safetyReserve: g.safetyReserve ?? 0,
           members: g.members.map(m => ({ connectionId: m.connectionId, percent: m.percent, priority: m.priority })) })),
         assignments: body.config.assignments.map(a => ({ skuId: a.skuId, groupId: a.groupId })),
       };

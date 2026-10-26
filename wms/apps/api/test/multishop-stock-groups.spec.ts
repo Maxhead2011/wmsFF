@@ -60,6 +60,20 @@ describe('multi-shop settings', () => {
     const result = await service.save('client', { revision: null, config: { ...config, enabled: true } as any }, admin);
     expect(result.config).not.toHaveProperty('enabled');
   });
+  // TEST: server whitelist retains mode/reserve and defaults old clients safely.
+  it('persists shared mode and a single safety reserve', async () => {
+    const { service } = fixture();
+    const shared = { ...config, groups: config.groups.map(g => ({ ...g, mode: 'SHARED' as const, safetyReserve: 3 })) };
+    const result = await service.save('client', { revision: null, config: shared }, admin);
+    expect(result.config.groups[0]).toMatchObject({ mode: 'SHARED', safetyReserve: 3 });
+    expect((await service.read('client', admin)).config.groups[0]).toMatchObject({ mode: 'SHARED', safetyReserve: 3 });
+    expect(result.publicationEnabled).toBe(false);
+  });
+  it('defaults an older client to allocated mode without reserve', async () => {
+    const { service } = fixture();
+    const result = await service.save('client', { revision: null, config }, admin);
+    expect(result.config.groups[0]).toMatchObject({ mode: 'ALLOCATED', safetyReserve: 0 });
+  });
   it('constrains product search to client and page size', async () => {
     const { service, prisma } = fixture();
     await service.products('client', 'шк', 2, admin);

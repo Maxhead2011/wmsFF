@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { AuthSession } from '../../lib/api';
 
 type Member = { connectionId: string; percent: number; priority: number };
-type Group = { id: string; name: string; warehouseId: string; lowStockThreshold: number; members: Member[] };
+type Group = { id: string; name: string; warehouseId: string; lowStockThreshold: number; members: Member[]; mode?: 'ALLOCATED' | 'SHARED'; safetyReserve?: number };
 type Config = { groups: Group[]; assignments: { skuId: string; groupId: string }[] };
 type Connection = { id: string; accountName: string | null; marketplace: string; fbsExecutionWarehouseId: string | null };
 type State = { config: Config; revision: string | null; connections: Connection[]; invalidReason: string | null };
@@ -72,7 +72,7 @@ function Editor({ session, clientId }: { session: AuthSession; clientId: string 
   const canEdit = session.user.permissionCodes.includes('system:admin') || session.user.writableClientIds.includes(clientId);
   return <section className="multishop-groups">
     <h3>Между магазинами</h3>
-    <p>Назначьте товары группам магазинов: например, первой или второй паре WB/Ozon. Для каждой группы задайте доли общего остатка.</p>
+    <p>Назначьте товары группам магазинов: например, первой или второй паре WB/Ozon. Остаток можно разделить по долям или показывать общий остаток во всех магазинах группы.</p>
     <p className="multishop-groups__notice">Сейчас сохраняется только схема распределения. Эти настройки пока не меняют действующую отправку остатков в магазины.</p>
     {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
     {!state ? <p role="status">{error ? 'Раздел не загружен.' : 'Загрузка групп…'} <button type="button" onClick={() => setReload(v => v + 1)}>Повторить</button></p> : <>
@@ -82,9 +82,13 @@ function Editor({ session, clientId }: { session: AuthSession; clientId: string 
           <button type="button" disabled={!dirty} onClick={() => void save()}>{busy ? 'Сохранение…' : 'Сохранить изменения'}</button><span>{dirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены'}</span></div>
         {state.config.groups.map(group => <article className="multishop-groups__card" key={group.id}>
           <div className="multishop-groups__actions"><label>Название группы<input value={group.name} maxLength={200} onChange={e => groupEdit(group.id, { name: e.target.value })} /></label>
+            {/* FIX: absent settings retain the legacy allocated mode and zero reserve. */}
+            <label>Режим остатка<select aria-label="Режим остатка" value={group.mode ?? 'ALLOCATED'} onChange={e => groupEdit(group.id, { mode: e.target.value as 'ALLOCATED' | 'SHARED' })}><option value="ALLOCATED">По долям</option><option value="SHARED">Общий остаток</option></select></label>
+            <label>Страховой запас, шт.<input type="number" min={0} step={1} value={group.safetyReserve ?? 0} onChange={e => groupEdit(group.id, { safetyReserve: Number(e.target.value) })} /></label>
             <label>Малый остаток, шт.<input type="number" min={0} step={1} value={group.lowStockThreshold} onChange={e => groupEdit(group.id, { lowStockThreshold: Number(e.target.value) })} /></label>
             <button type="button" disabled={state.config.assignments.some(a => a.groupId === group.id)} onClick={() => edit({ ...state.config, groups: state.config.groups.filter(g => g.id !== group.id) })}>Удалить пустую группу</button></div>
-          <p>При малом остатке все единицы получает магазин с наименьшим номером приоритета и ненулевой долей.</p>
+          <p>Страховой запас вычитается один раз из общего доступного количества. При малом остатке все единицы получает магазин с наименьшим номером приоритета{group.mode === 'SHARED' ? '.' : ' и ненулевой долей.'}</p>
+          {group.mode === 'SHARED' && <p>Каждый выбранный магазин получает одинаковое доступное количество. Заказ в любом магазине уменьшает общий доступный остаток. Обновление маркетплейсов происходит не одновременно.</p>}
           <div className="multishop-groups__shops">{state.connections.map(connection => {
             const member = group.members.find(m => m.connectionId === connection.id);
             return <div key={connection.id} className="multishop-groups__shop"><label><input type="checkbox" checked={Boolean(member)} disabled={!connection.fbsExecutionWarehouseId || (!member && Boolean(group.warehouseId) && connection.fbsExecutionWarehouseId !== group.warehouseId)} onChange={e => {
@@ -92,10 +96,10 @@ function Editor({ session, clientId }: { session: AuthSession; clientId: string 
               groupEdit(group.id, { members, warehouseId: members.length ? group.warehouseId || connection.fbsExecutionWarehouseId! : '' });
             }} />{connection.marketplace === 'WILDBERRIES' ? 'WB' : 'Ozon'} · {connection.accountName || connection.id}</label>
               {!connection.fbsExecutionWarehouseId && <span>Не задан склад исполнения</span>}
-              {member && <><label>Доля, %<input type="number" min={0} max={100} step={1} value={member.percent} onChange={e => groupEdit(group.id, { members: group.members.map(m => m === member ? { ...m, percent: Number(e.target.value) } : m) })} /></label>
+              {member && <>{group.mode !== 'SHARED' && <label>Доля, %<input type="number" min={0} max={100} step={1} value={member.percent} onChange={e => groupEdit(group.id, { members: group.members.map(m => m === member ? { ...m, percent: Number(e.target.value) } : m) })} /></label>}
                 <label>Приоритет<input type="number" min={0} step={1} value={member.priority} onChange={e => groupEdit(group.id, { members: group.members.map(m => m === member ? { ...m, priority: Number(e.target.value) } : m) })} /></label></>}
             </div>;
-          })}</div><p>Сумма долей: <strong>{group.members.reduce((sum, m) => sum + m.percent, 0)}%</strong> · Назначено товаров: {state.config.assignments.filter(a => a.groupId === group.id).length}</p>
+          })}</div><p>{group.mode !== 'SHARED' && <>Сумма долей: <strong>{group.members.reduce((sum, m) => sum + m.percent, 0)}%</strong> · </>}Назначено товаров: {state.config.assignments.filter(a => a.groupId === group.id).length}</p>
         </article>)}
       </fieldset>
       <h4>Товары и группы магазинов</h4>

@@ -59,4 +59,23 @@ describe('multi-shop publication phases', () => {
     await expect(advanceShopPublication(job, ports)).rejects.toThrow('lost lease');
     expect(ports.write).not.toHaveBeenCalled();
   });
+  // TEST: a persisted job cannot grant itself permission to mirror the physical budget.
+  it('rejects a shared job when the authoritative configuration is allocated', async () => {
+    const ports = fixture();
+    const shared: ShopPublicationJob = { ...job, mode: 'SHARED', desired: { old: 10, new: 10 } };
+    expect((await advanceShopPublication(shared, ports)).status).toBe('STALE');
+    expect(ports.observe).not.toHaveBeenCalled();
+    expect(ports.write).not.toHaveBeenCalled();
+  });
+  it('stops between shared writes if the mode changes', async () => {
+    const ports = fixture();
+    vi.mocked(ports.current)
+      .mockResolvedValueOnce({ revision: 'v1', budget: 10, mode: 'SHARED' })
+      .mockResolvedValueOnce({ revision: 'v1', budget: 10, mode: 'SHARED' })
+      .mockResolvedValue({ revision: 'v1', budget: 10, mode: 'ALLOCATED' });
+    vi.mocked(ports.observe).mockResolvedValue({ old: 0, new: 0 });
+    const shared: ShopPublicationJob = { ...job, mode: 'SHARED', desired: { old: 10, new: 10 } };
+    expect((await advanceShopPublication(shared, ports)).status).toBe('STALE');
+    expect(ports.write).toHaveBeenCalledTimes(1);
+  });
 });

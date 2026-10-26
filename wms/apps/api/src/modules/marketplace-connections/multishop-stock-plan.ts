@@ -1,5 +1,6 @@
 export type ShopShare = { connectionId: string; percent: number; priority: number };
-export type ShopGroup = { id: string; name: string; warehouseId: string; lowStockThreshold: number; members: ShopShare[] };
+export type ShopStockMode = 'ALLOCATED' | 'SHARED';
+export type ShopGroup = { id: string; name: string; warehouseId: string; lowStockThreshold: number; members: ShopShare[]; mode?: ShopStockMode; safetyReserve?: number };
 export type ShopAssignment = { skuId: string; groupId: string };
 
 function integer(value: number, label: string) {
@@ -16,6 +17,8 @@ function validateGroup(group: ShopGroup) {
   identity(group.warehouseId, 'Склад');
   identity(group.name, 'Название');
   integer(group.lowStockThreshold, 'Порог малого остатка');
+  if (group.mode !== undefined && group.mode !== 'ALLOCATED' && group.mode !== 'SHARED') throw new Error('Неизвестный режим распределения.');
+  integer(group.safetyReserve === undefined ? 0 : group.safetyReserve, 'Страховой запас');
   if (!Array.isArray(group.members) || !group.members.length || group.members.length > 100) throw new Error('Выберите от 1 до 100 магазинов.');
   const seen = new Set<string>();
   const priorities = new Set<number>();
@@ -27,7 +30,7 @@ function validateGroup(group: ShopGroup) {
     seen.add(member.connectionId);
     priorities.add(member.priority);
   }
-  if (group.members.reduce((sum, m) => sum + m.percent, 0) !== 100) throw new Error('Сумма долей группы должна быть 100%.');
+  if (group.mode !== 'SHARED' && group.members.reduce((sum, m) => sum + m.percent, 0) !== 100) throw new Error('Сумма долей группы должна быть 100%.');
 }
 
 // FIX: validate one assignment per canonical SKU, never independently per marketplace barcode.
@@ -57,8 +60,11 @@ export function validateShopGroups(groups: ShopGroup[], assignments: ShopAssignm
 export function allocateShopStock(amount: number, group: ShopGroup) {
   integer(amount, 'Остаток');
   validateGroup(group);
-  const prioritized = [...group.members].filter(m => m.percent > 0).sort((a, b) => a.priority - b.priority);
+  // FIX: reserve once against the physical pool, before splitting or mirroring it.
+  amount = Math.max(0, amount - (group.safetyReserve ?? 0));
+  const prioritized = [...group.members].filter(m => group.mode === 'SHARED' || m.percent > 0).sort((a, b) => a.priority - b.priority);
   if (amount <= group.lowStockThreshold) return group.members.map(m => ({ connectionId: m.connectionId, amount: m === prioritized[0] ? amount : 0 }));
+  if (group.mode === 'SHARED') return group.members.map(m => ({ connectionId: m.connectionId, amount }));
   const rows = group.members.map(m => {
     const numerator = BigInt(amount) * BigInt(m.percent);
     return { connectionId: m.connectionId, amount: Number(numerator / 100n), remainder: Number(numerator % 100n), priority: m.priority };
@@ -76,11 +82,15 @@ export type ShopTransition = { phase: 'VERIFY' | 'DECREASE' | 'INCREASE' | 'DONE
 
 // FIX: observations must cover the persisted union of old and new destinations.
 // Caller must re-read after each phase and serialize writers; an ACK is not an observation.
-export function planShopTransition(budget: number, observed: Record<string, number | null>, desired: Record<string, number>): ShopTransition {
+export function planShopTransition(budget: number, observed: Record<string, number | null>, desired: Record<string, number>, mode: ShopStockMode = 'ALLOCATED'): ShopTransition {
   integer(budget, 'Доступный остаток');
+  if (mode !== 'ALLOCATED' && mode !== 'SHARED') throw new Error('Неизвестный режим распределения.');
   let total = 0n;
-  for (const amount of Object.values(desired)) total += BigInt(integer(amount, 'Назначенный остаток'));
-  if (total > BigInt(budget)) throw new Error('Распределение превышает доступный остаток.');
+  for (const amount of Object.values(desired)) {
+    total += BigInt(integer(amount, 'Назначенный остаток'));
+    if (amount > budget) throw new Error('Распределение превышает доступный остаток.');
+  }
+  if (mode === 'ALLOCATED' && total > BigInt(budget)) throw new Error('Распределение превышает доступный остаток.');
   const destinations = [...new Set([...Object.keys(observed), ...Object.keys(desired)])].sort();
   for (const destination of destinations) {
     if (!Object.prototype.hasOwnProperty.call(observed, destination) || observed[destination] === null) return { phase: 'VERIFY', writes: [] };
