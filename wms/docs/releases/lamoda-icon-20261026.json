@@ -1,0 +1,46 @@
+{
+  "publication": {
+    "published": true,
+    "at": 1793012228.8235698,
+    "api": "sha256:45cf6266d5595c95eea3bd1243cfd726fd47dba296502a23edae3e8b6c7db7a5",
+    "web": "sha256:46a9d1e31b56cbb6d2fe9b4a84d64cd01896dda5135a0cd0f88a559f04744e8e",
+    "pr": 693,
+    "rollback": "logoff-web:before-lamoda-icon-20261026",
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "verification": {
+    "base": "sha256:8d3eae55423831c40e2020ccfadcd68345896d85d8f73bc4620fa11a424b2b28",
+    "api": "sha256:45cf6266d5595c95eea3bd1243cfd726fd47dba296502a23edae3e8b6c7db7a5",
+    "web": "sha256:46a9d1e31b56cbb6d2fe9b4a84d64cd01896dda5135a0cd0f88a559f04744e8e",
+    "hashes": {
+      "brand/lamoda-wordmark.svg": "18ee73eab8597182ba5fd5c5c1819d8ad8561b3028985b9c3f3f6d72c98f61e4",
+      "brand/lamoda.jpg": "aad50253b529081c315c2074271c8dc44b1978808d3dfbd0b82c4d594a14246c",
+      "index.html": "b041e65ffb195d2cbcecfe7a6fb73293ef67b36fc6b38ba601c8dfc7f547ed74",
+      "assets/lamoda-icon-host-20261026.js": "eb377129a5f36777af13ed5791e70111a5327b784668d8e641200eea07751ea4",
+      "assets/lamoda-icon-20261026.css": "46549b8b418ffe412b1fb6bb3091235174b8122906aec355eb7aba13a9264435"
+    },
+    "oldFilesPreserved": 3116,
+    "browserProof": {
+      "passed": 11,
+      "isolatedApi": true,
+      "writes": [
+        "account",
+        "check",
+        "CATALOG"
+      ],
+      "errors": []
+    }
+  },
+  "publicBrowser": {
+    "passed": 11,
+    "isolatedApi": true,
+    "writes": [
+      "account",
+      "check",
+      "CATALOG"
+    ],
+    "errors": []
+  }
+}
