@@ -1,0 +1,1 @@
+Published PR697: opt-in shared/allocated WB-Ozon stock publication.14 API/3 web delta over PR691 API and PR695 web. No client activated; Kubrin legacy settings retained. Isolated DB12, runtime8, browser13/15/public15, API3736/web502 passed. Source parity false. Exact live runtime verified.

@@ -25,6 +25,13 @@ export type InternalApiDefinition = {
 // ADDED: Explicit registry documents every controller group loaded by AppModule.
 // Keeping it declarative avoids a global interceptor and therefore does not touch normal API traffic.
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
+  // FIX: isolated, opt-in Lamoda preparation routes; business writes are not exposed.
+  {
+    id: 'lamoda', name: 'Lamoda — подготовка подключения', prefixes: ['/lamoda'], routeCount: 12,
+    description: 'Подключение, каталог и соответствия, загрузка документов, черновики FBO и предварительная доступность.',
+    logic: ['Доступ по клиенту и правам API; планы ограничены филиалом.', 'Секрет зашифрован, токены только в памяти процесса.', 'Загрузка не создаёт остатки и резервы. Отправка остатков, запуск сборки и отгрузок не реализованы.'],
+    dependencies: ['Основная БД', 'Lamoda Seller REST API v2', 'WMS_LAMODA_ENABLED', 'WMS_LAMODA_SECRET_KEY'],
+  },
   // FIX: scoped suspicious receipt barcode review endpoints.
   {
     id: 'receipt-barcode-review', name: 'Подозрительные ШК приёмки',
@@ -230,9 +237,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     name: 'Маркетплейсы и FBS',
     prefixes: ['/marketplace-connections', '/marketplace-connection', '/external/v1/fbs',
       '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
-      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly'],
-    // FIX: include four gated manual-assembly handlers; aliases count once.
-    routeCount: 114,
+      '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly',
+      '/marketplace-connections/multishop'],
+    // FIX: four draft handlers plus status, preview, explicit activation and graceful stop.
+    routeCount: 123,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сборка ФБС по номерам: администратор или собственник проверяет WB и доступные короба, создаёт одну обычную заявку в выбранном филиале с сохранением поставок WB; повторный запрос не дублирует заявку.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
@@ -286,7 +294,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'skus',
     name: 'Товары и SKU',
     prefixes: ['/skus'],
-    routeCount: 16,
+    routeCount: 17,
     description: 'Карточки товаров, штрихкоды, характеристики и связи маркетплейсов.',
     logic: ['Создаёт и обновляет SKU.', 'Управляет штрихкодами и заменой ошибочного ШК.', 'Связывает товар с артикулом и идентификатором маркетплейса.'],
     dependencies: ['Основная БД'],

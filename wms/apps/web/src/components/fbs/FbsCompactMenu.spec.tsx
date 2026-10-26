@@ -74,3 +74,14 @@ it('keeps penalties WB-only and preserves the original layout with the flag off'
  for(const marketplace of ['OZON','YANDEX_MARKET']){h.slots=[];h.slots[0]=marketplace;h.slots[1]='deadlines';const t=panel();expect(nodes(t).some(n=>n.type==='button'&&text(n)==='Штрафы по FBS')).toBe(false);expect(nodes(t).find(n=>n.props?.className==='fbs-tiles')?.props['data-menu-layout']).toBeUndefined();}
  vi.stubEnv('VITE_FBS_COMPACT_MENU_ENABLED','false');h.slots=[];h.slots[0]='WILDBERRIES';const t=panel();expect(tabs(t).some(n=>text(n).includes('Штрафы по FBS'))).toBe(true);expect(nodes(t).find(n=>n.props?.className==='fbs-tiles')?.props['data-menu-layout']).toBeUndefined();
 });
+// TEST: official local icons must preserve marketplace navigation.
+it('uses local brand images and keeps each marketplace click target',()=>{
+ vi.stubGlobal('window',{localStorage:{getItem:()=>null},history:{state:{},pushState:vi.fn()}});
+ const t=panel();
+ for(const [kind,file,market] of [['wb','wb.svg','WILDBERRIES'],['ozon','ozon.png','OZON'],['yandex','yandex-market.png','YANDEX_MARKET']]){
+  const button=nodes(t).find(n=>n.type==='button'&&n.props.className===`fbs-marketplace-card fbs-marketplace-card--${kind}`);
+  expect(button).toBeDefined();
+  expect(nodes(button).find(n=>n.type==='img')?.props.src).toBe(`/brand/${file}`);
+  button.props.onClick();expect(h.slots[0]).toBe(market);
+ }
+});

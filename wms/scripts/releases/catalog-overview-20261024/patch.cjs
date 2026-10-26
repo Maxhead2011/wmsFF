@@ -1,0 +1,38 @@
+// FIX: overlay only the catalog methods and UI on the verified live runtime.
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),ts=require('../../../node_modules/typescript');
+const root=path.resolve(process.argv[2]),src=path.resolve(__dirname,'../../../apps/api/src'),websrc=path.resolve(__dirname,'../../../apps/web/src');
+const opts={module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true};
+const compile=n=>ts.transpileModule(fs.readFileSync(src+'/'+n+'.ts','utf8'),{compilerOptions:opts}).outputText;
+const read=n=>fs.readFileSync(root+'/api-base/'+n+'.js','utf8');const changes=[];
+function write(n,s){assert.equal(ts.createSourceFile('x.js',s,99,true).parseDiagnostics.length,0,n);fs.writeFileSync(root+'/api/'+n+'.js',s);changes.push(n+'.js');}
+function once(s,a,b){assert.equal(s.split(a).length,2,a);return s.replace(a,b);}
+function method(s,name){const a=ts.createSourceFile('x.js',s,99,true);const found=[];function visit(n){if(ts.isMethodDeclaration(n)&&n.name.getText(a)===name)found.push(n);ts.forEachChild(n,visit)}visit(a);assert.equal(found.length,1,name);const n=found[0];return {text:n.getText(a),start:n.getStart(a),end:n.end};}
+const pre='modules/marketplace-connections/';let s=read(pre+'marketplace-connections.service'),compiled=compile(pre+'marketplace-connections.service');
+const before=method(s,'productLinks'),next=method(compiled,'productLinks');
+s=s.slice(0,before.start)+next.text+s.slice(before.end);const at=method(s,'syncProducts').start;s=s.slice(0,at)+method(compiled,'enableCatalogReconciliation').text+'\n    '+s.slice(at);
+write(pre+'marketplace-connections.service','const catalog_reconciliation_1=require("./catalog-reconciliation");\n'+s);
+write(pre+'catalog-reconciliation',compile(pre+'catalog-reconciliation'));
+s=read(pre+'marketplace-connections.controller');compiled=compile(pre+'marketplace-connections.controller');const start=method(s,'syncProducts').start;s=s.slice(0,start)+method(compiled,'enableCatalogReconciliation').text+'\n    '+s.slice(start);
+const ast=ts.createSourceFile('controller.js',compiled,99,true);const decorators=ast.statements.filter(n=>n.getText(ast).startsWith('__decorate([')&&n.getText(ast).includes('prototype, "enableCatalogReconciliation",'));assert.equal(decorators.length,1);
+s=once(s,'exports.MarketplaceConnectionsController = MarketplaceConnectionsController = __decorate([',decorators[0].getText(ast)+'\nexports.MarketplaceConnectionsController = MarketplaceConnectionsController = __decorate([');write(pre+'marketplace-connections.controller',s);
+const reg='modules/administration/administration-internal-api.service';s=read(reg);const st=s.indexOf("id: 'marketplace-connections'"),en=s.indexOf('description:',st);assert(st>0&&en>st);s=s.slice(0,st)+once(s.slice(st,en),'routeCount: 134,','routeCount: 135,')+s.slice(en);write(reg,s);fs.writeFileSync(root+'/api-changes.json',JSON.stringify(changes));
+const esbuild=require('module').createRequire(require.resolve('../../../apps/web/node_modules/vite/package.json'))('esbuild');
+(async()=>{
+ const source=fs.readFileSync(websrc+'/components/catalog/CatalogPanel.tsx','utf8');
+ const button=source.match(/\{marketplaceOverview.disabled>0 \? <button.*?<\/button>\}/)[0];
+ const section=source.slice(source.indexOf('{selectedClientId && <section aria-label="Автоматическая'),source.indexOf('      {selectedClientId && <MarketplaceProductLinks'));
+ const cell=source.split('\n').find(l=>l.includes('{linksForSku(marketplaceOverview.rows,sku.id).length'));
+ const entry=`import {CatalogMarketplaceCell,useCatalogMarketplaceOverview} from './CatalogMarketplaceOverview';import {linksForSku} from './marketplaceOverview';export {useCatalogMarketplaceOverview};export function Button({marketplaceOverview,session,connections,canWrite}){return <>${button}</>}export function Summary({marketplaceOverview,selectedClientId}){return <>${section}</>}export function Cell({marketplaceOverview,selectedClientId,sku,marketplaceLabel}){return <>${cell}</>}`;
+ const assets=root+'/web/assets';fs.mkdirSync(assets,{recursive:true});
+ const built=await esbuild.build({stdin:{contents:entry,loader:'tsx',resolveDir:websrc+'/components/catalog'},bundle:true,write:false,format:'esm',jsx:'automatic',minify:true,define:{'import.meta.env':'{}'},plugins:[{name:'host-react',setup(b){b.onResolve({filter:/^react(\/jsx-runtime)?$/},a=>({path:a.path,namespace:'host'}));b.onLoad({filter:/.*/,namespace:'host'},a=>({contents:a.path==='react'?'import{r as R}from"./admin-tiles-20261019-0.js";export const useState=(...a)=>R.useState(...a),useEffect=(...a)=>R.useEffect(...a),useRef=(...a)=>R.useRef(...a);':'import{j as J}from"./admin-tiles-20261019-0.js";export const jsx=(...a)=>J.jsx(...a),jsxs=(...a)=>J.jsxs(...a),Fragment=Symbol.for("react.fragment");',loader:'js',resolveDir:assets}));b.onResolve({filter:/admin-tiles-20261019-0\.js$/},a=>({path:a.path,external:true}));}}]});
+ const ui='catalog-overview-ui-20261024.js',name='catalog-overview-host-20261024.js',old='telegram-topic-ui-20261024.js';fs.writeFileSync(assets+'/'+ui,built.outputFiles[0].text);
+ const original=fs.readFileSync(root+'/web-base/assets/'+old,'utf8');const a=ts.createSourceFile(old,original,99,true);const functions=a.statements.filter(n=>ts.isFunctionDeclaration(n)&&n.getText(a).includes('catalog-marketplaces__actions'));assert.equal(functions.length,1);const fn=functions[0];let f=fn.getText(a);
+ f=once(f,'if(x.useEffect(', 'const __overview=__Catalog.useCatalogMarketplaceOverview(t.accessToken,d,R);if(x.useEffect(');
+ f=once(f,'className:"catalog-marketplaces__actions",children:[','className:"catalog-marketplaces__actions",children:[e.jsx(__Catalog.Button,{marketplaceOverview:__overview,session:t,connections:R,canWrite:s}),');
+ f=once(f,'d&&e.jsx(__MarketplaceLinks.MarketplaceProductLinks,{session:t,connections:R,canWrite:s})','e.jsx(__Catalog.Summary,{marketplaceOverview:__overview,selectedClientId:d}),d&&e.jsx(__MarketplaceLinks.MarketplaceProductLinks,{session:t,connections:R,canWrite:s},`${d}:${__overview.disabled}`)');
+ f=once(f,'e.jsx("th",{children:"Маркетплейс"})','e.jsx("th",{children:"Связи WB / Ozon"})');f=once(f,'e.jsx("th",{children:"Штрихкод"})','e.jsx("th",{children:"Складской ШК"})');
+ f=once(f,'e.jsxs("td",{children:[e.jsx("strong",{children:X.marketplace?gj(X.marketplace):"WMS"}),e.jsx("span",{children:X.marketplaceOfferId||X.clientSku||"-"})]})','e.jsx("td",{children:e.jsx(__Catalog.Cell,{marketplaceOverview:__overview,selectedClientId:d,sku:X,marketplaceLabel:gj})})');
+ const patched='import * as __Catalog from "./'+ui+'";\n'+original.slice(0,fn.getStart(a))+f+original.slice(fn.end);assert.equal(ts.createSourceFile(name,patched,99,true).parseDiagnostics.length,0);fs.writeFileSync(assets+'/'+name,patched);
+ let html=fs.readFileSync(root+'/web-base/index.html','utf8');const match=html.match(/<script type="importmap">(.*?)<\/script>/s),map=JSON.parse(match[1]);for(const k of Object.keys(map.imports))if(map.imports[k]==='/assets/'+old)map.imports[k]='/assets/'+name;map.imports['/assets/'+old]='/assets/'+name;html=html.replace(match[1],JSON.stringify(map));html=once(html,'src="/assets/'+old+'"','src="/assets/'+name+'"');fs.writeFileSync(root+'/web/index.html',html);
+ fs.writeFileSync(root+'/web-changes.json',JSON.stringify(['index.html','assets/'+ui,'assets/'+name]));fs.writeFileSync(root+'/patch-proof.json',JSON.stringify({changedFunction:fn.name.text,unchangedPrefix:fn.getStart(a),unchangedSuffix:original.length-fn.end,api:changes}));console.log('Exact catalog overlay ready');
+})().catch(e=>{console.error(e);process.exitCode=1});

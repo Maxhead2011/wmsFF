@@ -1,0 +1,1 @@
+Published PR693: Lamoda la icon and official SVG wordmark. Exact five-file web overlay. API runtime/schema byte-identical to PR691; API image unchanged. No business records, APK or sold WMS changes. Source parity remains false.

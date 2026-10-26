@@ -1,0 +1,1 @@
+Published PR687: catalog sorting and stock/correspondence filters. Four API and four web files; exact overlays from PR685. Sold WMS, APK, configuration and business records unchanged. Source parity remains false.

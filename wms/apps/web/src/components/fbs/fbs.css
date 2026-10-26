@@ -5664,3 +5664,6 @@
 @media screen and (max-width:600px) {
  :root .app-layout .fbs-tiles[data-marketplace="WILDBERRIES"][data-menu-layout="seven"] { grid-template-columns:repeat(2,minmax(0,1fr))!important; }
 }
+
+/* FIX: official local brand assets retain the existing badge geometry. */
+.fbs-marketplace-card__brand img { display:block; width:100%; height:100%; object-fit:contain; border-radius:inherit; }

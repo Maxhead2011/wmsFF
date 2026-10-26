@@ -119,6 +119,8 @@ import {
 import { FbsCostCalculator } from './FbsCostCalculator';
 import { FbsStockAllocationView } from './FbsStockAllocationView';
 import { FbsStockAllocationSection } from './FbsStockAllocationSection';
+import { MultishopStockGroupsEntry } from './MultishopStockGroupsEntry';
+import './multishop-stock-groups.css';
 import {
   FBS_AUTO_CANCEL_HOURS,
   fbsActiveOrderAgeTone,
@@ -1640,7 +1642,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             onClick={() => openMarketplace('WILDBERRIES')}
           >
             <span className="fbs-marketplace-card__index">1</span>
-            <span className="fbs-marketplace-card__brand">WB</span>
+            <span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/wb.svg" alt="" /></span>
             <span className="fbs-marketplace-card__content">
               <small>Wildberries</small>
               <span className="fbs-marketplace-card__heading">
@@ -1658,7 +1660,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             onClick={() => openMarketplace('OZON')}
           >
             <span className="fbs-marketplace-card__index">2</span>
-            <span className="fbs-marketplace-card__brand">OZON</span>
+            <span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/ozon.png" alt="" /></span>
             <span className="fbs-marketplace-card__content">
               <small>Ozon Seller</small>
               <span className="fbs-marketplace-card__heading">
@@ -1676,7 +1678,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             onClick={() => openMarketplace('YANDEX_MARKET')}
           >
             <span className="fbs-marketplace-card__index">3</span>
-            <span className="fbs-marketplace-card__brand">Я</span>
+            <span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/yandex-market.png" alt="" /></span>
             <span className="fbs-marketplace-card__content">
               <small>Яндекс Маркет</small>
               <span className="fbs-marketplace-card__heading">
@@ -2129,7 +2131,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           <FbsPassesView clientId={selectedClientId} session={session} />
         ) : activeView === 'stocks' ? (
           <FbsStocksView key={compactMenuEnabled ? selectedClientId : undefined} clientId={selectedClientId} session={session} search={search} />
-        ) : activeView === 'allocation' ? compactMenuEnabled ? (
+        ) : activeView === 'allocation' ? <><MultishopStockGroupsEntry key={selectedClientId} session={session} clientId={selectedClientId} />{compactMenuEnabled ? (
           <FbsStocksView key={selectedClientId} clientId={selectedClientId} session={session} search={search} />
         ) : (
           <FbsStockAllocationView
@@ -2137,7 +2139,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             connectionId={data?.connections.find((connection) => connection.marketplace === 'WILDBERRIES')?.id ?? ''}
             session={session}
           />
-        ) : activeView === 'cargo' ? (
+        )}</> : activeView === 'cargo' ? (
           <FbsCargoPackingView
             state={cargoState}
             search={search}

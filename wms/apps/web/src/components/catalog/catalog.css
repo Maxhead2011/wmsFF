@@ -653,3 +653,9 @@
     padding: 10px;
   }
 }
+
+/* FIX: catalog controls wrap on narrow screens without changing other tables. */
+.catalog-sort-controls,.catalog-pagination{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:12px 0}
+.catalog-sort-controls label{display:flex;flex-direction:column;gap:6px}
+.catalog-sort-controls .catalog-sort-controls__stock{flex-direction:row;align-items:center}
+.catalog-sort-controls select{max-width:100%;padding:8px}

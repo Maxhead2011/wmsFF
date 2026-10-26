@@ -35,7 +35,9 @@ describe('AdministrationInternalApiService', () => {
     expect(definition.prefixes).toContain('/marketplace-connection/fbs/reshipment');
     // TEST: manual assembly adds four gated handlers without losing existing routes.
     expect(definition.prefixes).toContain('/service/fbs-manual-assembly');
-    expect(definition.routeCount).toBe(114);
+    // TEST: four isolated multishop draft routes are included alongside manual assembly.
+    expect(definition.prefixes).toContain('/marketplace-connections/multishop');
+    expect(definition.routeCount).toBe(123);
     const controller = readFileSync(join(__dirname, '../src/modules/marketplace-connections/fbs-reshipment.controller.ts'), 'utf8');
     expect([...controller.matchAll(/@(Get|Post)\('([^']+)'\)/g)].map((match) => `${match[1]} ${match[2]}`))
       .toEqual(['Get capabilities', 'Post check', 'Post preview', 'Post create', 'Post resume']);
@@ -81,7 +83,8 @@ describe('AdministrationInternalApiService', () => {
     // TEST: attendance-device adds the tablet and branch-scoped admin endpoints.
     // TEST: receipt directions add four branch-scoped routes.
     // TEST: suspicious receipt review adds one independently gated group.
-    expect(INTERNAL_API_DEFINITIONS).toHaveLength(35);
+    // TEST: Lamoda preparation is registered without being advertised as a shipping connector.
+    expect(INTERNAL_API_DEFINITIONS).toHaveLength(36);
   });
 
   it('не рисует ложный зелёный статус при ошибке основной БД', async () => {

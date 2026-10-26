@@ -21,3 +21,5 @@ Ozon `/v3/supply-order/get` возвращает `data_filling_deadline` (под
 `apps/web/src/components/ozon-fbo/OzonEditCountdown.spec.tsx`: неизвестный срок, граница истечения, смена срочности, округление минут, отдельные сроки нескольких заявок, МСК и отключённое отображение.
 
 Проверки 26.10.2026: API 3608 passed / 155 skipped (345 suites passed / 12 skipped), web 493 passed / 2 skipped; TypeScript API/web passed, git diff --check passed. Полный первый API-прогон обнаружил недоступный `kiz-duplicate.integration.spec.ts`: не задан URL выделенной PostgreSQL; повторный прогон явно исключил только этот файл. Его поведение этим изменением не проверено. Публикация не выполнялась.
+
+Validation after approved merge: API 3740 passed / 155 skipped; web 510 passed / 2 skipped; both TypeScript checks passed. Dedicated KIZ database suite excluded. Actual candidate runtime 4 checks and module graph passed; actual browser graph passed 3 themes x 6 widths and deadline cards. Exact overlay: 4 API + 4 web files.

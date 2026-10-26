@@ -1,0 +1,172 @@
+{
+  "publication": {
+    "base": {
+      "api": "sha256:45cf6266d5595c95eea3bd1243cfd726fd47dba296502a23edae3e8b6c7db7a5",
+      "web": "sha256:35a52c864ef7548e408af8c56c66df958de8b628b63a5c8578146348eaa8da7a"
+    },
+    "images": {
+      "api": "sha256:264f32a9adf3b0e350a239f90dd29c5346cab051e8b5c8b393084c527fd201ca",
+      "web": "sha256:9a70be813709f266579971028fc7aabe1a3dd4c434d5456b65c5a2098c868344"
+    },
+    "hashes": {
+      "api": {
+        "modules/marketplace-connections/multishop-stock-plan.js": "711700ac92390489d37ab86b92629fa8be7fb2694205fd4888ecd1ff85752089",
+        "modules/marketplace-connections/multishop-stock-groups.service.js": "7aacc69b000e59c6e30993a591fc05f53b8ad7a023a35dd436f780b54c07641a",
+        "modules/marketplace-connections/multishop-stock-groups.controller.js": "8efc76242bf7265696bdcc4137732470b8df950539e67bd83f2fa5fe6941ff70",
+        "modules/marketplace-connections/multishop-stock-publication.js": "bdad4231a273f45f4a585761ea686227ae9ffe1e021cd9caff63ea094ac257ef",
+        "modules/marketplace-connections/multishop-stock-reservations.js": "51c72ba25a8d21b5509041210815492b10000052d32fd8c351adddc10da7f65a",
+        "modules/marketplace-connections/multishop-stock-snapshot.js": "5465ec757d7e4b8f18af00ac7aabaa7c17f93abe22935d36fa0aa2d1cb8d5efd",
+        "modules/marketplace-connections/multishop-stock-reader.js": "ade1e5b32b5712b243ca94c110cab9f3c3e696fcf1502e1c12b40300dd3396e2",
+        "modules/marketplace-connections/multishop-stock-queue.js": "feb099a47e68597e94cc8deca7cc01234e386a7e191fb1d3ad30a993d610b657",
+        "modules/marketplace-connections/multishop-stock-transport.js": "1627a042120358f727fd865b769b51113f3c01c28b5a25ab07df0d4b73c95832",
+        "modules/marketplace-connections/multishop-stock-ownership.js": "1329f403d820ed80175608baf036701e18fbf9d6cd039e8c707fcae734e76c96",
+        "modules/marketplace-connections/multishop-stock-sync.service.js": "944f43bd86963ff39fca1eb16dca262d38dbe652c5758bd79b18f593564ab61a",
+        "modules/marketplace-connections/marketplace-connections.module.js": "0fac98234dda04e7b3b2f9000ed529aa7c75c6c4a0a5525c5a56c2fb45294aed",
+        "modules/marketplace-connections/marketplace-connections.service.js": "c6aa47cf5d2a8ac354d8c1473c43b604fa682b99fefa22e34785152e8ff6a68f",
+        "modules/administration/administration-internal-api.service.js": "206c21597b9baa68d807ac6b2fa6aef19bd41696a404fd2aece40e28a70d5c43"
+      },
+      "web": {
+        "index.html": "b522a8d193c095ad7e9969fdee496ceb4683ca581b823f1180c9e0594bf43957",
+        "assets/multishop-auto-ui-20261026.js": "97a3524066d0d6f4af2d317ec08ce8ec65a27bcdfa1fb05bbad3a231c10b0619",
+        "assets/multishop-auto-host-20261026.js": "32b59a8399f9aaaa81e9f9366787cee38a5fdac0979d7edd07cbe330cec9376d"
+      }
+    },
+    "browser": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "multishopWrites": 1,
+      "passed": [
+        "group editor in runtime hub",
+        "canonical assignment persisted",
+        "legacy pair retained",
+        "7 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark",
+        "penalties within problems",
+        "two-row desktop geometry"
+      ],
+      "mutations": 0
+    },
+    "runtime": {
+      "passed": 8,
+      "isolatedPersistence": true,
+      "publicationEnabled": true
+    },
+    "readOnlyCheck": {
+      "enabled": true,
+      "publicationEnabled": true,
+      "clientRead": true,
+      "productRead": true,
+      "credentialsExcluded": true,
+      "managedClients": 0,
+      "mutations": 0
+    },
+    "published": true,
+    "pr": 697,
+    "at": 1793016488.134439,
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "validation": {
+    "apiPassed": 3736,
+    "apiSkipped": 155,
+    "webPassed": 502,
+    "webSkipped": 2,
+    "typeScript": true,
+    "dedicatedKizIntegration": "excluded: dedicated DB unavailable",
+    "candidateRuntime": {
+      "passed": 8,
+      "isolatedPersistence": true,
+      "publicationEnabled": true
+    },
+    "candidateBrowser": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "multishopWrites": 1,
+      "passed": [
+        "group editor in runtime hub",
+        "canonical assignment persisted",
+        "legacy pair retained",
+        "7 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark",
+        "penalties within problems",
+        "two-row desktop geometry"
+      ],
+      "mutations": 0
+    },
+    "publicBrowser": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "multishopWrites": 1,
+      "passed": [
+        "group editor in runtime hub",
+        "canonical assignment persisted",
+        "legacy pair retained",
+        "7 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark",
+        "penalties within problems",
+        "two-row desktop geometry"
+      ],
+      "mutations": 0
+    },
+    "readOnlyLive": {
+      "enabled": true,
+      "publicationEnabled": true,
+      "clientRead": true,
+      "productRead": true,
+      "credentialsExcluded": true,
+      "managedClients": 0,
+      "mutations": 0
+    },
+    "isolatedPostgres": {
+      "passed": 12,
+      "isolated": true,
+      "externalWrites": 0,
+      "fullApiHealth": true,
+      "apiImage": "sha256:264f32a9adf3b0e350a239f90dd29c5346cab051e8b5c8b393084c527fd201ca"
+    },
+    "editorBrowser": {
+      "isolatedApi": true,
+      "externalWrites": 0,
+      "passed": [
+        "exclusive-pair",
+        "canonical-sku-assignment",
+        "revision-on-save",
+        "assigned-group-delete-disabled",
+        "shared-mode-save-reload",
+        "reserve-save-reload",
+        "mode-switch-preserves-shares",
+        "preview-before-activation",
+        "explicit-activation",
+        "stop-zero-status",
+        "conflict-retains-draft",
+        "mobile-width",
+        "no-runtime-errors"
+      ]
+    }
+  }
+}

@@ -10,6 +10,7 @@ import { CreateArticleMappingDto } from './dto/create-article-mapping.dto';
 import { CreateNomenclatureItemDto } from './dto/create-nomenclature-item.dto';
 import { CreateSkuDto } from './dto/create-sku.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
+import { parseCatalogQuery,readCatalogPage } from './catalog-list';
 import {
   parseNomenclatureSheet,
   type NomenclatureImportItem,
@@ -55,6 +56,20 @@ export class SkusService {
     });
 
     return skus.map(enrichSkuMarketplaceData);
+  }
+
+  // FIX: isolated catalog view; existing SKU consumers keep their original list contract.
+  async catalog(filter:Record<string,string|undefined>,user:AuthUser){
+    if(process.env.WMS_CATALOG_SORT_ENABLED!=='true')throw new NotFoundException();
+    const q=parseCatalogQuery(filter),warehouseId=this.scopedWarehouseId(user);
+    const search=filter.search?.trim();
+    const where:Prisma.SkuWhereInput={clientId:this.clientScopes.resolveClientFilter(user,filter.clientId),OR:search?[
+      {name:{contains:search,mode:'insensitive'}},{internalSku:{contains:search,mode:'insensitive'}},{article:{contains:search,mode:'insensitive'}},{color:{contains:search,mode:'insensitive'}},{barcodes:{some:{value:{contains:search}}}},
+    ]:undefined};
+    const page=await readCatalogPage(this.prisma,where,warehouseId,q);
+    const skus=await this.prisma.sku.findMany({where:{AND:[where,{id:{in:page.items.map(s=>s.id)}}]},include:{client:{select:{id:true,code:true,name:true}},barcodes:true}});
+    const details=new Map(skus.map(s=>[s.id,s]));
+    return {...page,items:page.items.flatMap(row=>{const s=details.get(row.id);return s?[{...enrichSkuMarketplaceData(s),stockQuantity:row.stockQuantity,correspondence:row.correspondence}]:[];})};
   }
 
   async get(id: string, user: AuthUser) {
