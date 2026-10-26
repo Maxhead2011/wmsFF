@@ -1,0 +1,1 @@
+Published PR689: group drafts and canonical SKU assignments only. External stock publication remains disabled. Five API/four web files; existing writers, schema, APK, configuration and sold WMS unchanged. Runtime byte-for-byte verified against live container. Source parity remains false.
