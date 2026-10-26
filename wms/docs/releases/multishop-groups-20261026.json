@@ -1,0 +1,136 @@
+{
+  "publication": {
+    "base": {
+      "api": "sha256:528e9a3a62a8cc4ad3c0e74bb8e9f52f288829a4d45be1e124273a6586d3d7b8",
+      "web": "sha256:b25e038eb05f7db2457dc0a1eba9c04df28cf3716a38cc0dcc2bb4b32d9f456c"
+    },
+    "images": {
+      "api": "sha256:3a6b672cd7644e6ad0ea000bce8b43ecfe16ee52587a01485d8a77943aea89fa",
+      "web": "sha256:15b2a4a23627b701cafcb2dfeda6ab5ed7c093830bc9822eb30b11b5ddf91887"
+    },
+    "hashes": {
+      "api": {
+        "modules/marketplace-connections/multishop-stock-plan.js": "7695ee79a45aa03d881629335e910975d811f57331db5d9afec2d2bf2e7e19f5",
+        "modules/marketplace-connections/multishop-stock-groups.service.js": "e6fc39268c695252902a6c6dc8bf2ada60f8e66fdc32adf0956e5cfa196a5338",
+        "modules/marketplace-connections/multishop-stock-groups.controller.js": "daac99c6083110bf35cce27376fdab74ef56d0fbc57537863ecb19bbecbad088",
+        "modules/marketplace-connections/marketplace-connections.module.js": "0a130e1a558cfb41090e7d5ce72bc9d203eda0d3afc13e6d39cccfe096a1d11c",
+        "modules/administration/administration-internal-api.service.js": "bf8a95bda9add2e7f0a8102609806debc3a4b89c883ffd0c3cf44c3c5b29195f"
+      },
+      "web": {
+        "index.html": "7d8b800baa829ab1bd790aa593172ba7a9cb27b2265ed4ede331f35d7e3e5aec",
+        "assets/multishop-groups-ui-20261026.js": "97c6abdcd12ea3e795c2e8ba873de586d09599def55f37582d73d6ddef58ec05",
+        "assets/multishop-groups-host-20261026.js": "31db7df6f489df3d1598059706e5eb27707e475750ec80e1ae647cff0d658d41",
+        "assets/multishop-groups-20261026.css": "9afd18984e62472f20a420d1c5c7b61318d5fd61702acc01cdef009543fd6b70"
+      }
+    },
+    "browser": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "multishopWrites": 1,
+      "passed": [
+        "group editor in runtime hub",
+        "canonical assignment persisted",
+        "legacy pair retained",
+        "7 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark",
+        "penalties within problems",
+        "two-row desktop geometry"
+      ],
+      "mutations": 0
+    },
+    "runtime": {
+      "passed": 8,
+      "isolatedPersistence": true,
+      "publicationEnabled": false
+    },
+    "readOnlyCheck": {
+      "enabled": true,
+      "publicationEnabled": false,
+      "clientRead": true,
+      "productRead": true,
+      "credentialsExcluded": true,
+      "mutations": 0
+    },
+    "published": true,
+    "pr": 689,
+    "at": 1793000948.3915522,
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "validation": {
+    "apiPassed": 3643,
+    "apiSkipped": 155,
+    "webPassed": 497,
+    "webSkipped": 2,
+    "typeScript": true,
+    "dedicatedKizIntegration": "excluded: dedicated DB unavailable",
+    "candidateRuntime": {
+      "passed": 8,
+      "isolatedPersistence": true,
+      "publicationEnabled": false
+    },
+    "candidateBrowser": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "multishopWrites": 1,
+      "passed": [
+        "group editor in runtime hub",
+        "canonical assignment persisted",
+        "legacy pair retained",
+        "7 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark",
+        "penalties within problems",
+        "two-row desktop geometry"
+      ],
+      "mutations": 0
+    },
+    "publicBrowser": {
+      "builtWeb": true,
+      "isolatedApi": true,
+      "multishopWrites": 1,
+      "passed": [
+        "group editor in runtime hub",
+        "canonical assignment persisted",
+        "legacy pair retained",
+        "7 tiles",
+        "all 5 existing allocation sections",
+        "existing stocks/cabinet selector",
+        "existing warehouse settings",
+        "history tabs + received order read-only",
+        "problem tabs",
+        "restricted tariffs",
+        "calculator",
+        "3 widths",
+        "Panthera light/dark",
+        "penalties within problems",
+        "two-row desktop geometry"
+      ],
+      "mutations": 0
+    },
+    "readOnlyLive": {
+      "enabled": true,
+      "publicationEnabled": false,
+      "clientRead": true,
+      "productRead": true,
+      "credentialsExcluded": true,
+      "mutations": 0
+    }
+  }
+}
