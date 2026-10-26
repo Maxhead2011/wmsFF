@@ -1,3 +1,5 @@
+Published PR699 / 2026-10-26: actual Ozon FBO editing deadline countdown. Exact 4 API / 4 web overlay on multishop-auto. API3740/web510 passed, 155/2 skipped; dedicated KIZ database suite unavailable. TypeScript, runtime4/module graph, candidate/public browser (3 themes x6 widths) and live health/hash checks passed. Baseline `2026-10-26-ozon-deadline`; sourceParityVerified=false. Existing requests need an Ozon refresh. Sold WMS, APK, schema and business records unchanged.
+
 # Обратный отсчёт редактирования ФБО Ozon
 
 Подготовлено 26.10.2026, не опубликовано. Ветка `feature/fbo-edit-deadline`, целевой PR — `feature/wb-print-check`.
