@@ -359,3 +359,12 @@ it('includes completed-work supplements in the merge with zero logistics days', 
   expect(preview.primaryProcessing.shipments).toBe(0);
   expect(preview.logisticsDays).toEqual([]);
 });
+
+// TEST: explicit profile changes only primary work; billed history remains immutable.
+it('uses receipt price and removes included extra service for completed work',()=>{
+ const receiptProfiles=new Map([['BOX',{receiptId:'r',kind:'GRAY' as const,revision:1,pricingRevision:1,profile:{unitPriceRub:'20',taxMode:'INCLUDED' as const,includedServiceIds:['additional']}}]]);
+ const plan=completedWorkPlan(context({config:{...config,receiptProfiles}}));
+ expect(plan.lines.map(l=>l.service)).toEqual(['processing','primary']);expect(plan.lines.find(l=>l.service==='primary')?.totalRub).toBe(20);
+ const already=charge({serviceId:'primary',metadata:{kind:'FBS_PRIMARY_PROCESSING',marketplace:'WILDBERRIES',connectionId:'account',orderIds:['81701'],serviceCode:'ITEM_PROCESSING'}});
+ expect(completedWorkPlan(context({config:{...config,receiptProfiles},charges:[already]})).lines.some(l=>l.service==='primary')).toBe(false);
+});

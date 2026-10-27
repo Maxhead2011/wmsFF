@@ -20,6 +20,8 @@ const LUKIN_CLIENT_IDS = new Set([
 ]);
 
 export function lukinPrimaryLines(clientId: string, quantity: number, lines: PrimaryLine[]): PrimaryLine[] {
+  // FIX: receipt-aware callers already normalize legacy per-order lines before explicit profile replacement.
+  if (process.env.WMS_RECEIPT_PROCESSING_ENABLED === 'true' && lines.length && lines.every(line => line.billingPolicy === 'RECEIPT_PROCESSING_V1')) return lines;
   if (process.env.WMS_LUKIN_PRIMARY_SERVICE_POLICY_ENABLED !== 'true' || !LUKIN_CLIENT_IDS.has(clientId)) {
     return lines;
   }

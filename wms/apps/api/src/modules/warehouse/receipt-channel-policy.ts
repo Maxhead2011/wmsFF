@@ -245,10 +245,10 @@ export async function receiptStockSyncEvent(db:Db,clientId:string){
 export const receiptApprovalEnabled=()=>process.env.WMS_RECEIPT_APPROVAL_ENABLED==='true';
 export const receiptApprovalScopeKey=(clientId:string,warehouseId:string)=>`receipt.approval.scope.v1:${clientId}:${warehouseId}`;
 export const receiptApprovalKey=(clientId:string,warehouseId:string,id:string)=>`receipt.approval.v1:${clientId}:${warehouseId}:${id}`;
-type ApprovalScope={clientId:string;warehouseId:string;grandfatheredReceiptIds:string[];revision?:number};
+type ApprovalScope={clientId:string;warehouseId:string;grandfatheredReceiptIds:string[];defaultAvailable?:boolean;revision?:number};
 type Approval={available:boolean;revision:number;changedAt?:string;changedByName?:string;changedByUserId?:string};
-export function receiptApprovalState(id:string,scope:Pick<ApprovalScope,'grandfatheredReceiptIds'>|null,saved:Approval|null):Approval {
-  return saved??{available:!scope||scope.grandfatheredReceiptIds.includes(id),revision:0};
+export function receiptApprovalState(id:string,scope:Pick<ApprovalScope,'grandfatheredReceiptIds'|'defaultAvailable'>|null,saved:Approval|null):Approval {
+  return saved??{available:!scope||scope.defaultAvailable===true||scope.grandfatheredReceiptIds.includes(id),revision:0};
 }
 export async function receiptApprovalEntries(db:Db,clientId:string,warehouseId?:string|null,documents?:Receipt[],boxIds?:string[]){
   if(!receiptApprovalEnabled())return [] as Array<{doc:Receipt;approval:Approval}>;
@@ -305,4 +305,17 @@ export async function changeReceiptApproval(db:Db,input:{clientId:string;warehou
     await db.auditLog.create({data:{userId:user.id,action:'RECEIPT_STOCK_ACCESS_CHANGED',entity:'Receipt',entityId:input.id,payload:{clientId:input.clientId,warehouseId:input.warehouseId,sourceDocument:entry.doc.sourceDocument,previous:entry.approval as unknown as Prisma.InputJsonValue,next:next as unknown as Prisma.InputJsonValue}}});
     await receiptStockSyncEvent(db,input.clientId);
   }return {approval:next,sourceDocument:entry.doc.sourceDocument};
+}
+
+// FIX: creating a manual scope changes no stock visibility; the subsequent approval uses existing shared/exclusive locks.
+export async function enableReceiptManagement(db:Db,clientId:string,warehouseId:string,user:{id:string;roleCodes:string[]}){
+ if(process.env.WMS_RECEIPT_PROCESSING_ENABLED!=='true'||!receiptApprovalEnabled())throw new NotFoundException('Управление приёмками не включено.');
+ if(!user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r)))throw new ForbiddenException('Требуется администратор.');
+ const key=receiptApprovalScopeKey(clientId,warehouseId);
+ await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key},0))::text`;
+ const existing=await db.systemSetting.findUnique({where:{key}});
+ if(existing)return;
+ const value={clientId,warehouseId,grandfatheredReceiptIds:[],defaultAvailable:true,revision:0};
+ await db.systemSetting.create({data:{key,value,updatedByUserId:user.id}});
+ await db.auditLog.create({data:{userId:user.id,action:'RECEIPT_MANUAL_MANAGEMENT_ENABLED',entity:'Client',entityId:clientId,payload:value}});
 }

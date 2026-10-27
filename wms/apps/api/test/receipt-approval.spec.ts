@@ -76,3 +76,9 @@ it('lists and confirms the own client receipt through the controller',async()=>{
  expect(settings.get(receiptApprovalKey('c','w',data.rows[0].id)).changedByName).toBe(client.name);
  await expect(controller.approval(user,{clientId:'c',warehouseId:'other',id:data.rows[0].id,available:true,revision:1,save:true})).rejects.toThrow('Нет доступа');
 });
+
+// TEST: manual management must not turn untouched legacy/new receipts into pending stock.
+it('preserves available default in explicitly manual receipt scope',()=>{
+ expect(receiptApprovalState('new',{grandfatheredReceiptIds:[],defaultAvailable:true} as any,null).available).toBe(true);
+ expect(receiptApprovalState('new',{grandfatheredReceiptIds:[],defaultAvailable:true} as any,{available:false,revision:1}).available).toBe(false);
+});
