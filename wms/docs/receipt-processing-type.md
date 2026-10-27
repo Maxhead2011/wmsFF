@@ -36,4 +36,6 @@ Build exact overlays on the fresh published API/web images, because sourceParity
 
 ## Startup correction
 
+Published through PR705. Public authenticated startup verified with synthetic API responses.
+
 The first PR703 browser graph test imported modules but did not await authenticated restoration. The HTML entry still named catalog-sorting-host while imports resolved to receipt-processing-host; both mounted roots into the same DOM and caused removeChild failures. The correction changes only the HTML entry src. startup-regression.cjs reproduces the blank screen with the old HTML and checks the authenticated Panther workspace with the corrected HTML; all API calls are synthetic fixtures.
