@@ -1,0 +1,51 @@
+{
+  "publication": {
+    "base": {
+      "api": "sha256:aa2fe82ab189d33bcd7706a7aedfb6af5cec1273788849241595b8997011f5d2"
+    },
+    "images": {
+      "api": "sha256:f2d0d9042ba01d4147581c95a0974b5cefaecab99e5823fec7bfd94869034863"
+    },
+    "hashes": {
+      "api": {
+        "modules/marketplace-connections/marketplace-connections.service.js": "8787d1cb8e7c547651370bd28774c6807ddc221228a1968331a23586ed7be39b",
+        "modules/marketplace-connections/ozon-direct-label.js": "d132bfaa28eb306f686ee5132903628cd66577f450b7c7e58e0d161e077f1f2f"
+      }
+    },
+    "runtime": {
+      "passed": 1,
+      "selectedOnly": true,
+      "validPdf": true
+    },
+    "published": true,
+    "pr": 701,
+    "at": 1793114190.5083463,
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false,
+    "enabledFlag": "WMS_OZON_DIRECT_LABEL_ENABLED=true"
+  },
+  "validation": {
+    "apiPassed": 3748,
+    "apiSkipped": 155,
+    "webPassed": 510,
+    "webSkipped": 2,
+    "typeScript": true,
+    "dedicatedKizIntegration": "excluded: dedicated DB unavailable",
+    "candidateRuntime": {
+      "passed": 1,
+      "selectedOnly": true,
+      "validPdf": true
+    },
+    "readOnlyLive": {
+      "request": 2461,
+      "count": 1,
+      "bytes": 72205,
+      "durationMs": 417,
+      "fullHistoryLoaded": false,
+      "readOnly": true,
+      "flagEnabled": true
+    },
+    "exactMethodDelta": true
+  }
+}
