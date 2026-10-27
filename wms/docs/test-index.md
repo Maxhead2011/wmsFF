@@ -1,3 +1,5 @@
+Prepared 2026-10-27: selected Ozon FBS label download avoids full multi-marketplace/history reload. See [Ozon label download](ozon-direct-label.md). Not published; opt-in WMS_OZON_DIRECT_LABEL_ENABLED. API3748/web510 passed;155/2 skipped; dedicated KIZ DB suite excluded. TypeScript passed.
+
 Published PR699 / 2026-10-26: actual Ozon FBO editing deadline countdown. Exact 4 API / 4 web overlay on multishop-auto. API3740/web510 passed, 155/2 skipped; dedicated KIZ database suite unavailable. TypeScript, runtime4/module graph, candidate/public browser (3 themes x6 widths) and live health/hash checks passed. Baseline `2026-10-26-ozon-deadline`; sourceParityVerified=false. Existing requests need an Ozon refresh. Sold WMS, APK, schema and business records unchanged.
 
 Prepared / 2026-10-26: [Обратный отсчёт ФБО Ozon](ozon-edit-deadline.md). Exact API deadline per order; customer list, assembly/cargo details and legacy plans. Own-host UI only; unknown dates never inferred from slots. Not published. Tests: `ozon-edit-deadline.spec.ts`, `OzonEditCountdown.spec.tsx`.

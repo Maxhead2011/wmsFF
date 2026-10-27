@@ -1,3 +1,4 @@
+import { selectedOzonLabels } from './ozon-direct-label';
 import { assertNotMultishopOwned } from './multishop-stock-ownership';
 import {lockOrderLinks,assertOrdersNotRemoved,withoutRemovedOrders,ADMIN_REMOVED,requestRemovalEnabled} from '../client-requests/request-removal-policy';
 import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, pinnedOriginalSticker } from './fbs-original-sticker';
@@ -21411,6 +21412,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    // FIX: an Ozon label download must not wait for every marketplace's history.
+    const direct = await selectedOzonLabels(this.prisma, clientId, dto.orders, marketplaceJson, marketplaceBinary);
+    if (direct) return {
+      fileName: `fbs-order-stickers-${fileTimestamp(new Date())}.pdf`,
+      contentType: 'application/pdf' as const,
+      buffer: await mergeFbsStickerPdfs(direct.parts),
+      count: direct.count,
+    };
     const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
     const unavailable = orders.filter((order) => {
       if (order.marketplace === MarketplaceType.WILDBERRIES) {
