@@ -64,3 +64,11 @@ it('does not enumerate stock for clients outside the approval scope',async()=>{
   expect((await readIndexedReceiptState(db,'other','w',undefined,false)).pending).toEqual([]);
   expect(db.$queryRaw).toHaveBeenCalledOnce();expect(db.systemSetting.findMany).not.toHaveBeenCalled();
 });
+
+// TEST: manual management leaves receipts available until explicitly revoked.
+it('honors manual scope default in the indexed picking path',()=>{
+ const manual={...scope,value:{...scope.value,defaultAvailable:true}};
+ expect(indexedReceiptState([box],[],[manual],true).pending).toEqual([]);
+ const saved={key:'receipt.approval.v1:c:w:'+id(source),value:{available:false}};
+ expect(indexedReceiptState([box],[saved],[manual],true).pending).toEqual(['b']);
+});

@@ -1,5 +1,6 @@
+import type { ReceiptFboUnit } from './receipt-processing-fbo';
 import { BadRequestException } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { fboProcessingPricingEnabled, normalizeFboTariff, priceFboUnits } from './fbo-processing-pricing.policy';
 import type { FboSavedTariff } from './fbo-processing-pricing.service';
 // FIX: opt-in compositions replace only processing lines; packaging and relabeling remain separate.
@@ -20,6 +21,7 @@ export async function createFboCompositionCharges(tx: Prisma.TransactionClient, 
             };
         }>;
     }>;
+    receiptUnits?:ReceiptFboUnit[];
     processedUnits: number;
     user: {
         id: string;
@@ -47,7 +49,9 @@ export async function createFboCompositionCharges(tx: Prisma.TransactionClient, 
         units = [{ skuId: '__default__', quantity: input.processedUnits }];
     if (units.some(item => !item.skuId) || units.reduce((sum, item) => sum + item.quantity, 0) !== input.processedUnits)
         throw new BadRequestException('Для расчёта первоначальной обработки не хватает фактического состава упаковок.');
-    const lines = priceFboUnits(definition, units);
+    const lines = input.receiptUnits?input.receiptUnits.flatMap(unit=>priceFboUnits(definition,[{skuId:unit.skuId,quantity:1}]).filter(line=>!unit.selection||(!unit.selection.profile.includedServiceIds.includes(line.serviceId)&&!['ITEM_PROCESSING','NOM_ОБРАБОТКА_ОДЕЖДЫ'].includes(catalog.find(s=>s.id===line.serviceId)?.code??'')))):priceFboUnits(definition, units);
+    // FIX: retain one immutable row per service/variant when receipt profiles split the same SKU.
+    if(input.receiptUnits){const grouped=new Map<string,typeof lines[number]>();for(const line of lines){const key=line.variantKey+':'+line.serviceId;const previous=grouped.get(key);if(previous){previous.quantity=String(Number(previous.quantity)+Number(line.quantity));previous.totalRub=String(Number(previous.totalRub)+Number(line.totalRub));}else grouped.set(key,{...line});}for(const line of grouped.values())line.totalRub=new Prisma.Decimal(line.priceBeforeTaxRub).mul(line.quantity).div(line.taxMode==='ADD_6_PERCENT'?'0.94':'1').toFixed(2);lines.splice(0,lines.length,...grouped.values());}
     for (const line of lines) {
         const service = catalog.find(s => s.id === line.serviceId)!;
         await tx.billingCharge.create({ data: { clientId: input.request.clientId, requestId: input.request.id, serviceId: service.id, description: `${service.name}${line.variantName ? ' · ' + line.variantName : ''} по заявке ${input.request.title ?? input.request.id}`, unit: 'PIECE', quantity: line.quantity, unitPriceRub: line.unitPriceRub, totalRub: line.totalRub, status: 'APPROVED', source: 'MANUAL', serviceDate: input.serviceDate, sourceKey: prefix + tariff.id + ':' + line.variantKey + ':' + service.id, metadata: { packageBilling: true, fboProcessingComposition: true, tariffId: tariff.id, definitionHash: tariff.definitionHash, variantName: line.variantName, multiplier: line.multiplier, taxMode: line.taxMode, priceBeforeTaxRub: line.priceBeforeTaxRub, processedUnits: input.processedUnits }, comment: 'Первоначальная обработка FBO: сохранённый состав услуг', createdByUserId: input.user.id, approvedByUserId: input.user.id, approvedAt: new Date() } });

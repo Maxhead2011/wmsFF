@@ -1,5 +1,6 @@
+import { receiptFboPlan, saveReceiptFboCharges } from '../billing/receipt-processing-fbo';
 import { assertReceiptTransfer, assertReceiptStockAvailable, pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { createHash, randomUUID } from 'node:crypto';
 import { isFboTwoStageRequest } from '../tsd/fbo-two-stage-policy';
@@ -4111,7 +4112,20 @@ export class StockOperationsService {
     const relabelUnits = await this.resolveRequestRelabelUnits(tx, input.request);
     const processing = await this.resolveRequestProcessingBreakdown(tx, input.request, input.processedUnits);
     // FIX: only explicitly configured future FBO operations use the new composition.
-    const compositionApplied = await createFboCompositionCharges(tx, input);
+    const receiptPlan=await receiptFboPlan(tx,input);
+    if(receiptPlan){
+      const client=await tx.client.findUnique({where:{id:input.request.clientId},select:{name:true,legalName:true}});
+      const clothing=(u:{sourceBoxCode:string})=>isLukinClient(client)&&isClothingOriginBox(u.sourceBoxCode);
+      const selected=receiptPlan.units.filter(u=>u.selection);
+      const selectedClothing=selected.filter(clothing).length;
+      // FIX: never guess an old mixed-origin transfer's price from a current box label.
+      if(selected.length!==input.processedUnits&&receiptPlan.units.filter(clothing).length!==processing.clothingUnits)throw new ConflictException('Нужна сверка источников товара для расчёта смешанной обработки.');
+      if(selected.length===input.processedUnits){processing.standardUnits=0;processing.clothingUnits=0;}
+      else{processing.clothingUnits-=selectedClothing;processing.standardUnits-=selected.length-selectedClothing;}
+      if(processing.clothingUnits<0||processing.standardUnits<0)throw new ConflictException('Количество по видам прихода не совпадает с упаковкой.');
+      await saveReceiptFboCharges(tx,input,receiptPlan);
+    }
+    const compositionApplied = await createFboCompositionCharges(tx, {...input,receiptUnits:receiptPlan?.units});
     const rows: FulfillmentBillingRow[] = [
       ...(compositionApplied ? [] : [{
         ...FULFILLMENT_BILLING_SERVICES.ITEM_PROCESSING,
@@ -4151,6 +4165,11 @@ export class StockOperationsService {
         continue;
       }
 
+      if(receiptPlan&&row.code==='RELABELING'){
+        const included=receiptPlan.units.filter(u=>u.selection?.profile.includedServiceIds.includes(service.id)).length;
+        if(included===receiptPlan.units.length)continue;
+        if(included>0)throw new ConflictException('Нужно уточнить, какие перемаркированные единицы включены в смешанные тарифы приёмок.');
+      }
       const unitPriceRub = applyFulfillmentTaxMode(Number(clientPrice.priceRub), clientPrice.taxMode);
       // FIX: gross up the line base before rounding, not the rounded unit price.
       const totalRub = applyFulfillmentTaxMode(Number(clientPrice.priceRub) * row.quantity, clientPrice.taxMode);
