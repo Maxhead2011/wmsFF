@@ -1,6 +1,6 @@
 # Receipt stock access and processing kind
 
-Status: candidate, not published yet. Own WMS only; `WMS_RECEIPT_PROCESSING_ENABLED=true` is set in the candidate API image. Sold WMS remains on its existing image/configuration.
+Published through PR703 on 2026-10-27. Own WMS only; `WMS_RECEIPT_PROCESSING_ENABLED=true` is set in the candidate API image. Sold WMS remains on its existing image/configuration.
 
 ## User flow
 

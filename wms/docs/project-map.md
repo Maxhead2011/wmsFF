@@ -1,4 +1,4 @@
-Receipt processing candidate (2026-10-27): [scope, files, tests and release](receipt-processing-type.md).
+Published PR703 / 2026-10-27: receipt availability controls and per-client Gray/White processing profiles. Exact13 API/4 web overlay; WMS_RECEIPT_PROCESSING_ENABLED=true in our image only. API3767/web510 passed;155/2 skipped; dedicated KIZ DB suite excluded. TypeScript, runtime18, browser12/full graph, isolated PostgreSQL/full Nest health and production rollback8 passed. Baseline `2026-10-27-receipt-processing`; sourceParityVerified=false. No client configured, no receipt/stock/invoice changed at deploy; APK/schema/sold WMS unchanged. [Details](receipt-processing-type.md).
 
 Published PR701 / 2026-10-27: selected Ozon FBS labels avoid full marketplace/history reload. Exact2 API files; WMS_OZON_DIRECT_LABEL_ENABLED=true in our API image only. API3748/web510 passed,155/2 skipped; dedicated KIZ DB suite unavailable. TypeScript, candidate runtime/module graph, live health/hashes and read-only request2461 PDF passed (417ms,72205bytes). Baseline `2026-10-27-ozon-direct-label`; sourceParityVerified=false. Web/APK/schema/sold WMS/business records unchanged.
 
