@@ -33,3 +33,7 @@ Source tests include manual availability, SQL index reading, sold flag-off behav
 Candidate checks: 18 runtime/module checks; 12 bundled UI scenarios; full actual browser module graph; isolated PostgreSQL/full Nest health; 8 read/write checks against production in a forced rollback transaction. No physical balances or invoices change in that transaction.
 
 Build exact overlays on the fresh published API/web images, because sourceParityVerified=false. Never replace all production modules with the local dist. Scripts: scripts/releases/receipt-processing-20261027. Release requires merged PR, matching image base, rollback/isolated/browser proofs, release locks, public health/hash checks, unchanged APK/env/other containers. Rollback tags: logoff-api:before-receipt-processing-20261027 and logoff-web:before-receipt-processing-20261027.
+
+## Startup correction
+
+The first PR703 browser graph test imported modules but did not await authenticated restoration. The HTML entry still named catalog-sorting-host while imports resolved to receipt-processing-host; both mounted roots into the same DOM and caused removeChild failures. The correction changes only the HTML entry src. startup-regression.cjs reproduces the blank screen with the old HTML and checks the authenticated Panther workspace with the corrected HTML; all API calls are synthetic fixtures.
