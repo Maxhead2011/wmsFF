@@ -64,5 +64,18 @@
     "passed": 2,
     "wholeGraph": true,
     "errors": []
-  }
+  },
+  "publicGraph": {
+    "passed": 2,
+    "wholeGraph": true,
+    "errors": []
+  },
+  "liveRead": {
+    "readOnly": true,
+    "processingEnabled": true,
+    "canManageProcessing": true,
+    "canEnableManagement": true,
+    "rows": 4
+  },
+  "baselineGuards": 8
 }
