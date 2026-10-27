@@ -1,0 +1,8 @@
+const fs=require('fs'),ts=require('../../../node_modules/typescript'),assert=require('node:assert/strict'),path=require('path');
+const r=process.argv[2],repo=path.resolve(__dirname,'../../../..'),file=repo+'/wms/apps/api/src/modules/billing/billing.service.ts';
+const config=ts.readConfigFile(repo+'/wms/apps/api/tsconfig.json',ts.sys.readFile).config,options=ts.parseJsonConfigFileContent(config,ts.sys,repo+'/wms/apps/api').options;
+const emitted=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:options,fileName:file}).outputText;
+function methods(s){const out={};const f=ts.createSourceFile('x.js',s,99,true);function visit(n){if(ts.isMethodDeclaration(n)&&['ensureStandardBillingServices','ensureStandardClientBillingServices'].includes(n.name.getText(f)))out[n.name.getText(f)]={start:n.getStart(f),end:n.end,text:n.getText(f)};ts.forEachChild(n,visit);}visit(f);return out;}
+const before=fs.readFileSync(r+'/base-service.js','utf8'),old=methods(before),newer=methods(emitted);assert.equal(Object.keys(old).length,2);let result=before;
+for(const name of Object.keys(old).sort((a,b)=>old[b].start-old[a].start)){assert(newer[name]);result=result.slice(0,old[name].start)+newer[name].text+result.slice(old[name].end);}
+assert.equal(ts.createSourceFile('x.js',result,99,true).parseDiagnostics.length,0);let restored=result;const updated=methods(result);for(const n of Object.keys(updated).sort((a,b)=>updated[b].start-updated[a].start))restored=restored.slice(0,updated[n].start)+old[n].text+restored.slice(updated[n].end);assert.equal(restored,before);fs.writeFileSync(r+'/billing.service.js',result);console.log('Only two initialization methods changed');
