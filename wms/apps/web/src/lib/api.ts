@@ -23,7 +23,8 @@ export type LamodaOverview = {
   exchanges:{id:string;operation:string;status:string;errorCode:string|null;createdAt:string;itemCount:number}[];
   externalWritesEnabled:false;assemblyEnabled:boolean;limits:{products:number;documents:number;plans:number};
 };
-export type LamodaPreview = {unresolvedRows:number[];canAssemble:boolean;message:string;availability:{lines:{name:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
+export type LamodaQuantity = { skuId: string; quantity: number };
+export type LamodaPreview = {unresolvedRows:number[];canAssemble:boolean;canAdjust:boolean;remoteShipmentId?:string|null;message:string;availability:{lines:{skuId:string;name:string|null;article?:string|null;size?:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
 const lamodaPath=(id:string)=>'/lamoda/accounts/'+encodeURIComponent(id);
 export const fetchLamodaAccounts=(accessToken:string,clientId:string)=>request<LamodaAccount[]>('/lamoda/accounts?clientId='+encodeURIComponent(clientId),{accessToken});
 export const createLamodaAccount=(accessToken:string,body:{clientId:string;name:string;sellerId:string;oauthClientId:string;secret:string;fboEnabled:boolean;fbsEnabled:boolean})=>request<LamodaAccount>('/lamoda/accounts',{accessToken,method:'POST',body});
@@ -12634,4 +12635,4 @@ export function lookupFbsOriginalSticker(accessToken:string,clientId:string,orde
 
 // FIX: both Lamoda import methods converge on one idempotent warehouse assembly.
 export const importLamodaShipment=(accessToken:string,id:string,body:{reference:string;warehouseId:string;title?:string})=>request<{id:string}>(lamodaPath(id)+'/plans/from-shipment',{accessToken,method:'POST',body});
-export const createLamodaAssembly=(accessToken:string,id:string,planId:string)=>request<{id:string;number:number}>(lamodaPath(id)+'/plans/'+encodeURIComponent(planId)+'/assembly',{accessToken,method:'POST'});
+export const createLamodaAssembly=(accessToken:string,id:string,planId:string,quantities?:LamodaQuantity[])=>request<{id:string;number:number}>(lamodaPath(id)+'/plans/'+encodeURIComponent(planId)+'/assembly',{accessToken,method:'POST',body:quantities ? {quantities} : {}});

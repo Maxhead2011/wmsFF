@@ -11,6 +11,15 @@
 .lamoda-card{padding:16px;border:1px solid #dce4eb;border-radius:12px}
 .lamoda-scroll{overflow:auto}.lamoda-workspace table{width:100%;border-collapse:collapse}.lamoda-workspace th,.lamoda-workspace td{text-align:left;padding:10px;border-bottom:1px solid #dce4eb;vertical-align:top}
 .lamoda-workspace small{display:block}.lamoda-error{color:#b42318}
+/* FIX: keep the shortage review readable and its table scroll contained on narrow screens. */
+.lamoda-stock-review{min-width:0;max-width:100%;box-sizing:border-box}
+.lamoda-stock-review table{min-width:880px}
+.lamoda-stock-review input[type=number]{min-width:92px;max-width:120px;box-sizing:border-box}
+.lamoda-stock-warning{border-left:4px solid #dc8b21;padding:12px;background:rgba(220,139,33,.12)}
+.lamoda-stock-review tr[data-shortage=true]{background:rgba(220,139,33,.08)}
+.lamoda-stock-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.lamoda-stock-review .lamoda-stock-create{font-weight:700}
+
 .lamoda-operational-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
 .lamoda-operational-create, .lamoda-operational-list { min-width: 0; }
 .lamoda-operational-grid > .lamoda-card { grid-column: 1; }
@@ -23,6 +32,10 @@
 .lamoda-assembly-detail .fbo-inline-execution__header { flex-wrap: wrap; }
 .lamoda-assembly-detail .fbo-inline-execution__header h2 { min-width: 0; overflow-wrap: anywhere; }
 .lamoda-assembly-detail .online-execution-table-wrap { max-width: 100%; overflow-x: auto; }
+.lamoda-operational-grid > .lamoda-stock-review { grid-column: 1 / -1; }
+/* FIX: constrain intrinsic table width to the scrolling review, including mobile layouts. */
+.lamoda-workspace:has(.lamoda-stock-review) { grid-template-columns: minmax(0, 1fr); }
+
 /* FIX: full-width Ozon-style FBO landing, scoped away from legacy/FBS/maintenance. */
 .lamoda-ozon-layout { color: var(--ink,#243444); min-width: 0; container-type: inline-size; }
 .lamoda-ozon-layout .lamoda-page-header { padding: 18px 20px; border: 1px solid var(--line,#dce4eb); border-radius: 18px; }

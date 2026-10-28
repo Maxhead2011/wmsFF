@@ -1,4 +1,5 @@
 import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { adjustLamodaComposition, assertLamodaStockAvailable, lamodaStockAvailability, type LamodaQuantity } from './lamoda-stock-guard';
 import { Prisma, type LamodaAccount } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -229,8 +230,17 @@ export class LamodaService {
     });
     const skus = grouped.size ? await this.db.sku.findMany({ where: { id: { in: [...grouped.keys()] }, clientId: c.clientId, isDraft: false }, include: { barcodes: true } }) : [];
     const warehouse = useLamodaWarehouseBarcodes({ items: [...grouped.values()], directions: [] }, skus);
-    const availability = grouped.size ? await this.requests.previewAvailability({ clientId: c.clientId, warehouseId: plan.warehouseId, type: 'OUTBOUND', items: warehouse.items }, user) : null;
-    return { unresolvedRows: unresolved, availability, canAssemble: lamodaAssemblyEnabled() && !unresolved.length, message: 'Предварительный расчёт FBO. Черновик не резервирует товар. Перед запуском сборки потребуется повторная проверка.' };
+    // FIX: the preview uses the same eligible stock/reservation reader as final creation.
+    const stock = grouped.size ? await this.db.$transaction(tx => lamodaStockAvailability(tx, c.clientId, plan.warehouseId, warehouse.items), { isolationLevel: 'RepeatableRead', timeout: 30000 }) : [];
+    const existing = await this.db.lamodaFboAssembly.findUnique({ where: { planId }, include: { request: { select: { id: true, number: true } } } });
+    const availability = { canCommit: stock.length > 0 && stock.every(r => !r.shortageQuantity), lines: stock.map(r => {
+      const sku = skus.find(s => s.id === r.skuId);
+      return { ...r, requestedQuantity: r.quantity, name: sku?.name ?? r.barcode, article: sku?.article ?? null, size: sku?.size ?? null };
+    }) };
+    const canAdjust = lamodaAssemblyEnabled() && c.isActive && c.fboEnabled && !unresolved.length && stock.length > 0 && !existing;
+    return { unresolvedRows: unresolved, availability, canAdjust, canAssemble: canAdjust && availability.canCommit,
+      remoteShipmentId: plan.remoteShipmentId, existingRequest: existing?.request ?? null,
+      message: existing ? `По этому плану уже создана заявка №${existing.request.number}.` : 'Проверьте дефициты и количество к сборке. Черновик не резервирует товар; перед созданием остатки проверяются повторно.' };
   }
   async importShipment(id:string,body:{reference:string;warehouseId:string;title?:string},user:AuthUser) {
     const c=await this.account(id,user,'write',true);
@@ -248,7 +258,7 @@ export class LamodaService {
   private assertShipmentOpen(shipment:Record<string,unknown>) {
     if(!['NEW','CONFIRMED','DRAFT','VALIDATION','READY_FOR_SHIPMENT'].includes(String(shipment.status))) throw new ConflictException(`Поставка Lamoda недоступна для новой сборки: ${String(shipment.status)}.`);
   }
-  async createAssembly(id:string,planId:string,user:AuthUser) {
+  async createAssembly(id:string,planId:string,user:AuthUser,body:{quantities?:LamodaQuantity[]}={}) {
     const c=await this.account(id,user,'write',true);
     if(!lamodaAssemblyEnabled()) throw new BadRequestException('Создание сборок Lamoda пока выключено.');
     if(!user.permissionCodes.some(p=>['system:admin','client-requests:write'].includes(p))) throw new ForbiddenException('Нужны права создания складских заявок.');
@@ -274,17 +284,22 @@ export class LamodaService {
       if(!current) throw new ConflictException('Подключение изменилось. Повторите проверку.');
       if(!await tx.warehouseClient.findFirst({where:{clientId:c.clientId,warehouseId:plan.warehouseId,status:'ACTIVE',warehouse:{isActive:true}}})) throw new BadRequestException('Клиент не активен в филиале.');
       const products=await tx.lamodaProduct.findMany({where:{accountId:id,isPresent:true,linkState:'CONFIRMED',barcode:{in:lines.map(l=>l.barcode)}}});
-      const resolved=resolveLamodaLines(lines,products);
+      const original=resolveLamodaLines(lines,products);
+      const resolved=adjustLamodaComposition(original,body.quantities);
       if(remoteLines) {
         const remoteResolved=resolveLamodaLines(remoteLines,products);
         const fingerprint=(items:typeof resolved.items)=>JSON.stringify(items.map(i=>[i.skuId,i.quantity]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
-        if(fingerprint(remoteResolved.items)!==fingerprint(resolved.items)) throw new ConflictException('Состав изменился в Lamoda. Загрузите поставку заново.');
+        if(fingerprint(remoteResolved.items)!==fingerprint(resolved.items)) throw new ConflictException('Скорректированный состав не совпадает с поставкой Lamoda. Измените состав в кабинете Lamoda и повторите проверку. Заявка WMS не создана.');
       }
       const skus=await tx.sku.findMany({where:{id:{in:resolved.items.map(i=>i.skuId)},clientId:c.clientId,isDraft:false},include:{barcodes:true}});
       const warehouse = useLamodaWarehouseBarcodes(resolved, skus);
+      // FIX: check remaining stock and FBS/FBO demand atomically before reserving this plan.
+      await assertLamodaStockAvailable(tx, c.clientId, plan.warehouseId, warehouse.items);
       const request=await tx.clientRequest.create({data:{clientId:c.clientId,warehouseId:plan.warehouseId,type:'OUTBOUND',status:'SUBMITTED',priority:'NORMAL',title:plan.title,destinationCity:warehouse.directions.map(d=>d.name).join(', '),createdByUserId:user.id,items:{create:warehouse.items}},select:{id:true,number:true}});
       await tx.lamodaFboAssembly.create({data:{requestId:request.id,planId,externalKey:plan.remoteShipmentId?JSON.stringify([c.sellerId,plan.remoteShipmentId]):null,directions:warehouse.directions}});
       await tx.clientRequestEvent.create({data:{requestId:request.id,clientId:c.clientId,eventType:'CREATED',title:'Сборка Lamoda создана',statusTo:'SUBMITTED',createdByUserId:user.id}});
+      if(body.quantities) await tx.auditLog.create({data:{userId:user.id,action:'LAMODA_ASSEMBLY_COMPOSITION_ADJUSTED',entity:'ClientRequest',entityId:request.id,
+        payload:{planId,before:original.items,after:warehouse.items,directions:warehouse.directions,sourcePlanUnchanged:true}}});
       return request;
     },{isolationLevel:'Serializable',timeout:30000}); }
     catch(error) {
