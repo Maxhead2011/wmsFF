@@ -1,4 +1,5 @@
 import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { assertLamodaStockAvailable } from './lamoda-stock-guard';
 import { Prisma, type LamodaAccount } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -282,6 +283,8 @@ export class LamodaService {
       }
       const skus=await tx.sku.findMany({where:{id:{in:resolved.items.map(i=>i.skuId)},clientId:c.clientId,isDraft:false},include:{barcodes:true}});
       const warehouse = useLamodaWarehouseBarcodes(resolved, skus);
+      // FIX: check remaining stock and FBS/FBO demand atomically before reserving this plan.
+      await assertLamodaStockAvailable(tx, c.clientId, plan.warehouseId, warehouse.items);
       const request=await tx.clientRequest.create({data:{clientId:c.clientId,warehouseId:plan.warehouseId,type:'OUTBOUND',status:'SUBMITTED',priority:'NORMAL',title:plan.title,destinationCity:warehouse.directions.map(d=>d.name).join(', '),createdByUserId:user.id,items:{create:warehouse.items}},select:{id:true,number:true}});
       await tx.lamodaFboAssembly.create({data:{requestId:request.id,planId,externalKey:plan.remoteShipmentId?JSON.stringify([c.sellerId,plan.remoteShipmentId]):null,directions:warehouse.directions}});
       await tx.clientRequestEvent.create({data:{requestId:request.id,clientId:c.clientId,eventType:'CREATED',title:'Сборка Lamoda создана',statusTo:'SUBMITTED',createdByUserId:user.id}});

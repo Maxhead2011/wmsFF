@@ -2,10 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LamodaService } from '../src/modules/lamoda/lamoda.service';
 import { ClientScopeService } from '../src/modules/auth/client-scope.service';
 import { LamodaApiError, sealSecret } from '../src/modules/lamoda/lamoda-client';
+import { wbReservationQuantities } from '../src/common/stock/wb-order-stock-lifecycle';
+import { receiptRules } from '../src/modules/warehouse/receipt-channel-policy';
+
+vi.mock('../src/common/stock/wb-order-stock-lifecycle', async (original) => ({
+  ...await original<any>(), wbReservationQuantities: vi.fn(async () => new Map()),
+}));
+vi.mock('../src/modules/warehouse/receipt-channel-policy', async (original) => ({
+  ...await original<any>(), receiptRules: vi.fn(async () => new Map()),
+}));
 
 const user: any = { id: 'u', permissionCodes: ['marketplace-api:read', 'marketplace-api:write'], roleCodes: ['CLIENT'], clientScopeMode: 'LIMITED', clientIds: ['c'], writableClientIds: ['c'] };
 let account: any, db: any, requests: any, service: LamodaService, remote: any;
 beforeEach(() => {
+  vi.mocked(wbReservationQuantities).mockResolvedValue(new Map());
+  vi.mocked(receiptRules).mockResolvedValue(new Map());
   vi.stubEnv('WMS_LAMODA_ENABLED', 'true'); vi.stubEnv('WMS_LAMODA_SECRET_KEY', Buffer.alloc(32, 4).toString('base64'));
   account = { id: 'a', clientId: 'c', sellerId: 's', oauthClientId: 'oauth', isActive: true, fboEnabled: true, fbsEnabled: true, updatedAt: new Date(0), ordersSyncedAt: null };
   account.encryptedSecret = sealSecret('password', JSON.stringify(['c', 's', 'oauth']));
@@ -37,8 +48,27 @@ describe('Lamoda warehouse assembly',()=>{
   db.lamodaProduct.findMany.mockResolvedValue([{remoteSku:'lm',barcode:'12345678',externalSku:'a',skuId:'s',isPresent:true,linkState:'CONFIRMED'}]);
   db.sku={findMany:vi.fn(async()=>[{id:'s',barcodes:[{value:'12345678'}]}])};
   db.clientRequest={create:vi.fn(async()=>({id:'r',number:1}))};db.clientRequestEvent={create:vi.fn()};
+  db.client={findUniqueOrThrow:vi.fn(async()=>({storesWithoutBoxes:false}))};
+  db.stockBalance={findMany:vi.fn(async()=>[{skuId:'s',boxId:'box',quantity:2}])};
   return plan;
  }
+ // TEST: reproduce creation reserving more than physical stock minus existing FBS demand.
+ it('rejects an existing FBS reserve inside the creation transaction before any write',async()=>{
+  assemblyFixture();vi.mocked(wbReservationQuantities).mockResolvedValue(new Map([['s',1]]));
+  await expect(service.createAssembly('a','plan',user)).rejects.toThrow('Недостаточно свободного остатка');
+  expect(db.clientRequest.create).not.toHaveBeenCalled();expect(db.lamodaFboAssembly.create).not.toHaveBeenCalled();
+  expect(wbReservationQuantities).toHaveBeenCalledWith(db,'c',['s'],'w',undefined);
+ });
+ it('rejects zero stock even when the user previously previewed the plan',async()=>{
+  assemblyFixture();db.stockBalance.findMany.mockResolvedValue([]);
+  await expect(service.createAssembly('a','plan',user)).rejects.toThrow('доступно 0');
+  expect(db.clientRequest.create).not.toHaveBeenCalled();
+ });
+ it('does not create demand from a receipt forbidden for FBO',async()=>{
+  assemblyFixture();vi.mocked(receiptRules).mockResolvedValue(new Map([['box',{fbo:false,fbs:true,stockAvailable:true} as any]]));
+  await expect(service.createAssembly('a','plan',user)).rejects.toThrow('доступно 0');
+  expect(db.clientRequest.create).not.toHaveBeenCalled();
+ });
  // TEST: customer request permissions suffice only for own plans; API management stays restricted.
  it('lets a writable customer create an own assembly without API administration rights',async()=>{
   assemblyFixture();const customer={...user,permissionCodes:['client-requests:read','client-requests:write']};
