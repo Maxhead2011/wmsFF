@@ -5,6 +5,7 @@ import {lockOrderLinks,assertOrdersNotRemoved,withoutRemovedOrders,ADMIN_REMOVED
 import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, pinnedOriginalSticker } from './fbs-original-sticker';
 import { measureOperation } from '../../common/diagnostics/operation-timing';
 import { reconcileWbBackground } from '../../common/reconciliation/wb-background';
+import { reconcileTerminalAutoReservations } from './wb-terminal-auto-reservations';
 import { doneRequestPackingEnabled, reconcileDoneRequestPacking } from '../../common/stock/done-request-packing';
 import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorReservation } from './fbs-monitor-routing';
 import { fbsStockReserveDisplay } from './fbs-stock-reserve-display';
@@ -1156,6 +1157,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     // FIX: keep order refresh running while skipping stock publication for sales-managed clients.
     if (!await this.stockControl.isEnabled(clientId)) return;
+    // FIX: reconcile exact terminal AUTO demand before computing publishable quantities.
+    await reconcileTerminalAutoReservations(this.prisma, clientId,
+      (apiKey, ids) => this.readWbStatusesForConnection(apiKey, ids));
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: {
         clientId,

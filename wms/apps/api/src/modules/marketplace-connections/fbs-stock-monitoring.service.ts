@@ -1,4 +1,6 @@
 import { fbsMonitorRoutingEnabled, fbsMonitorRoute, fbsMonitorScopeWhere } from './fbs-monitor-routing';
+import { monitorIdentityKey, monitorProductIdentities } from './fbs-monitor-product-identity';
+import { productLinksEnabled } from './marketplace-product-links';
 import { BadRequestException, ConflictException, HttpException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientRequestStatus, ClientRequestType, MarketplaceType, Prisma, StockStatus, type FbsStockMonitorEvent } from '@prisma/client';
@@ -385,6 +387,10 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
     const connectionById = new Map(connections.map((item) => [item.id, item]));
     const skuById = new Map(skus.map((item) => [item.id, item]));
     const configByConnection = new Map(storedConfigs.map((item) => [item.connectionId, item]));
+    // FIX: use the publication identity for this account, not an unrelated marketplace id.
+    const identities = await monitorProductIdentities(this.prisma, eligible.map(order => ({
+      ...order, marketplaceProductId: skuById.get(order.skuId)?.marketplaceProductId,
+    })));
 
     const candidates = eligible.flatMap((order) => {
       const connection = connectionById.get(order.connectionId);
@@ -394,7 +400,7 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
       const config = this.configFor(order.clientId, order.connectionId, configByConnection.get(order.connectionId));
       if (!config.enabled) return [];
       const sku = skuById.get(order.skuId);
-      const ids = monitorWbProductIds(sku?.marketplaceProductId);
+      const ids = identities.get(monitorIdentityKey(order));
       const eventTypes: FbsStockMonitorEventType[] = order.category === 'cancelled'
         ? ['SALE', 'CANCEL']
         : ['SALE'];
@@ -1016,7 +1022,8 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
           },
           data: { processingAt: new Date(), processingBy: this.workerId },
         });
-        if (claim.count === 1) claimed.push(event);
+        // FIX: database BigInt must be normalized at the monitor probe boundary.
+        if (claim.count === 1) claimed.push({ ...event, chrtId: event.chrtId == null ? null : Number(event.chrtId) });
       }
       if (claimed.length === 0) {
         await this.finishRun(run.id, startedAt, { checked: 0 });
@@ -1025,6 +1032,19 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
 
       let probeResults: FbsStockMonitorProbeResult[] = [];
       try {
+        // FIX: old events also recover their missing WB identity on a normal recheck.
+        const identities = await monitorProductIdentities(this.prisma, claimed.map(event => ({
+          ...event, marketplaceProductId: event.chrtId ? `${event.nmId}:${event.chrtId}` : null,
+        })));
+        for (const event of claimed) {
+          if (!productLinksEnabled(event.clientId)) continue;
+          const ids = identities.get(monitorIdentityKey(event));
+          if (event.chrtId && (event.chrtId !== ids?.chrtId || event.nmId !== ids?.nmId)) {
+            event.wbBeforeAmount = null; event.wbExpectedAfterAmount = null;
+            event.wbStatus = 'UNAVAILABLE';
+          }
+          event.nmId = ids?.nmId ?? null; event.chrtId = ids?.chrtId ?? null;
+        }
         probeResults = await this.probe(claimed.map((event) => ({
           eventId: event.id,
           eventType: requireEventType(event.eventType),
@@ -1115,6 +1135,8 @@ export class FbsStockMonitoringService implements OnModuleInit, OnModuleDestroy 
           this.prisma.fbsStockMonitorEvent.update({
             where: { id: event.id },
             data: {
+              nmId: event.nmId, chrtId: event.chrtId,
+              wbBeforeAmount: event.wbBeforeAmount, wbExpectedAfterAmount: event.wbExpectedAfterAmount,
               wbCurrentAmount: probeResult.wbCurrentAmount,
               wbAfterAmount: wbResult.status === 'SUCCESS'
                 ? probeResult.wbCurrentAmount
@@ -1351,7 +1373,7 @@ function formatMonitorEvent(event: {
   productName: string;
   article: string | null;
   nmId: string | null;
-  chrtId: number | null;
+  chrtId: number | bigint | null;
   barcode: string | null;
   size: string | null;
   color: string | null;
@@ -1399,7 +1421,7 @@ function formatMonitorEvent(event: {
     productName: event.productName,
     article: event.article,
     nmId: event.nmId,
-    chrtId: event.chrtId,
+    chrtId: event.chrtId == null ? null : Number(event.chrtId),
     barcode: event.barcode,
     size: event.size,
     color: event.color,
