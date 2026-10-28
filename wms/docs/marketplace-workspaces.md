@@ -1,6 +1,6 @@
 # Рабочие разделы маркетплейсов
 
-Подготовлено 28.10.2026 в `feature/marketplace-workspaces` от PR719 / baseline `2026-10-28-lamoda-mapping`. Не опубликовано. Проданная ВМС не входит в выпуск.
+Опубликовано 28.10.2026 через PR720 из `feature/marketplace-workspaces` от PR719 / baseline `2026-10-28-lamoda-mapping`. После выпуска публичный браузер прошёл 24 сценария без ошибок. Проданная ВМС не входит в выпуск. Последующее открытие Lamoda встроено в страницу через PR721 — см. `lamoda-inline-assembly.md`.
 
 ## План и реализация
 
@@ -35,4 +35,4 @@ API `WMS_MARKETPLACE_WORKSPACES_ENABLED` и web `VITE_MARKETPLACE_WORKSPACES_ENA
 
 Дополнение по скриншотам Катерины: `components/layout/marketplace-surfaces.css` подключается только при включённом workspace-флаге. Непрозрачные подложки Ozon/FBY/Lamoda в La Panthera, две равные вкладки Ozon и полная ширина текстовой кнопки удаления в колонке действий. `surfaces.cjs` воспроизводит проблему на production CSS до исправления и проверяет после: шесть сочетаний светлого/тёмного стиля и ширины 390/1440/1920 px. Обработчики удаления, статусов и поставок не изменены.
 
-Локальные проверки: API 3851 passed / 150 skipped (два специальных KIZ DB integration файла исключены), web 523 passed / 2 skipped, TypeScript. Браузер: 9 сценариев с изолированными API-ответами. Read-only сверка production image подтвердила baseline PR718. Публикация не выполнялась.
+Локальные проверки: API 3851 passed / 150 skipped (два специальных KIZ DB integration файла исключены), web 524 passed / 2 skipped, TypeScript. Исходный браузер: 9 сценариев; фактический кандидат и публичный сайт: по 24 сценария с изолированными API-ответами. Перед выпуском проверен baseline PR718. Резервные образы `logoff-api:before-marketplace-workspaces-20261028` и `logoff-web:before-marketplace-workspaces-20261028`.
