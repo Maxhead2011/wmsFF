@@ -64,6 +64,12 @@ export class ClientRequestsController {
     return this.clientRequests.list(query, user);
   }
 
+  // FIX: inherits client-requests:read; declared before the dynamic ID route.
+  @Get('fbo-active-counts')
+  activeFboCounts(@CurrentUser() user: AuthUser) {
+    return this.clientRequests.activeFboCounts(user);
+  }
+
   @Get('box-overlaps')
   @RequirePermissions('system:admin')
   boxOverlaps(@CurrentUser() user: AuthUser) {

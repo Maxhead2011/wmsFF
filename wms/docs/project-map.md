@@ -1,3 +1,5 @@
+Prepared / 2026-10-28: active WB/Ozon FBO card counters, complete scoped request queue, loading/error states and stale-response protection. Own-WMS workspace flags; not published. [Scope and tests](fbo-active-card-counts.md).
+
 Published PR721 / 2026-10-28: Lamoda FBO opens shared execution inline after creation, preserves it across list refresh, resets on account/client/branch switch. API3851/web524 passed (150/2 skipped), build/TypeScript, baseline guards8, candidate/public browser28 passed with synthetic API fixtures. Web-only3 files on PR720; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-inline`, sourceParityVerified=false. [Details](lamoda-inline-assembly.md).
 
 Prepared / 2026-10-28: Lamoda shared FBO execution opens inline after assembly creation; list refresh preserves selection, scope change drops stale response. Web-only follow-up to PR720; API/APK/schema/sold unchanged. Runtime regression28 and full API3851/web524 passed. [Scope and tests](lamoda-inline-assembly.md).

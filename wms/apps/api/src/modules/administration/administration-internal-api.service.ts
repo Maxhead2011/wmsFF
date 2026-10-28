@@ -144,9 +144,9 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'client-requests',
     name: 'Заявки клиентов',
     prefixes: ['/client-request-removal', '/client-requests', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
-    routeCount: 57, // FIX: preview/commit/capability for audited administrative removal.
+    routeCount: 58, // FIX: scoped active FBO counters.
     description: 'Онлайн-заявки, документы, маршруты сборки и управление заказами FBS.',
-    logic: ['Создаёт и изменяет заявки.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
+    logic: ['Создаёт и изменяет заявки.', 'Считает активные заявки FBO WB/Ozon с учётом доступа и филиала.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
     dependencies: ['Основная БД', 'Склад', 'Подключения маркетплейсов'],
   },
   {
