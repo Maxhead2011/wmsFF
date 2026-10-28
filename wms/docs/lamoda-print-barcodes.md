@@ -1,6 +1,6 @@
 # Lamoda barcode lookup in printing
 
-Prepared on `fix/lamoda-print-barcodes`; **not published**.
+Published through [PR740](https://github.com/Maxhead2011/wmsFF/pull/740) into `feature/wb-print-check`, 2026-10-28.
 
 Read-only inspection of Lukin CL-000001 found 136 confirmed active Lamoda cards.
 All 136 Lamoda barcodes already existed as warehouse barcode aliases. Printing
@@ -61,3 +61,7 @@ Publication requires a fresh image/hash check and a PR into `feature/wb-print-ch
 Local evidence: `D:/WMSFF/_Kof/work/lamoda-print-20261028`.
 
 Candidate is based on live PR739 (APK238). Isolated PostgreSQL: six passed and full Nest API startup verified. PR737 stylesheet entry is preserved.
+
+Published API: `sha256:e3b5c94c6de4ee31da174963d8986f40ca59134ef4b6f19d6dbeb453d7c738f3`.
+Published web: `sha256:0cd665fa3d559ad5a83df7f692cadd91b39781ce0c3cf3db416ffe2d63a2b31e`.
+Public browser3 and live read-only lookup6 passed. Baseline `2026-10-28-lamoda-print`; sourceParityVerified=false. Rollback tags: `logoff-api:before-lamoda-print-20261028`, `logoff-web:before-lamoda-print-20261028`. Physical printer was not used during verification.
