@@ -26,11 +26,11 @@
 - `client-requests.service.ts`: связь в списке, защита состава. `client-request-marketplace-files.service.ts`: запрет файлов WB.
 - `tsd-assembly.service.ts`, `fbo-two-stage.service.ts`: отдельная очередь и тип площадки. `app.module.ts`, реестр внутреннего API: регистрация модуля/маршрутов.
 - `apps/web/src/components/yandex-fby/`, `FboWorkspace.tsx`, `fbo.css`, `fboRequestScope.ts`, `lib/api.ts`: две формы, привязка, сверка, плитки и исключение из WB.
-- Android `MainActivity.java`, `FboTwoStageScreen.java`: очередь и завершение без файлов WB. Версия logoff 235; prod APK пока не заменён.
+- Android `MainActivity.java`, `FboTwoStageScreen.java`: очередь и завершение без файлов WB. Версия logoff 236; prod APK пока не заменён.
 
 ## Проверки и выпуск
 
-API: policy/client/service tests, общий Vitest, TypeScript-сборка и 5 проверок скомпилированного модуля. Web: общий Vitest, TypeScript, production build и 8 браузерных сценариев. Android: полный `testLogoffDebugUnitTest` (266 тестов) и сборка debug APK 235. Миграция проверена в отдельном пустом PostgreSQL без портов/сети: уникальности, FK, ручные заявки, каскад. Production-данные не менялись.
+API: policy/client/service tests, full Vitest and TypeScript. Web: full Vitest, TypeScript, production build and actual-runtime browser checks. Android: all three flavor unit suites and LOGOFF release APK236. PostgreSQL integration uses an isolated disposable database; no production business data changed.
 
 Итог объединённого кандидата: API 3846 passed / 150 skipped; web 519 passed / 2 skipped; Android 267 passed в каждом из трёх flavor. Точный runtime: 19 проверок Lamoda и 12 FBY в отдельном PostgreSQL, полная загрузка Nest, 16 браузерных сценариев. Два специальных KIZ DB integration файла исключены (для них нужен отдельный стенд). Пропуски не считаются успешными проверками. В web build остаются прежние предупреждения размера чанков и отсутствующего локального шрифта Jura-Medium.ttf.
 

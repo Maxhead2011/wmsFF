@@ -43,5 +43,11 @@
     ],
     "errors": []
   },
-  "database": "pending"
+  "database": {
+    "passed": 12,
+    "isolated": true,
+    "noStockChanges": true,
+    "lamodaPassed": 19,
+    "fullApiHealth": true
+  }
 }
