@@ -2,6 +2,10 @@ import { fetchWorkspaceClients, visibleMarket, workspaceEnabled } from '../../li
 import { lazy, Suspense, useState, useEffect } from 'react';
 import { fetchFboActiveCounts, type AuthSession, type ClientSummary } from '../../lib/api';
 import '../fbs/fbs.css';
+// FIX: the deployed lazy WB module is external; its CSS must load with this entry point.
+import './client-requests.css';
+import './request-action-menus.css';
+import './request-batch.css';
 import './fbo.css';
 const Requests=lazy(()=>import('./ClientRequestsPanel').then(m=>({default:m.ClientRequestsPanel})));
 const Ozon=lazy(()=>import('../ozon-fbo/OzonFboPanel').then(m=>({default:m.OzonFboPanel})));
