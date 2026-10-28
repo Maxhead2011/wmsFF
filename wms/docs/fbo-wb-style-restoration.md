@@ -23,3 +23,7 @@
 `scripts/releases/fbo-wb-styles-20261028/patch.cjs` воспроизводит HTML-патч. `release.py` проверяет свежие API/web image ID, точный однофайловый delta и браузерные доказательства. Публикация разрешена только после MERGED PR из fix/fbo-wb-style-restoration, под release locks, с проверкой health, публичных хешей, неизменности остальных контейнеров, конфигурации и APK. При сбое выполняется откат web.
 
 Rollback: `logoff-web:before-fbo-wb-styles-20261028`.
+
+## Опубликовано PR737
+
+28.10.2026: web `sha256:dfc428dd10c327acc9dadf1f0fa18305aca8067bbbebb9c3593c6ec4f30d595c`. API `sha256:48ccf6622d2aad597c8784f8033a0644d5504ac3971d1f614e7449349c0f8140` не перезапускался. Публичные browser32 прошли с учебными данными; health и хеши HTML/CSS подтверждены. APK237, остальные контейнеры, конфигурация и бизнес-данные не изменены. Новый baseline `2026-10-28-fbo-wb-styles`.
