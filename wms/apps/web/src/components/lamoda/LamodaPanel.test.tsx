@@ -45,3 +45,10 @@ it('does not put OAuth secrets in query strings', async () => {
   expect(fetcher.mock.calls[0][0]).not.toContain('password');
   expect(fetcher.mock.calls[0][1].method).toBe('POST');
 });
+
+// TEST: clients see their planning entry without receiving credential-management controls.
+it('shows Lamoda planning for CLIENT request readers without API permissions',()=>{
+ vi.stubEnv('VITE_LAMODA_ENABLED','true');const client={...session,user:{...session.user,roleCodes:['CLIENT'],permissionCodes:['client-requests:read','client-requests:write'],clientScopeMode:'LIMITED' as const,clientIds:['c'],writableClientIds:['c']}};
+ expect(renderToStaticMarkup(<FboWorkspace session={client}/>)).toContain('lamoda');
+ const html=renderToStaticMarkup(<LamodaPanel session={client}/>);expect(html).not.toContain('Client secret');expect(html).not.toContain('OAuth Client ID');expect(html).toContain('FBO');
+});

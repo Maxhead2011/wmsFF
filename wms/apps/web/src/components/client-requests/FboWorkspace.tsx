@@ -8,7 +8,7 @@ const Lamoda=lazy(()=>import('../lamoda/LamodaPanel').then(m=>({default:m.Lamoda
 // FIX: preserve the existing Ozon workflow while placing WB Excel/manual requests next to it.
 export function FboWorkspace({session}:{session:AuthSession}) {
   const [market,setMarket]=useState<'wb'|'ozon'|'lamoda'|null>(null);
-  const canReadLamoda=import.meta.env.VITE_LAMODA_ENABLED==='true'&&session.user.permissionCodes.some(p=>p==='system:admin'||p==='marketplace-api:read');
+  const canReadLamoda=import.meta.env.VITE_LAMODA_ENABLED==='true'&&(session.user.permissionCodes.some(p=>p==='system:admin'||p==='marketplace-api:read')||(session.user.roleCodes.includes('CLIENT')&&session.user.permissionCodes.includes('client-requests:read')));
   const canReadWb=session.user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:read');
   return <section aria-label="FBO"><div className="section-heading"><div><p className="eyebrow">Поставки на склады маркетплейсов</p><h2>FBO</h2></div></div>
     <div className="fbo-marketplaces">{canReadWb&&<button className="fbs-marketplace-card fbs-marketplace-card--wb" aria-pressed={market==='wb'} onClick={()=>setMarket('wb')}><span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/wb.svg" alt="" /></span><span className="fbs-marketplace-card__content"><strong>FBO WB</strong><span>Заявки из Excel и созданные вручную</span></span></button>}

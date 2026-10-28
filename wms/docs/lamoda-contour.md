@@ -1,3 +1,9 @@
+## Client planning access — 28.10.2026
+
+The Lamoda tile and planning routes accept CLIENT users with client-requests:read/write. Every service call still validates the selected client; writes require writable membership and are blocked for demo users. Excel and existing-shipment imports, availability and assembly creation use these scoped rights. API connection, secret rotation, catalog sync and product mapping remain administrative. The customer view opens Plans FBO directly and never renders credential controls.
+
+Regression: the client-role test failed before the fix; service, controller metadata, rendered workspace and actual-runtime browser tests cover planning, read-only membership and forbidden management. Candidate database tests:19 passed on disposable PostgreSQL with synthetic data; full Nest application health passed. Customer browser10 and administrative browser13 passed. No business record or existing role is changed by deployment.
+
 # Lamoda — подготовительный контур, 26.10.2026
 
 ## Продолжение в работе: `feature/lamoda-operations`
