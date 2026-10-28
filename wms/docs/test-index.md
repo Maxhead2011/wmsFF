@@ -339,3 +339,5 @@ Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal
 - Synthetic DB constraint proof5: work/lamoda-contour/fbo-db-proof.json; not full runtime migration parity.
 
 Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.
+
+Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB suite excluded), web512/2; TypeScript using separately generated Prisma client to avoid shared workspace artifacts; Android logoff/ffullhab/platform passed; PostgreSQL runtime migration parity and17 tests/full Nest health; candidate/public browser13; baseline guards. Public fixtures intercepted every API call. Physical end-to-end cycle awaits client shipment.

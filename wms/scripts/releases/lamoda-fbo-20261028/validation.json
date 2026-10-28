@@ -1,0 +1,52 @@
+{
+  "api": {
+    "passed": 3810,
+    "skipped": 155
+  },
+  "web": {
+    "passed": 512,
+    "skipped": 2
+  },
+  "db": {
+    "passed": 17,
+    "isolated": true,
+    "noStockChanges": true,
+    "fullApiHealth": true
+  },
+  "candidateBrowser": {
+    "passed": 13,
+    "isolatedApi": true,
+    "writes": [
+      "account",
+      "check",
+      "CATALOG",
+      "import",
+      "assembly"
+    ],
+    "errors": []
+  },
+  "publicBrowser": {
+    "passed": 13,
+    "isolatedApi": true,
+    "writes": [
+      "account",
+      "check",
+      "CATALOG",
+      "import",
+      "assembly"
+    ],
+    "errors": []
+  },
+  "physicalLiveShipmentTested": false,
+  "apiImage": "sha256:a5d976c0cad870e1c7496dbac353c7ace696405f4f7f000265cb60a77ab4abf5",
+  "webImage": "sha256:f8605e9c64b86247ab7e8e502629d30153161d5ca9de761cd9e0a1797d22450e",
+  "apk": {
+    "versionCode": 235,
+    "versionName": "0.1.235-lamoda-fbo",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-lamoda-235.apk",
+    "sha256": "fa6494aacdc5f2804d27dfcdb6e6369b93656acb790ada9ee4c613358de5874b",
+    "size": 5398935,
+    "releasedAt": "2026-10-28T09:40:58.779916+00:00",
+    "releaseNotes": "Lamoda FBO assembly and packing."
+  }
+}
