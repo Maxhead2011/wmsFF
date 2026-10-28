@@ -94,6 +94,7 @@ export class FboTwoStageService {
         return {request,plan:await this.snapshot(tx,request)};
     }
     private async snapshot(tx: Prisma.TransactionClient, r: Request, context: Record<string, unknown> = {}) {
+        const yandex = process.env.WMS_YANDEX_FBY_ENABLED === 'true' ? await tx.yandexFbyShipment.findUnique({ where: { requestId: r.id }, select: { id: true } }) : null;
         const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
@@ -187,7 +188,7 @@ export class FboTwoStageService {
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
-            marketplace: shipment ? 'OZON' : 'WILDBERRIES',
+            marketplace: yandex ? 'YANDEX_MARKET' : shipment ? 'OZON' : 'WILDBERRIES',
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
             unboxedPickingSupported: unboxed,
             reopenPackingBoxSupported: ozonReopenSupported(shipment),
@@ -579,7 +580,7 @@ export class FboTwoStageService {
     }
     async wbFile(id: string, user: AuthUser) {
         const plan = await this.plan(id, user);
-        if (plan.marketplace === 'OZON') throw new BadRequestException('Это поставка Ozon. Файл WB для неё не формируется.');
+        if (plan.marketplace !== 'WILDBERRIES') throw new BadRequestException('Файл WB доступен только для поставок Wildberries.');
         if (plan.phase !== 'COMPLETED')
             throw new ConflictException('Сначала подтвердите все короба поставки.');
         return this.files.getWbPackagingTemplate(id, user);

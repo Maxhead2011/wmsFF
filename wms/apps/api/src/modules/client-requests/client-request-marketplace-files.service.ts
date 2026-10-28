@@ -92,6 +92,8 @@ export class ClientRequestMarketplaceFilesService {
     }
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
     assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
+    if (process.env.WMS_YANDEX_FBY_ENABLED === 'true' && await this.prisma.yandexFbyShipment.findUnique({ where: { requestId } }))
+      throw new BadRequestException('Для FBY не формируются файлы Wildberries.');
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Файлы WB доступны только для заявок на отгрузку.');
     }

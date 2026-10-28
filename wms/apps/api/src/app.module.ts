@@ -30,6 +30,7 @@ import { MobileIdempotencyInterceptor } from './modules/mobile/mobile-idempotenc
 import { OwnCompaniesModule } from './modules/own-companies/own-companies.module';
 import { OzonFboModule } from './modules/ozon-fbo/ozon-fbo.module';
 import { LamodaModule } from './modules/lamoda/lamoda.module';
+import { YandexFbyModule } from './modules/yandex-fby/yandex-fby.module';
 import { PrintModule } from './modules/print/print.module';
 import { ServiceCenterModule } from './modules/service/service-center.module';
 import { SkusModule } from './modules/skus/skus.module';
@@ -66,6 +67,7 @@ import { WmsAiModule } from './modules/wms-ai/wms-ai.module';
     OwnCompaniesModule,
     OzonFboModule,
     LamodaModule,
+    YandexFbyModule,
     ImportsModule,
     InventoryModule,
     // ADDED: isolated external API; it does not change existing user or TSD routes.

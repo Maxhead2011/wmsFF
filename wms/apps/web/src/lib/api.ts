@@ -1,3 +1,17 @@
+export type FbyAccount = { id: string; accountName: string | null; sellerId: string | null; client: { name: string } };
+export type FbyInput = { warehouseId: string; reference?: string; items?: { barcode: string; quantity: number }[]; mappings?: { offerId: string; barcode: string }[]; destination?: string; title?: string };
+export type FbyPreview = { previewHash: string; canCreate: boolean; destination: string; desiredDate: string | null; lines: { offerId?: string; barcode: string; name: string; size: string | null; quantity: number; resolved: boolean }[]; availability: { canCommit: boolean; lines: { barcode: string | null; availableQuantity: number; reservedQuantity: number; shortageQuantity: number }[] } | null };
+export type FbyRequest = { id: string; number: number; title: string; status: string; warehouseId: string; destinationCity: string | null; items: { quantity: number }[]; yandexFbyShipment: { remoteNumber: string | null; remoteStatus: string | null; checkedAt: string | null } };
+const fbyPath=(id:string)=>'/yandex-fby/accounts/'+encodeURIComponent(id);
+export const fetchFbyAccounts=(accessToken:string,clientId:string)=>request<FbyAccount[]>('/yandex-fby/accounts?clientId='+encodeURIComponent(clientId),{accessToken});
+export const fetchFbyWarehouses=(accessToken:string,id:string)=>request<{id:string;name:string}[]>(fbyPath(id)+'/warehouses',{accessToken});
+export const fetchFbyRequests=(accessToken:string,id:string,view:string)=>request<FbyRequest[]>(fbyPath(id)+'/requests?view='+encodeURIComponent(view),{accessToken});
+export const previewFby=(accessToken:string,id:string,body:FbyInput)=>request<FbyPreview>(fbyPath(id)+'/preview',{accessToken,method:'POST',body});
+export const createFby=(accessToken:string,id:string,body:FbyInput&{previewHash:string;idempotencyKey:string})=>request<{request:FbyRequest;existing:boolean}>(fbyPath(id)+'/requests',{accessToken,method:'POST',body});
+export const bindFby=(accessToken:string,id:string,requestId:string,body:FbyInput&{previewHash:string})=>request(fbyPath(id)+'/requests/'+encodeURIComponent(requestId)+'/bind',{accessToken,method:'POST',body});
+export const refreshFby=(accessToken:string,id:string,requestId:string)=>request<{status:string;matches:boolean;differences:{offerId:string;assemblyQuantity:number;yandexQuantity:number}[]}>(fbyPath(id)+'/requests/'+encodeURIComponent(requestId)+'/refresh',{accessToken,method:'POST'});
+export const parseFbyFile=(accessToken:string,id:string,file:File)=>{const body=new FormData();body.set('file',file);return requestMultipart<{barcode:string;quantity:number}[]>(fbyPath(id)+'/file',body,accessToken);};
+export const downloadFbyTemplate=(accessToken:string,id:string)=>requestBlob(fbyPath(id)+'/template',accessToken);
 // FIX: isolated Lamoda preparation API; no stock publication or shipment write endpoint.
 export type LamodaResource = 'CATALOG'|'ORDERS'|'FBO_SHIPMENTS'|'FBS_SHIPMENTS'|'RETURNS';
 export type LamodaAccount = {id:string;clientId:string;name:string;sellerId:string;oauthClientId:string;isActive:boolean;fboEnabled:boolean;fbsEnabled:boolean;checkedAt:string|null;ordersSyncedAt:string|null};
@@ -1512,6 +1526,7 @@ export type ClientRequestTimeline = {
 };
 
 export type ClientRequestSummary = {
+  yandexFbyShipment?: { requestId: string } | null;
   // FIX: marketplace identity for WB/Ozon list separation, including custom request titles.
   ozonShipment?: { requestId: string } | null;
   id: string;

@@ -58,3 +58,7 @@
 .fbs-marketplace-card--lamoda .fbs-marketplace-card__brand img { display:block; width:100%; height:100%; object-fit:contain; border-radius:inherit; }
 
 .fbs-marketplace-card--lamoda .lamoda-wordmark { display:block; width:168px; max-width:100%; height:28px; background:currentColor; -webkit-mask:url(/brand/lamoda-wordmark.svg) center/contain no-repeat; mask:url(/brand/lamoda-wordmark.svg) center/contain no-repeat; }
+
+/* FIX: marketplace cards share one equal responsive grid. */
+.fbo-marketplaces > .fbs-marketplace-card{width:100%;min-width:0;min-height:200px;height:100%;box-sizing:border-box}
+@media(min-width:1800px){.fbo-marketplaces{grid-template-columns:repeat(4,minmax(0,1fr))}}

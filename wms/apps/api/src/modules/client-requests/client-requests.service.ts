@@ -106,6 +106,7 @@ export class ClientRequestsService {
       // FIX: expose the persisted marketplace relation without loading Ozon directions or orders.
       include: { ...clientRequestInclude,
         ...(process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? { ozonShipment: { select: { requestId: true } } } : {}),
+        ...(process.env.WMS_YANDEX_FBY_ENABLED === 'true' ? { yandexFbyShipment: { select: { requestId: true } } } : {}),
       },
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
@@ -470,6 +471,10 @@ export class ClientRequestsService {
   }
 
   async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
+    // FIX: the remote composition must not diverge through the generic editor.
+    if (dto.items !== undefined && process.env.WMS_YANDEX_FBY_ENABLED === 'true' &&
+        await this.prisma.yandexFbyShipment.findUnique({ where: { requestId: id } }))
+      throw new BadRequestException('Состав FBY зафиксирован при проверке. Создайте новую сборку для другого состава.');
     // FIX: allocation and total demand must not diverge through the generic item editor.
     if (dto.items !== undefined && process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' &&
         await this.prisma.ozonFboShipment.findUnique({ where: { requestId: id } }))

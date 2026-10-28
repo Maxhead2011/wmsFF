@@ -26,6 +26,18 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: Yandex completed packing must not offer downloads for a different marketplace.
+    @Test public void yandexCompletedPackingDoesNotOfferWbFiles() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("COMPLETED");p.marketplace="YANDEX_MARKET";
+            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger());
+            try {
+                assertNotNull(find(a.findViewById(android.R.id.content),"Сборка FBY проверена"));
+                assertNull(find(a.findViewById(android.R.id.content),"Скачать файл WB"));
+                assertNull(find(a.findViewById(android.R.id.content),"Скачать состав для WB"));
+            } finally {screen.close();}
+        }
+    }
     // TEST: an off-route box needs a successful read before scanning products; no stock command on location scans.
     @Test public void alternativeBoxIsValidatedWithoutStockMutation() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
