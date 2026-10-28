@@ -1,3 +1,5 @@
+Published PR718: customer/admin manual mapping. Baseline `2026-10-28-lamoda-mapping`; public browser14 and live client-scoped search passed. All136 Lukin products confirmed.
+
 ## Manual correspondence — 28.10.2026
 
 FBO -> Lamoda -> Products and correspondence: CLIENT request readers may search only their own non-draft SKUs; writable client membership and client-requests:write are required to confirm. Administrators retain scoped access. Search supports WMS name, internal article and barcode. Empty search retains exact-barcode suggestions. API credentials and synchronization remain administrative.
