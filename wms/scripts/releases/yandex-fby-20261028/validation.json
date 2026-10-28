@@ -49,5 +49,23 @@
     "noStockChanges": true,
     "lamodaPassed": 19,
     "fullApiHealth": true
+  },
+  "publicBrowser": {
+    "passed": 16,
+    "isolatedApi": true,
+    "writes": [
+      "fby",
+      "fby",
+      "account",
+      "check",
+      "rotate"
+    ],
+    "errors": []
+  },
+  "release": {
+    "pr": 716,
+    "published": true,
+    "baseline": "2026-10-28-yandex-fby",
+    "otherContainersUnchanged": true
   }
 }
