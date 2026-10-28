@@ -17,8 +17,8 @@ function save(old,next,s){fs.writeFileSync(assets+'/'+next,s);mapping.push([old,
  const entry=`export {FboWorkspace} from '${src}/components/client-requests/FboWorkspace';export {LamodaPanel} from '${src}/components/lamoda/LamodaPanel';export {ClientLamodaConnections} from '${src}/components/client-cabinet/ClientLamodaConnections';export {visibleMarket,connected,workspaceClients,fetchWorkspaceClients} from '${src}/lib/marketplaceWorkspace';export {fetchClients} from '${src}/lib/api';`;
  const result=await esbuild.build({stdin:{contents:entry,resolveDir:src,loader:'tsx'},bundle:true,external:['/brand/*'],write:false,outfile:assets+'/'+name+'.js',format:'esm',jsx:'automatic',minify:true,define:{'import.meta.env':JSON.stringify({VITE_LAMODA_ENABLED:'true',VITE_YANDEX_FBY_ENABLED:'true',VITE_MARKETPLACE_WORKSPACES_ENABLED:'true'})},plugins:[plugin]});for(const f of result.outputFiles)fs.writeFileSync(f.path,f.contents);
  let html=fs.readFileSync(base+'/index.html','utf8');const m=html.match(/<script type="importmap">(.*?)<\/script>/s);assert(m);const map=JSON.parse(m[1]);
- for(const[k,v]of Object.entries(map.imports))if(v==='/assets/workspace-inline-20261028.js')map.imports[k]='/assets/'+name+'.js';
- map.imports['/assets/workspace-inline-20261028.js']='/assets/'+name+'.js';
+ for(const[k,v]of Object.entries(map.imports))if(v==='/assets/workspace-lamoda-layout-20261028.js')map.imports[k]='/assets/'+name+'.js';
+ map.imports['/assets/workspace-lamoda-layout-20261028.js']='/assets/'+name+'.js';
  html=html.replace(m[1],JSON.stringify(map)).replace('</head>','<link rel="stylesheet" href="/assets/'+name+'.css">\n</head>');
  fs.appendFileSync(assets+'/'+name+'.css','\n'+fs.readFileSync(src+'/components/layout/marketplace-surfaces.css','utf8'));
  fs.writeFileSync(root+'/web/payload/index.html',html);console.log('Inline assembly overlay built');
