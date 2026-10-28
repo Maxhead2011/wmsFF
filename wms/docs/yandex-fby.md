@@ -1,6 +1,6 @@
 # Яндекс Маркет FBY
 
-Состояние на 28.10.2026: объединённый кандидат в `feature/yandex-fby-workspace`, **не опубликован**. Целевая ветка PR: `feature/wb-print-check`. Сохранены опубликованные Lamoda FBO и клиентский доступ PR711–715. Проданная WMS не включается в выпуск.
+Published 28.10.2026 via PR716 into `feature/wb-print-check`. Own WMS only. Lamoda FBO and CLIENT access PR711-715 preserved. APK236 available; current baseline `2026-10-28-yandex-fby`.
 
 ## Рабочий сценарий
 
@@ -26,7 +26,7 @@
 - `client-requests.service.ts`: связь в списке, защита состава. `client-request-marketplace-files.service.ts`: запрет файлов WB.
 - `tsd-assembly.service.ts`, `fbo-two-stage.service.ts`: отдельная очередь и тип площадки. `app.module.ts`, реестр внутреннего API: регистрация модуля/маршрутов.
 - `apps/web/src/components/yandex-fby/`, `FboWorkspace.tsx`, `fbo.css`, `fboRequestScope.ts`, `lib/api.ts`: две формы, привязка, сверка, плитки и исключение из WB.
-- Android `MainActivity.java`, `FboTwoStageScreen.java`: очередь и завершение без файлов WB. Версия logoff 236; prod APK пока не заменён.
+- Android `MainActivity.java`, `FboTwoStageScreen.java`: separate LOGOFF FBY queue, completion without WB files; signed APK236 published.
 
 ## Проверки и выпуск
 
@@ -45,3 +45,5 @@ API: policy/client/service tests, full Vitest and TypeScript. Web: full Vitest, 
 Новые флаги: API `WMS_YANDEX_FBY_ENABLED`, web `VITE_YANDEX_FBY_ENABLED`; по умолчанию выключены. Android-пункт только в logoff flavor. Включать только совместно после миграции в нашей WMS. При выключенном API-флаге старые очереди не обращаются к новой связи.
 
 Перед публикацией заново проверить live image и `current-production.md`. `sourceParityVerified=false`: полную локальную сборку поверх production не ставить. Нужен проверенный адресный overlay, миграция, совместимый Prisma Client, проверки собранного API/web/APK и baseline check-candidate. После появления FBY-заявок нельзя просто выключить фильтрующий API-флаг: они снова станут видны старым очередям. Для отката сначала закрыть доступ к новым операциям FBY, сохранить фильтрацию и таблицу связей; не удалять бизнес-данные.
+
+Published runtime: health/public file hashes/APK signature verified; 16 public-browser scenarios passed using isolated API fixtures. No production business writes in browser tests. Real client Yandex import and physical device scan still need operational validation.
