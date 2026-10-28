@@ -1,3 +1,4 @@
+import { physicalKizIdentity } from '../../common/kiz-physical-identity';
 import { ConflictException } from '@nestjs/common';
 import type { LamodaPlanLine } from '../lamoda/lamoda-policy';
 import type { Prisma } from '@prisma/client';
@@ -44,4 +45,23 @@ export async function assertLamodaRelabelRecovery(tx:Prisma.TransactionClient, r
   const binding=await tx.lamodaFboAssembly.findUnique({where:{requestId:request.id}});
   if(binding&&(binding.relabelLabels||request.client.relabelingEnabled&&process.env.WMS_LAMODA_FBO_RELABEL_ENABLED==='true'))
     throw new ConflictException('Товар Lamoda с переклейкой упаковывается только через поштучное сканирование.');
+}
+
+// FIX: choose by warehouse identity, never by a manually selected marketplace row.
+export function resolveLamodaRelabelUnit<T extends {id:string;skuId:string;sourceBarcode:string;kiz?:string|null;printId?:string|null;label?:LamodaRelabelLabel|null}>(units:T[], lines:Array<{skuId:string;barcode:string;barcodes?:string[]}>, scan:string, kiz?:string) {
+ const barcode=typeof scan==='string'?scan.trim():'';
+ if(!barcode)throw new ConflictException('Сканируйте складской ШК товара.');
+ const found=units.filter(u=>u.sourceBarcode===barcode||lines.some(l=>l.skuId===u.skuId&&(l.barcode===barcode||l.barcodes?.includes(barcode))));
+ if(!found.length)throw new ConflictException('Этот товар не отобран или уже прошёл переклейку.');
+ if(new Set(found.map(u=>u.skuId)).size!==1)throw new ConflictException('ШК связан с разными товарами. Уточните соответствия.');
+ if(found.some(u=>!u.label)||new Set(found.map(u=>JSON.stringify(u.label))).size!==1)throw new ConflictException('Нет однозначного соответствия Lamoda.');
+ const identity=(s:string)=>physicalKizIdentity(s)||s.trim();
+ if(found.some(u=>u.kiz)) {
+  if(!kiz)throw new ConflictException('Сканируйте КИЗ этой единицы.');
+  const exact=found.filter(u=>u.kiz&&identity(u.kiz)===identity(kiz));
+  if(exact.length!==1)throw new ConflictException('КИЗ не соответствует отобранному товару.');
+  return exact[0];
+ }
+ if(kiz)throw new ConflictException('Для этого товара КИЗ не ожидается.');
+ return [...found].sort((a,b)=>Number(!!b.printId)-Number(!!a.printId)||a.id.localeCompare(b.id))[0];
 }

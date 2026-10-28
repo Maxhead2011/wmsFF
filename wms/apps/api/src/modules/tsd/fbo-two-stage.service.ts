@@ -1,5 +1,5 @@
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
-import { readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
+import { resolveLamodaRelabelUnit, readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
 import { buildTsdRelabelLabel } from './tsd-relabel-label';
 import { alternativeFboPickingEnabled, prioritizeAlternativeFboBox } from './fbo-alternative-picking';
 import { ozonReopenSupported, reopenOzonBox } from './ozon-reopen-box';
@@ -51,6 +51,13 @@ export class FboTwoStageService {
         return isFboTwoStageRequest(this.prisma, requestId);
     }
     // FIX: the print is tied to one physical picked unit and one immutable Lamoda identity.
+    // FIX: scoped, read-only resolution from a physical source scan.
+    async resolveLamodaRelabel(id:string,body:{barcode?:string;kiz?:string},user:AuthUser) {
+        const r=await this.load(this.prisma,id,user,'write');
+        const plan=await this.plan(id,user);
+        if(!plan.relabelRequired)throw new ConflictException('Переклейка Lamoda не требуется.');
+        return resolveLamodaRelabelUnit(plan.relabelUnits,r.items.flatMap(i=>i.skuId?[{skuId:i.skuId,barcode:i.barcode??'',barcodes:i.sku?.barcodes.map(b=>b.value)}]:[]),body.barcode??'',body.kiz);
+    }
     async relabelStations(id:string,user:AuthUser) {
         const r=await this.load(this.prisma,id,user,'write');
         if(process.env.WMS_LAMODA_FBO_RELABEL_ENABLED!=='true'||!lamodaAssemblyEnabled()||!await this.prisma.lamodaFboAssembly.findUnique({where:{requestId:id}})) throw new NotFoundException();

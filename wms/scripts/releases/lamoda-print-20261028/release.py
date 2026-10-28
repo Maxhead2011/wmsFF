@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess,json,hashlib,sys,fcntl,time,urllib.request
 r=Path('/opt/logoff-wms/wms/work/lamoda-print-20261028');app=Path('/opt/logoff-wms/wms')
-base={'api': 'sha256:48ccf6622d2aad597c8784f8033a0644d5504ac3971d1f614e7449349c0f8140', 'web': 'sha256:dfc428dd10c327acc9dadf1f0fa18305aca8067bbbebb9c3593c6ec4f30d595c'}
+base={'api': 'sha256:59ddff0650c9e24e16b95e8baa4689a3ec559f568a091c216c24335dd2124ad6', 'web': 'sha256:81659a9ebac7dd8b14d16eac97ddcf58dc510e2610d4aaa3255abca93558372c'}
 roots={'api':'/app/apps/api/dist/','web':'/usr/share/nginx/html/'}
 allowed={'api':{'modules/skus/skus.service.js','modules/skus/skus.controller.js','modules/print/print-agent.service.js','modules/print/lamoda-print-barcodes.js'},'web':{'index.html','assets/lamoda-print-host-20261028.js'}}
 def d(*a):return subprocess.check_output(['docker',*a],text=True).strip()

@@ -12645,3 +12645,6 @@ export function lookupFbsOriginalSticker(accessToken:string,clientId:string,orde
 // FIX: both Lamoda import methods converge on one idempotent warehouse assembly.
 export const importLamodaShipment=(accessToken:string,id:string,body:{reference:string;warehouseId:string;title?:string})=>request<{id:string}>(lamodaPath(id)+'/plans/from-shipment',{accessToken,method:'POST',body});
 export const createLamodaAssembly=(accessToken:string,id:string,planId:string,quantities?:LamodaQuantity[])=>request<{id:string;number:number}>(lamodaPath(id)+'/plans/'+encodeURIComponent(planId)+'/assembly',{accessToken,method:'POST',body:quantities ? {quantities} : {}});
+
+// FIX: physical warehouse scan resolves the confirmed Lamoda correspondence.
+export function resolveLamodaRelabel(accessToken:string,id:string,body:{barcode:string;kiz?:string}) {return request<NonNullable<FboPlan["relabelUnits"]>[number]>(`/tsd/requests/${id}/fbo/lamoda-relabel/resolve`,{accessToken,method:"POST",body});}

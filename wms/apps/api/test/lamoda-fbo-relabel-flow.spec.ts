@@ -66,3 +66,10 @@ it('does not enqueue duplicates after a lost response',async()=>{
  expect(repeat).toEqual(first);expect(tx.fbsPrintJob.create).toHaveBeenCalledTimes(1);
  expect(jobs[0].stickerCode).toBe(label.barcode);expect(jobs[0].assemblyId).toBe('unit');
 });
+
+// TEST: resolution performs write-scope authorization first and does not mutate stock.
+it('authorizes source resolution before looking up a plan',async()=>{
+ const {svc}=fixture();svc.load=vi.fn(async()=>{throw Error('scope');});svc.plan=vi.fn();
+ await expect(svc.resolveLamodaRelabel('r',{barcode:'warehouse'},{id:'worker'})).rejects.toThrow('scope');
+ expect(svc.plan).not.toHaveBeenCalled();expect(svc.move).not.toHaveBeenCalled();
+});

@@ -2,10 +2,10 @@
   "sourceParityVerified": false,
   "containers": {
     "infra-api-1": {
-      "image": "sha256:48ccf6622d2aad597c8784f8033a0644d5504ac3971d1f614e7449349c0f8140"
+      "image": "sha256:59ddff0650c9e24e16b95e8baa4689a3ec559f568a091c216c24335dd2124ad6"
     },
     "infra-web-1": {
-      "image": "sha256:14e6a4009f89c83c87d6f3093679a34d7c6940301d3dd4dc62ed40d707e1a429"
+      "image": "sha256:81659a9ebac7dd8b14d16eac97ddcf58dc510e2610d4aaa3255abca93558372c"
     }
   },
   "release": {
@@ -14,8 +14,8 @@
   },
   "artifacts": {
     "api-runtime.tar.gz": {
-      "size": 1591131,
-      "sha256": "91563d6df166159293274725cb3a00cee00511a740c3b9743ff94d7632095d85",
+      "size": 1591643,
+      "sha256": "e6964153ff9a40a8b64d531c975a82bca569be6fc20121695da228b3176e801b",
       "files": {
         "scripts/repair-sku633-pilot.js": "d95f738bafe590139f3d7e2ba37c7f2c863b4b45f03f6fe6a10e41f73a794f3a",
         "scripts/repair-fbs-double-consumption.js": "36cc3d9da09d2535ca4f483fcad62bbc50941f7a5d7ab249cfc74cbc6643dcf9",
@@ -109,7 +109,7 @@
         "modules/own-companies/own-companies.controller.js": "c18b4b78d551cccd965745b4d6c37009aa05f513cf3add780ae73ebe55d93861",
         "modules/own-companies/own-companies.module.js": "7df2e612544edd7c8f39d806f621ad3a6bb3e414bab58eb3e7600eb84758f756",
         "modules/tsd/tsd-sync.controller.js": "af63cbf4840a3d951a8ae403dfa0338b27ab27ff616f6b2e78e49a80c8941e22",
-        "modules/tsd/fbo-two-stage.service.js": "6c2bdbf5d2be49337463c9818737fc6bb8392e9a69b1f988b8667afb2c06b939",
+        "modules/tsd/fbo-two-stage.service.js": "90d7246c5e206d337c4048cac7e6851e74e4ce2bdd05db00e920abb551273a8b",
         "modules/tsd/tsd-receipt.service.js": "85cca43477a4902b78eccd5f1dc3e1dc2e862d83938b47d189daa0c5884f7105",
         "modules/tsd/tsd-device.controller.js": "4d2e91c6df6d97294d2c33bb7ecfaf549b0e848a3fecd2177bf19395f9184baa",
         "modules/tsd/tsd.module.js": "e66a7c1748a00868a6d250abf824f8c666ea173b92395cd663a31f2645e65c39",
@@ -130,10 +130,10 @@
         "modules/tsd/tsd-audit.interceptor.js": "84f072165f5405bf5688ec48b01d4c97c034e6e54a57c3d41595d7cc5815a95a",
         "modules/tsd/tsd-payload.parser.js": "bef4f92e3a5b0cb70c755804b9a0dbcb1fb8d7a37d49e11943cb0237d6ea7406",
         "modules/tsd/tsd-sync.service.js": "29814959f7b267360ce3d1690d7386e274bf08ea1665881f8d9420561e6bc875",
-        "modules/tsd/fbo-two-stage.controller.js": "4e0eff865da011e54f2cfe0891dfdf1a8fbdccf59c51beb3b3835216865362be",
+        "modules/tsd/fbo-two-stage.controller.js": "d74c181068a53da38d3194a14f6c13653e67de7377f121efee4acf3fe1a2efca",
         "modules/tsd/tsd-review.service.js": "1ca8881498dc40da2ecce491e48badad8d3960ed5cec540198057271fa696198",
         "modules/tsd/tsd-operation.types.js": "d43aa81f5bc89faa359e0f97c814ba25155591ff078fbb9bfd40f8c7c9683230",
-        "modules/tsd/lamoda-fbo-relabel.js": "58de16a47c83bdeab5d639952e3e00dad7a6fad18950ded135ff1e94048b460b",
+        "modules/tsd/lamoda-fbo-relabel.js": "d83023b23ae54fe176ca0c968e11cc3b53fb0165fc5f0a05a04f8e410c14d5e0",
         "modules/tsd/fbo-alternative-picking.js": "f3f5b0253b20839d90ff57e64ab8e8b67907973c57ccca2018b84339e42aee78",
         "modules/tsd/ozon-reopen-box.js": "a0c2a62209116aa9a3503791b07b95349826c5022f9c6b910e28b9c34cf68016",
         "modules/tsd/fbo-unplaced-picking.js": "7ccecf8b5565b60f7641611997c15744e061175abe1f89d10cd6c84308f4380c",
@@ -559,7 +559,7 @@
         "modules/administration/administration-unpalleted-writeoff.service.js": "4516b70ce394a76e6e6cf8ac317e94cdb2c3619e5b213ab09028119da3711e39",
         "modules/administration/auto-assembly.service.js": "a36cb5dfa0a2c6a24caf7211454632f4ef8070326cea16b1f64d2fd407e021e2",
         "modules/administration/auto-assembly-policy.js": "c550a42c9138ba7032087252f08f4e65a8ee49b23c2c64337c40ce94016df269",
-        "modules/administration/administration-internal-api.service.js": "fd3efdd9562b7f267fd74a3c3a933d80887df5424420f6f64c170a056fd3b93a",
+        "modules/administration/administration-internal-api.service.js": "ae3c41683a3d7d80373680e94e2a037c92a101edfe5b5f88649a56ef5bc93f92",
         "modules/administration/wb-stock-comparison.js": "cc20f0864882540d69cf905c3eb6040f1a1243c4e97ea5d9e4c13b8e03b7a068",
         "modules/administration/administration-marketplace-stock-control.controller.js": "507732e6e61cb3483239239f82fab19b59418bd91a064df34d72c9b4115fe263",
         "modules/administration/phantom-stock.service.js": "56c32ebf88d1bf6e3b4916a9cd8c7bdbf46c88043b3ead6987d5079a14c14cf1",
@@ -703,5 +703,5 @@
       "sha256": "a70da686968ffd90ed693ab848f86d168ffe970f9dfdcb38d44c51fde09f362b"
     }
   },
-  "capturedAt": "2026-10-28T14:37:53.384076+00:00"
+  "capturedAt": "2026-10-28T14:59:12.546477+00:00"
 }

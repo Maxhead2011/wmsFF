@@ -52,12 +52,12 @@ Publication requires a fresh image/hash check and a PR into `feature/wb-print-ch
   the Lamoda article. No physical print was issued.
 - Proposed handler tested against production in a READ ONLY transaction: six
   successful lookups by Lamoda remoteSku, externalSku and barcode for two cards.
-- Full API: 3894 passed,155 skipped; dedicated unconfigured
+- Full API: 3901 passed,155 skipped; dedicated unconfigured
   `kiz-duplicate.integration.spec.ts` excluded. Web:537 passed,2 skipped.
   API TypeScript with isolated current Prisma types and web TypeScript/build
   passed (existing bundle-size warning). Baseline guard verifies exactly four API
-  changes against API image `sha256:48ccf6622d2aad597c8784f8033a0644d5504ac3971d1f614e7449349c0f8140`.
+  changes against API image `sha256:59ddff0650c9e24e16b95e8baa4689a3ec559f568a091c216c24335dd2124ad6`.
 
 Local evidence: `D:/WMSFF/_Kof/work/lamoda-print-20261028`.
 
-Candidate is based on live PR737 (API PR735, APK237). Isolated PostgreSQL: six passed and full Nest API startup verified. PR737 stylesheet entry is preserved.
+Candidate is based on live PR739 (APK238). Isolated PostgreSQL: six passed and full Nest API startup verified. PR737 stylesheet entry is preserved.

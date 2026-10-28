@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 237 // FIX: Lamoda product relabel print and physical scan confirmation.
-            versionName = "0.1.237-lamoda-relabel"
+            versionCode = 238 // FIX: Lamoda product relabel print and physical scan confirmation.
+            versionName = "0.1.238-lamoda-source-scan"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
