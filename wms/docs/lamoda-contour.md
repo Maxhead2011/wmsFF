@@ -1,3 +1,5 @@
+Published PR714. Baseline `2026-10-28-lamoda-client`; exact2 API/4 web changes, source parity false. Public customer browser10 and live read-only Lukin access verified. No production data mutations.
+
 ## Client planning access — 28.10.2026
 
 The Lamoda tile and planning routes accept CLIENT users with client-requests:read/write. Every service call still validates the selected client; writes require writable membership and are blocked for demo users. Excel and existing-shipment imports, availability and assembly creation use these scoped rights. API connection, secret rotation, catalog sync and product mapping remain administrative. The customer view opens Plans FBO directly and never renders credential controls.
