@@ -1,0 +1,34 @@
+// TEST: real print lookup and queue validation in a disposable PostgreSQL database only.
+require('reflect-metadata');const assert=require('node:assert/strict');
+assert.equal(process.env.NODE_ENV,'test');assert.equal(new URL(process.env.DATABASE_URL).hostname,'lamoda-print-test-pg');
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient();
+const {SkusService}=require('/app/apps/api/dist/modules/skus/skus.service');
+const {SkusController}=require('/app/apps/api/dist/modules/skus/skus.controller');
+const {PrintAgentService}=require('/app/apps/api/dist/modules/print/print-agent.service');
+const {ClientScopeService}=require('/app/apps/api/dist/modules/auth/client-scope.service');
+(async()=>{let passed=0;
+ const c=await p.client.create({data:{code:'TEST',name:'Test'}}),other=await p.client.create({data:{code:'OTHER',name:'Other'}});
+ const sku=await p.sku.create({data:{clientId:c.id,internalSku:'WMS',name:'Warehouse',barcodes:{create:{value:'2000000000011',isPrimary:true}}}});
+ const account=await p.lamodaAccount.create({data:{clientId:c.id,name:'Test',sellerId:'seller',oauthClientId:'test',encryptedSecret:'unused'}});
+ const card=await p.lamodaProduct.create({data:{accountId:account.id,remoteSku:'LM-48',externalSku:'Lamoda article',name:'Lamoda name',barcode:'04640684262439',skuId:sku.id,linkState:'CONFIRMED'}});
+ const user={id:'synthetic',roleCodes:['CLIENT'],permissionCodes:['skus:read','print:write'],clientScopeMode:'LIMITED',clientIds:[c.id],writableClientIds:[c.id]};
+ const scopes=new ClientScopeService(),controller=new SkusController(new SkusService(p,scopes,{}));
+ for(const query of ['LM-48','Lamoda article','04640684262439']){
+  const rows=await controller.list(user,c.id,query,'','true');assert.equal(rows.length,1);assert.equal(rows[0].barcodes.find(b=>b.source==='LAMODA').value,card.barcode);
+ }assert.equal(await p.barcode.count(),1);passed++;
+ assert.equal((await controller.list(user,c.id,'WMS'))[0].barcodes.length,1);
+ await assert.rejects(()=>controller.list(user,other.id,'LM-48','','true'));passed++;
+ const station=await p.fbsPrintStation.create({data:{name:'TEST',agentKey:'test-only',printerName:'No device',printerModel:'TEST'}});
+ const png=Buffer.alloc(24);Buffer.from('89504e470d0a1a0a','hex').copy(png);png.writeUInt32BE(709,16);png.writeUInt32BE(472,20);
+ const input={stationId:station.id,skuId:sku.id,barcode:card.barcode,copies:1,widthMm:60,heightMm:40,imageBase64:png.toString('base64')};
+ const agent=new PrintAgentService(p,scopes);const job=await agent.createSkuJob(input,user);
+ assert.equal((await p.printJob.findUniqueOrThrow({where:{id:job.id}})).payload.barcode,card.barcode);passed++;
+ await p.lamodaProduct.update({where:{id:card.id},data:{linkState:'UNLINKED'}});
+ await assert.rejects(()=>agent.createSkuJob(input,user));assert.equal(await p.printJob.count(),1);passed++;
+ await p.lamodaProduct.update({where:{id:card.id},data:{linkState:'CONFIRMED'}});
+ await p.barcode.create({data:{skuId:sku.id,value:card.barcode,isPrimary:false}});
+ const rows=await controller.list(user,c.id,'LM-48','','true');assert.equal(rows[0].barcodes.length,2);assert.equal(rows[0].barcodes.find(b=>b.source==='LAMODA').value,card.barcode);passed++;
+ process.env.WMS_LAMODA_ENABLED='false';assert.equal((await controller.list(user,c.id,'LM-48','','true')).length,0);
+ assert.equal(await p.stockMovement.count(),0);assert.equal(await p.clientRequest.count(),0);assert.equal(await p.productMark.count(),0);passed++;
+ console.log(JSON.stringify({passed}));
+})().finally(()=>p.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});
