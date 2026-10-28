@@ -248,3 +248,5 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 [Administrative FBO/FBS request removal](request-removal.md): scoped preview/confirmation, preserved audit and prevention of automatic recreation.
+
+Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.

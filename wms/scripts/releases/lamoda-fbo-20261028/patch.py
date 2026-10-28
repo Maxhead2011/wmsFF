@@ -14,6 +14,9 @@ for n,v in json.loads((r/'compiled.json').read_text()).items():
   s=original[n]
   for before,after in [('include: { ...clientRequestInclude,','include: { ...clientRequestInclude, ...(process.env.WMS_LAMODA_ENABLED === "true" ? {lamodaAssembly:{select:{requestId:true}}}:{}),'),('async update(id, dto, user) {','async update(id, dto, user) {\nif(dto.items!==undefined && process.env.WMS_LAMODA_ENABLED === "true" && await this.prisma.lamodaFboAssembly.findUnique({where:{requestId:id}})) throw new common_1.BadRequestException("Lamoda assembly composition is controlled by its plan.");')]:
    assert s.count(before)==1;s=s.replace(before,after,1)
+ elif n=='modules/tsd/tsd-assembly.service.js':
+  s=original[n];before="!['WB', 'OZON'].includes(marketplace)";assert s.count(before)==1;s=s.replace(before,"!['WB', 'OZON', ...(require('../lamoda/lamoda-fbo-policy').lamodaAssemblyEnabled()?['LAMODA']:[])].includes(marketplace)")
+  before="...(marketplace ? { ozonShipment:";assert s.count(before)==1;s=s.replace(before,"...(marketplace && process.env.WMS_LAMODA_ENABLED === 'true' ? {lamodaAssembly:marketplace==='LAMODA'?{isNot:null}:{is:null}}:{}),\n            "+before)
  elif n=='modules/tsd/fbo-two-stage.service.js':
   s=original[n]
   for key in ['r.id','id']:

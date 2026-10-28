@@ -680,7 +680,7 @@ public class FboTwoStageScreenTest {
                 find(root,"FBO").performClick();root=a.findViewById(android.R.id.content);
                 assertNotNull(find(root,"Сборка FBO"));assertNotNull(find(root,"Упаковка FBO"));
                 find(root,"Сборка FBO").performClick();root=a.findViewById(android.R.id.content);
-                assertNotNull(find(root,"FBO WB"));assertNotNull(find(root,"FBO Ozon"));
+                assertNotNull(find(root,"FBO WB"));assertNotNull(find(root,"FBO Ozon"));assertNotNull(find(root,"FBO Lamoda")); // TEST: reachable only in the LOGOFF marketplace menu.
                 a.onBackPressed();assertNotNull(find(a.findViewById(android.R.id.content),"Упаковка FBO"));
             } else {assertNotNull(find(root,"Упаковка FBS"));assertNotNull(find(root,"Сборка FBO Ozon"));assertNull(find(root,"Упаковка FBO"));}
             a.getSharedPreferences("logoff_wms_tsd_session",0).edit().clear().commit();

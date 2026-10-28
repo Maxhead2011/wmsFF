@@ -7017,6 +7017,8 @@ public class MainActivity extends Activity {
         LinearLayout root=baseRoot();root.addView(header());root.addView(title(fboPacking ? "Упаковка FBO" : "Сборка FBO"));
         root.addView(primaryMenuButton("FBO WB",v->{fboMarketplace="WB";openAssemblyRequests();}));
         root.addView(primaryMenuButton("FBO Ozon",v->{fboMarketplace="OZON";openAssemblyRequests();}));
+        // FIX: own LOGOFF menu exposes the isolated Lamoda queue.
+        root.addView(primaryMenuButton("FBO Lamoda",v->{fboMarketplace="LAMODA";openAssemblyRequests();}));
         root.addView(secondaryButton("Назад",v->renderFboMenu()));setScrollableContent(root);
     }
 
@@ -7064,7 +7066,7 @@ public class MainActivity extends Activity {
         screen = Screen.ASSEMBLY_LIST;
         LinearLayout root = baseRoot();
         root.addView(header());
-        root.addView(title("logoff".equals(BuildConfig.FLAVOR) ? ((fboPacking ? "Упаковка FBO " : "Сборка FBO ") + ("OZON".equals(fboMarketplace) ? "Ozon" : "WB")) : "Сборка заявки"));
+        root.addView(title("logoff".equals(BuildConfig.FLAVOR) ? ((fboPacking ? "Упаковка FBO " : "Сборка FBO ") + ("LAMODA".equals(fboMarketplace) ? "Lamoda" : "OZON".equals(fboMarketplace) ? "Ozon" : "WB")) : "Сборка заявки"));
 
         if (assemblyRequests.isEmpty()) {
             root.addView(messageView("Активных заявок на сборку нет."));
@@ -9553,7 +9555,7 @@ public class MainActivity extends Activity {
             case FBO_MENU: return "FBO";
             case FBO_PICK_MENU: return fboPacking ? "Упаковка FBO" : "Сборка FBO";
             case FBS_MENU: return "FBS";
-            case FBO_TWO_STAGE: return (fboPacking ? "Упаковка FBO " : "Сборка FBO ") + ("OZON".equals(fboMarketplace) ? "Ozon" : "WB");
+            case FBO_TWO_STAGE: return (fboPacking ? "Упаковка FBO " : "Сборка FBO ") + ("LAMODA".equals(fboMarketplace) ? "Lamoda" : "OZON".equals(fboMarketplace) ? "Ozon" : "WB");
             case PALLET_SORTING: return "Сортировка и перемещение";
             case RECEIPT: return "Приёмка";
             case ASSEMBLY_LIST:

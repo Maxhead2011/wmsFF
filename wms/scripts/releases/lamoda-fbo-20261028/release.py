@@ -34,7 +34,7 @@ def publish():
  locks=[]
  for name in ['/run/logoff-wms-release.lock','/opt/logoff-wms/.release.lock','/run/logoff-wms-web-release.lock']:
   f=open(name,'a');fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(f)
- check();v=json.loads((r/'verification.json').read_text());pr=json.loads((r/'pr.json').read_text());assert pr['state']=='MERGED' and pr['headRefName']=='feature/lamoda-fbo-imports';assert not (r/'published.json').exists()
+ check();v=json.loads((r/'verification.json').read_text());pr=json.loads((r/'pr.json').read_text());assert pr['state']=='MERGED' and pr['headRefName']=='fix/lamoda-tsd-entry';assert not (r/'published.json').exists()
  db=json.loads((r/'db-proof.json').read_text());browser=json.loads((r/'browser-proof.json').read_text());assert db['passed']>=10 and db['fullApiHealth'] and browser['passed']>=8 and browser['isolatedApi']
  os.umask(0o077);others={n:d('inspect',n,'--format','{{.Id}}') for n in d('ps','--format','{{.Names}}').splitlines() if n not in ['infra-api-1','infra-web-1']}
  with open(r/'database-before.dump','wb') as f:subprocess.run(['docker','exec','infra-postgres-1','sh','-c','pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc'],stdout=f,check=True)
