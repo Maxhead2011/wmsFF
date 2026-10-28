@@ -2,6 +2,7 @@ import {expect,it,vi,afterEach} from 'vitest';
 import {LamodaService} from '../src/modules/lamoda/lamoda.service';
 import {ClientScopeService} from '../src/modules/auth/client-scope.service';
 import {resolveLamodaLines,useLamodaWarehouseBarcodes} from '../src/modules/lamoda/lamoda-fbo-policy';
+vi.mock('../src/common/stock/wb-order-stock-lifecycle', () => ({ wbReservationQuantities: vi.fn(async () => new Map()) }));
 const user:any={id:'u',roleCodes:['CLIENT'],permissionCodes:['client-requests:read','client-requests:write'],clientScopeMode:'LIMITED',clientIds:['c'],writableClientIds:['c']};
 afterEach(()=>vi.unstubAllEnvs());
 // TEST: a customer explicitly links different marketplace and warehouse identities.
@@ -35,8 +36,10 @@ it('searches own warehouse identifiers and previews the mapped warehouse barcode
  const product={barcode:'11111111',externalSku:'LM-A',skuId:'s',remoteSku:'LM1',isPresent:true,linkState:'CONFIRMED'};
  const db:any={lamodaAccount:{findUnique:async()=>({clientId:'c'})},lamodaProduct:{findFirst:async()=>product,findMany:async()=>[product]},sku:{findMany:vi.fn(async()=>[sku])},lamodaPlan:{findFirst:async()=>({warehouseId:'w',items:[{barcode:'11111111',article:'LM-A',quantity:2}]})}};
  const requests={previewAvailability:vi.fn(async()=>({lines:[]}))};const service=new LamodaService(db,new ClientScopeService(),requests as any);
+ db.$transaction=async(fn:any)=>fn(db);db.client={findUniqueOrThrow:async()=>({storesWithoutBoxes:true})};
+ db.stockBalance={findMany:async()=>[{skuId:'s',boxId:null,quantity:2}]};db.lamodaFboAssembly={findUnique:async()=>null};
  await service.candidates('a','p',user,'WMS-A');
  expect(db.sku.findMany.mock.calls[0][0].where).toMatchObject({clientId:'c',isDraft:false,OR:[{internalSku:{contains:'WMS-A',mode:'insensitive'}},{name:{contains:'WMS-A',mode:'insensitive'}},{barcodes:{some:{value:{contains:'WMS-A'}}}}]});
- await service.availability('a','plan',user);
- expect(requests.previewAvailability).toHaveBeenCalledWith(expect.objectContaining({items:[{skuId:'s',barcode:'22222222',quantity:2}]}),user);
+ const preview=await service.availability('a','plan',user);
+ expect(preview.availability.lines).toEqual([expect.objectContaining({skuId:'s',barcode:'22222222',requestedQuantity:2,availableQuantity:2})]);
 });

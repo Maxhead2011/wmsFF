@@ -1,3 +1,5 @@
+Published PR723 / 2026-10-28: Lamoda operational FBO matches Ozon page layout: compact client/account/branch toolbar, collapsed file/supply forms, full-width active/completed cards with adaptive density4-6. API3851/web525 passed (150/2 skipped), source browser9, candidate/public browser43, TypeScript/build and baseline guards8. Exact web3 files; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-layout`, sourceParityVerified=false. [Details](lamoda-ozon-layout.md).
+
 Prepared / 2026-10-28: active WB/Ozon FBO card counters, complete scoped request queue, loading/error states and stale-response protection. Own-WMS workspace flags; not published. [Scope and tests](fbo-active-card-counts.md).
 
 Published PR721 / 2026-10-28: Lamoda FBO opens shared execution inline after creation, preserves it across list refresh, resets on account/client/branch switch. API3851/web524 passed (150/2 skipped), build/TypeScript, baseline guards8, candidate/public browser28 passed with synthetic API fixtures. Web-only3 files on PR720; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-inline`, sourceParityVerified=false. [Details](lamoda-inline-assembly.md).

@@ -1,4 +1,5 @@
-import { IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, MaxLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { lamodaResources, type LamodaResource } from './lamoda-client';
 // FIX: DTO classes preserve ValidationPipe checks at runtime (interfaces do not).
 export class LamodaCreateAccountDto {
@@ -29,4 +30,13 @@ export class LamodaImportShipmentDto {
   @IsString() @IsNotEmpty() @MaxLength(2000) reference!: string;
   @IsString() @IsNotEmpty() @MaxLength(200) warehouseId!: string;
   @IsOptional() @IsString() @MaxLength(200) title?: string;
+}
+// FIX: explicit lower quantities are validated before the serializable creation check.
+export class LamodaQuantityDto {
+  @IsString() @IsNotEmpty() @MaxLength(200) skuId!: string;
+  @IsInt() @Min(0) quantity!: number;
+}
+export class LamodaAssemblyDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(1000) @ValidateNested({ each: true }) @Type(() => LamodaQuantityDto)
+  quantities?: LamodaQuantityDto[];
 }

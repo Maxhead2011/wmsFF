@@ -1,3 +1,5 @@
+Prepared / 2026-10-28: Lamoda shortage/correction guard. API3872 passed/155 skipped (dedicated KIZ database suite excluded), web529 passed/2 skipped; TypeScript/build; 43 focused API tests; isolated PostgreSQL7 including concurrent creation; candidate browser8 including no write on correction, refreshed FBS deficit, inline execution, mobile and Dark. Four-file runtime delta verified on PR721–723. Not published. [Details](lamoda-stock-guard.md).
+
 Prepared / 2026-10-28: active WB/Ozon FBO card counters, complete scoped request queue, loading/error states and stale-response protection. Own-WMS workspace flags; not published. [Scope and tests](fbo-active-card-counts.md).
 
 Published PR721 / 2026-10-28: Lamoda FBO opens shared execution inline after creation, preserves it across list refresh, resets on account/client/branch switch. API3851/web524 passed (150/2 skipped), build/TypeScript, baseline guards8, candidate/public browser28 passed with synthetic API fixtures. Web-only3 files on PR720; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-inline`, sourceParityVerified=false. [Details](lamoda-inline-assembly.md).

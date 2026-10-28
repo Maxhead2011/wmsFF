@@ -11,6 +11,15 @@
 .lamoda-card{padding:16px;border:1px solid #dce4eb;border-radius:12px}
 .lamoda-scroll{overflow:auto}.lamoda-workspace table{width:100%;border-collapse:collapse}.lamoda-workspace th,.lamoda-workspace td{text-align:left;padding:10px;border-bottom:1px solid #dce4eb;vertical-align:top}
 .lamoda-workspace small{display:block}.lamoda-error{color:#b42318}
+/* FIX: keep the shortage review readable and its table scroll contained on narrow screens. */
+.lamoda-stock-review{min-width:0;max-width:100%;box-sizing:border-box}
+.lamoda-stock-review table{min-width:880px}
+.lamoda-stock-review input[type=number]{min-width:92px;max-width:120px;box-sizing:border-box}
+.lamoda-stock-warning{border-left:4px solid #dc8b21;padding:12px;background:rgba(220,139,33,.12)}
+.lamoda-stock-review tr[data-shortage=true]{background:rgba(220,139,33,.08)}
+.lamoda-stock-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.lamoda-stock-review .lamoda-stock-create{font-weight:700}
+
 .lamoda-operational-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
 .lamoda-operational-create, .lamoda-operational-list { min-width: 0; }
 .lamoda-operational-grid > .lamoda-card { grid-column: 1; }
@@ -23,3 +32,39 @@
 .lamoda-assembly-detail .fbo-inline-execution__header { flex-wrap: wrap; }
 .lamoda-assembly-detail .fbo-inline-execution__header h2 { min-width: 0; overflow-wrap: anywhere; }
 .lamoda-assembly-detail .online-execution-table-wrap { max-width: 100%; overflow-x: auto; }
+.lamoda-operational-grid > .lamoda-stock-review { grid-column: 1 / -1; }
+/* FIX: constrain intrinsic table width to the scrolling review, including mobile layouts. */
+.lamoda-workspace:has(.lamoda-stock-review) { grid-template-columns: minmax(0, 1fr); }
+
+/* FIX: full-width Ozon-style FBO landing, scoped away from legacy/FBS/maintenance. */
+.lamoda-ozon-layout { color: var(--ink,#243444); min-width: 0; container-type: inline-size; }
+.lamoda-ozon-layout .lamoda-page-header { padding: 18px 20px; border: 1px solid var(--line,#dce4eb); border-radius: 18px; }
+.lamoda-ozon-layout .lamoda-page-header small { margin-bottom: 8px; }
+.lamoda-ozon-layout .lamoda-page-header h2 { margin: 0; }
+.lamoda-ozon-layout .lamoda-toolbar { grid-template-columns: minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr) auto; align-items: end; }
+.lamoda-ozon-layout .lamoda-toolbar > * { min-width: 0; margin: 0; }
+.lamoda-ozon-layout button { font-weight: 650; min-height: 42px; background: var(--surface,#fff); color: var(--ink,#243444); }
+.lamoda-ozon-layout .lamoda-tabs [aria-pressed=true] { background: var(--accent-soft,#eee8f4) !important; color: var(--ink,#243444) !important; }
+.lamoda-ozon-layout .lamoda-operational-grid { display: flex; flex-direction: column; gap: 20px; }
+.lamoda-ozon-layout .lamoda-operational-grid > * { width: 100%; min-width: 0; box-sizing: border-box; }
+.lamoda-ozon-layout .lamoda-operational-create { padding: 16px; border: 1px solid var(--line,#dce4eb); border-radius: 16px; }
+.lamoda-ozon-layout [hidden] { display: none !important; }
+.lamoda-ozon-layout .lamoda-list-header { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.lamoda-ozon-layout .lamoda-list-header h3 { margin: 0 auto 0 0; }
+.lamoda-ozon-layout .lamoda-list-header label { display: flex; gap: 8px; align-items: center; }
+.lamoda-ozon-layout .lamoda-list-header select { width: 74px; }
+.lamoda-ozon-layout .lamoda-list-tabs { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin: 10px 0 14px; }
+.lamoda-ozon-layout .lamoda-list-tabs button { margin: 0; width: 100%; }
+.lamoda-ozon-layout .lamoda-assembly-cards { display: grid; grid-template-columns: repeat(var(--lamoda-columns,6),minmax(0,1fr)); gap: 14px; }
+.lamoda-ozon-layout .lamoda-assembly-card { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; background: var(--surface,#fff); }
+.lamoda-ozon-layout .lamoda-assembly-card strong { font-size: 1.15rem; margin-bottom: 12px; }
+.lamoda-ozon-layout .lamoda-plan-status { align-self: flex-start; border-radius: 10px; padding: 8px 12px; margin-bottom: 18px; background: var(--accent-soft,#e6f3ef) !important; }
+.lamoda-ozon-layout .lamoda-assembly-card button { width: 100%; margin: 6px 0 0; white-space: normal; }
+.lamoda-ozon-layout .lamoda-assembly-card p + button { margin-top: auto; }
+@container (max-width: 1400px) { .lamoda-ozon-layout .lamoda-assembly-cards { grid-template-columns: repeat(min(var(--lamoda-columns,6),4),minmax(0,1fr)); } }
+@container (max-width: 1050px) { .lamoda-ozon-layout .lamoda-toolbar { grid-template-columns: repeat(2,minmax(0,1fr)); } .lamoda-ozon-layout .lamoda-assembly-cards { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@container (max-width: 760px) { .lamoda-ozon-layout .lamoda-assembly-cards { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@container (max-width: 480px) { .lamoda-ozon-layout .lamoda-toolbar,.lamoda-ozon-layout .lamoda-assembly-cards { grid-template-columns: minmax(0,1fr); } }
+/* FIX: Panthera's generic button background must not erase the selected tab. */
+:root[data-ui-theme='modern'][data-ui-variant='la_panthera'] .lamoda-ozon-layout .lamoda-tabs button[aria-pressed='true'] { background: #40384f !important; color: #f1eaf9 !important; }
+:root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='light'] .lamoda-ozon-layout .lamoda-tabs button[aria-pressed='true'] { background: #eee8f4 !important; color: #34434f !important; }
