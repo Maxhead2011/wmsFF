@@ -347,6 +347,7 @@ final class FboTwoStageScreen {
         input=null;
         if(packingChoices()&&packingMode==PackingMode.MENU&&!state.target.isEmpty())packingMode=PackingMode.NEW_BOXES;
         if(plan!=null){text(root,plan.title);text(root,"Этап: "+FboFeedback.phase(screenPhase()));
+            renderLamodaRelabel(root);
             text(root,"Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" из "+plan.needed);
             text(root,"Проверено коробов "+FboFeedback.confirmed(plan)+" из "+plan.boxes.size());
             if(directed()&&plan.directions!=null){
@@ -659,9 +660,56 @@ final class FboTwoStageScreen {
         });
     }
     private void send(String action,String kiz){send(action,kiz,null);}
+    private String relabelUnitId="";
+    // FIX: only LOGOFF and an explicit server capability expose the replacement-label step.
+    private void renderLamodaRelabel(LinearLayout root){
+        if(!"logoff".equals(BuildConfig.FLAVOR)||!plan.relabelRequired||plan.relabelUnits==null)return;
+        text(root,"Переклейка Lamoda: ожидает проверки "+plan.relabelUnits.size()+" шт.");
+        for(TsdFboPlan.RelabelUnit unit:plan.relabelUnits){
+            if(unit.label==null)continue;
+            String label=unit.label.name+" · "+unit.label.size+" · "+unit.label.barcode;
+            text(root,label+" · печать: "+(unit.printStatus==null?"не отправлена":unit.printStatus));
+            if("PRINTED".equals(unit.printStatus))button(root,"Сканировать новую этикетку",ready(),()->confirmLamodaRelabel(unit));
+            else if(unit.printStatus==null||"FAILED".equals(unit.printStatus))button(root,"Печать 2 этикеток 58 × 40",ready(),()->chooseLamodaPrinter(unit));
+        }
+    }
+    private void chooseLamodaPrinter(TsdFboPlan.RelabelUnit unit){
+        if(!ready())return;busy=true;render();executor.execute(()->{try{
+            Response<List<TsdPrintStation>> response=api.lamodaFboRelabelStations(session.authorizationHeader(),id).execute();
+            if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
+            List<TsdPrintStation> stations=response.body();handler.post(()->{if(closed)return;busy=false;render();
+                if(stations.isEmpty()){message="Нет станций печати на связи. Запустите агент печати.";render();return;}
+                String[] names=new String[stations.size()];for(int i=0;i<names.length;i++)names[i]=stations.get(i).name;
+                new AlertDialog.Builder(activity).setTitle("Станция переклейки Lamoda").setItems(names,(d,n)->printLamodaUnit(unit,stations.get(n).id)).setNegativeButton("Назад",null).show();
+            });
+        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message=e.getMessage();render();});}});
+    }
+    private void printLamodaUnit(TsdFboPlan.RelabelUnit unit,String station){
+        if(!ready())return;busy=true;render();Map<String,String> body=new LinkedHashMap<>();body.put("unitId",unit.id);body.put("stationId",station);body.put("printId",UUID.randomUUID().toString());
+        executor.execute(()->{try{Response<TsdRelabelPrintJob> response=api.lamodaFboRelabelPrint(session.authorizationHeader(),id,body).execute();
+            if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
+            handler.post(()->{if(closed)return;busy=false;message="Печать отправлена. После выхода этикеток обновите экран и подтвердите новый ШК.";refresh();});
+        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message="Проверьте состояние печати кнопкой «Обновить»: "+e.getMessage();render();});}});
+    }
+    private void confirmLamodaRelabel(TsdFboPlan.RelabelUnit unit){
+        if(!ready())return;
+        LinearLayout form=new LinearLayout(activity);form.setOrientation(LinearLayout.VERTICAL);
+        EditText barcode=new EditText(activity);barcode.setSingleLine(true);barcode.setHint("Сканируйте новую этикетку Lamoda");form.addView(barcode);
+        EditText mark=new EditText(activity);mark.setSingleLine(true);mark.setHint("Сканируйте КИЗ этой единицы");
+        boolean marked=unit.kiz!=null&&!unit.kiz.isEmpty();if(marked)form.addView(mark);
+        AlertDialog dialog=new AlertDialog.Builder(activity).setTitle(unit.label.name+" · размер "+unit.label.size).setView(form).setNegativeButton("Назад",null).setPositiveButton("Подтвердить",null).create();
+        quantityDialog=dialog;
+        dialog.setOnDismissListener(d->{quantityDialog=null;});
+        dialog.setOnShowListener(d->{barcode.requestFocus();dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(!unit.label.barcode.equals(barcode.getText().toString().trim())){barcode.setError("Неверный ШК Lamoda");return;}
+            if(marked&&mark.getText().toString().trim().isEmpty()){mark.setError("Сканируйте КИЗ");return;}
+            if(!ready())return;relabelUnitId=unit.id;state.barcode=barcode.getText().toString().trim();dialog.dismiss();send("RELABEL_UNIT",marked?mark.getText().toString():null);
+        });});dialog.show();
+    }
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;retrySending=state.pending()!=null;feedbackColor=Color.TRANSPARENT;Map<String,String> payload=state.prepare(action,kiz,quantity);
+        if("RELABEL_UNIT".equals(payload.get("action"))&&!retrySending){payload.put("relabelUnitId",relabelUnitId);state.restore(payload);}
         // FIX: persist before sending, so a restart can retry the identical operation.
-        boolean fast=!"PACK_PRODUCT".equals(payload.get("action"))&&!"UNDO_PACK_UNIT".equals(payload.get("action"))&&fastConfirmation();
+        boolean fast=!"RELABEL_UNIT".equals(payload.get("action"))&&!"PACK_PRODUCT".equals(payload.get("action"))&&!"UNDO_PACK_UNIT".equals(payload.get("action"))&&fastConfirmation();
         if(!prefs.edit().putString(pendingKey,new JSONObject(payload).toString()).putBoolean(pendingKey+":fast",fast).commit()){message="Не удалось сохранить операцию. Проверьте память ТСД.";packingErrorSpeech=true;render();return;}
         if(fast){sendAcknowledged(payload);return;}
         busy=true;message="";render();executor.execute(()->{try{

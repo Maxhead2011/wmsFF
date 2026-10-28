@@ -1,4 +1,5 @@
 import {OzonStockAdjustment} from './OzonStockAdjustment';
+import {LamodaFboRelabel} from './LamodaFboRelabel';
 import { startVisiblePolling } from '../../lib/visiblePolling';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { startFboPolling } from './fboLivePolling';
@@ -50,7 +51,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     if(plan.phase==='PICKING'&&!source){const selected=selectFboLocation(plan.route,pallet,value);if(!selected){setError(pallet?'Короб не входит в список на этом паллете.':'Сначала отсканируйте паллет. Короб без паллета можно сканировать сразу.');return;}setPallet(selected.pallet);setSource(selected.source);setError('');return;}
     if(plan.phase==='PACKING'&&!target){if(plan.wholeBoxes.includes(value)){await command('PACK_BOX',{sourceBoxCode:value});return;}await command('OPEN_BOX',{targetBoxCode:value});return;}
     if(barcode){await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode,kiz:value});return;}
-    const line=plan.lines.find(l=>l.barcode===value&&(plan.phase==='PICKING'?l.remaining>0:l.picked>l.packed));
+    const line=plan.lines.find(l=>(l.barcode===value||l.barcodes?.includes(value))&&(plan.phase==='PICKING'?l.remaining>0:l.picked>l.packed));
     if(!line){setError('Этот ШК не требуется на текущем этапе.');return;}
     if(line.requiresKiz){setBarcode(value);setError('');}
     else await command(plan.phase==='PICKING'?'PICK_UNIT':'PACK_UNIT',{sourceBoxCode:source,targetBoxCode:target,barcode:value});
@@ -67,6 +68,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     </header>
     {plan.marketplace==='OZON'&&canWrite&&<OzonStockAdjustment requestId={plan.requestId} accessToken={accessToken} disabled={busy||!!pending} onLockChange={setAdjusting} onChanged={()=>void refresh()}/>}
     <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>
+    {plan.marketplace==='LAMODA'&&<LamodaFboRelabel plan={plan} accessToken={accessToken} disabled={!canWrite||busy||!!pending||adjusting} command={command} refresh={refresh}/>}
     {!!plan.directions?.length&&<section aria-label="Направления сборки"><h3>Единая сборка · направления</h3>{plan.directions.map(d=><details key={d.name}><summary>{d.name}: упаковано {d.packed} из {d.needed}</summary><ul>{d.items.map(i=><li key={i.skuId}>{plan.lines.find(l=>l.skuId===i.skuId)?.name} · {i.barcode}: {i.packed} из {i.quantity}</li>)}</ul></details>)}
     {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||adjusting||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
