@@ -337,3 +337,5 @@ Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal
 - lamoda-fbo-import.spec.ts: ID safety, planned quantities, exact mappings/direction quotas. lamoda.service.spec.ts: assembly gate, request/binding, replay, unmapped rejection. lamoda-client.spec.ts: detail/items pagination and seller isolation. lamoda-wb-isolation.spec.ts: both WB exports blocked.
 - fboRequestScope.spec.ts/FboTwoStagePanel.spec.tsx: Lamoda excluded from WB/exports. Android FboTwoStageScreenTest: Lamoda title/no WB export. Full logoff/ffullhab/platform suites passed.
 - Synthetic DB constraint proof5: work/lamoda-contour/fbo-db-proof.json; not full runtime migration parity.
+
+Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.

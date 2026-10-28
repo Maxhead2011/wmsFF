@@ -1,3 +1,4 @@
+import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { ordinaryPickStatusLabel } from '../../common/stock/ordinary-unmarked-pick';
 import { ozonPickLinesEnabled, readOzonPickState } from '../marketplace-connections/ozon-fbs-pick-lines';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
@@ -89,9 +90,11 @@ export class TsdAssemblyService {
     if (workflow && !['fbo-pick', 'fbo-pack'].includes(workflow)) throw new BadRequestException('Неизвестный этап сборки.');
     if (workflow && !fboTwoStageEnabled()) throw new BadRequestException('Сборка FBO недоступна в этой ВМС.');
     // FIX: opt-in marketplace filter; legacy clients retain their existing list.
-    if (marketplace && (!workflow || !['WB', 'OZON'].includes(marketplace))) throw new BadRequestException('Неизвестный маркетплейс ФБО.');
+    if (marketplace && (!workflow || !['WB', 'OZON', ...(lamodaAssemblyEnabled() ? ['LAMODA'] : [])].includes(marketplace))) throw new BadRequestException('Неизвестный маркетплейс ФБО.');
     const fboFilter: Prisma.ClientRequestWhereInput = !workflow ? {} : {
       fbsOrderLinks: { none: {} },
+      // FIX: isolate persisted Lamoda requests before pagination, even while its workflow is disabled.
+      ...(marketplace && process.env.WMS_LAMODA_ENABLED === 'true' ? { lamodaAssembly: marketplace === 'LAMODA' ? { isNot: null } : { is: null } } : {}),
       ...(marketplace ? { ozonShipment: marketplace === 'OZON' ? { isNot: null } : { is: null } } : {}),
       ...(workflow === 'fbo-pack'
         ? { fboAssembly: { is: { phase: { in: ['PACKING', 'CONTROL'] } } } }
