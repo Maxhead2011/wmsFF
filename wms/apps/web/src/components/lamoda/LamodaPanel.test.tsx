@@ -10,7 +10,7 @@ afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
 it('opens operational planning and moves technical actions to the client card', () => {
   vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED', 'true');
   const html=renderToStaticMarkup(<LamodaPanel session={session}/>);
-  expect(html).toContain('Lamoda · поставки FBO');
+  expect(html).toContain('Сборки Lamoda');
   expect(html).not.toContain('type="password"');
   expect(html).not.toContain('Журнал обмена');
   expect(html).not.toContain('Заказы FBS');
@@ -20,6 +20,22 @@ it('opens operational planning and moves technical actions to the client card', 
   const maintenance=renderToStaticMarkup(<LamodaPanel session={session} maintenanceClientId="client"/>);
   expect(maintenance).toContain('Журнал обмена');
   expect(maintenance).not.toContain('type="password"');
+});
+// TEST: Ozon-style FBO landing keeps creation collapsed and the assemblies list full width.
+it('shows compact FBO toolbar and full-width list before opening creation', () => {
+  vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED', 'true');
+  const html=renderToStaticMarkup(<LamodaPanel session={session}/>);
+  expect(html).toContain('lamoda-ozon-layout');
+  expect(html).toContain('Создать сборку');
+  expect(html).toContain('aria-expanded="false"');
+  expect(html).toContain('Филиал WMS');
+  expect(html).toContain('Плиток в ряд');
+  expect(html).toContain('Завершённые');
+  expect(html).not.toContain('type="file"');
+  const fbs=renderToStaticMarkup(<LamodaPanel session={session} mode="fbs"/>);
+  expect(fbs).not.toContain('lamoda-ozon-layout');
+  vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED', 'false');
+  expect(renderToStaticMarkup(<LamodaPanel session={session}/>)).not.toContain('lamoda-ozon-layout');
 });
 // TEST: all marketplace tiles have the same brand/content structure, including Lamoda.
 it('renders a Lamoda brand badge alongside its tile content', () => {
