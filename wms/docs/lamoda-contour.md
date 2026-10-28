@@ -1,3 +1,13 @@
+## Manual correspondence — 28.10.2026
+
+FBO -> Lamoda -> Products and correspondence: CLIENT request readers may search only their own non-draft SKUs; writable client membership and client-requests:write are required to confirm. Administrators retain scoped access. Search supports WMS name, internal article and barcode. Empty search retains exact-barcode suggestions. API credentials and synchronization remain administrative.
+
+The UI displays both identities and size before explicit confirmation. Linking stores skuId plus audit and does not rewrite barcodes or stock. Existing assemblies retain their items/directions. New availability and assembly requests convert Lamoda plan identifiers to a valid warehouse barcode (prefer an existing equal barcode, otherwise primary then deterministic alternative). Catalog identity changes still invalidate links.
+
+Validation: pre-fix customer linking failed; tests cover different codes, own/foreign/read-only scope, converted direction/preview barcodes and unchanged external plan. API3849/web519 passed,155/2 skipped; two dedicated KIZ DB suites excluded. Isolated regenerated Prisma typecheck avoids shared generation races. Runtime PostgreSQL19 and full Nest health passed; customer browser14 passed with synthetic data. Existing Yandex FBY published runtime preserved.
+
+Authorized operational action: loaded136 Lukin Lamoda cards, found136 unique exact-barcode candidates with matching numeric sizes, confirmed136 mappings via audited service. Snapshot retained under work/lamoda-mapping-release-20261028; no stock changes.
+
 Published PR714. Baseline `2026-10-28-lamoda-client`; exact2 API/4 web changes, source parity false. Public customer browser10 and live read-only Lukin access verified. No production data mutations.
 
 ## Client planning access — 28.10.2026

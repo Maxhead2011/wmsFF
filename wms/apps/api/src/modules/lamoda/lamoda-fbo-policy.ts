@@ -22,6 +22,16 @@ export function lamodaShipmentLines(items:Record<string,unknown>[],destination:s
   return lines;
 }
 type Product={remoteSku:string;barcode:string|null;externalSku:string|null;skuId:string|null;linkState:string;isPresent:boolean};
+// FIX: plans retain Lamoda identifiers; reservations and picking use warehouse identifiers.
+export function useLamodaWarehouseBarcodes(resolved:ReturnType<typeof resolveLamodaLines>, skus:{id:string;barcodes:{value:string;isPrimary?:boolean}[]}[]) {
+  const convert=(item:typeof resolved.items[number])=>{
+    const bars=skus.find(s=>s.id===item.skuId)?.barcodes ?? [];
+    const barcode=bars.find(b=>b.value===item.barcode)?.value ?? [...bars].sort((a,b)=>Number(!!b.isPrimary)-Number(!!a.isPrimary)||a.value.localeCompare(b.value))[0]?.value;
+    if(!barcode) throw new BadRequestException('Карточки WMS изменились или нет складского ШК. Проверьте соответствия.');
+    return {...item,barcode};
+  };
+  return {items:resolved.items.map(convert),directions:resolved.directions.map(d=>({...d,items:d.items.map(convert)}))};
+}
 export function resolveLamodaLines(lines:LamodaPlanLine[],products:Product[]) {
   const grouped=new Map<string,{skuId:string;barcode:string;quantity:number}>();
   const byDirection=new Map<string,Map<string,{skuId:string;barcode:string;quantity:number}>>();

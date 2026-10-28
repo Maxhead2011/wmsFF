@@ -7,7 +7,7 @@ import {PermissionsGuard} from '../src/modules/auth/guards/permissions.guard';
 it('allows customer planning routes and keeps API management routes restricted',()=>{
  const guard=new PermissionsGuard(new Reflector());
  const check=(name:string,permissions:string[])=>guard.canActivate({getHandler:()=>LamodaController.prototype[name],getClass:()=>LamodaController,switchToHttp:()=>({getRequest:()=>({user:{roleCodes:['CLIENT'],permissionCodes:permissions},method:'POST',url:'/lamoda'})})} as never);
- for(const name of ['accounts','overview','warehouses','template'])expect(check(name,['client-requests:read'])).toBe(true);
- for(const name of ['importPlan','availability','fromShipment','assembly']){expect(check(name,['client-requests:read','client-requests:write'])).toBe(true);expect(()=>check(name,['client-requests:read'])).toThrow();}
- for(const name of ['create','update','check','sync','link'])expect(()=>check(name,['client-requests:read','client-requests:write'])).toThrow();
+ for(const name of ['accounts','overview','warehouses','template','candidates'])expect(check(name,['client-requests:read'])).toBe(true);
+ for(const name of ['importPlan','availability','fromShipment','assembly','link']){expect(check(name,['client-requests:read','client-requests:write'])).toBe(true);expect(()=>check(name,['client-requests:read'])).toThrow();}
+ for(const name of ['create','update','check','sync'])expect(()=>check(name,['client-requests:read','client-requests:write'])).toThrow();
 });

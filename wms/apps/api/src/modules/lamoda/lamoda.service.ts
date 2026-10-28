@@ -8,7 +8,7 @@ import { ClientRequestsService } from '../client-requests/client-requests.servic
 import { assertWarehouseAccess, warehouseScopeWhere } from '../client-requests/client-request-warehouse-scope';
 import { LamodaApiError, LamodaClient, lamodaResources, openSecret, sealSecret, type LamodaResource } from './lamoda-client';
 import { documentSnapshot, parseLamodaPlan, planHash, productSnapshot, text, type LamodaPlanLine } from './lamoda-policy';
-import { lamodaAssemblyEnabled, lamodaShipmentId, lamodaShipmentLines, resolveLamodaLines } from './lamoda-fbo-policy';
+import { lamodaAssemblyEnabled, lamodaShipmentId, lamodaShipmentLines, resolveLamodaLines, useLamodaWarehouseBarcodes } from './lamoda-fbo-policy';
 
 const accountSelect = { id: true, clientId: true, name: true, sellerId: true, oauthClientId: true, isActive: true, fboEnabled: true, fbsEnabled: true, checkedAt: true, ordersSyncedAt: true } satisfies Prisma.LamodaAccountSelect;
 const identity = (c: Pick<LamodaAccount, 'clientId' | 'sellerId' | 'oauthClientId'>) => JSON.stringify([c.clientId, c.sellerId, c.oauthClientId]);
@@ -94,7 +94,7 @@ export class LamodaService {
   async overview(id: string, user: AuthUser) {
     await this.account(id, user, 'read', true);
     const [products, documents, plans, exchanges] = await Promise.all([
-      this.db.lamodaProduct.findMany({ where: { accountId: id }, include: { sku: { select: { id: true, name: true, internalSku: true } } }, orderBy: { remoteSku: 'asc' }, take: 1000 }),
+      this.db.lamodaProduct.findMany({ where: { accountId: id }, include: { sku: { select: { id: true, name: true, internalSku: true, size: true, color: true, barcodes: { select: { value: true } } } } }, orderBy: { remoteSku: 'asc' }, take: 1000 }),
       this.db.lamodaDocument.findMany({ where: { accountId: id }, orderBy: { syncedAt: 'desc' }, take: 500 }),
       this.db.lamodaPlan.findMany({ where: { accountId: id, ...warehouseScopeWhere(user) }, include: { warehouse: { select: { name: true } }, ...(lamodaAssemblyEnabled() ? { assembly: { select: { requestId: true } } } : {}) }, orderBy: { createdAt: 'desc' }, take: 100 }),
       this.db.lamodaExchange.findMany({ where: { accountId: id }, orderBy: { createdAt: 'desc' }, take: 25 }),
@@ -169,23 +169,29 @@ export class LamodaService {
       await this.db.lamodaAccount.updateMany({ where: { id, syncToken }, data: { syncLeaseUntil: null, syncToken: null } });
     }
   }
-  async candidates(id: string, productId: string, user: AuthUser) {
-    const c = await this.account(id, user, 'read');
+  async candidates(id: string, productId: string, user: AuthUser, query = '') {
+    const c = await this.account(id, user, 'read', true);
     const p = await this.db.lamodaProduct.findFirst({ where: { id: productId, accountId: id, isPresent: true } });
     if (!p) throw new NotFoundException('Товар Lamoda не найден.');
-    if (!p.barcode) return [];
-    return this.db.sku.findMany({ where: { clientId: c.clientId, isDraft: false, barcodes: { some: { value: p.barcode } } },
-      select: { id: true, internalSku: true, name: true, size: true, color: true, barcodes: { select: { value: true } } }, take: 100 });
+    // FIX: exact-barcode suggestions remain; explicit search may use another warehouse identity.
+    const q = query.trim();
+    if (q.length > 200) throw new BadRequestException('Поиск — не более 200 символов.');
+    if (!q && !p.barcode) return [];
+    return this.db.sku.findMany({ where: { clientId: c.clientId, isDraft: false, ...(q ? { OR: [
+      { internalSku: { contains: q, mode: 'insensitive' as const } }, { name: { contains: q, mode: 'insensitive' as const } },
+      { barcodes: { some: { value: { contains: q } } } },
+    ] } : { barcodes: { some: { value: p.barcode! } } }) },
+      select: { id: true, internalSku: true, name: true, size: true, color: true, barcodes: { select: { value: true } } }, orderBy: [{ name: 'asc' }, { id: 'asc' }], take: 100 });
   }
   async link(id: string, productId: string, skuId: string, user: AuthUser) {
-    const c = await this.account(id, user, 'write');
-    const candidates = await this.candidates(id, productId, user);
-    if (!candidates.some(s => s.id === skuId)) throw new BadRequestException('Выберите товар этого клиента с тем же штрихкодом.');
+    const c = await this.account(id, user, 'write', true);
     return this.db.$transaction(async tx => {
       const p = await tx.lamodaProduct.findFirst({ where: { id: productId, accountId: id, isPresent: true } });
       if (!p) throw new NotFoundException();
-      const sku = await tx.sku.findFirst({ where: { id: skuId, clientId: c.clientId, isDraft: false, barcodes: { some: { value: p.barcode ?? '' } } } });
+      // FIX: explicit customer confirmation links identities without rewriting either barcode.
+      const sku = await tx.sku.findFirst({ where: { id: skuId, clientId: c.clientId, isDraft: false }, include: { barcodes: true } });
       if (!sku) throw new ConflictException('Карточка изменилась. Обновите соответствия.');
+      if (!sku.barcodes.length) throw new BadRequestException('У складского товара нет штрихкода для сборки.');
       const saved = await tx.lamodaProduct.update({ where: { id: productId }, data: { skuId, linkState: 'CONFIRMED' } });
       await tx.auditLog.create({ data: { userId: user.id, action: 'LAMODA_PRODUCT_LINKED', entity: 'LamodaProduct', entityId: productId, payload: { clientId: c.clientId, skuId, previousSkuId: p.skuId } } });
       return saved;
@@ -221,7 +227,9 @@ export class LamodaService {
       const old = grouped.get(skuId);
       grouped.set(skuId, { skuId, barcode: line.barcode, quantity: (old?.quantity ?? 0) + line.quantity });
     });
-    const availability = grouped.size ? await this.requests.previewAvailability({ clientId: c.clientId, warehouseId: plan.warehouseId, type: 'OUTBOUND', items: [...grouped.values()] }, user) : null;
+    const skus = grouped.size ? await this.db.sku.findMany({ where: { id: { in: [...grouped.keys()] }, clientId: c.clientId, isDraft: false }, include: { barcodes: true } }) : [];
+    const warehouse = useLamodaWarehouseBarcodes({ items: [...grouped.values()], directions: [] }, skus);
+    const availability = grouped.size ? await this.requests.previewAvailability({ clientId: c.clientId, warehouseId: plan.warehouseId, type: 'OUTBOUND', items: warehouse.items }, user) : null;
     return { unresolvedRows: unresolved, availability, canAssemble: lamodaAssemblyEnabled() && !unresolved.length, message: 'Предварительный расчёт FBO. Черновик не резервирует товар. Перед запуском сборки потребуется повторная проверка.' };
   }
   async importShipment(id:string,body:{reference:string;warehouseId:string;title?:string},user:AuthUser) {
@@ -273,9 +281,9 @@ export class LamodaService {
         if(fingerprint(remoteResolved.items)!==fingerprint(resolved.items)) throw new ConflictException('Состав изменился в Lamoda. Загрузите поставку заново.');
       }
       const skus=await tx.sku.findMany({where:{id:{in:resolved.items.map(i=>i.skuId)},clientId:c.clientId,isDraft:false},include:{barcodes:true}});
-      if(resolved.items.some(i=>!skus.some(s=>s.id===i.skuId&&s.barcodes.some(b=>b.value===i.barcode)))) throw new ConflictException('Карточки WMS изменились. Проверьте соответствия.');
-      const request=await tx.clientRequest.create({data:{clientId:c.clientId,warehouseId:plan.warehouseId,type:'OUTBOUND',status:'SUBMITTED',priority:'NORMAL',title:plan.title,destinationCity:resolved.directions.map(d=>d.name).join(', '),createdByUserId:user.id,items:{create:resolved.items}},select:{id:true,number:true}});
-      await tx.lamodaFboAssembly.create({data:{requestId:request.id,planId,externalKey:plan.remoteShipmentId?JSON.stringify([c.sellerId,plan.remoteShipmentId]):null,directions:resolved.directions}});
+      const warehouse = useLamodaWarehouseBarcodes(resolved, skus);
+      const request=await tx.clientRequest.create({data:{clientId:c.clientId,warehouseId:plan.warehouseId,type:'OUTBOUND',status:'SUBMITTED',priority:'NORMAL',title:plan.title,destinationCity:warehouse.directions.map(d=>d.name).join(', '),createdByUserId:user.id,items:{create:warehouse.items}},select:{id:true,number:true}});
+      await tx.lamodaFboAssembly.create({data:{requestId:request.id,planId,externalKey:plan.remoteShipmentId?JSON.stringify([c.sellerId,plan.remoteShipmentId]):null,directions:warehouse.directions}});
       await tx.clientRequestEvent.create({data:{requestId:request.id,clientId:c.clientId,eventType:'CREATED',title:'Сборка Lamoda создана',statusTo:'SUBMITTED',createdByUserId:user.id}});
       return request;
     },{isolationLevel:'Serializable',timeout:30000}); }
