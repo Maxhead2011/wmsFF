@@ -1,1 +1,2 @@
-*.tar.gz binary
+api-runtime.tar.gz -text
+api-schema.prisma -text
