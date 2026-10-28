@@ -1,6 +1,8 @@
 import { fetchClients, type ClientSummary, type AuthSession } from './api';
 
 export const workspaceEnabled = () => import.meta.env.VITE_MARKETPLACE_WORKSPACES_ENABLED === 'true';
+// FIX: only our enabled workspace loads the Panthera operational surface overrides.
+if (workspaceEnabled()) void import('../components/layout/marketplace-surfaces.css');
 // FIX: use persisted connections, not live API availability. Disabled accounts remain accessible.
 export function connected(client: ClientSummary, market: string, mode: 'fbo' | 'fbs' = 'fbo') {
   if (market === 'LAMODA') return !!client.lamodaAccounts?.some(a => mode === 'fbo' ? a.fboEnabled : a.fbsEnabled);

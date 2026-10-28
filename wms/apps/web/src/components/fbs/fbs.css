@@ -5669,6 +5669,6 @@
 .fbs-marketplace-card__brand img { display:block; width:100%; height:100%; object-fit:contain; border-radius:inherit; }
 
 /* FIX: four independent operational marketplaces, own-workspace mode only. */
-.fbs-marketplace-picker--four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-@media (min-width:1800px) { .fbs-marketplace-picker--four { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (max-width:700px) { .fbs-marketplace-picker--four { grid-template-columns: minmax(0, 1fr); } }
+:root .app-layout .fbs-marketplace-picker--four { grid-template-columns: repeat(2, minmax(0, 1fr))!important; }
+@media (min-width:1800px) { :root .app-layout .fbs-marketplace-picker--four { grid-template-columns: repeat(4, minmax(0, 1fr))!important; } }
+@media (max-width:700px) { :root .app-layout .fbs-marketplace-picker--four { grid-template-columns: minmax(0, 1fr)!important; } }

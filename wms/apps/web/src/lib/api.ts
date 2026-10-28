@@ -7771,11 +7771,13 @@ export function fetchOperationsStatistics(accessToken: string, filter: {
   return request<OperationsStatisticsReport>(withQuery('/operations-statistics', filter), { accessToken });
 }
 
-export async function fetchClients(accessToken: string, options: { includeArchived?: boolean; marketplaceDirectory?: boolean } = {}) {
+export async function fetchClients(accessToken: string, options: { includeArchived?: boolean; marketplaceDirectory?: boolean; allBranches?: boolean; displayWarehouseId?: string } = {}) {
   return request<ClientSummary[]>(
     withQuery('/clients', {
       includeArchived: options.includeArchived ? 'true' : undefined,
       marketplaceDirectory: options.marketplaceDirectory ? 'true' : undefined,
+      allBranches: options.allBranches ? '1' : undefined,
+      displayWarehouseId: options.displayWarehouseId || undefined,
     }),
     {
       accessToken,
