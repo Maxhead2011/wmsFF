@@ -1,3 +1,5 @@
+Prepared / 2026-10-28: add the missing Lamoda active-request counter to the FBO tile; same scoped queue and status policy as WB/Ozon, no draft plans. Own-WMS flag, not published.
+
 Published PR729 / 2026-10-28: scoped active WB/Ozon FBO card counters without the 200-row list cap. API3875/web530 passed (155/2 skipped), TypeScript, PostgreSQL5/full API health, candidate/public browser5 and marketplace/Lamoda regression50. Exact3 API/3web overlay on PR727; schema/APK236/sold unchanged. Live authorized endpoint200, anonymous401; current actor counts WB2/Ozon3. Baseline `2026-10-28-fbo-counts`, sourceParityVerified=false. [Details](fbo-active-card-counts.md).
 
 Published PR727 / 2026-10-28: shared administrative removal in Lamoda FBO cards, request-ID confirmation, scope reset and archive refresh. Preserves PR725 shortage review. API3872/web529 passed (150/2 skipped), TypeScript/build, baseline guards8, candidate/public browser50 plus shortage regression8 passed. Exact web3-file overlay; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-removal`, sourceParityVerified=false. [Details](lamoda-request-removal.md).
