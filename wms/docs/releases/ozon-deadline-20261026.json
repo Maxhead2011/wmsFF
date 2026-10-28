@@ -1,0 +1,65 @@
+{
+  "publication": {
+    "base": {
+      "api": "sha256:264f32a9adf3b0e350a239f90dd29c5346cab051e8b5c8b393084c527fd201ca",
+      "web": "sha256:9a70be813709f266579971028fc7aabe1a3dd4c434d5456b65c5a2098c868344"
+    },
+    "images": {
+      "api": "sha256:aa2fe82ab189d33bcd7706a7aedfb6af5cec1273788849241595b8997011f5d2",
+      "web": "sha256:981132f2f53897c5599726b85f3aa22528abb56e06b222a7b0bedd33586d582d"
+    },
+    "hashes": {
+      "api": {
+        "modules/client-requests/ozon-assembly-supply.service.js": "9e479dd3fc55139ea64ace4624dace13b8e79ef0109f67759aa55b0a1ef04d44",
+        "modules/client-requests/ozon-fbo-import.service.js": "e0d8ef5b57b828deb434d6471b60dbf419eaa11b383013c9fb4c8394f85949c2",
+        "modules/client-requests/ozon-supply-policy.js": "49d713a9ae2772a652a7337c863e27d84a8e9480eea3ddfc8f229c94dcbc6afc",
+        "modules/ozon-fbo/ozon-fbo.service.js": "aabfd7a6fe216cfaadd1d92cf0b61944edebc8f1c30a7884f99abb714995d54f"
+      },
+      "web": {
+        "index.html": "4f0371f9ecd3457949ee54c7d11529bbf1d00aac124598c3961b50d158493000",
+        "assets/ozon-deadline-20261026.css": "074f941f4da89a8edf0c52cb06612b31a2af8de3ec40e564b01c991fdc481cd6",
+        "assets/ozon-deadline-host-20261026.js": "195fc81a1fbaff3c63c76e80301f83bdee13dd0d36fae801b4630a27ab4e97f0",
+        "assets/ozon-deadline-ui-20261026.js": "e2bcf9faa982ba27587ef6461d5ce8e396bae258587869281cfe1883e5212499"
+      }
+    },
+    "browser": {
+      "passed": true,
+      "noBusinessWrites": true,
+      "themes": 3,
+      "widths": 6,
+      "deadlineCards": 6
+    },
+    "runtime": {
+      "passed": 4,
+      "moduleGraph": true,
+      "network": false
+    },
+    "published": true,
+    "pr": 699,
+    "at": 1793034510.0294912,
+    "otherContainersUnchanged": true,
+    "apkUnchanged": true,
+    "businessRecordsChanged": false
+  },
+  "validation": {
+    "apiPassed": 3740,
+    "apiSkipped": 155,
+    "webPassed": 510,
+    "webSkipped": 2,
+    "typeScript": true,
+    "dedicatedKizIntegration": "excluded: dedicated DB unavailable",
+    "candidateRuntime": {
+      "passed": 4,
+      "moduleGraph": true,
+      "network": false
+    },
+    "candidateBrowser": {
+      "passed": true,
+      "noBusinessWrites": true,
+      "themes": 3,
+      "widths": 6,
+      "deadlineCards": 6
+    },
+    "publicBrowser": true
+  }
+}

@@ -1,0 +1,27 @@
+Published PR699 / 2026-10-26: actual Ozon FBO editing deadline countdown. Exact 4 API / 4 web overlay on multishop-auto. API3740/web510 passed, 155/2 skipped; dedicated KIZ database suite unavailable. TypeScript, runtime4/module graph, candidate/public browser (3 themes x6 widths) and live health/hash checks passed. Baseline `2026-10-26-ozon-deadline`; sourceParityVerified=false. Existing requests need an Ozon refresh. Sold WMS, APK, schema and business records unchanged.
+
+# Обратный отсчёт редактирования ФБО Ozon
+
+Подготовлено 26.10.2026, не опубликовано. Ветка `feature/fbo-edit-deadline`, целевой PR — `feature/wb-print-check`.
+
+## Поведение
+
+Ozon `/v3/supply-order/get` возвращает `data_filling_deadline` (поддерживается также `data_filling_deadline_utc`). Сохраняем только точную дату с часовым поясом; таймслот не используем как дедлайн. Проверено чтением №2432: дедлайн 26.10.2026 18:00 МСК, слот 19:00 МСК.
+
+В списке сборок, выбранной сборке и панели грузомест показан срок каждой привязанной заявки. Прежний экран API-планов тоже показывает срок. Локальный таймер обновляется каждые 15 секунд и при возврате фокуса. До 24 часов — предупреждение, до 2 часов — срочное предупреждение, после срока — «Срок редактирования истёк». Дата подписана МСК независимо от часового пояса браузера.
+
+При отсутствии срока — «Дедлайн неизвестен — обновите сверку с Ozon». Срок обновляется при привязке/сверке поставки; для прежних планов — при обновлении статуса поставки. Старые заявки требуют сверки после установки. После 15 минут от последней сверки показано напоминание обновить срок после переноса. Таймер не выполняет внешние вызовы и не меняет поставку, остатки или грузоместа.
+
+## Изоляция и публикация
+
+Отображение включено только на `wms.logoff.pro`, localhost и 127.0.0.1. Изменения API аддитивны: необязательные поля JSON, без миграций. Проданную WMS не публиковать. Перед публикацией обязательно проверить свежий runtime и построить минимальный delta: исходники текущей ветки не доказаны полностью соответствующими production.
+
+## Проверки
+
+`apps/api/test/ozon-edit-deadline.spec.ts`: получение реального поля API, сохранение в общей сборке, очистка исчезнувшего срока, явные часовые пояса и сохранение метаданных прежних планов. Первые два сценария воспроизвели дефект до исправления.
+
+`apps/web/src/components/ozon-fbo/OzonEditCountdown.spec.tsx`: неизвестный срок, граница истечения, смена срочности, округление минут, отдельные сроки нескольких заявок, МСК и отключённое отображение.
+
+Проверки 26.10.2026: API 3608 passed / 155 skipped (345 suites passed / 12 skipped), web 493 passed / 2 skipped; TypeScript API/web passed, git diff --check passed. Полный первый API-прогон обнаружил недоступный `kiz-duplicate.integration.spec.ts`: не задан URL выделенной PostgreSQL; повторный прогон явно исключил только этот файл. Его поведение этим изменением не проверено. Публикация не выполнялась.
+
+Validation after approved merge: API 3740 passed / 155 skipped; web 510 passed / 2 skipped; both TypeScript checks passed. Dedicated KIZ database suite excluded. Actual candidate runtime 4 checks and module graph passed; actual browser graph passed 3 themes x 6 widths and deadline cards. Exact overlay: 4 API + 4 web files.

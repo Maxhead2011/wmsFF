@@ -1,0 +1,81 @@
+{
+  "apiTests": 3767,
+  "apiSkipped": 155,
+  "webTests": 510,
+  "webSkipped": 2,
+  "typeChecks": true,
+  "excluded": [
+    "test/kiz-duplicate.integration.spec.ts (dedicated database not configured)"
+  ],
+  "candidate": {
+    "base": {
+      "api": "sha256:f2d0d9042ba01d4147581c95a0974b5cefaecab99e5823fec7bfd94869034863",
+      "web": "sha256:981132f2f53897c5599726b85f3aa22528abb56e06b222a7b0bedd33586d582d"
+    },
+    "images": {
+      "api": "sha256:4eb9ed22a0a6d661f9928bf304e7ac9f4e5b2daa8c23b005b495f0046547a925",
+      "web": "sha256:05192401f34d6e440f481357e8721c18037a8362b97a99349a9c442cf8a56264"
+    },
+    "hashes": {
+      "api": {
+        "modules/administration/administration-internal-api.service.js": "aac7f62fcaf37ad405f78538c564eff4d9022dcc159a88cc62b1e600c2ec5e39",
+        "modules/billing/billing.module.js": "8b107a93287c7f63cc504ce106378ef25747b9dd13f4f55a1bdc4d6a01bf6f67",
+        "modules/billing/completed-fbs-billing.js": "70d8c71ef351bb43f7b4cd674f1cee9b73c4852d260f68357b59441607240fdf",
+        "modules/billing/fbo-processing-pricing.charges.js": "baebd17a07f92c2bf06f574544e3574791f50fa0e8bfb590db8e99b1541d9b13",
+        "modules/billing/lukin-primary-policy.js": "beeff3080611196274ed0006f0cb8d66e107be0a006b903a9e53288125ee7634",
+        "modules/marketplace-connections/marketplace-connections.service.js": "6a776b545e1627d4401a6938a2d6f6ff70e2649d3fdb867cff0190ffd1b91300",
+        "modules/stock/stock-operations.service.js": "792e59bcc08101944ba0b7e1d868f8f62fad16814e7d2eea1833563759cd32f5",
+        "modules/warehouse/receipt-channel-policy.js": "add96d1d9338a69eca0a7d1b46830557e3974f0364753d9a04279f7baeaf120e",
+        "modules/warehouse/receipt-channels.controller.js": "cad9271abee5e628cde80d211415c3eb96ba3769876af4d5ab27bf1dfb02f150",
+        "modules/warehouse/receipt-stock-index.js": "f22ed5921d4d10e91cb9f113bb8f780ec18a673c654969550cc407e2eb4dc08e",
+        "modules/billing/receipt-processing-fbo.js": "87ec65da4c5186d3e9c95ba93d2c191ba8e1560d8deddc57244f46d4445545d5",
+        "modules/billing/receipt-processing.controller.js": "b2ef3586e3fb293c555239b699a0490966d1fcee4218deedbd84fd4a01cc7063",
+        "modules/billing/receipt-processing.js": "eae9c05b6822ffe03302f8af66ca554bb9876225519329304051bcb6bc989da6"
+      },
+      "web": {
+        "index.html": "4dae09ea15605e300634c0bfcb9f6ffca5dda4152d5e010bd6250ec5adaeb2c7",
+        "assets/receipt-processing-ui-20261027.js": "57e4e9d6ebe562d8f8bf17b199b7dcb65fa993e18511247edd9820ea9a8c4ab3",
+        "assets/receipt-processing-ui-20261027.css": "8473beba8853235c97e403b3112e111796f9100982d7d1e05daab1fd7a2463ad",
+        "assets/receipt-processing-host-20261027.js": "ad06cfffc40741dd80463b6cab7e7ed8a06274bfc557d65cc1f42e61862e8142"
+      }
+    },
+    "runtime": {
+      "passed": 18
+    }
+  },
+  "db": {
+    "passed": 8,
+    "rolledBack": true,
+    "scopeWasEnabled": false,
+    "physicalChanges": 0,
+    "invoiceChanges": 0,
+    "apiImage": "sha256:4eb9ed22a0a6d661f9928bf304e7ac9f4e5b2daa8c23b005b495f0046547a925"
+  },
+  "isolated": {
+    "passed": 1,
+    "fullApiHealth": true,
+    "apiImage": "sha256:4eb9ed22a0a6d661f9928bf304e7ac9f4e5b2daa8c23b005b495f0046547a925"
+  },
+  "browser": {
+    "passed": 12,
+    "errors": []
+  },
+  "graph": {
+    "passed": 2,
+    "wholeGraph": true,
+    "errors": []
+  },
+  "publicGraph": {
+    "passed": 2,
+    "wholeGraph": true,
+    "errors": []
+  },
+  "liveRead": {
+    "readOnly": true,
+    "processingEnabled": true,
+    "canManageProcessing": true,
+    "canEnableManagement": true,
+    "rows": 4
+  },
+  "baselineGuards": 8
+}

@@ -37,7 +37,7 @@ describe('AdministrationInternalApiService', () => {
     expect(definition.prefixes).toContain('/service/fbs-manual-assembly');
     // TEST: four isolated multishop draft routes are included alongside manual assembly.
     expect(definition.prefixes).toContain('/marketplace-connections/multishop');
-    expect(definition.routeCount).toBe(119);
+    expect(definition.routeCount).toBe(123);
     const controller = readFileSync(join(__dirname, '../src/modules/marketplace-connections/fbs-reshipment.controller.ts'), 'utf8');
     expect([...controller.matchAll(/@(Get|Post)\('([^']+)'\)/g)].map((match) => `${match[1]} ${match[2]}`))
       .toEqual(['Get capabilities', 'Post check', 'Post preview', 'Post create', 'Post resume']);

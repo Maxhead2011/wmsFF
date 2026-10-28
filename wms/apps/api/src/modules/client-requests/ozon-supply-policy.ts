@@ -5,6 +5,7 @@ import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number; sku?: string }> };
 export type SupplyIntegration = {
   orders?: SupplyOrderSnapshot[];
+  editDeadlineAt?: string | null;
   connectionId: string; orderId: string; orderNumber: string; place: string; date: string; state: string;
   supplies: SupplySnapshot[]; mapping: Record<string, string>; checkedAt: string;
   operations: Record<string, { state: 'SENDING'|'UNKNOWN'|'ACCEPTED'|'SUCCESS'|'FAILED'; operationId?: string; error?: string; cargoes?: Array<{key:string;cargoId:string;barcode?:string}>; labelOperationId?: string; labelUrl?: string }>;
@@ -12,10 +13,10 @@ export type SupplyIntegration = {
   adjustment?: {state:string;[key:string]:any};
 };
 
-export type SupplyOrderSnapshot = Pick<SupplyIntegration,'orderId'|'orderNumber'|'place'|'date'|'state'|'supplies'|'checkedAt'>;
+export type SupplyOrderSnapshot = Pick<SupplyIntegration,'orderId'|'orderNumber'|'place'|'date'|'state'|'supplies'|'checkedAt'|'editDeadlineAt'>;
 // FIX: legacy single-order bindings remain readable, while every supply keeps its order owner.
 export function supplyOrders(link: SupplyIntegration): SupplyOrderSnapshot[] {
-  return link.orders ?? [{orderId:link.orderId,orderNumber:link.orderNumber,place:link.place,date:link.date,state:link.state,supplies:link.supplies,checkedAt:link.checkedAt}];
+  return link.orders ?? [{orderId:link.orderId,orderNumber:link.orderNumber,place:link.place,date:link.date,state:link.state,supplies:link.supplies,checkedAt:link.checkedAt,editDeadlineAt:link.editDeadlineAt??null}];
 }
 export function mergeSupplyOrders(base: SupplyIntegration, orders: SupplyOrderSnapshot[]): SupplyIntegration {
   if(!orders.length) throw new ConflictException('Нужна хотя бы одна заявка Ozon.');
@@ -23,7 +24,7 @@ export function mergeSupplyOrders(base: SupplyIntegration, orders: SupplyOrderSn
   if(new Set(orders.map(o=>o.orderId)).size!==orders.length||new Set(supplies.map(s=>s.id)).size!==supplies.length)
     throw new ConflictException('Повтор заявки или поставки Ozon.');
   const first=orders[0];
-  return {...base,orderId:first.orderId,orderNumber:first.orderNumber,place:first.place,date:first.date,state:first.state,orders,supplies,checkedAt:new Date().toISOString()};
+  return {...base,orderId:first.orderId,orderNumber:first.orderNumber,place:first.place,date:first.date,state:first.state,editDeadlineAt:first.editDeadlineAt??null,orders,supplies,checkedAt:new Date().toISOString()};
 }
 export function bindingIdentity(link: SupplyIntegration) {
   return JSON.stringify([link.connectionId,supplyOrders(link).map(o=>o.orderId).sort()]);
@@ -89,4 +90,11 @@ export function assertSupplyMutable(integration: unknown, action: string) {
 export function assertNoOzonAdjustment(integration: unknown) {
  const op=(integration as SupplyIntegration|null)?.adjustment;
  if(op&&!['APPLIED','CANCELLED'].includes(op.state))throw new ConflictException('Идёт корректировка количества в Ozon. Сначала проверьте её результат в заявке.');
+}
+
+// FIX: use only the explicit timezone-qualified Ozon deadline, never the delivery slot.
+export function ozonEditDeadline(order: any): string | null {
+  const value=order?.data_filling_deadline ?? order?.data_filling_deadline_utc;
+  if(typeof value!=='string'||!/(Z|[+-]\d{2}:\d{2})$/i.test(value)||!Number.isFinite(Date.parse(value)))return null;
+  return new Date(value).toISOString();
 }

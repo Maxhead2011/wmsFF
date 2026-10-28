@@ -43,7 +43,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   // FIX: branch-scoped receipt channel controls, disabled by default.
   {
     id: 'receipt-channels', name: 'Направления приёмок',
-    prefixes: ['/warehouse/receipt-channels'], routeCount: 7, // FIX: approval, history and receipt file.
+    prefixes: ['/warehouse/receipt-channels'], routeCount: 9, // FIX: approval, history and receipt file.
     description: 'Направления ФБС/ФБО по серии коробов с сохранением ранее поступивших заказов.',
     logic: ['Только ADMIN/OWNER своего филиала.', 'Предпросмотр, версия записи и аудит изменений.', 'Отдельный флаг нашей WMS.'],
     dependencies: ['Основная БД', 'Права warehouse:write'],
@@ -109,8 +109,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'billing',
     name: 'Биллинг и счета',
-    prefixes: ['/billing', '/billing/settlements', '/billing/period-close', '/billing/fbo-processing'],
-    routeCount: 54, // FIX: include the read-only FBO registry, product selection and explicit creation.
+    prefixes: ['/billing', '/billing/settlements', '/billing/period-close', '/billing/fbo-processing', '/billing/receipt-processing'],
+    routeCount: 56, // FIX: include the read-only FBO registry, product selection and explicit creation.
     description: 'Расчёт услуг, начислений, счетов, оплат и закрывающих документов.',
     logic: ['Считает услуги по тарифам и операциям WMS.', 'Формирует счета, акты и печатные документы.', 'Готовит предварительный расчёт отдельных счетов по услугам за выбранный период.', 'По отдельному флагу объединяет сохранённые расчёты сданных заявок в единый черновик на клиента и филиал; период определяется датой сдачи.', 'Предпросмотр объединения FBS принимает большой список счетов через POST JSON без изменения данных; GET сохранён для совместимости.', 'Учитывает оплаты, долги и ручные корректировки с аудитом.'],
     dependencies: ['Основная БД', 'PDF-генератор'],
@@ -239,8 +239,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
       '/marketplace-connections/fbs/repeat-assembly', '/marketplace-connection/fbs/repeat-assembly',
       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly',
       '/marketplace-connections/multishop'],
-    // FIX: include four opt-in multishop draft handlers; saving never publishes stocks.
-    routeCount: 119,
+    // FIX: four draft handlers plus status, preview, explicit activation and graceful stop.
+    routeCount: 123,
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сборка ФБС по номерам: администратор или собственник проверяет WB и доступные короба, создаёт одну обычную заявку в выбранном филиале с сохранением поставок WB; повторный запрос не дублирует заявку.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],

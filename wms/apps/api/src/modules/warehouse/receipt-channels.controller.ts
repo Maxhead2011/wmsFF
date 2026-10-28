@@ -1,3 +1,4 @@
+import { receiptProcessingEnabled, receiptProcessingPrefix, receiptProcessingKey, saveReceiptProcessing } from '../billing/receipt-processing';
 import { canManageReceiptDirections } from './receipt-direction-access';
 import { ModuleRef } from '@nestjs/core';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
@@ -11,7 +12,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
-import { assignReceiptBox, receiptChannelChange, receiptChannelsEnabled, receiptDocuments, requireReceiptChannelAdmin, receiptApprovalEntries, receiptApprovalEnabled, changeReceiptApproval } from './receipt-channel-policy';
+import { enableReceiptManagement, assignReceiptBox, receiptChannelChange, receiptChannelsEnabled, receiptDocuments, requireReceiptChannelAdmin, receiptApprovalEntries, receiptApprovalEnabled, changeReceiptApproval } from './receipt-channel-policy';
 
 @Controller('warehouse/receipt-channels')
 @RequireAnyPermissions('warehouse:read','stock:read','client-requests:read')
@@ -30,8 +31,28 @@ export class ReceiptChannelsController {
     const [groups,saved]=await Promise.all([Promise.all(warehouseIds.map(w=>receiptDocuments(this.prisma,clientId,w,since,undefined,true))),this.prisma.systemSetting.findMany({where:{key:{startsWith:`receipt.channels.v1:${clientId}:`}},select:{value:true}})]);
     const docs=groups.flat(), approvals=(await Promise.all(warehouseIds.map(w=>receiptApprovalEntries(this.prisma,clientId,w,docs)))).flat();
     const approvalById=new Map(approvals.map(a=>[a.doc.id,a.approval]));
+    const processing=receiptProcessingEnabled()?await this.prisma.systemSetting.findMany({where:{key:{startsWith:receiptProcessingPrefix(clientId)}}}):[];
     const rules=new Map(saved.map(s=>{const r=s.value as any;return [r.id,r] as const;}));
-    return {enabled:true,canManageDirections:await canManageReceiptDirections(this.prisma,user,clientId),rows:docs.filter(d=>(!receiptId||d.id===receiptId)&&(d.current||new Date(d.date)<=until)).map(d=>({...d,...(summary==='1'&&process.env.WMS_MENU_READS_ENABLED==='true'?{boxCount:d.boxes.length,boxes:[]}:{}),approvalEnabled:approvalById.has(d.id),approval:approvalById.get(d.id)??{available:true,revision:0},fbs:rules.get(d.id)?.fbs??true,fbo:rules.get(d.id)?.fbo??true,revision:rules.get(d.id)?.revision??0}))};
+    return {enabled:true,processingEnabled:receiptProcessingEnabled(),canManageProcessing:receiptProcessingEnabled()&&!user.isDemo&&user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r))&&user.permissionCodes.some(p=>['warehouse:write','system:admin'].includes(p)),canEnableManagement:process.env.WMS_RECEIPT_PROCESSING_ENABLED==='true'&&!user.isDemo&&user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r))&&user.permissionCodes.some(p=>['warehouse:write','system:admin'].includes(p)),canManageDirections:await canManageReceiptDirections(this.prisma,user,clientId),rows:docs.filter(d=>(!receiptId||d.id===receiptId)&&(d.current||new Date(d.date)<=until)).map(d=>({...d,processing:processing.find(s=>s.key===receiptProcessingKey(clientId,d.warehouseId,d.id))?.value??null,...(summary==='1'&&process.env.WMS_MENU_READS_ENABLED==='true'?{boxCount:d.boxes.length,boxes:[]}:{}),approvalEnabled:approvalById.has(d.id),approval:approvalById.get(d.id)??{available:true,revision:0},fbs:rules.get(d.id)?.fbs??true,fbo:rules.get(d.id)?.fbo??true,revision:rules.get(d.id)?.revision??0}))};
+  }
+  @Post('processing')
+  @RequirePermissions('warehouse:write')
+  async processing(@CurrentUser() user:AuthUser,@Body() body:any){
+    if(user.isDemo)throw new ForbiddenException('Read-only demo');
+    if(!body||typeof body.clientId!=='string'||typeof body.warehouseId!=='string'||typeof body.id!=='string'||!/^[a-f0-9]{32}$/.test(body.id))throw new BadRequestException('Укажите приёмку.');
+    this.scopes.requireClientAccess(user,body.clientId,'write');requireReceiptChannelAdmin(user);
+    if(!(await this.readWarehouses(user,body.clientId)).includes(body.warehouseId))throw new ForbiddenException('Нет доступа к филиалу.');
+    return this.prisma.$transaction(tx=>saveReceiptProcessing(tx,body,user),{timeout:60000});
+  }
+  @Post('enable-management')
+  @RequirePermissions('warehouse:write')
+  async enableManagement(@CurrentUser() user:AuthUser,@Body() body:any){
+    if(user.isDemo)throw new ForbiddenException('Read-only demo');
+    if(!body||typeof body.clientId!=='string'||typeof body.warehouseId!=='string')throw new BadRequestException('Укажите клиента и филиал.');
+    this.scopes.requireClientAccess(user,body.clientId,'write');requireReceiptChannelAdmin(user);
+    if(!(await this.readWarehouses(user,body.clientId)).includes(body.warehouseId))throw new ForbiddenException('Нет доступа к филиалу.');
+    await this.prisma.$transaction(tx=>enableReceiptManagement(tx,body.clientId,body.warehouseId,user));
+    return {enabled:true};
   }
   // FIX: the client can confirm only its own receipt; disabling remains an administrator action.
   @Post('approval')
@@ -46,7 +67,7 @@ export class ReceiptChannelsController {
   @Get('history')
   async history(@CurrentUser() user:AuthUser,@Query('clientId') clientId:string,@Query('warehouseId') warehouseId:string,@Query('id') id:string){
     await this.readReceipt(user,clientId,warehouseId,id);
-    return this.prisma.auditLog.findMany({where:{entity:'Receipt',entityId:id,action:'RECEIPT_STOCK_ACCESS_CHANGED',AND:[{payload:{path:['clientId'],equals:clientId}},{payload:{path:['warehouseId'],equals:warehouseId}}]},select:{createdAt:true,payload:true},orderBy:{createdAt:'desc'},take:100});
+    return this.prisma.auditLog.findMany({where:{entity:'Receipt',entityId:id,action:{in:['RECEIPT_STOCK_ACCESS_CHANGED','RECEIPT_PROCESSING_CHANGED']},AND:[{payload:{path:['clientId'],equals:clientId}},{payload:{path:['warehouseId'],equals:warehouseId}}]},select:{createdAt:true,payload:true,action:true},orderBy:{createdAt:'desc'},take:100});
   }
   @Get('file.xlsx')
   async file(@CurrentUser() user:AuthUser,@Query('clientId') clientId:string,@Query('warehouseId') warehouseId:string,@Query('id') id:string,@Res() response:Response){

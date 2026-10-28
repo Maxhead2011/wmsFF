@@ -1,3 +1,4 @@
+import {supplyOrders,type SupplyIntegration} from './ozon-supply-policy';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestStatus } from '@prisma/client';
 import {unboxedFboEnabled} from '../tsd/fbo-unboxed-picking';
@@ -51,8 +52,9 @@ export class OzonFboImportService {
     const rows = await this.db.clientRequest.findMany({where:{clientId,warehouseId,ozonShipment:{isNot:null},
       status: view === 'completed' ? {in:closed} : {notIn:closed}},
       orderBy:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
-        items:{select:{quantity:true}},ozonShipment:{select:{directions:true}},fboAssembly:{select:{phase:true}}}});
+        items:{select:{quantity:true}},ozonShipment:{select:{directions:true,integration:true}},fboAssembly:{select:{phase:true}}}});
     return rows.map(r=>({id:r.id,number:r.number,title:r.title,status:r.status,desiredDate:r.desiredDate,destinationCity:r.destinationCity,
+      editDeadlines:r.ozonShipment?.integration?supplyOrders(r.ozonShipment.integration as SupplyIntegration).map(o=>({orderId:o.orderId,orderNumber:o.orderNumber,editDeadlineAt:o.editDeadlineAt??null,checkedAt:o.checkedAt})):[],
       quantity:r.items.reduce((s,i)=>s+i.quantity,0),directions:(r.ozonShipment!.directions as unknown[]).length,phase:r.fboAssembly?.phase??'NOT_STARTED'}));
   }
   async preview(file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {

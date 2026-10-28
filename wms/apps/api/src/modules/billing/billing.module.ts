@@ -1,3 +1,4 @@
+import { ReceiptProcessingController } from './receipt-processing.controller';
 import { Module } from '@nestjs/common';
 import { CommonModule } from '../../common/common.module';
 import { AuthModule } from '../auth/auth.module';
@@ -27,7 +28,7 @@ import { FboProcessingPricingController } from './fbo-processing-pricing.control
     MarketplaceConnectionsModule,
     OwnCompaniesModule,
   ],
-  controllers: [BillingController, BillingSettlementsController, BillingPeriodCloseController, FboProcessingPricingController],
+  controllers: [ReceiptProcessingController, BillingController, BillingSettlementsController, BillingPeriodCloseController, FboProcessingPricingController],
   providers: [BillingService, BillingDocumentService, BillingPdfService, BillingPeriodService, BillingSettlementsService, BillingPeriodCloseService, FboProcessingPricingService],
   exports: [BillingService],
 })

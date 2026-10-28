@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 234 // FIX: validate alternative FBO sources, LOGOFF only.
-            versionName = "0.1.234-fbo-alternative"
+            versionCode = 235 // FIX: Lamoda directed FBO assembly, LOGOFF only.
+            versionName = "0.1.235-lamoda-fbo"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

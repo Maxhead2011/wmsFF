@@ -1,3 +1,4 @@
+import { ReceiptProcessingSettings } from './ReceiptProcessingSettings';
 import { Calculator, PackageCheck, RefreshCw, Save, Search, Truck, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -371,7 +372,7 @@ export function ClientBillingServicesPanel({
       className={`client-services-panel${embedded ? ' client-services-panel--embedded' : ''}`}
       aria-label="Услуги и цены клиента"
     >
-      <header className="client-services-panel__header">
+      <ReceiptProcessingSettings key={clientId} session={session} clientId={clientId}/><header className="client-services-panel__header">
         <div>
           <span>Настройка клиента</span>
           <h3>{section === 'fbo' ? 'Услуги FBO' : section === 'fbs' ? 'Режимы FBS' : 'Услуги и цены'}</h3>

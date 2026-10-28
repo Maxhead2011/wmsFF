@@ -3584,8 +3584,20 @@ export class BillingService {
   }
 
   private async ensureStandardBillingServices() {
+    // FIX: ordinary reads must not acquire write locks on unchanged standard rows.
+    const current = process.env.WMS_BILLING_SERVICE_READ_FAST_ENABLED === 'true'
+      ? await this.prisma.billingService.findMany({
+          where: { code: { in: STANDARD_BILLING_SERVICES.map(service => service.code) } },
+          select: { code: true, name: true, unit: true, defaultPriceRub: true, isActive: true },
+        }) : [];
+    const byCode = new Map(current.map(service => [service.code, service]));
+    const changed = STANDARD_BILLING_SERVICES.filter(service => {
+      const old = byCode.get(service.code);
+      return !old || old.name !== service.name || old.unit !== service.unit ||
+        old.defaultPriceRub === null || Number(old.defaultPriceRub) !== service.defaultPriceRub || !old.isActive;
+    });
     await Promise.all(
-      STANDARD_BILLING_SERVICES.map((service) =>
+      changed.map((service) =>
         this.prisma.billingService.upsert({
           where: { code: service.code },
           update: {
@@ -3665,8 +3677,15 @@ export class BillingService {
       },
     });
 
+    // FIX: existing client bindings retain their prices/status and need no empty upsert.
+    const current = process.env.WMS_BILLING_SERVICE_READ_FAST_ENABLED === 'true'
+      ? await this.prisma.clientBillingService.findMany({
+          where: { clientId, serviceId: { in: services.map(service => service.id) } },
+          select: { serviceId: true },
+        }) : [];
+    const existingIds = new Set(current.map(row => row.serviceId));
     await Promise.all(
-      services.map((service) =>
+      services.filter(service => !existingIds.has(service.id)).map((service) =>
         this.prisma.clientBillingService.upsert({
           where: {
             clientId_serviceId: {

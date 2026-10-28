@@ -17,6 +17,20 @@ describe('Lamoda adapter', () => {
     const bad=vi.fn().mockResolvedValueOnce(token()).mockResolvedValueOnce(json({id:'MPG1',sellerId:'foreign'}));
     await expect(new LamodaClient(bad).fboShipment(credentials,'MPG1')).rejects.toThrow('SHIPMENT_SCOPE_MISMATCH');expect(bad).toHaveBeenCalledTimes(2);
   });
+  // TEST: reproduce the production 400, then the catalog's distinct 25-row limit.
+  it('passes the required country for access checks and respects catalog pagination limits', async () => {
+    const http = vi.fn(async (url: string) => {
+      if (url.endsWith('auth-token')) return token();
+      const query = new URL(url).searchParams;
+      if (query.get('country') !== 'RU' || Number(query.get('limit')) > 25) return json({ error: { code: 'VALIDATION_FAILED' } }, 400);
+      const current = Number(query.get('page'));
+      return page('nomenclatures', [{ sku: String(current) }], current, query.get('limit') === '1' ? 1 : 2);
+    });
+    const client = new LamodaClient(http);
+    await expect(client.check(credentials)).resolves.toBeDefined();
+    expect(await client.collection(credentials, 'CATALOG')).toEqual([{ sku: '1' }, { sku: '2' }]);
+    expect(http.mock.calls.slice(2).map(([url]) => new URL(url).searchParams.get('limit'))).toEqual(['25', '25']);
+  });
   it('encrypts secrets with authenticated account binding and random IV', () => {
     vi.stubEnv('WMS_LAMODA_SECRET_KEY', Buffer.alloc(32, 7).toString('base64'));
     const value = sealSecret('password', 'account-1');

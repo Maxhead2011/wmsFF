@@ -43,7 +43,7 @@ export function indexedReceiptState(boxes:ReceiptStockIdentity[],settings:Settin
     const sourceDocument=assignment?.clientId===box.clientId&&assignment?.warehouseId===box.warehouseId?assignment.series:series(box.code,box.receiptAt);
     const id=receiptId(box.clientId,box.warehouseId,sourceDocument);
     const saved=byKey.get(`receipt.approval.v1:${box.clientId}:${box.warehouseId}:${id}`);
-    const available=saved?saved.available:scope.grandfatheredReceiptIds.includes(id);
+    const available=saved?saved.available:scope.defaultAvailable===true||scope.grandfatheredReceiptIds.includes(id);
     if(!available){
       pending.push(box.id);
       rules.set(box.id,{id,clientId:box.clientId,warehouseId:box.warehouseId,sourceDocument,fbs:true,fbo:true,protectedOrders:[],changedAt:'',revision:0,...rules.get(box.id),stockAvailable:false});

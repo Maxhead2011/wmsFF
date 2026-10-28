@@ -1,0 +1,27 @@
+{
+  "publication": {
+    "base": "sha256:4eb9ed22a0a6d661f9928bf304e7ac9f4e5b2daa8c23b005b495f0046547a925",
+    "web": "sha256:fa79b7e9d3b0393885e07e2df59d655642363cac0eabe720491e377216275d39",
+    "image": "sha256:d5cb501edd0bfbdfd450af6525ef9068e71cb3468e9079e660bd2ca0c9c0dcea",
+    "hash": "6cd062db29ea86e988bf99a2e437b4da2a770d5ba998dea4d5e61036cec0b9d3",
+    "proof": {
+      "passed": 1,
+      "readOnly": true,
+      "identicalPrices": true,
+      "services": 367,
+      "milliseconds": 70
+    },
+    "published": true,
+    "pr": 707,
+    "webUnchanged": true,
+    "businessDataUnchanged": true,
+    "at": 1793122217.8663466
+  },
+  "live": {
+    "passed": 1,
+    "readOnly": true,
+    "identicalPrices": true,
+    "services": 367,
+    "milliseconds": 47
+  }
+}

@@ -1,3 +1,6 @@
+import { receiptProcessingByBoxes, applyReceiptPrimary } from '../billing/receipt-processing';
+import { selectedOzonLabels } from './ozon-direct-label';
+import { assertNotMultishopOwned } from './multishop-stock-ownership';
 import {lockOrderLinks,assertOrdersNotRemoved,withoutRemovedOrders,ADMIN_REMOVED,requestRemovalEnabled} from '../client-requests/request-removal-policy';
 import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, pinnedOriginalSticker } from './fbs-original-sticker';
 import { measureOperation } from '../../common/diagnostics/operation-timing';
@@ -8122,6 +8125,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (stocks.length === 0) return {};
     // FIX: every writer (automatic, allocation, manual and reconciliation) shares this gate.
     await this.stockControl.assertEnabled(clientId);
+    await assertNotMultishopOwned(this.prisma, clientId, apiKey, stocks.map(s => s.chrtId));
     // ADDED: callers may persist the real WB acknowledgement in an audit
     // history; existing callers can continue ignoring the return value.
     return marketplaceJsonUncached(
@@ -8136,7 +8140,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           })),
         }),
       },
-      () => this.stockControl.assertEnabled(clientId),
+      async () => { await this.stockControl.assertEnabled(clientId); await assertNotMultishopOwned(this.prisma, clientId, apiKey, stocks.map(s => s.chrtId)); },
     );
   }
 
@@ -21409,6 +21413,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    // FIX: an Ozon label download must not wait for every marketplace's history.
+    const direct = await selectedOzonLabels(this.prisma, clientId, dto.orders, marketplaceJson, marketplaceBinary);
+    if (direct) return {
+      fileName: `fbs-order-stickers-${fileTimestamp(new Date())}.pdf`,
+      contentType: 'application/pdf' as const,
+      buffer: await mergeFbsStickerPdfs(direct.parts),
+      count: direct.count,
+    };
     const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
     const unavailable = orders.filter((order) => {
       if (order.marketplace === MarketplaceType.WILDBERRIES) {
@@ -26895,6 +26907,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: internal read-only input for the common stock pool; no billing or request mutation.
+  async readMultishopWildberriesOrders(connectionId: string, clientId: string) {
+    const connection = await this.prisma.clientMarketplaceConnection.findFirstOrThrow({ where: { id: connectionId, clientId, marketplace: 'WILDBERRIES', isActive: true }, include: { client: true } });
+    return this.fetchWildberriesFbsOrders(connection, 'full');
+  }
+
   private async fetchWildberriesFbsOrders(
     connection: MarketplaceConnectionWithClient,
     historyMode: FbsOrderHistoryMode = 'full',
@@ -27622,7 +27640,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const requestId = requestIds.length === 1 ? requestIds[0] : null;
       if (settings.primaryProcessingEnabled && !completedWorkEnabled) {
         // FIX: opted-in primary work is accounted per completed order, never rebuilt from a WB tail.
-        const primaryLinesFor = (orders: FbsOrderSummary[]) => fbsPrimaryChargeLines({
+        const legacyPrimaryLinesFor = (orders: FbsOrderSummary[]) => fbsPrimaryChargeLines({
           breakdown: buildFbsPrimaryProcessingBreakdown(
           orders.map((order) => {
             const assembly = order.processingEvidence ?? assemblyByOrder.get(
@@ -27647,6 +27665,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           primaryServices: configuredPrimaryServices,
           orders,
         });
+        const boxFor=(order:FbsOrderSummary)=>{const a=order.processingEvidence??assemblyByOrder.get(selectionKey(order.connectionId,order.id));return a?.boxCode??order.storageBoxes.find(b=>b.quantity>0)?.code??'';};
+        const receiptProfiles=await receiptProcessingByBoxes(this.prisma,clientId,batchOrders.map(boxFor));
+        const primaryLinesFor=(orders:FbsOrderSummary[])=>{
+          if(!receiptProfiles.size)return legacyPrimaryLinesFor(orders);
+          const combined=new Map<string,FbsPrimaryChargeLine>();
+          const countFor=(order:FbsOrderSummary)=>(order.processingEvidence??assemblyByOrder.get(selectionKey(order.connectionId,order.id)))?.itemCount??order.itemCount;
+          for(const order of orders){
+            const legacy=lukinPrimaryLines(clientId,countFor(order),legacyPrimaryLinesFor([order]));
+            const selected=receiptProfiles.get(boxFor(order));
+            const lines=applyReceiptPrimary(legacy,selected,countFor(order));
+            for(const line of lines){const key=line.key+':'+line.unitPriceRub+':'+line.taxMode;const prior=combined.get(key);combined.set(key,{...line,key,quantity:(prior?.quantity??0)+line.quantity,billingPolicy:'RECEIPT_PROCESSING_V1'});}
+          }
+          return [...combined.values()];
+        };
         await this.ensureFbsPrimaryProcessingInvoice({
           clientId,
           shipmentKey,
@@ -27980,6 +28012,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       select: { id: true, number: true, status: true, comment: true, paidRub: true, _count: { select: { payments: true } } },
     });
     let invoice = invoiceState ? { id: invoiceState.id, number: invoiceState.number, status: invoiceState.status } : null;
+    // FIX: selecting a receipt profile cannot implicitly reprice any existing invoice snapshot.
+    if(process.env.WMS_RECEIPT_PROCESSING_ENABLED==='true'&&invoiceState&&input.lines?.some(l=>l.billingPolicy==='RECEIPT_PROCESSING_V1'))return invoice;
     // FIX: preserve primary history just like the lifecycle processing invoice.
     if (wbOrderStockLifecycleEnabled() && invoiceState) return invoice;
     // FIX: cancelled merge sources and payment-bearing drafts are immutable to automation.

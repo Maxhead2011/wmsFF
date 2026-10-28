@@ -1,3 +1,4 @@
+import { receiptProcessingByBoxes, receiptProfileAmount, type BoxProcessing } from './receipt-processing';
 import { createHash, randomUUID } from 'node:crypto';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { BadRequestException } from '@nestjs/common';
@@ -28,7 +29,7 @@ export type WorkCharge = { id: string; status: string; sourceKey: string | null;
   quantity: unknown; totalRub: unknown; unitPriceRub?: unknown; description?: string; requestId?: string | null; serviceDate?: Date;
   serviceId: string | null; invoiceItems: { invoice: { status: string } }[] };
 export type WorkConfig = { processingPrice: number; primaryEnabled: boolean; relabelPrice: number;
-  serviceIds: Record<Service, string | null> };
+  serviceIds: Record<Service, string | null>; receiptProfiles?:Map<string,BoxProcessing> };
 type WorkLine = { sourceKey: string; existingChargeId?: string; service: Service; serviceId: string; requestId: string | null; warehouseId: string;
   description: string; quantity: number; unitPriceRub: number; totalRub: number; serviceDate: Date;
   metadata: Prisma.InputJsonObject };
@@ -110,10 +111,12 @@ export function completedWorkPlan(input: { clientId: string; work: CompletedWork
     }
     const warehouseId = work.requestId && warehouses.get(work.requestId);
     if (!warehouseId) { plan.blocked.push({ orderId: work.orderId, reason: 'REQUEST_WAREHOUSE_UNKNOWN' }); continue; }
+    const receipt=input.config.receiptProfiles?.get(work.boxCode);
     const services: Service[] = ['processing'];
     if (input.config.primaryEnabled) services.push('primary', 'additional');
     if (input.config.primaryEnabled && work.relabelConfirmedAt) services.push('relabel');
     for (const service of services) {
+      if(receipt&&service!=='processing'&&service!=='primary'&&input.config.serviceIds[service]&&receipt.profile.includedServiceIds.includes(input.config.serviceIds[service]!))continue;
       const identity = `${key(work)}:${service}`;
       if (seen.has(identity)) continue;
       seen.add(identity);
@@ -129,7 +132,8 @@ export function completedWorkPlan(input: { clientId: string; work: CompletedWork
       }
       if (sourceKeys.has(sourceKey)) { plan.blocked.push({ orderId: work.orderId, service, reason: 'RECOVERY_PREVIOUSLY_CANCELLED' }); continue; }
       const serviceId = input.config.serviceIds[service];
-      const price = service === 'processing' ? input.config.processingPrice : service === 'primary' ? 10.64 : service === 'additional' ? 4.26 : input.config.relabelPrice;
+      const price = service === 'processing' ? input.config.processingPrice : service === 'primary' ? (receipt?receiptProfileAmount(receipt.profile).toNumber():10.64) : service === 'additional' ? 4.26 : input.config.relabelPrice;
+      if(receipt&&service==='primary'&&price===0)continue;
       if (!serviceId || !Number.isFinite(price) || price <= 0) { plan.blocked.push({ orderId: work.orderId, service, reason: 'SERVICE_TARIFF_MISSING' }); continue; }
       plan.lines.push({ sourceKey, service, serviceId, requestId: work.requestId!, warehouseId,
         description: `${names[service]} — ${work.billingAttemptId ? 'повторная обработка, ' : ''}заказ ${work.orderId}`, quantity: work.itemCount,
@@ -140,7 +144,7 @@ export function completedWorkPlan(input: { clientId: string; work: CompletedWork
           shipmentKey: `${key(work)}:completed-work`, quantity: work.itemCount, lineQuantity: work.itemCount,
           serviceCode: codes[service], processingType: service === 'relabel' ? 'RELABEL' : `SERVICE:${serviceId}`,
           assemblyId: work.id, ...(work.billingAttemptId ? { billingAttemptId: work.billingAttemptId } : {}),
-          completedAt: work.completedAt.toISOString(), taxMode: 'INCLUDED' } });
+          completedAt: work.completedAt.toISOString(), taxMode: 'INCLUDED', ...(receipt&&service==='primary'?{receiptProcessing:JSON.parse(JSON.stringify(receipt))}:{}) } });
     }
   }
   return plan;
@@ -228,6 +232,7 @@ async function recoverCompletedWorkLocked(db: PrismaService, clientId: string, a
   const requestIds = [...new Set([...work.flatMap(w => w.requestId ? [w.requestId] : []),
     ...orphanCandidates.flatMap(c => [c.requestId ?? '', ...strings(record(c.metadata).requestIds)]), ...links.map(l => l.requestId)].filter(Boolean))];
   const requests = await db.clientRequest.findMany({ where: { clientId, id: { in: requestIds } }, select: { id: true, warehouseId: true } });
+  config.receiptProfiles=await receiptProcessingByBoxes(db,clientId,work.flatMap(w=>w.boxCode?[w.boxCode]:[]));
   const plan = completedWorkPlan({ clientId, config, work, requests, charges });
   const attached = new Set<string>();
   const warehouseByRequest = new Map(requests.map(r => [r.id, r.warehouseId]));
