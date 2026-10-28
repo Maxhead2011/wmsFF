@@ -11,6 +11,7 @@ import { CreateNomenclatureItemDto } from './dto/create-nomenclature-item.dto';
 import { CreateSkuDto } from './dto/create-sku.dto';
 import { UpdateSkuDto } from './dto/update-sku.dto';
 import { parseCatalogQuery,readCatalogPage } from './catalog-list';
+import { withLamodaPrintBarcodes } from '../print/lamoda-print-barcodes';
 import {
   parseNomenclatureSheet,
   type NomenclatureImportItem,
@@ -25,10 +26,12 @@ export class SkusService {
     private readonly volumes: VolumeService,
   ) {}
 
-  async list(filter: { clientId?: string; search?: string; draftsOnly?: boolean }, user: AuthUser) {
+  async list(filter: { clientId?: string; search?: string; draftsOnly?: boolean; forPrint?: boolean }, user: AuthUser) {
     const warehouseId = this.scopedWarehouseId(user);
+    const printLamoda = filter.forPrint === true && process.env.WMS_LAMODA_ENABLED === 'true';
+    const clientId = this.clientScopes.resolveClientFilter(user, filter.clientId);
     const where: Prisma.SkuWhereInput = {
-      clientId: this.clientScopes.resolveClientFilter(user, filter.clientId),
+      clientId,
       isDraft: filter.draftsOnly ? true : undefined,
       OR: filter.search
         ? [
@@ -38,6 +41,15 @@ export class SkusService {
           ]
         : undefined,
     };
+
+    // FIX: Lamoda search is restricted to this print request and the resolved client scope.
+    if (printLamoda && filter.search) {
+      (where.OR as Prisma.SkuWhereInput[]).push({ lamodaProducts: { some: {
+        isPresent: true, linkState: 'CONFIRMED', account: { isActive: true, clientId },
+        OR: [{ barcode: { contains: filter.search } }, { externalSku: { contains: filter.search, mode: 'insensitive' } },
+          { remoteSku: { contains: filter.search, mode: 'insensitive' } }, { name: { contains: filter.search, mode: 'insensitive' } }],
+      } } });
+    }
 
     const skus = await this.prisma.sku.findMany({
       where,
@@ -55,7 +67,8 @@ export class SkusService {
       take: 100,
     });
 
-    return skus.map(enrichSkuMarketplaceData);
+    const rows = skus.map(enrichSkuMarketplaceData);
+    return printLamoda ? withLamodaPrintBarcodes(this.prisma, rows) : rows;
   }
 
   // FIX: isolated catalog view; existing SKU consumers keep their original list contract.

@@ -21,6 +21,7 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
   const [skus, setSkus] = useState<SkuSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [skuCode, setSkuCode] = useState('');
+  const [barcode, setBarcode] = useState('');
   const [name, setName] = useState('');
   const [preview, setPreview] = useState<LabelPreview | null>(null);
   const [error, setError] = useState('');
@@ -64,7 +65,7 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
     setError('');
 
     try {
-      const list = await fetchSkus(session.accessToken, { clientId: nextClientId });
+      const list = await fetchSkus(session.accessToken, { clientId: nextClientId, forPrint: true });
       setSkus(list);
       setSkuCode((current) => current || list[0]?.internalSku || '');
       setName((current) => current || list[0]?.name || '');
@@ -78,12 +79,14 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
   function changeClient(nextClientId: string) {
     setClientId(nextClientId);
     setSkuCode('');
+    setBarcode('');
     setName('');
     setPreview(null);
   }
 
   function changeSku(nextSkuCode: string) {
     setSkuCode(nextSkuCode);
+    setBarcode('');
     const sku = skus.find((item) => item.internalSku === nextSkuCode);
     if (sku) {
       setName(sku.name);
@@ -100,7 +103,7 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
       const nextPreview = await previewSkuLabel(session.accessToken, {
         skuCode: skuCode.trim(),
         name: (selectedSku?.name ?? name).trim(),
-        barcode: selectedSku?.barcodes.find((barcode) => barcode.isPrimary)?.value ?? selectedSku?.barcodes[0]?.value,
+        barcode: barcode || selectedSku?.barcodes.find((barcode) => barcode.isPrimary)?.value || selectedSku?.barcodes[0]?.value,
         clientName: selectedClient?.name,
         article: selectedSku?.article ?? undefined,
         color: selectedSku?.color ?? undefined,
@@ -144,6 +147,11 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
           </datalist>
         </label>
 
+        {/* FIX: Lamoda is an explicit print option, never the warehouse default. */}
+        {selectedSku ? <label><span>Штрихкод для печати</span>
+          <select value={barcode || selectedSku.barcodes.find(b => b.isPrimary)?.value || selectedSku.barcodes[0]?.value || ''} onChange={event => setBarcode(event.target.value)}>
+            {selectedSku.barcodes.map(b => <option key={b.id} value={b.value}>{b.value}{b.source === 'LAMODA' ? ' · Lamoda' : b.isPrimary ? ' · основной' : ''}</option>)}
+          </select></label> : null}
         <label>
           <span>Название</span>
           <input value={selectedSku?.name ?? name} onChange={(event) => setName(event.target.value)} required />

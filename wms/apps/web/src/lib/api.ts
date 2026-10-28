@@ -5084,6 +5084,7 @@ export type SkuSummary = {
     id: string;
     value: string;
     isPrimary: boolean;
+    source?: 'LAMODA';
   }>;
   _count?: {
     balances: number;
@@ -8957,7 +8958,7 @@ export async function importClientsXlsx(accessToken: string, payload: { file: Fi
   return requestMultipart<ClientImportResult>('/clients/import-xlsx', form, accessToken);
 }
 
-export async function fetchSkus(accessToken: string, filter: { clientId?: string; search?: string; draftsOnly?: boolean } = {}) {
+export async function fetchSkus(accessToken: string, filter: { clientId?: string; search?: string; draftsOnly?: boolean; forPrint?: boolean } = {}) {
   return request<SkuSummary[]>(withQuery('/skus', filter), {
     accessToken,
   });

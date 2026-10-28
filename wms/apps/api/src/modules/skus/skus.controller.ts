@@ -23,8 +23,9 @@ export class SkusController {
     @Query('clientId') clientId?: string,
     @Query('search') search?: string,
     @Query('draftsOnly') draftsOnly?: string,
+    @Query('forPrint') forPrint?: string,
   ) {
-    return this.skus.list({ clientId, search, draftsOnly: draftsOnly === 'true' }, user);
+    return this.skus.list({ clientId, search, draftsOnly: draftsOnly === 'true', forPrint: forPrint === 'true' }, user);
   }
 
   @Get('catalog')
