@@ -58,3 +58,5 @@ TypeScript API/web и Vite build прошли. У сборки есть пред
 Скрипты воспроизводимости — scripts/releases/fbo-counts-20261028.
 
 После публикации: health/public hashes passed, browser5 with synthetic API passed; live authenticated count endpoint returned 200 (WB2/Ozon3 in current actor scope), anonymous401. Rollback tags: logoff-api:before-fbo-counts-20261028 and logoff-web:before-fbo-counts-20261028. Other containers unchanged.
+
+Follow-up prepared: Lamoda tile now counts its persisted active ClientRequests through lamodaAssembly; drafts without requests are excluded. Same scope/status rules; no deployment yet. API response adds lamoda; WB/Ozon classification preserved. Tests cover the tile and separate count.
