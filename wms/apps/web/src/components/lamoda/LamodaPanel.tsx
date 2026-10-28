@@ -7,6 +7,8 @@ import {
   type LamodaResource, type LamodaPreview,
 } from '../../lib/api';
 import './lamoda.css';
+import { importLamodaShipment, createLamodaAssembly, fetchFboPlan, type FboPlan } from '../../lib/api';
+import { FboTwoStagePanel } from '../client-requests/FboTwoStagePanel';
 
 type Tab = 'connection' | 'catalog' | 'fbo' | 'fbs' | 'returns' | 'log';
 const tabs: [Tab, string][] = [['connection', 'Подключение'], ['catalog', 'Товары'], ['fbo', 'Планы FBO'], ['fbs', 'Заказы FBS'], ['returns', 'Возвраты'], ['log', 'Журнал обмена']];
@@ -27,6 +29,8 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
   const [preview, setPreview] = useState<LamodaPreview | null>(null), [previewPlan, setPreviewPlan] = useState('');
   const [candidates, setCandidates] = useState<{ productId: string; rows: LamodaCandidate[] } | null>(null);
   const [revision, setRevision] = useState(0), [loading, setLoading] = useState(false);
+  const [reference,setReference]=useState(''),[previewId,setPreviewId]=useState('');
+  const [assembly,setAssembly]=useState<FboPlan|null>(null);
   const selected = accounts.find(c => c.id === accountId);
   useEffect(() => {
     let current = true;
@@ -42,6 +46,7 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
   useEffect(() => {
     let current = true;
     setOverview(null); setCandidates(null); setPreview(null); setPreviewPlan(''); setFile(null); setTitle(''); setRemoteShipmentId(''); setWarehouses([]); setWarehouseId(''); setForm(emptyForm());
+    setReference('');setPreviewId('');setAssembly(null);
     if (!accountId) { setLoading(false); return; }
     setLoading(true);
     Promise.all([fetchLamodaOverview(token, accountId), fetchLamodaWarehouses(token, accountId)])
@@ -66,7 +71,7 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
   const documents = overview?.documents.filter(d => tab === 'fbo' ? d.kind === 'FBO_SHIPMENTS' : tab === 'fbs' ? ['ORDERS', 'FBS_SHIPMENTS'].includes(d.kind) : tab === 'returns' ? d.kind === 'RETURNS' : false) ?? [];
   return <section className="lamoda-workspace" aria-label="Lamoda">
     <h2>Lamoda · подготовка подключения</h2>
-    <p className="lamoda-note">Здесь можно подключить кабинет, загрузить данные и проверить планы. Отправка остатков, запуск сборки и подтверждение отгрузок пока недоступны.</p>
+    <p className="lamoda-note">Загрузите план из Excel или из существующей поставки Lamoda и проверьте состав. Отправка остатков и подтверждение отгрузок пока недоступны.</p>
     <div className="lamoda-fields">
       <label>Клиент<select value={clientId} disabled={busy} onChange={e => setClientId(e.target.value)}><option value="">Выберите клиента</option>{clients.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>
       <label>Кабинет Lamoda<select value={accountId} disabled={busy || !clientId} onChange={e => setAccountId(e.target.value)}><option value="">Новое подключение</option>{accounts.map(c => <option key={c.id} value={c.id}>{c.name} · {c.sellerId}{c.isActive ? '' : ' · отключено'}</option>)}</select></label>
@@ -92,12 +97,20 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
         <h3>План из файла клиента</h3><div className="lamoda-fields"><label>Название<input value={title} onChange={e => setTitle(e.target.value)} required disabled={disabled} /></label><label>Филиал WMS<select value={warehouseId} onChange={e => setWarehouseId(e.target.value)} required disabled={disabled}>{warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><label>Существующая поставка Lamoda<select value={remoteShipmentId} onChange={e => setRemoteShipmentId(e.target.value)} disabled={disabled}><option value="">Пока без привязки</option>{overview?.documents.filter(d => d.kind === 'FBO_SHIPMENTS').map(d => <option key={d.id} value={d.remoteId}>{d.number} · {d.remoteId}</option>)}</select></label></div>
         <label>Файл клиента<input key={`${accountId}-${revision}`} type="file" accept=".xlsx,.xls" disabled={disabled} onChange={e => setFile(e.target.files?.[0] ?? null)} /></label><button type="button" disabled={disabled} onClick={() => void run(async () => { const blob = await downloadLamodaTemplate(token, accountId); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'Lamoda-FBO.xlsx'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30_000); })}>Скачать шаблон</button><button disabled={disabled || !canWrite || !file || !warehouseId}>Сохранить черновик</button>
       </form>
-      {overview?.plans.map(p => <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p><button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title); })}>Проверить соответствия и остатки</button></div>)}
-      {preview && <div className="lamoda-card"><h3>Проверка: {previewPlan}</h3><p>{preview.message}</p>{preview.unresolvedRows.length > 0 && <p role="alert">Нет однозначного соответствия в строках: {preview.unresolvedRows.join(', ')}</p>}{preview.availability && <div className="lamoda-scroll"><table><thead><tr><th>Товар</th><th>В плане</th><th>Доступно</th><th>В чужих резервах</th><th>Не хватает</th></tr></thead><tbody>{preview.availability.lines.map((l, i) => <tr key={i}><td>{l.name ?? l.barcode}</td><td>{l.requestedQuantity}</td><td>{l.availableQuantity}</td><td>{l.reservedQuantity}</td><td>{l.shortageQuantity}</td></tr>)}</tbody></table></div>}</div>}
+      <form className="lamoda-card" onSubmit={e=>{e.preventDefault();void run(async()=>{await importLamodaShipment(token,accountId,{reference,warehouseId,title});setNotice('Состав поставки загружен. Проверьте соответствия и остатки.');setRevision(v=>v+1);});}}>
+        <h3>Создать сборку по ссылке или ID Lamoda</h3>
+        <label>Ссылка или ID поставки<input value={reference} onChange={e=>setReference(e.target.value)} required disabled={disabled}/></label>
+        <label>Или выберите загруженную поставку<select value="" disabled={disabled} onChange={e=>setReference(e.target.value)}><option value="">Выберите поставку</option>{documents.map(d=><option key={d.id} value={d.remoteId}>{d.number} · {d.status}</option>)}</select></label>
+        <p>Используется филиал WMS, выбранный выше. Загружается плановое количество, без изменения поставки в Lamoda.</p>
+        <button disabled={disabled||!canWrite||!warehouseId||!reference}>Загрузить состав поставки</button>
+      </form>
+      {overview?.plans.map(p => <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p><button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>{p.assembly && <button disabled={disabled} onClick={()=>void run(async()=>setAssembly(await fetchFboPlan(token,p.assembly!.requestId)))}>Открыть сборку</button>}</div>)}
+      {preview && <div className="lamoda-card"><h3>Проверка: {previewPlan}</h3><p>{preview.message}</p>{preview.unresolvedRows.length > 0 && <p role="alert">Нет однозначного соответствия в строках: {preview.unresolvedRows.join(', ')}</p>}{overview?.assemblyEnabled && preview.canAssemble && <button disabled={disabled||!canWrite||!previewId} onClick={()=>void run(async()=>{const result=await createLamodaAssembly(token,accountId,previewId);setNotice(`Создана сборка №${result.number}. Плановое количество сохранено; дефицит, если он есть, остаётся в плане.`);setRevision(v=>v+1);})}>Создать сборку и резерв</button>}{preview.availability && <div className="lamoda-scroll"><table><thead><tr><th>Товар</th><th>В плане</th><th>Доступно</th><th>В чужих резервах</th><th>Не хватает</th></tr></thead><tbody>{preview.availability.lines.map((l, i) => <tr key={i}><td>{l.name ?? l.barcode}</td><td>{l.requestedQuantity}</td><td>{l.availableQuantity}</td><td>{l.reservedQuantity}</td><td>{l.shortageQuantity}</td></tr>)}</tbody></table></div>}</div>}
     </>}
     {tab === 'fbs' && <><p>Загруженные заказы пока не создают сборок и резервов WMS. До запуска обработки FBS остатки в Lamoda не публикуются.</p><button disabled={disabled || !canWrite || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('ORDERS')}>Загрузить заказы</button><button disabled={disabled || !canWrite || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('FBS_SHIPMENTS')}>Загрузить отгрузки FBS</button></>}
     {tab === 'returns' && <><p>Это ожидаемые возвраты Lamoda. Доступный остаток увеличивается только после физической приёмки в WMS.</p><button disabled={disabled || !canWrite || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('RETURNS')}>Загрузить ожидаемые возвраты</button></>}
     {['fbo', 'fbs', 'returns'].includes(tab) && <div className="lamoda-scroll"><table><thead><tr><th>Номер</th><th>ID Lamoda</th><th>Статус Lamoda</th><th>Последняя загрузка</th></tr></thead><tbody>{documents.map(d => <tr key={d.id}><td>{d.number}</td><td>{d.remoteId}</td><td>{d.status}</td><td>{date(d.syncedAt)}</td></tr>)}</tbody></table><p>Показано до 500 документов. Поставки и возвраты загружаются за период ±90 дней; заказы — с последней успешной загрузки, при первом запуске за 90 дней.</p></div>}
     {tab === 'log' && <div className="lamoda-scroll"><table><thead><tr><th>Время</th><th>Операция</th><th>Результат</th><th>Записей</th></tr></thead><tbody>{overview?.exchanges.map(e => <tr key={e.id}><td>{date(e.createdAt)}</td><td>{e.operation}</td><td>{({ RUNNING: 'Выполняется', SUCCEEDED: 'Завершено', FAILED: 'Ошибка' } as Record<string, string>)[e.status] ?? e.status} {e.errorCode}</td><td>{e.itemCount}</td></tr>)}</tbody></table></div>}
+    {assembly&&<FboTwoStagePanel initial={assembly} accessToken={token} userId={session.user.id} canWrite={canWrite} onClose={()=>setAssembly(null)}/> }
   </section>;
 }

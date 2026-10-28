@@ -4,7 +4,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import type { AuthUser } from '../auth/auth.types';
 import { LamodaService } from './lamoda.service';
-import { LamodaCreateAccountDto, LamodaUpdateAccountDto, LamodaSyncDto, LamodaLinkDto, LamodaImportDto } from './lamoda.dto';
+import { LamodaCreateAccountDto, LamodaUpdateAccountDto, LamodaSyncDto, LamodaLinkDto, LamodaImportDto, LamodaImportShipmentDto } from './lamoda.dto';
 import { templateWorkbook } from './lamoda-policy';
 
 @Controller('lamoda')
@@ -49,4 +49,10 @@ export class LamodaController {
   @Post('accounts/:id/plans/:planId/availability')
   @RequirePermissions('marketplace-api:write')
   availability(@Param('id') id: string, @Param('planId') planId: string, @CurrentUser() user: AuthUser) { return this.service.availability(id, planId, user); }
+  @Post('accounts/:id/plans/from-shipment')
+  @RequirePermissions('marketplace-api:write')
+  fromShipment(@Param('id') id:string,@Body() body:LamodaImportShipmentDto,@CurrentUser() user:AuthUser) { return this.service.importShipment(id,body,user); }
+  @Post('accounts/:id/plans/:planId/assembly')
+  @RequirePermissions('marketplace-api:write')
+  assembly(@Param('id') id:string,@Param('planId') planId:string,@CurrentUser() user:AuthUser) { return this.service.createAssembly(id,planId,user); }
 }

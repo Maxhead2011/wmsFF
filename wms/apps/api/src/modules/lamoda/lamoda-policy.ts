@@ -43,7 +43,7 @@ export function documentSnapshot(kind: Exclude<LamodaResource, 'CATALOG'>, row: 
   return { remoteId: id, number: optional(row.orderId) ?? optional(row.externalShipmentId) ?? id, status: optional(row.status) ?? 'UNKNOWN', payload };
 }
 
-export type LamodaPlanLine = { barcode: string; quantity: number; article: string; destination: string };
+export type LamodaPlanLine = { barcode: string; quantity: number; article: string; destination: string; remoteSku?: string };
 export function parseLamodaPlan(buffer: Buffer): LamodaPlanLine[] {
   let book: XLSX.WorkBook;
   try { book = XLSX.read(buffer, { type: 'buffer', cellFormula: true, sheetRows: 1002 }); }

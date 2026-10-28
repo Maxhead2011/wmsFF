@@ -332,3 +332,8 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal.spec.ts (15), scripts/releases/request-removal-20261024/browser.cjs (8 compiled UI) and postgres.cjs (9 isolated DB). API3590/web476; TypeScript passed. See [scope and limitations](request-removal.md).
+
+## Lamoda FBO imports (prepared2026-10-28)
+- lamoda-fbo-import.spec.ts: ID safety, planned quantities, exact mappings/direction quotas. lamoda.service.spec.ts: assembly gate, request/binding, replay, unmapped rejection. lamoda-client.spec.ts: detail/items pagination and seller isolation. lamoda-wb-isolation.spec.ts: both WB exports blocked.
+- fboRequestScope.spec.ts/FboTwoStagePanel.spec.tsx: Lamoda excluded from WB/exports. Android FboTwoStageScreenTest: Lamoda title/no WB export. Full logoff/ffullhab/platform suites passed.
+- Synthetic DB constraint proof5: work/lamoda-contour/fbo-db-proof.json; not full runtime migration parity.

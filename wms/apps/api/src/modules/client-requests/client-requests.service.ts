@@ -105,6 +105,7 @@ export class ClientRequestsService {
       where,
       // FIX: expose the persisted marketplace relation without loading Ozon directions or orders.
       include: { ...clientRequestInclude,
+        ...(process.env.WMS_LAMODA_ENABLED === 'true' ? { lamodaAssembly: {select:{requestId:true}} } : {}),
         ...(process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? { ozonShipment: { select: { requestId: true } } } : {}),
       },
       orderBy: [{ updatedAt: 'desc' }],
@@ -470,6 +471,7 @@ export class ClientRequestsService {
   }
 
   async update(id: string, dto: UpdateClientRequestDto, user: AuthUser) {
+    if(dto.items!==undefined && process.env.WMS_LAMODA_ENABLED === 'true' && await this.prisma.lamodaFboAssembly.findUnique({where:{requestId:id}})) throw new BadRequestException('Состав сборки Lamoda задан планом. Изменение отдельных строк недоступно.');
     // FIX: allocation and total demand must not diverge through the generic item editor.
     if (dto.items !== undefined && process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' &&
         await this.prisma.ozonFboShipment.findUnique({ where: { requestId: id } }))

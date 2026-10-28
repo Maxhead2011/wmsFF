@@ -1,5 +1,30 @@
 # Lamoda — подготовительный контур, 26.10.2026
 
+## Продолжение в работе: `feature/lamoda-operations`
+
+Локально добавлены `lamoda-commands.ts`, закреплённые схемы официального API,
+методы `LamodaClient.execute/packLabel` и `lamoda-operation-journal.ts`.
+Отправки ограничены перечнем методов, валидируются до OAuth и требуют отдельного
+`WMS_LAMODA_EXTERNAL_WRITES_ENABLED=true` (по умолчанию выключен).
+Таймаут, 5xx, неоднозначный HTTP и повреждённый успешный ответ означают UNKNOWN,
+автоматического повтора бизнес-запроса нет. PDF проверяется по MIME и сигнатуре,
+чтение ограничено 10 МБ. Форматы этикеток S/M/L соответствуют спецификации.
+
+Подготовлена дополнительная миграция `20261026160000_lamoda_operations`.
+Журнал использует уникальный ключ кабинета/операции, хеш состава и атомарный переход
+PENDING → SENDING. SENDING после перезапуска не возвращается автоматически в очередь.
+Неопределённый результат требует сверки. Ответы с персональными данными в журнал не пишутся.
+
+**Не опубликовано.** Журнал пока является внутренним компонентом, не подключён
+к пользовательским маршрутам и складской сборке. Миграция на сервер не применялась.
+Следующий этап: сохранение подтверждённых внешних идентификаторов, сверка зависших
+операций, создание складских заявок и интеграция ТСД. Не включать внешние записи
+до завершения этих этапов и проверки с подключённым клиентом.
+
+Проверки: 60 тестов Lamoda API/контрактов и 5 тестов журнала прошли;
+Общий API-прогон: 3709 passed, 150 skipped; две специальные KIZ integration suites исключены. TypeScript и Prisma schema прошли. Тест журнала использует изолированное хранилище в памяти:
+это не заменяет проверку миграции и конкурентных запросов на PostgreSQL.
+
 Ветка `feature/lamoda-contour`, база PR689/PR690 (`276e7fac`, `feature/wb-print-check`), объединена без потери последнего выпуска.
 **Опубликовано 26.10.2026, PR691. Это первый этап плана, а не готовый полный коннектор FBO/FBS.**
 
@@ -133,3 +158,15 @@ SHA-256 скачанного OpenAPI:
 Точный runtime и схема сверены с кандидатом после публикации; health OK. Публичный интерфейс прошёл 10 сценариев с перехватом всех API-вызовов на синтетические данные. Реальный read-only smoke проверил таблицы и доступность раздела без создания подключений/товаров.
 Ключ хранится в серверном `.env`, добавлена передача `WMS_LAMODA_SECRET_KEY` только API. Миграция записана в `_prisma_migrations`. Резервная копия БД/конфигурации находится в защищённой серверной папке выпуска.
 Откат: `logoff-api:before-lamoda-preparation-20261026` и `logoff-web:before-lamoda-preparation-20261026`; конфигурация сохраняется отдельно. При откате не удалять ключ, если уже появились подключения: он нужен для расшифровки. Новые таблицы автоматически не удаляются.
+
+## Prepared FBO import and assembly / 2026-10-28
+
+Excel creates a plan; existing-shipment import reads ID, warehouse and quantityPlanned from Lamoda. Confirmed unambiguous SKU mappings are required before a separate action creates an OUTBOUND request/reservation and durable LamodaFboAssembly binding. Repeated creation returns the same request. Shortage never silently reduces the plan. Existing two-stage stock/reservation/KIZ guards remain; boxless and source-box picking and direction packing use the shared pipeline. Lamoda cannot export WB files.
+
+Files: lamoda-fbo-policy.ts (ID/quantity/mapping); lamoda-client.ts/fboShipment; lamoda.service.ts/importShipment,createAssembly; controller/DTO; Prisma LamodaFboAssembly and migration20261028120000; client-requests.service.ts and client-request-marketplace-files.service.ts; fbo-two-stage.service.ts; LamodaPanel.tsx/FboTwoStagePanel.tsx/fboRequestScope.ts/api.ts; Android FboTwoStageScreen.java; administration-internal-api.service.ts registry.
+
+Release needs additive migration, new APK and own-installation-only WMS_LAMODA_FBO_ASSEMBLY_ENABLED=true. Preserve existing two-stage/unboxed flags. Lukin FBO account was verified28Oct; FBS disabled, live shipment list empty. Actual cabinet URL and physical end-to-end cycle still unverified. This imports existing Lamoda shipments; it does not create remote shipments.
+
+Pre-integration checks: web506 passed/2 skipped; all three Android flavor unit suites passed; isolated synthetic PostgreSQL table constraints5 passed (not full runtime migration parity). Exact runtime migration, candidate/browser/public checks remain mandatory before release.
+
+Release candidate2026-10-28: integrated PR710; API3809 passed/155 skipped (dedicated KIZ DB suite excluded), web512/2, TypeScript API/web and all three Android flavor suites passed. APK235 LOGOFF only. A first highly parallel API run timed out in an existing PDF test; complete four-worker rerun passed. Candidate uses12 API files, two additive tables, Lamoda UI and one WB list filter overlay. Browser13 isolated scenarios passed. Remote shipment creation/stock publication still disabled; live shipment list empty.

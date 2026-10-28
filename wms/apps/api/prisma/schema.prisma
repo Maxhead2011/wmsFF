@@ -786,6 +786,7 @@ model RolePermission {
 
 // FIX: isolated Lamoda preparation contour; no stock or legacy connection ownership.
 model LamodaAccount {
+  operations LamodaOperation[]
   id String @id @default(uuid())
   clientId String
   name String
@@ -807,6 +808,21 @@ model LamodaAccount {
   plans LamodaPlan[]
   exchanges LamodaExchange[]
   @@unique([clientId, sellerId])
+}
+
+// FIX: an external mutation claim must survive process restarts and ambiguous responses.
+model LamodaOperation {
+  id String @id
+  accountId String
+  operationKey String
+  payloadHash String
+  status String @default("PENDING")
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  @@unique([accountId, operationKey])
+  @@index([accountId, status])
 }
 
 model LamodaProduct {
@@ -842,6 +858,7 @@ model LamodaDocument {
 }
 
 model LamodaPlan {
+  assembly LamodaFboAssembly?
   id String @id @default(uuid())
   accountId String
   warehouseId String
@@ -866,6 +883,17 @@ model LamodaExchange {
   finishedAt DateTime?
   account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
   @@index([accountId, createdAt])
+}
+
+// FIX: one plan and one remote Lamoda shipment can own only one warehouse request.
+model LamodaFboAssembly {
+  requestId String @id
+  planId String @unique
+  externalKey String? @unique
+  directions Json
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  plan LamodaPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
 }
 
 model Client {
@@ -1905,6 +1933,7 @@ model InventoryBoxRescanRequest {
 }
 
 model ClientRequest {
+  lamodaAssembly LamodaFboAssembly?
   ozonShipment                 OzonFboShipment?
   id                           String                     @id @default(uuid())
   number                       Int                        @unique @default(autoincrement())

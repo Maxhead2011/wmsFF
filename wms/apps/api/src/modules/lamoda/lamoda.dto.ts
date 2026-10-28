@@ -25,3 +25,8 @@ export class LamodaImportDto {
   @IsString() @IsNotEmpty() @MaxLength(200) warehouseId!: string;
   @IsOptional() @IsString() @MaxLength(200) remoteShipmentId?: string;
 }
+export class LamodaImportShipmentDto {
+  @IsString() @IsNotEmpty() @MaxLength(2000) reference!: string;
+  @IsString() @IsNotEmpty() @MaxLength(200) warehouseId!: string;
+  @IsOptional() @IsString() @MaxLength(200) title?: string;
+}

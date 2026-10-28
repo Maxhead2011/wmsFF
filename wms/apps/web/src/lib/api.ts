@@ -5,11 +5,11 @@ export type LamodaCandidate = {id:string;name:string;internalSku:string;size:str
 export type LamodaOverview = {
   products:{id:string;name:string;remoteSku:string;externalSku:string|null;barcode:string|null;size:string|null;skuId:string|null;linkState:string;isPresent:boolean;sku:{id:string;name:string;internalSku:string}|null}[];
   documents:{id:string;kind:LamodaResource;remoteId:string;number:string;status:string;syncedAt:string}[];
-  plans:{id:string;title:string;createdAt:string;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
+  plans:{id:string;title:string;createdAt:string;assembly?:{requestId:string}|null;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
   exchanges:{id:string;operation:string;status:string;errorCode:string|null;createdAt:string;itemCount:number}[];
-  externalWritesEnabled:false;assemblyEnabled:false;limits:{products:number;documents:number;plans:number};
+  externalWritesEnabled:false;assemblyEnabled:boolean;limits:{products:number;documents:number;plans:number};
 };
-export type LamodaPreview = {unresolvedRows:number[];canAssemble:false;message:string;availability:{lines:{name:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
+export type LamodaPreview = {unresolvedRows:number[];canAssemble:boolean;message:string;availability:{lines:{name:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
 const lamodaPath=(id:string)=>'/lamoda/accounts/'+encodeURIComponent(id);
 export const fetchLamodaAccounts=(accessToken:string,clientId:string)=>request<LamodaAccount[]>('/lamoda/accounts?clientId='+encodeURIComponent(clientId),{accessToken});
 export const createLamodaAccount=(accessToken:string,body:{clientId:string;name:string;sellerId:string;oauthClientId:string;secret:string;fboEnabled:boolean;fbsEnabled:boolean})=>request<LamodaAccount>('/lamoda/accounts',{accessToken,method:'POST',body});
@@ -1514,6 +1514,7 @@ export type ClientRequestTimeline = {
 export type ClientRequestSummary = {
   // FIX: marketplace identity for WB/Ozon list separation, including custom request titles.
   ozonShipment?: { requestId: string } | null;
+  lamodaAssembly?: { requestId: string } | null;
   id: string;
   number: number;
   clientId: string;
@@ -12610,3 +12611,7 @@ export const ozonAdjustment=(accessToken:string,id:string,action:''|'preview'|'s
 export function lookupFbsOriginalSticker(accessToken:string,clientId:string,orderId:string) {
   return request<FbsRepeatPreview & {selection:FbsRepeatSelection}>('/marketplace-connections/fbs/repeat-assembly/original-sticker/lookup',{method:'POST',accessToken,body:{clientId,orderId}});
 }
+
+// FIX: both Lamoda import methods converge on one idempotent warehouse assembly.
+export const importLamodaShipment=(accessToken:string,id:string,body:{reference:string;warehouseId:string;title?:string})=>request<{id:string}>(lamodaPath(id)+'/plans/from-shipment',{accessToken,method:'POST',body});
+export const createLamodaAssembly=(accessToken:string,id:string,planId:string)=>request<{id:string;number:number}>(lamodaPath(id)+'/plans/'+encodeURIComponent(planId)+'/assembly',{accessToken,method:'POST'});
