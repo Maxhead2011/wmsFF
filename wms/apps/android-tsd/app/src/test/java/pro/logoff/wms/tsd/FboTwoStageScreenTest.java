@@ -26,6 +26,18 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: Yandex completed packing must not offer downloads for a different marketplace.
+    @Test public void yandexCompletedPackingDoesNotOfferWbFiles() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan("COMPLETED");p.marketplace="YANDEX_MARKET";
+            FboTwoStageScreen screen=open(a,p,true,new AtomicInteger());
+            try {
+                assertNotNull(find(a.findViewById(android.R.id.content),"Сборка FBY проверена"));
+                assertNull(find(a.findViewById(android.R.id.content),"Скачать файл WB"));
+                assertNull(find(a.findViewById(android.R.id.content),"Скачать состав для WB"));
+            } finally {screen.close();}
+        }
+    }
     // TEST: Lamoda is never presented as WB and never exposes WB downloads.
     @Test public void lamodaHasOwnTitleAndNoWbExport() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()){

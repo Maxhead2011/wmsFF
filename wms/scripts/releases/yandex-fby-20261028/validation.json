@@ -1,0 +1,53 @@
+{
+  "api": {
+    "passed": 3846,
+    "skipped": 150,
+    "excluded": [
+      "kiz-identity-transfer.integration.spec.ts",
+      "kiz-duplicate.integration.spec.ts"
+    ]
+  },
+  "web": {
+    "passed": 519,
+    "skipped": 2
+  },
+  "android": {
+    "Logoff": {
+      "tests": 267,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Platform": {
+      "tests": 267,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Ffullhab": {
+      "tests": 267,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "browser": {
+    "passed": 16,
+    "isolatedApi": true,
+    "writes": [
+      "fby",
+      "fby",
+      "account",
+      "check",
+      "rotate"
+    ],
+    "errors": []
+  },
+  "database": {
+    "passed": 12,
+    "isolated": true,
+    "noStockChanges": true,
+    "lamodaPassed": 19,
+    "fullApiHealth": true
+  }
+}

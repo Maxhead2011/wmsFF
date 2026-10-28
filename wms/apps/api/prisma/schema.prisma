@@ -1033,6 +1033,7 @@ model ClientArticleMapping {
 }
 
 model ClientMarketplaceConnection {
+  yandexFbyShipments         YandexFbyShipment[]
   id                        String                    @id @default(uuid())
   clientId                  String
   marketplace               MarketplaceType
@@ -1933,6 +1934,7 @@ model InventoryBoxRescanRequest {
 }
 
 model ClientRequest {
+  yandexFbyShipment            YandexFbyShipment?
   lamodaAssembly LamodaFboAssembly?
   ozonShipment                 OzonFboShipment?
   id                           String                     @id @default(uuid())
@@ -1983,6 +1985,25 @@ model ClientRequest {
   @@index([type, status])
   @@index([createdByUserId])
   @@index([assignedToUserId])
+}
+
+// FIX: explicit marketplace ownership, including assemblies prepared before remote binding.
+model YandexFbyShipment {
+  id               String @id @default(uuid())
+  requestId        String @unique
+  connectionId     String
+  importKey        String @unique
+  remoteId         String?
+  remoteNumber     String?
+  remoteStatus     String?
+  snapshot         Json?
+  checkedAt        DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  request          ClientRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  connection       ClientMarketplaceConnection @relation(fields: [connectionId], references: [id])
+
+  @@unique([connectionId, remoteId])
 }
 
 model SkuCollectionSource {

@@ -1,5 +1,6 @@
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { ordinaryPickStatusLabel } from '../../common/stock/ordinary-unmarked-pick';
+import { fbyQueueScope } from '../yandex-fby/yandex-fby-scope';
 import { ozonPickLinesEnabled, readOzonPickState } from '../marketplace-connections/ozon-fbs-pick-lines';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
@@ -90,7 +91,8 @@ export class TsdAssemblyService {
     if (workflow && !['fbo-pick', 'fbo-pack'].includes(workflow)) throw new BadRequestException('Неизвестный этап сборки.');
     if (workflow && !fboTwoStageEnabled()) throw new BadRequestException('Сборка FBO недоступна в этой ВМС.');
     // FIX: opt-in marketplace filter; legacy clients retain their existing list.
-    if (marketplace && (!workflow || !['WB', 'OZON', ...(lamodaAssemblyEnabled() ? ['LAMODA'] : [])].includes(marketplace))) throw new BadRequestException('Неизвестный маркетплейс ФБО.');
+    if (marketplace && (!workflow || !['WB', 'OZON', 'YANDEX_MARKET', ...(lamodaAssemblyEnabled() ? ['LAMODA'] : [])].includes(marketplace))) throw new BadRequestException('Неизвестный маркетплейс ФБО.');
+    const yandexScope = fbyQueueScope(marketplace);
     const fboFilter: Prisma.ClientRequestWhereInput = !workflow ? {} : {
       fbsOrderLinks: { none: {} },
       // FIX: isolate persisted Lamoda requests before pagination, even while its workflow is disabled.
@@ -107,6 +109,7 @@ export class TsdAssemblyService {
         ...warehouseScopeWhere(user),
         type: ClientRequestType.OUTBOUND,
         ...fboFilter,
+        ...yandexScope,
         status: { in: activeAssemblyStatuses },
       },
       orderBy: [{ updatedAt: 'desc' }],

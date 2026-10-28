@@ -1,0 +1,26 @@
+// TEST: compiled FBY and both marketplace queues against disposable PostgreSQL.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'yandex-test-pg');
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const {YandexFbyService}=require(dir+'modules/yandex-fby/yandex-fby.service'),{ClientScopeService}=require(dir+'modules/auth/client-scope.service');
+(async()=>{let passed=0;
+ const w=await p.warehouse.create({data:{code:'FBY_TEST',name:'Test'}}),c=await p.client.create({data:{code:'FBY_TEST',name:'Test'}}),u=await p.user.create({data:{email:'fby@test.invalid',passwordHash:'disabled',name:'Test'}}),sku=await p.sku.create({data:{clientId:c.id,internalSku:'FBY_TEST',name:'Test',barcodes:{create:{value:'000123'}}}});
+ await p.warehouseClient.create({data:{clientId:c.id,warehouseId:w.id,status:'ACTIVE'}});
+ const a=await p.clientMarketplaceConnection.create({data:{clientId:c.id,marketplace:'YANDEX_MARKET',accountName:'Test',sellerId:'123',apiKey:'synthetic'}}),user={id:u.id,roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[]};
+ const service=new YandexFbyService(p,new ClientScopeService(),{previewAvailability:async()=>({canCommit:true,lines:[]})});
+ const dto={warehouseId:w.id,destination:'Test',items:[{barcode:'000123',quantity:2}],idempotencyKey:randomUUID()};const preview=await service.preview(a.id,dto,user);assert(preview.canCreate);passed++;
+ const results=await Promise.all([1,2].map(()=>service.create(a.id,{...dto,previewHash:preview.previewHash},user)));assert.equal(results[0].request.id,results[1].request.id);assert.equal(await p.yandexFbyShipment.count(),1);passed++;
+ await assert.rejects(()=>service.create(a.id,{...dto,items:[{barcode:'000123',quantity:3}],previewHash:preview.previewHash},user));passed++;
+ await assert.rejects(()=>service.preview(a.id,dto,{...user,roleCodes:['CLIENT'],permissionCodes:['client-requests:read','client-requests:write'],clientScopeMode:'LIMITED',clientIds:['foreign'],writableClientIds:['foreign']}));passed++;
+ service.remote={supply:async()=>({id:{id:42,marketplaceRequestId:'777'},type:'SUPPLY',subtype:'DEFAULT',status:'CREATED',targetLocation:{name:'Test'}}),items:async()=>[{offerId:'A',counters:{planCount:2}}]};
+ const remote={warehouseId:w.id,reference:'777',mappings:[{offerId:'A',barcode:'000123'}]};const rp=await service.preview(a.id,remote,user);await service.bind(a.id,results[0].request.id,{...remote,previewHash:rp.previewHash},user);assert.equal((await p.yandexFbyShipment.findFirst()).remoteId,'42');passed++;
+ assert((await service.create(a.id,{...remote,idempotencyKey:randomUUID(),previewHash:rp.previewHash},user)).existing);passed++;
+ service.remote.items=async()=>[{offerId:'A',counters:{planCount:3}}];const refreshed=await service.refresh(a.id,results[0].request.id,user);assert(!refreshed.matches);assert.equal((await p.clientRequestItem.findFirst({where:{requestId:results[0].request.id}})).quantity,2);passed++;
+ const {ClientRequestMarketplaceFilesService}=require(dir+'modules/client-requests/client-request-marketplace-files.service'),files=new ClientRequestMarketplaceFilesService(p,new ClientScopeService());await assert.rejects(()=>files.getWbProductsTemplate(results[0].request.id,user));passed++;
+ const {FboTwoStageService}=require(dir+'modules/tsd/fbo-two-stage.service'),tsd=new FboTwoStageService(p,new ClientScopeService(),{},{},{},files);const plan=await tsd.plan(results[0].request.id,user);assert.equal(plan.marketplace,'YANDEX_MARKET');await assert.rejects(()=>tsd.wbFile(results[0].request.id,user));passed++;
+ const {TsdAssemblyService}=require(dir+'modules/tsd/tsd-assembly.service'),queue=new TsdAssemblyService(p,new ClientScopeService(),{},{},{},tsd);
+ assert.equal((await queue.listActiveRequests(user,'fbo-pick','YANDEX_MARKET')).length,1);assert.equal((await queue.listActiveRequests(user,'fbo-pick','LAMODA')).length,2);assert.equal((await queue.listActiveRequests(user,'fbo-pick','WB')).length,0);assert.equal((await queue.listActiveRequests(user,'fbo-pick','OZON')).length,0);passed++;
+ assert.equal(await p.stockBalance.count(),0);assert.equal(await p.stockMovement.count(),0);passed++;
+ process.env.WMS_YANDEX_FBY_ENABLED='false';await assert.rejects(()=>service.list(a.id,user,'active'));passed++;
+ console.log(JSON.stringify({passed,isolated:true,noStockChanges:true}));
+})().finally(()=>p.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});

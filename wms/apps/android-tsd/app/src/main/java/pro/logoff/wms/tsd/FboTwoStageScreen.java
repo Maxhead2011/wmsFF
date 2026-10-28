@@ -73,6 +73,7 @@ final class FboTwoStageScreen {
         if(!hasPallet)state.pallet="";
         if(!hasSource){state.source="";state.barcode="";}
     }
+    private boolean yandex(){return plan!=null&&"YANDEX_MARKET".equals(plan.marketplace);}
     private boolean ozon(){return plan!=null&&"OZON".equals(plan.marketplace);}
     // FIX: Lamoda has destination quotas but must never offer WB export.
     private boolean lamoda(){return plan!=null&&"LAMODA".equals(plan.marketplace);}
@@ -341,7 +342,7 @@ final class FboTwoStageScreen {
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
         if(renderCompactPacking())return;
         LinearLayout root=new LinearLayout(activity);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(24,20,24,24);int screenColor=AssemblyScreenFeedback.background("logoff".equals(BuildConfig.FLAVOR),retrySending&&busy&&state.pending()!=null,packingErrorSpeech?Color.rgb(254,202,202):feedbackColor);root.setBackgroundColor(screenColor);
-        text(root,packing?"Упаковка FBO":lamoda()?"FBO Lamoda":ozon()?"FBO Ozon":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
+        text(root,yandex()?(packing?"Упаковка Яндекс FBY":"Сборка Яндекс FBY"):packing?"Упаковка FBO":lamoda()?"FBO Lamoda":ozon()?"FBO Ozon":"FBO WB");if(!message.isEmpty())card(root,message,feedbackColor);
         if("logoff".equals(BuildConfig.FLAVOR)&&retrySending&&busy&&state.pending()!=null)text(root,"Повторная отправка запроса");
         input=null;
         if(packingChoices()&&packingMode==PackingMode.MENU&&!state.target.isEmpty())packingMode=PackingMode.NEW_BOXES;
@@ -392,7 +393,7 @@ final class FboTwoStageScreen {
             else if("NOT_STARTED".equals(screenPhase()))button(root,"Начать отбор",ready(),()->send("START",null));
             else if("COMPLETED".equals(screenPhase())){text(root,"Все короба поставки подтверждены");
                 // FIX: both confirmed-shipment templates remain downloadable from the request.
-                if(directed()){text(root,"Все направления собраны");}else if(packingChoices()){
+                if(yandex()){text(root,"Сборка FBY проверена");}else if(directed()){text(root,"Все направления собраны");}else if(packingChoices()){
                     button(root,"Скачать состав для WB",ready(),()->download("products"));
                     button(root,"Скачать распределение по коробам для WB",ready(),()->download("packages"));
                 }else button(root,"Скачать файл WB",ready(),this::download);
@@ -472,7 +473,7 @@ final class FboTwoStageScreen {
                     int count=0;for(TsdFboPlan.Box b:plan.boxes)if(b.confirmed)count++;
                     text(root,"Подтверждено коробов "+count+" из "+plan.boxes.size());
                     if(packingChoices())text(root,"Осталось отсканировать: "+String.join(", ",unconfirmedBoxes()));
-                    button(root,directed()?"Завершить проверку направлений":packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
+                    button(root,yandex()?"Завершить проверку FBY":directed()?"Завершить проверку направлений":packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
                 }
                 for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+(b.direction==null?"":" · "+b.direction)+" · "+b.quantity+" ед. · "+(b.confirmed?"Подтверждён":b.closed?"Закрыт":"Открыт"));
             }
