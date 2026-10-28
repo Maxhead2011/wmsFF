@@ -1,3 +1,4 @@
+import {fetchWorkspaceClients} from '../../lib/marketplaceWorkspace';
 import {OzonEditCountdown} from './OzonEditCountdown';
 import {RequestRemovalProvider,RequestRemovalButton} from '../client-requests/RequestRemoval';
 import './ozon-workspace.css';
@@ -28,7 +29,7 @@ export function OzonCustomerWorkspace({session}:{session:AuthSession}){
  const [branch,setBranch]=useState({clientId:'',warehouseId:''});
  const warehouseId=branch.clientId===clientId?branch.warehouseId:'';
  const selectionKey=clientId+':'+warehouseId+':'+view;const current=useRef(selectionKey);current.current=selectionKey;
- useEffect(()=>{let live=true;void fetchClients(session.accessToken).then(data=>{if(!live)return;const choices=data.filter(c=>c.status!=='ARCHIVED');setClients(choices);setClient(old=>choices.some(c=>c.id===old)?old:choices[0]?.id??'');}).catch(e=>{if(live)setError(String(e));});return()=>{live=false;};},[session.accessToken]);
+ useEffect(()=>{let live=true;void fetchWorkspaceClients(session.accessToken,"OZON").then(data=>{if(!live)return;const choices=data.filter(c=>c.status!=='ARCHIVED');setClients(choices);setClient(old=>choices.some(c=>c.id===old)?old:choices[0]?.id??'');}).catch(e=>{if(live)setError(String(e));});return()=>{live=false;};},[session.accessToken]);
  useEffect(()=>{let live=true;requestSequence.current++;setSelected(null);setOpening(false);setRows([]);setPlan(null);setSupplyId('');setError('');if(!clientId||!warehouseId){setLoading(false);return;}setLoading(true);
   void fetchOzonCustomerRequests(session.accessToken,clientId,warehouseId,view).then(data=>{if(live)setRows(data);}).catch(e=>{if(live)setError(e instanceof Error?e.message:String(e));}).finally(()=>{if(live)setLoading(false);});return()=>{live=false;};
  },[session.accessToken,clientId,warehouseId,revision,view]);

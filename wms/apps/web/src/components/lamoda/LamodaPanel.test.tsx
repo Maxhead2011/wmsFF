@@ -6,6 +6,21 @@ import { FboWorkspace } from '../client-requests/FboWorkspace';
 import { createLamodaAccount, fetchLamodaOverview, syncLamoda, type AuthSession } from '../../lib/api';
 const session: AuthSession = { accessToken: 'test-token', tokenType: 'Bearer', user: { id: 'user', name: 'Test', email: 'test@example.invalid', roleCodes: ['OWNER'], permissionCodes: ['system:admin'], clientScopeMode: 'ALL', clientIds: [], writableClientIds: [] } };
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
+// TEST: operational FBO has no credential form or technical navigation.
+it('opens operational planning and moves technical actions to the client card', () => {
+  vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED', 'true');
+  const html=renderToStaticMarkup(<LamodaPanel session={session}/>);
+  expect(html).toContain('Lamoda · поставки FBO');
+  expect(html).not.toContain('type="password"');
+  expect(html).not.toContain('Журнал обмена');
+  expect(html).not.toContain('Заказы FBS');
+  const fbs=renderToStaticMarkup(<LamodaPanel session={session} mode="fbs"/>);
+  expect(fbs).toContain('Lamoda · заказы FBS');
+  expect(fbs).not.toContain('Планы FBO');
+  const maintenance=renderToStaticMarkup(<LamodaPanel session={session} maintenanceClientId="client"/>);
+  expect(maintenance).toContain('Журнал обмена');
+  expect(maintenance).not.toContain('type="password"');
+});
 // TEST: all marketplace tiles have the same brand/content structure, including Lamoda.
 it('renders a Lamoda brand badge alongside its tile content', () => {
   vi.stubEnv('VITE_LAMODA_ENABLED', 'true');

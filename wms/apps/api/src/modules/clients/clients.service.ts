@@ -29,7 +29,7 @@ export class ClientsService {
     private readonly clientScopes: ClientScopeService,
   ) {}
 
-  list(user: AuthUser, includeArchived = false) {
+  list(user: AuthUser, includeArchived = false, marketplaceDirectory = false) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const where: Prisma.ClientWhereInput = {
       ...(clientFilter === undefined ? {} : { id: clientFilter }),
@@ -50,7 +50,11 @@ export class ClientsService {
     return this.prisma.client.findMany({
       where,
       orderBy: { name: 'asc' },
-      select: this.clientSummarySelect(),
+      // FIX: opt-in local directory, scoped by the existing client filter; never return credentials.
+      select: { ...this.clientSummarySelect(), ...(marketplaceDirectory && process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true' ? {
+        marketplaceConnections: { select: { marketplace: true, isActive: true } },
+        lamodaAccounts: { select: { isActive: true, fboEnabled: true, fbsEnabled: true } },
+      } : {}) },
     });
   }
 

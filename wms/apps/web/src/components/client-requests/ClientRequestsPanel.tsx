@@ -1,3 +1,4 @@
+import { fetchWorkspaceClients } from '../../lib/marketplaceWorkspace';
 import {RequestRemovalProvider} from './RequestRemoval';
 import { OperationsTools } from './OperationsTools';
 import { startVisiblePolling } from '../../lib/visiblePolling';
@@ -502,7 +503,7 @@ export function ClientRequestsPanel({
           archive: showArchive || undefined,
           boxCode: showArchive ? appliedArchiveBoxSearch || undefined : undefined,
         }),
-        fetchClients(session.accessToken),
+        fboOnly ? fetchWorkspaceClients(session.accessToken, 'WILDBERRIES') : fetchClients(session.accessToken),
         fetchPendingPickWaveBalanceReviews(session.accessToken),
       ]);
       setRequests({ status: 'ready', data: nextRequests });

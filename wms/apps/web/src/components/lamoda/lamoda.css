@@ -11,3 +11,9 @@
 .lamoda-card{padding:16px;border:1px solid #dce4eb;border-radius:12px}
 .lamoda-scroll{overflow:auto}.lamoda-workspace table{width:100%;border-collapse:collapse}.lamoda-workspace th,.lamoda-workspace td{text-align:left;padding:10px;border-bottom:1px solid #dce4eb;vertical-align:top}
 .lamoda-workspace small{display:block}.lamoda-error{color:#b42318}
+.lamoda-operational-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.lamoda-operational-create, .lamoda-operational-list { min-width: 0; }
+.lamoda-operational-grid > .lamoda-card { grid-column: 1; }
+.lamoda-operational-list { grid-column: 2; grid-row: 1 / span 3; }
+.lamoda-operational-grid > button { justify-self: start; }
+@media (max-width: 900px) { .lamoda-operational-grid { display: flex; flex-direction: column; } .lamoda-operational-grid > * { width: 100%; } }
