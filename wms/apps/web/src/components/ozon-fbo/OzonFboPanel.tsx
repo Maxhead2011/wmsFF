@@ -1,3 +1,4 @@
+import { fetchWorkspaceClients, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import {OzonEditCountdown} from './OzonEditCountdown';
 import { assemblyProductLabel, hasAssemblyProductDisplay } from '../../lib/assemblyProductDisplay';
 import {
@@ -132,7 +133,7 @@ export function LegacyOzonFboPanel({ session }: Props) {
   }, [session.accessToken]);
 
   useEffect(() => {
-    void fetchClients(session.accessToken)
+    void fetchWorkspaceClients(session.accessToken, 'OZON')
       .then((data) => {
         setClients(data);
         const first = data.find((client) => session.user.clientIds.includes(client.id)) ?? data[0];
@@ -446,7 +447,7 @@ export function LegacyOzonFboPanel({ session }: Props) {
             <label><span>Название поставки</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Например, Трусы Попова · 5 августа" /></label>
             <label><span>Кабинет Ozon</span><select value={connectionId} onChange={(event) => setConnectionId(event.target.value)}><option value="">Выберите подключение</option>{overview.connections.map((connection) => <option key={connection.id} value={connection.id}>{connection.accountName || `Client ID ${connection.sellerId}`}</option>)}</select></label>
             <label className={`ozfbo-file ${file ? 'selected' : ''}`}><CloudUpload /><span><strong>{file ? file.name : 'Выберите Excel-файл'}</strong><small>XLSX или XLS, до 20 МБ</small></span><input type="file" accept=".xlsx,.xls" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
-            {!overview.connections.length && <div className="ozfbo-inline-warning"><AlertTriangle />У клиента нет активного подключения Ozon. Добавьте его в разделе FBS → Подключения.</div>}
+            {!overview.connections.length && <div className="ozfbo-inline-warning"><AlertTriangle />У клиента нет активного подключения Ozon. Добавьте его в карточке клиента — «Кабинеты и подключения маркетплейсов».</div>}
             <button className="ozfbo-primary" disabled={busy === 'import' || !overview.connections.length}>{busy === 'import' ? <LoaderCircle className="spin" /> : <Sparkles />}Разобрать распределение</button>
           </form>
 

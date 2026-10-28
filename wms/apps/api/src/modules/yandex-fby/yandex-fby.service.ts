@@ -24,15 +24,15 @@ export class YandexFbyService {
   }
   private async account(id: string, user: AuthUser, mode: 'read' | 'write') {
     this.guard(user, mode);
-    const c = await this.db.clientMarketplaceConnection.findFirst({ where: { id, marketplace: 'YANDEX_MARKET', isActive: true } });
+    const c = await this.db.clientMarketplaceConnection.findFirst({ where: { id, marketplace: 'YANDEX_MARKET', ...(mode === 'read' && process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true' ? {} : {isActive:true}) } });
     if (!c) throw new NotFoundException('Активное подключение Яндекса не найдено.');
     this.scopes.requireClientAccess(user, c.clientId, mode);
     return c;
   }
   async accounts(clientId: string, user: AuthUser) {
     this.guard(user, 'read'); this.scopes.requireClientAccess(user, clientId, 'read');
-    return this.db.clientMarketplaceConnection.findMany({ where: { clientId, marketplace: 'YANDEX_MARKET', isActive: true },
-      select: { id: true, accountName: true, sellerId: true, client: { select: { name: true } } } });
+    return this.db.clientMarketplaceConnection.findMany({ where: { clientId, marketplace: 'YANDEX_MARKET', ...(process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true' ? {} : {isActive:true}) },
+      select: { id: true, accountName: true, sellerId: true, isActive: true, client: { select: { name: true } } } });
   }
   async warehouses(id: string, user: AuthUser, mode: 'read' | 'write' = 'read') {
     const c = await this.account(id, user, mode);

@@ -16,8 +16,8 @@ export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query('includeArchived') includeArchived?: string) {
-    return this.clients.list(user, includeArchived === 'true');
+  list(@CurrentUser() user: AuthUser, @Query('includeArchived') includeArchived?: string, @Query('marketplaceDirectory') marketplaceDirectory?: string) {
+    return this.clients.list(user, includeArchived === 'true', marketplaceDirectory === 'true');
   }
 
   @Get(':id')

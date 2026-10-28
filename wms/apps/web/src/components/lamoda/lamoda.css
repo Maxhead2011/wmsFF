@@ -19,3 +19,19 @@
 .lamoda-stock-review tr[data-shortage=true]{background:rgba(220,139,33,.08)}
 .lamoda-stock-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
 .lamoda-stock-review .lamoda-stock-create{font-weight:700}
+
+.lamoda-operational-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.lamoda-operational-create, .lamoda-operational-list { min-width: 0; }
+.lamoda-operational-grid > .lamoda-card { grid-column: 1; }
+.lamoda-operational-list { grid-column: 2; grid-row: 1 / span 3; }
+.lamoda-operational-grid > button { justify-self: start; }
+@media (max-width: 900px) { .lamoda-operational-grid { display: flex; flex-direction: column; } .lamoda-operational-grid > * { width: 100%; } }
+/* FIX: reuse Ozon's inline FBO execution view below the operational forms. */
+.lamoda-assembly-detail { min-width: 0; scroll-margin-top: 20px; }
+.lamoda-assembly-detail .fbo-inline-execution { min-width: 0; padding: 20px; border: 1px solid var(--line,#dce4eb); border-radius: 16px; }
+.lamoda-assembly-detail .fbo-inline-execution__header { flex-wrap: wrap; }
+.lamoda-assembly-detail .fbo-inline-execution__header h2 { min-width: 0; overflow-wrap: anywhere; }
+.lamoda-assembly-detail .online-execution-table-wrap { max-width: 100%; overflow-x: auto; }
+.lamoda-operational-grid > .lamoda-stock-review { grid-column: 1 / -1; }
+/* FIX: constrain intrinsic table width to the scrolling review, including mobile layouts. */
+.lamoda-workspace:has(.lamoda-stock-review) { grid-template-columns: minmax(0, 1fr); }

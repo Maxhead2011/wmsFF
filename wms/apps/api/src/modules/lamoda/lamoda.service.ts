@@ -97,7 +97,7 @@ export class LamodaService {
     const [products, documents, plans, exchanges] = await Promise.all([
       this.db.lamodaProduct.findMany({ where: { accountId: id }, include: { sku: { select: { id: true, name: true, internalSku: true, size: true, color: true, barcodes: { select: { value: true } } } } }, orderBy: { remoteSku: 'asc' }, take: 1000 }),
       this.db.lamodaDocument.findMany({ where: { accountId: id }, orderBy: { syncedAt: 'desc' }, take: 500 }),
-      this.db.lamodaPlan.findMany({ where: { accountId: id, ...warehouseScopeWhere(user) }, include: { warehouse: { select: { name: true } }, ...(lamodaAssemblyEnabled() ? { assembly: { select: { requestId: true } } } : {}) }, orderBy: { createdAt: 'desc' }, take: 100 }),
+      this.db.lamodaPlan.findMany({ where: { accountId: id, ...warehouseScopeWhere(user) }, include: { warehouse: { select: { name: true } }, ...(lamodaAssemblyEnabled() ? { assembly: { select: { requestId: true, ...(process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true' ? { request: { select: { number: true, status: true } } } : {}) } } } : {}) }, orderBy: { createdAt: 'desc' }, take: 100 }),
       this.db.lamodaExchange.findMany({ where: { accountId: id }, orderBy: { createdAt: 'desc' }, take: 25 }),
     ]);
     return { products, documents, plans, exchanges, externalWritesEnabled: false, assemblyEnabled: lamodaAssemblyEnabled(), limits: { products: 1000, documents: 500, plans: 100 } };

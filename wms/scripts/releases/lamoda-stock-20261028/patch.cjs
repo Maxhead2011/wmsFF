@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),cp=require('node:child_process');
 const ts=require('../../../node_modules/typescript');
 const candidate=process.argv[2];assert(candidate);
-const repo=path.resolve(__dirname,'../../../..'),base=process.argv[3]||'232d1021';
+const repo=path.resolve(__dirname,'../../../..'),base=process.argv[3]||'110c728f';
 const options={module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true};
 const compiled={};
 for(const name of ['lamoda.service','lamoda.controller','lamoda.dto','lamoda-stock-guard']){

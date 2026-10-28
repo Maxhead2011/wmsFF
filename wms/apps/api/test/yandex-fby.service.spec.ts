@@ -12,6 +12,15 @@ beforeEach(()=>{
  remote={supply:vi.fn(async()=>({id:{id:42,marketplaceRequestId:'100'},type:'SUPPLY',subtype:'DEFAULT',status:'CREATED',targetLocation:{name:'Москва'}})),items:vi.fn(async()=>[{offerId:'offer',name:'Товар',counters:{planCount:2}}])};(service as any).remote=remote;
 });
 afterEach(()=>vi.unstubAllEnvs());
+// TEST: read disabled cabinets locally while retaining the active-only mutation guard.
+it('keeps disabled cabinet history readable without enabling imports',async()=>{
+ vi.stubEnv('WMS_MARKETPLACE_WORKSPACES_ENABLED','true');
+ db.clientRequest.findMany=vi.fn(async()=>[]);
+ await service.list('a',user,'active');
+ expect(db.clientMarketplaceConnection.findFirst.mock.calls.at(-1)[0].where.isActive).toBeUndefined();
+ await service.preview('a',input,user);
+ expect(db.clientMarketplaceConnection.findFirst.mock.calls.at(-1)[0].where.isActive).toBe(true);
+});
 // TEST: binding and import share the supply lock; no generic database error or duplicate binding.
 it('rejects an already bound supply under the same lock as import',async()=>{
  const dto={warehouseId:'w',reference:'100',mappings:[{offerId:'offer',barcode:'001'}]};

@@ -1,3 +1,6 @@
+import { lazy, Suspense } from 'react';
+const LamodaFbs = lazy(() => import('../lamoda/LamodaPanel').then(m=>({default:m.LamodaPanel})));
+import { fetchWorkspaceClients, workspaceClients, visibleMarket, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { startVisiblePolling } from '../../lib/visiblePolling';
 // FIX: keep reshipment alongside the deployed FBS delivery controls.
 import { describeStockTransfer } from '../../lib/fbs-stock-transfer';
@@ -497,6 +500,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const supplyRequestAuditSequence = useRef(0);
   // FIX: scope background reads to this retained desktop window.
   const pollingRoot = useRef<HTMLElement | null>(null);
+  const [lamodaOpen,setLamodaOpen]=useState(false);
   const canManagePricing =
     session.user.permissionCodes.includes('system:admin') ||
     session.user.permissionCodes.includes('billing:write') ||
@@ -529,7 +533,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
 
   useEffect(() => {
     let active = true;
-    void fetchClients(session.accessToken)
+    void fetchWorkspaceClients(session.accessToken)
       .then((rows) => {
         if (!active) return;
         setClients(rows);
@@ -543,6 +547,12 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       active = false;
     };
   }, [session.accessToken]);
+
+  useEffect(() => {
+    if (!workspaceEnabled() || !marketplace) return;
+    const choices = workspaceClients(clients, marketplace, 'fbs');
+    setSelectedClientId(current => choices.some(c => c.id === current) ? current : choices.length === 1 ? choices[0].id : '');
+  }, [clients, marketplace]);
 
   const loadOrders = useCallback(
     async (refresh = false) => {
@@ -624,6 +634,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     // Загружаем последовательно: первый запрос наполняет серверный кэш заказов,
     // а следующие два считают свои маркетплейсы без лишних параллельных запросов к API.
     for (const targetMarketplace of FBS_MARKETPLACES) {
+      if (!visibleMarket(session, clients, targetMarketplace, 'fbs')) { results.push([targetMarketplace,{status:'ready',count:0}]); continue; }
       try {
         const rows = await fetchFbsActiveClients(session.accessToken, targetMarketplace);
         results.push([
@@ -642,7 +653,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setMarketplaceOrderCounts(
       Object.fromEntries(results) as Record<FbsMarketplace, FbsMarketplaceActiveCount>,
     );
-  }, [session.accessToken]);
+  }, [session.accessToken, clients]);
 
   const loadCargoPackings = useCallback(async () => {
     if (!selectedClientId) {
@@ -1620,6 +1631,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     return () => window.removeEventListener('popstate', handleBrowserBack);
   }, []);
 
+  if (lamodaOpen) return <section><button className="icon-text-button" onClick={()=>setLamodaOpen(false)}>Назад к площадкам FBS</button><Suspense fallback={<p>Загрузка Lamoda…</p>}><LamodaFbs session={session} mode="fbs"/></Suspense></section>;
   if (!marketplace) {
     return (
       <section ref={pollingRoot} className="fbs-panel fbs-marketplace-entry" aria-label="Выбор FBS-маркетплейса">
@@ -1630,13 +1642,13 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           <div>
             <p className="eyebrow">FBS</p>
             <h2>Выберите маркетплейс</h2>
-            <p>Заказы и инструменты Wildberries, Ozon и Яндекс Маркета работают раздельно и не смешиваются в одной очереди.</p>
+            <p>Заказы и инструменты Wildberries, Ozon, Lamoda и Яндекс Маркета работают раздельно и не смешиваются в одной очереди.</p>
           </div>
-          <span className="fbs-panel__scope">3 рабочих контура</span>
+          <span className="fbs-panel__scope">{workspaceEnabled() && import.meta.env.VITE_LAMODA_ENABLED==='true' ? '4 рабочих контура' : '3 рабочих контура'}</span>
         </header>
 
-        <div className="fbs-marketplace-picker">
-          <button
+        <div className={workspaceEnabled() ? "fbs-marketplace-picker fbs-marketplace-picker--four" : "fbs-marketplace-picker"}>
+          {visibleMarket(session, clients, 'WILDBERRIES', 'fbs') && <button
             type="button"
             className="fbs-marketplace-card fbs-marketplace-card--wb"
             onClick={() => openMarketplace('WILDBERRIES')}
@@ -1652,9 +1664,9 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
               <p>Заказы, сборка, остатки WB, короба, грузоместа, поставки и пропуска.</p>
             </span>
             <ChevronRight size={26} aria-hidden="true" />
-          </button>
+          </button>}
 
-          <button
+          {visibleMarket(session, clients, 'OZON', 'fbs') && <button
             type="button"
             className="fbs-marketplace-card fbs-marketplace-card--ozon"
             onClick={() => openMarketplace('OZON')}
@@ -1670,9 +1682,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
               <p>Отдельная очередь заказов Ozon, статусы отгрузки, архив, стоимость и API.</p>
             </span>
             <ChevronRight size={26} aria-hidden="true" />
-          </button>
+          </button>}
 
-          <button
+          {workspaceEnabled() && import.meta.env.VITE_LAMODA_ENABLED==='true' && visibleMarket(session,clients,'LAMODA','fbs') && <button type="button" className="fbs-marketplace-card fbs-marketplace-card--lamoda" onClick={()=>setLamodaOpen(true)}><span className="fbs-marketplace-card__brand"><img src="/brand/lamoda.jpg" alt=""/></span><span className="fbs-marketplace-card__content"><strong>FBS Lamoda</strong><p>Заказы и статусы отгрузок Lamoda</p></span></button>}
+          {visibleMarket(session, clients, 'YANDEX_MARKET', 'fbs') && <button
             type="button"
             className="fbs-marketplace-card fbs-marketplace-card--yandex"
             onClick={() => openMarketplace('YANDEX_MARKET')}
@@ -1688,7 +1701,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
               <p>Отдельная очередь заказов Яндекс Маркета, сборка, статусы, архив и подключение API.</p>
             </span>
             <ChevronRight size={26} aria-hidden="true" />
-          </button>
+          </button>}
         </div>
       </section>
     );
@@ -1803,7 +1816,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
                 <span>Клиент</span>
                 <select value={selectedClientId} onChange={(event) => setSelectedClientId(event.target.value)}>
                   <option value="">Выберите клиента</option>
-                  {clients.map((client) => (
+                  {workspaceClients(clients, marketplace ?? '', 'fbs').map((client) => (
                     <option key={client.id} value={client.id}>
                       {client.code} · {client.name}
                     </option>
@@ -2163,7 +2176,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         ) : ordersState.status === 'error' ? (
           <FbsNotice icon={AlertTriangle} title="Не удалось получить заказы" text={ordersState.error} tone="error" />
         ) : data && !data.connected ? (
-          <FbsConnectionPrompt
+          workspaceEnabled() ? <FbsNotice icon={AlertTriangle} title="Кабинет не подключён" text="Подключение настраивается в карточке клиента — Кабинеты и подключения маркетплейсов." /> : <FbsConnectionPrompt
             isOpen={connectionOpen}
             marketplace={connectionMarketplace}
             accountName={connectionName}

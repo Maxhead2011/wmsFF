@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess, json, time, base64
 root = Path('/opt/logoff-wms/wms/work/lamoda-stock-20261028')
-image = 'sha256:c508378d6c5ae11cdf18e918ef36fd8ea8bc59c0fc91c8f7cfd47ce5e51e4f08'
+image = 'sha256:f2edb08d3cb55808622e9d0b9ce9770c8e3924b41db3bc148d48ccb0e051231e'
 network, pg = 'lamoda-stock-test', 'lamoda-stock-test-pg'
 def run(*args, **kw): return subprocess.run(['docker', *args], check=True, **kw)
 assert network not in subprocess.check_output(['docker','network','ls','--format','{{.Name}}'],text=True).splitlines()
