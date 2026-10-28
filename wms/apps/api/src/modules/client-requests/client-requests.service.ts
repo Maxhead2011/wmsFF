@@ -56,6 +56,31 @@ export class ClientRequestsService {
     private readonly telegram?: TelegramNotificationService,
   ) {}
 
+  // FIX: count the complete scoped queue, without the 200-row detail-list limit.
+  async activeFboCounts(user: AuthUser) {
+    if (process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED !== 'true') throw new NotFoundException();
+    const rows = await this.prisma.clientRequest.findMany({
+      where: {
+        clientId: this.clientScopes.resolveClientFilter(user),
+        warehouseId: user.activeWarehouseId && !user.roleCodes.includes('CLIENT') ? user.activeWarehouseId : undefined,
+        ...warehouseScopeWhere(user),
+        type: 'OUTBOUND',
+        status: { notIn: ['DONE', 'CANCELLED', 'REJECTED'] },
+        lamodaAssembly: null,
+        yandexFbyShipment: null,
+      },
+      select: { id: true, title: true, comment: true, ozonShipment: {select:{requestId:true}}, _count:{select:{fbsOrderLinks:true}} },
+    });
+    const history = rows.length ? await readFbsAttemptHistory(this.prisma, {requestId:{in:rows.map(row=>row.id)}}) : [];
+    const fbsIds = new Set(history.map(row=>row.task.requestId));
+    return rows.reduce((counts, row) => {
+      if (row.ozonShipment) counts.ozon++;
+      else if (!row._count.fbsOrderLinks && !fbsIds.has(row.id) && !/^(FBS|DBS)/i.test(row.title.trim()) &&
+        !row.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:')) counts.wb++;
+      return counts;
+    }, {wb:0, ozon:0});
+  }
+
   async list(query: ListClientRequestsDto, user: AuthUser) {
     const boxCode = query.boxCode?.trim();
     const where: Prisma.ClientRequestWhereInput = {

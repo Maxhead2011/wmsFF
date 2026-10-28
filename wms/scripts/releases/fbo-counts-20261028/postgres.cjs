@@ -1,0 +1,28 @@
+// TEST: real scoped queries on disposable PostgreSQL, no production credentials.
+require('reflect-metadata');const assert=require('node:assert/strict');
+assert.equal(process.env.NODE_ENV,'test');assert.equal(new URL(process.env.DATABASE_URL).hostname,'fbo-counts-test-pg');
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient();
+const {ClientRequestsService}=require('/app/apps/api/dist/modules/client-requests/client-requests.service');
+const {ClientScopeService}=require('/app/apps/api/dist/modules/auth/client-scope.service');
+(async()=>{let passed=0;
+const w=await p.warehouse.create({data:{code:'ONE',name:'One'}}),w2=await p.warehouse.create({data:{code:'TWO',name:'Two'}});
+const c=await p.client.create({data:{code:'ONE',name:'One'}}),c2=await p.client.create({data:{code:'TWO',name:'Two'}});
+const row={clientId:c.id,warehouseId:w.id,type:'OUTBOUND',title:'Excel'};
+await p.clientRequest.createMany({data:Array.from({length:205},()=>({...row}))});
+for(const status of ['DONE','CANCELLED','REJECTED'])await p.clientRequest.create({data:{...row,status}});
+for(const status of ['IN_WORK','PACKED','APPROVED','IN_REVIEW'])await p.clientRequest.create({data:{...row,status}});
+await p.clientRequest.create({data:{...row,type:'INBOUND'}});
+await p.clientRequest.create({data:{...row,title:'FBS legacy'}});
+await p.clientRequest.create({data:{...row,comment:'Создано из FBS-заказов: 1'}});
+await p.clientRequest.create({data:{...row,warehouseId:w2.id}});
+await p.clientRequest.create({data:{...row,clientId:c2.id}});
+await p.clientRequest.create({data:{...row,ozonShipment:{create:{importKey:'test',directions:[]}}}});
+const service=new ClientRequestsService(p,new ClientScopeService(),{});
+const admin={roleCodes:[],permissionCodes:['system:admin'],activeWarehouseId:w.id,clientIds:[]};
+assert.deepEqual(await service.activeFboCounts(admin),{wb:210,ozon:1});passed++;
+assert.deepEqual(await service.activeFboCounts({...admin,activeWarehouseId:w2.id}),{wb:1,ozon:0});passed++;
+assert.deepEqual(await service.activeFboCounts({...admin,roleCodes:['CLIENT'],permissionCodes:[],clientScopeMode:'LIMITED',clientIds:[c.id]}),{wb:210,ozon:1});passed++;
+await assert.rejects(service.activeFboCounts({...admin,roleCodes:['BRANCH_MANAGER'],permissionCodes:[],warehouseIds:[w2.id],clientScopeMode:'ALL'}));passed++;
+process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED='false';await assert.rejects(service.activeFboCounts(admin));passed++;
+console.log(JSON.stringify({passed}));
+})().finally(()=>p.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});
