@@ -1,3 +1,7 @@
+Published PR727 / 2026-10-28: shared administrative removal in Lamoda FBO cards, request-ID confirmation, scope reset and archive refresh. Preserves PR725 shortage review. API3872/web529 passed (150/2 skipped), TypeScript/build, baseline guards8, candidate/public browser50 plus shortage regression8 passed. Exact web3-file overlay; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-removal`, sourceParityVerified=false. [Details](lamoda-request-removal.md).
+
+Published PR725 / 2026-10-28: Lamoda shortages block assembly creation; review shows warehouse barcode/size/plan/reserves/free/deficit, explicit corrections reduce quantities without reserving, then Serializable recheck protects FBS/FBO demand. Original plan retained; compact PR723 layout and inline execution preserved. API3872/web529 passed (155/2 skipped), TypeScript/build, PostgreSQL7/full API health, candidate/public browser8 and baseline guards8 passed. Exact4 API/3 web overlay; schema/APK/sold unchanged. Baseline `2026-10-28-lamoda-stock`, sourceParityVerified=false. [Details](lamoda-stock-guard.md).
+
 Published PR723 / 2026-10-28: Lamoda operational FBO matches Ozon page layout: compact client/account/branch toolbar, collapsed file/supply forms, full-width active/completed cards with adaptive density4-6. API3851/web525 passed (150/2 skipped), source browser9, candidate/public browser43, TypeScript/build and baseline guards8. Exact web3 files; API/schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-layout`, sourceParityVerified=false. [Details](lamoda-ozon-layout.md).
 
 Prepared / 2026-10-28: active WB/Ozon FBO card counters, complete scoped request queue, loading/error states and stale-response protection. Own-WMS workspace flags; not published. [Scope and tests](fbo-active-card-counts.md).
@@ -276,3 +280,6 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 [Administrative FBO/FBS request removal](request-removal.md): scoped preview/confirmation, preserved audit and prevention of automatic recreation.
 
 Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.
+
+
+Prepared / 2026-10-28: shared guarded removal in Lamoda FBO cards; scope reset and refreshed archive. Preserves PR725 stock review. Web-only on PR725; API3872/web529, runtime browser50 plus stock regression8 passed. [Details](lamoda-request-removal.md).

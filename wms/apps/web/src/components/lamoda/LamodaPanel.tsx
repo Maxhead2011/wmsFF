@@ -11,6 +11,7 @@ import './lamoda.css';
 import { importLamodaShipment, createLamodaAssembly, fetchFboPlan, type FboPlan } from '../../lib/api';
 import { FboTwoStagePanel } from '../client-requests/FboTwoStagePanel';
 import { LamodaStockReview } from './LamodaStockReview';
+import { RequestRemovalProvider, RequestRemovalButton } from '../client-requests/RequestRemoval';
 
 type Tab = 'connection' | 'catalog' | 'fbo' | 'fbs' | 'returns' | 'log';
 const tabs: [Tab, string][] = [['connection', 'Подключение'], ['catalog', 'Товары и соответствия'], ['fbo', 'Планы FBO'], ['fbs', 'Заказы FBS'], ['returns', 'Возвраты'], ['log', 'Журнал обмена']];
@@ -95,7 +96,7 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   const disabled = busy || loading;
   const documents = overview?.documents.filter(d => tab === 'fbo' ? d.kind === 'FBO_SHIPMENTS' : tab === 'fbs' ? ['ORDERS', 'FBS_SHIPMENTS'].includes(d.kind) : tab === 'returns' ? d.kind === 'RETURNS' : false) ?? [];
   const visiblePlans = overview?.plans.filter(p=>!operational||(planView==='closed')===closedPlan(p)) ?? [];
-  return <section className={`lamoda-workspace${compact ? ' lamoda-ozon-layout' : ''}`} aria-label="Lamoda" style={compact ? {'--lamoda-columns': columns} as CSSProperties : undefined}>
+  const content = <section className={`lamoda-workspace${compact ? ' lamoda-ozon-layout' : ''}`} aria-label="Lamoda" style={compact ? {'--lamoda-columns': columns} as CSSProperties : undefined}>
     {compact && <header className="lamoda-page-header"><small>LOGOFF WMS · LAMODA</small><h2>Сборки Lamoda</h2></header>}
     {!compact && <h2>{maintenanceClientId ? 'Lamoda · обслуживание кабинета' : operational || customerMode ? mode==='fbs' ? 'Lamoda · заказы FBS' : 'Lamoda · поставки FBO' : 'Lamoda · подготовка подключения'}</h2>}
     {!compact && <p className="lamoda-note">{mode==='fbs' ? 'Заказы и отгрузки FBS Lamoda. Здесь доступны загруженные документы и их статусы; сборка и отправка остатков пока не подключены.' : 'Загрузите план из Excel или из существующей поставки Lamoda и проверьте состав. Отправка остатков и подтверждение отгрузок пока недоступны.'}</p>}
@@ -156,6 +157,8 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
         <p>Создана: {date(p.createdAt)}</p>
         <p className={compact ? 'lamoda-plan-status' : undefined}>{p.assembly?.request ? `${compact ? '' : `№${p.assembly.request.number} · `}${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p>
         <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>
+        {/* FIX: reuse server-authorized removal with the assembly request ID, never a draft plan ID. */}
+        {p.assembly?.request && <RequestRemovalButton request={{id:p.assembly.requestId,number:p.assembly.request.number,title:p.title,type:'OUTBOUND',status:p.assembly.request.status}}/>}
         {p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}
       </div>)}
       </div></aside>
@@ -179,4 +182,6 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
     {!customerMode && tab === 'log' && <div className="lamoda-scroll"><table><thead><tr><th>Время</th><th>Операция</th><th>Результат</th><th>Записей</th></tr></thead><tbody>{overview?.exchanges.map(e => <tr key={e.id}><td>{date(e.createdAt)}</td><td>{e.operation}</td><td>{({ RUNNING: 'Выполняется', SUCCEEDED: 'Завершено', FAILED: 'Ошибка' } as Record<string, string>)[e.status] ?? e.status} {e.errorCode}</td><td>{e.itemCount}</td></tr>)}</tbody></table></div>}
     {assembly&&<div ref={detailRef} className={operational?'lamoda-assembly-detail':undefined} aria-label="Выбранная сборка Lamoda"><FboTwoStagePanel key={assembly.requestId} embedded={operational} initial={assembly} accessToken={token} userId={session.user.id} canWrite={!customerMode&&canManage} onClose={()=>{openSequence.current++;setAssembly(null);setRevision(v=>v+1);}}/></div> }
   </section>;
+  // FIX: scope changes dismiss stale confirmations; modal stays outside the CSS container.
+  return compact ? <RequestRemovalProvider key={scope} token={token} onRemoved={()=>{openSequence.current++;setAssembly(null);setPreview(null);setPreviewId('');setRevision(v=>v+1);}}>{content}</RequestRemovalProvider> : content;
 }
