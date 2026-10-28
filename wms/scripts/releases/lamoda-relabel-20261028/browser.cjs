@@ -1,0 +1,35 @@
+// TEST: published shell/candidate bundle with isolated API fixtures only.
+const fs=require('fs'),path=require('path'),http=require('http'),assert=require('node:assert/strict');
+const {chromium}=require('C:/Users/La_pa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const root=path.resolve(process.argv[2]),out=root+(process.env.WEB_ORIGIN?'/public-browser':'/browser');fs.mkdirSync(out,{recursive:true});
+const user={id:'test',name:'Test',roleCodes:['OWNER'],permissionCodes:['system:admin','client-requests:read','client-requests:write','stock:read','stock:write'],clientScopeMode:'LIMITED',clientIds:['demo'],writableClientIds:['demo'],warehouseIds:[],writableWarehouseIds:[]};
+let passed=0,prints=0,confirmations=0;const errors=[];
+const unit={id:'unit52',skuId:'sku',sourceBarcode:'2053244002604',kiz:'physical-kiz',pickedByUserId:'test',printStatus:null,label:{name:'Пальто бордовое',size:'52',article:'MP52',barcode:'4640684266611'}};
+const plan={requestId:'request',number:2506,title:'Lamoda test',marketplace:'LAMODA',phase:'PACKING',needed:1,picked:1,packed:0,shortage:0,route:[],boxes:[],wholeBoxes:[],history:[],lines:[{id:'i',skuId:'sku',name:'Пальто бордовое',barcode:'2053244002604',needed:1,picked:1,packed:0,remaining:0}],directions:[],relabelRequired:true,relabelUnits:[unit]};
+const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://test').pathname;let file=path.resolve(root+'/web/payload','.'+name);if(!file.startsWith(root+path.sep))return res.end();if(!fs.existsSync(file))file=path.resolve(root+'/web-base','.'+name);if(!fs.existsSync(file)||fs.statSync(file).isDirectory())file=root+'/web/payload/index.html';res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=process.env.WEB_ORIGIN||'http://127.0.0.1:'+server.address().port,browser=await chromium.launch({channel:'msedge',headless:true});let page;
+ try{const context=await browser.newContext({viewport:{width:1440,height:1050}});await context.route('**/*',async route=>{
+  const req=route.request(),url=new URL(req.url());if(!url.pathname.startsWith('/api/'))return url.origin===origin?route.continue():route.abort();const p=url.pathname.replace(/^\/api(?:\/v1)?/,'');let data=[];
+  if(p==='/auth/me')data=user;
+  else if(p==='/clients')data=[{id:'demo',status:'ACTIVE',clientKind:'LEGAL_ENTITY',code:'TEST',name:'Учебный клиент',marketplaceConnections:[],lamodaAccounts:[{isActive:true,fboEnabled:true}]}];
+  else if(p==='/lamoda/accounts')data=[{id:'a',clientId:'demo',name:'Lamoda',sellerId:'test',isActive:true,fboEnabled:true}];
+  else if(p==='/lamoda/accounts/a')data={products:[],documents:[],plans:[{id:'p',title:'Переклейка',warehouse:{name:'ФФ Москва'},createdAt:new Date().toISOString(),items:[{quantity:1}],assembly:{requestId:'request',request:{number:2506,status:'IN_WORK'}}}],exchanges:[],assemblyEnabled:true,limits:{products:1000,documents:500,plans:100}};
+  else if(p==='/lamoda/accounts/a/warehouses')data=[{id:'msk',name:'ФФ Москва'}];
+  else if(p==='/tsd/requests/request/fbo')data=plan;
+  else if(p==='/tsd/requests/request/fbo/lamoda-relabel/stations')data=[{id:'station',name:'Склад',printerName:'Printer'}];
+  else if(p==='/tsd/requests/request/fbo/lamoda-relabel/print'){const b=req.postDataJSON();assert.equal(b.unitId,'unit52');assert.equal(b.stationId,'station');assert(b.printId);prints++;unit.printStatus='PRINTED';data={printId:b.printId,status:'QUEUED'};}
+  else if(p==='/tsd/requests/request/fbo/actions'){const b=req.postDataJSON();assert.equal(b.action,'RELABEL_UNIT');assert.equal(b.relabelUnitId,'unit52');assert.equal(b.barcode,'4640684266611');assert.equal(b.kiz,'physical-kiz');confirmations++;plan.relabelUnits=[];data=plan;}
+  else if(req.method()!=='GET')throw Error('Unexpected write '+p);
+  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});
+ });await context.addInitScript(u=>{localStorage.setItem('logoff-wms-session',JSON.stringify({accessToken:'isolated-test',tokenType:'Bearer',user:u}));localStorage.setItem('logoff-wms-ui-theme:'+u.id,'modern');},user);
+ page=await context.newPage();page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(e.message));await page.goto(origin,{waitUntil:'domcontentloaded',timeout:60000});await page.locator('aside').getByRole('button',{name:'FBO',exact:true}).click();await page.getByRole('button',{name:/lamoda/}).click();await page.getByRole('button',{name:'Открыть сборку',exact:true}).click();
+ const pane=page.getByRole('region',{name:'Переклейка Lamoda',exact:true});await pane.waitFor();assert((await pane.innerText()).includes('4640684266611'));passed++;
+ const confirm=pane.getByRole('button',{name:'Подтвердить переклейку',exact:true});assert(await confirm.isDisabled());passed++;
+ await pane.getByRole('button',{name:'Найти станции печати'}).click();await pane.getByLabel('Станция печати',{exact:true}).selectOption('station');await pane.getByRole('button',{name:'Напечатать 2 этикетки 58 × 40',exact:true}).click();await pane.getByText(/Печать: PRINTED/).waitFor();assert.equal(prints,1);passed++;
+ assert(await pane.getByRole('button',{name:'Напечатать 2 этикетки 58 × 40',exact:true}).isDisabled());assert(await confirm.isDisabled());passed++;
+ await pane.getByLabel('Новый ШК Lamoda',{exact:true}).fill('4640684266611');assert(await confirm.isDisabled());await pane.getByLabel('КИЗ этой единицы',{exact:true}).fill('physical-kiz');assert(await confirm.isEnabled());passed++;
+ await pane.screenshot({path:out+'/relabel-ready.png'});await confirm.click();await pane.getByText(/Ожидает проверки: 0/).waitFor();assert.equal(confirmations,1);passed++;
+ await page.reload({waitUntil:'domcontentloaded'});await page.locator('aside').getByRole('button',{name:'FBO',exact:true}).click();await page.getByRole('button',{name:/lamoda/}).click();await page.getByRole('button',{name:'Открыть сборку',exact:true}).click();await page.getByText(/Ожидает проверки: 0/).waitFor();assert.equal(prints,1);assert.equal(confirmations,1);passed++;
+ assert.deepEqual(errors,[]);passed++;fs.writeFileSync(out+'/proof.json',JSON.stringify({passed,isolatedApi:true,prints,confirmations,errors}));if(!process.env.WEB_ORIGIN)fs.copyFileSync(out+'/proof.json',root+'/browser-proof.json');console.log(JSON.stringify({passed,isolatedApi:true}));
+ }catch(e){console.error(errors);if(page){fs.writeFileSync(out+'/failure.txt',await page.locator('body').innerText());await page.screenshot({path:out+'/failure.png'});}throw e;}finally{await browser.close();server.close();}
+})().catch(e=>{console.error(e);server.close();process.exitCode=1});

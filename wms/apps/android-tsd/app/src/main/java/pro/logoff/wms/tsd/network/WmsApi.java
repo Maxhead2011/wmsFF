@@ -365,6 +365,12 @@ public interface WmsApi {
     );
 
     // FIX: the quiet-print station receives two target-product labels before verification.
+    @GET("api/v1/tsd/requests/{id}/fbo/lamoda-relabel/stations")
+    Call<List<TsdPrintStation>> lamodaFboRelabelStations(@Header("Authorization") String authorization,@Path("id") String id);
+
+    @POST("api/v1/tsd/requests/{id}/fbo/lamoda-relabel/print")
+    Call<TsdRelabelPrintJob> lamodaFboRelabelPrint(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
+
     @GET("api/v1/tsd/requests/{id}/relabel/print-stations")
     Call<List<TsdPrintStation>> relabelPrintStations(@Header("Authorization") String authorization, @Path("id") String id);
 

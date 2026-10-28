@@ -7,6 +7,14 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: retry after restart retains the exact relabeled unit and scanned barcode/KIZ.
+    @Test public void relabelEvidenceSurvivesRestart(){
+        FboScanState state=new FboScanState();state.barcode="4640684266611";
+        Map<String,String> payload=state.prepare("RELABEL_UNIT","physical-kiz");payload.put("relabelUnitId","unit52");state.restore(payload);
+        FboScanState restored=new FboScanState();restored.restore(state.pending());
+        assertEquals(payload,restored.prepare("RELABEL_UNIT","another-kiz"));
+        assertEquals("unit52",restored.pending().get("relabelUnitId"));
+    }
     // TEST: alternative lookup is opt-in, picking-only, and never treats a product barcode/KIZ as a location.
     @Test public void alternativeLocationIsScopedToOurPicker(){
         TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";

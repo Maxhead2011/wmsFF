@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 236 // FIX: separate Yandex FBY assembly and packing, LOGOFF only.
-            versionName = "0.1.236-marketplaces-fbo"
+            versionCode = 237 // FIX: Lamoda product relabel print and physical scan confirmation.
+            versionName = "0.1.237-lamoda-relabel"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

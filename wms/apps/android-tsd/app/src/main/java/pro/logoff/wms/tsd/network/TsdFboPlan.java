@@ -2,6 +2,13 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFboPlan {
+    public boolean relabelRequired;
+    public List<RelabelUnit> relabelUnits;
+    public static class RelabelUnit {
+        public String id,skuId,sourceBarcode,kiz,pickedByUserId,printId,printStatus;
+        public RelabelLabel label;
+    }
+    public static class RelabelLabel { public String barcode,name,size,article; }
     public String marketplace;
     public List<Direction> directions;
     // FIX: retain the server's per-destination quotas and physical packing counts.
