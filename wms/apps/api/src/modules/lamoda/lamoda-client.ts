@@ -105,7 +105,8 @@ export class LamodaClient {
   }
   async check(c: LamodaCredentials) {
     // Verify seller access too, rather than treating OAuth success as a working connection.
-    const data = await this.get(c, '/nomenclatures', { page: '1', limit: '1' });
+    // FIX: v2 catalog requires country even for a one-row connection check.
+    const data = await this.get(c, '/nomenclatures', { country: 'RU', page: '1', limit: '1' });
     if (!Array.isArray(data.nomenclatures) || record(data.meta).page !== 1) throw new LamodaApiError('INVALID_PAGE');
     return data;
   }
@@ -113,11 +114,13 @@ export class LamodaClient {
     const resource = resources[kind];
     if (!resource) throw new LamodaApiError('UNKNOWN_RESOURCE');
     const result: Record<string, unknown>[] = [], started = this.now();
-    for (let page = 1; page <= 100; page++) {
+    // FIX: catalog has a 25-row maximum; keep the previous 10,000-row safety cap.
+    const limit = kind === 'CATALOG' ? 25 : 100;
+    for (let page = 1; page <= 10_000 / limit; page++) {
       if (this.now() - started > 120_000) throw new LamodaApiError('SYNC_TIME_LIMIT');
-      const data = await this.get(c, resource.path, { ...params, page: String(page), limit: '100' });
+      const data = await this.get(c, resource.path, { ...params, ...(kind === 'CATALOG' ? { country: 'RU' } : {}), page: String(page), limit: String(limit) });
       const items = data[resource.key], meta = record(data.meta);
-      if (!Array.isArray(items) || items.length > 100 || meta.page !== page || !Number.isSafeInteger(meta.totalPages) ||
+      if (!Array.isArray(items) || items.length > limit || meta.page !== page || !Number.isSafeInteger(meta.totalPages) ||
           Number(meta.totalPages) < 0 || (Number(meta.totalPages) === 0 && items.length !== 0) ||
           (Number(meta.totalPages) > page && !items.length)) throw new LamodaApiError('INVALID_PAGE');
       result.push(...items.map(record));

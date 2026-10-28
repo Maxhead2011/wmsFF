@@ -1,3 +1,4 @@
+Prepared / 2026-10-28: Lamoda connection/catalog validation fix. Seller 1060287436 authorization succeeds; catalog HTTP400 reproduced without required country and HTTP200 with RU. Catalog page limit corrected from100 to25, previous10000-row/time caps preserved. Exact one API runtime file; source parity verified for that module. API3773/web510 passed;150/2 skipped; two dedicated KIZ DB suites excluded. TypeScript and3 candidate runtime checks passed. Own-WMS deployment only; sold/web/APK/schema/credentials/business records unchanged. [Details](lamoda-country-fix.md).
 Published PR707 / 2026-10-27: client service lists skip writes to unchanged standard services and existing client price bindings. Exact two methods/one API file; own-image WMS_BILLING_SERVICE_READ_FAST_ENABLED. API3772/web510 passed;155/2 skipped; dedicated KIZ DB suite unavailable. TypeScript, targeted30, candidate read-only70ms and published read-only47ms for identical367 Bushkova services passed. Web/APK/prices/invoices/sold WMS unchanged. Baseline `2026-10-27-billing-read-fast`; sourceParityVerified=false. [Details](billing-service-read-performance.md).
 
 Published PR705 / 2026-10-27: corrected HTML entry after PR703. One index.html src changed; prevents dual React roots and blank screen on saved-session restore. Authenticated Panther startup reproduced before and verified after, including public page with synthetic API fixtures. API3767/web510 passed;155/2 skipped, dedicated KIZ DB suite excluded. API/assets/APK/data/sold WMS unchanged. Baseline `2026-10-27-receipt-startup`; sourceParityVerified=false.
@@ -357,3 +358,4 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: [request removal](request-removal.md). Additive ADMIN/OWNER API, shared ownership guards, request/Ozon buttons; default-off own-WMS flag; no schema or physical stock changes.
+
