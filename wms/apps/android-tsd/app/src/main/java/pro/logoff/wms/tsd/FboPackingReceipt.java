@@ -13,6 +13,8 @@ public final class FboPackingReceipt {
         public List<String> wholeBoxes;
     }
     static boolean apply(TsdFboPlan plan, State next, boolean packing, String brand) {
+        // FIX: Lamoda needs directions and relabel state omitted by the v1 receipt.
+        if (plan != null && "LAMODA".equals(plan.marketplace)) return false;
         if(!packing||!"logoff".equals(brand)||plan==null||next==null||next.version!=1||
             !Objects.equals(plan.requestId,next.requestId)||!Objects.equals(plan.phase,next.phase)||
             !("PACKING".equals(next.phase)||"PICKING".equals(next.phase))||next.lines==null||next.boxes==null||next.wholeBoxes==null||

@@ -5,6 +5,14 @@ import pro.logoff.wms.tsd.network.*;
 import static org.junit.Assert.*;
 
 public class FboPackingReceiptTest {
+ // TEST: v1 cannot replace Lamoda boxes: it omits directions and relabel progress.
+ @Test public void lamodaPackingRequiresCompletePlanWithoutMutatingCurrentState(){
+  TsdFboPlan p=plan();p.marketplace="LAMODA";p.packed=3;
+  TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="BOX";box.direction="Lamoda";
+  p.boxes=new ArrayList<>(Arrays.asList(box));
+  assertFalse(FboPackingReceipt.apply(p,state(),true,"logoff"));
+  assertEquals(3,p.packed);assertEquals("Lamoda",p.boxes.get(0).direction);
+ }
  private TsdFboPlan plan(){TsdFboPlan p=new TsdFboPlan();p.requestId="r";p.phase="PACKING";return p;}
  private FboPackingReceipt.State state(){FboPackingReceipt.State s=new FboPackingReceipt.State();s.version=1;s.requestId="r";s.phase="PACKING";s.needed=10;s.picked=10;s.packed=4;s.lines=new ArrayList<>();s.boxes=new ArrayList<>();s.wholeBoxes=new ArrayList<>();return s;}
  // TEST: lost response and duplicate acknowledgement cannot add a unit twice.
