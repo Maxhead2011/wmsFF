@@ -1,5 +1,5 @@
 import { fetchWorkspaceClients, workspaceEnabled } from '../../lib/marketplaceWorkspace';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   fetchClients, fetchLamodaAccounts, fetchLamodaOverview, createLamodaAccount, checkLamodaAccount,
   syncLamoda, fetchLamodaCandidates, linkLamodaProduct, importLamodaPlan, previewLamodaPlan,
@@ -38,6 +38,12 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   const [reference,setReference]=useState(''),[previewId,setPreviewId]=useState('');
   const [assembly,setAssembly]=useState<FboPlan|null>(null);
   const [planView,setPlanView]=useState<'active'|'closed'>('active');
+  const detailRef=useRef<HTMLDivElement>(null),openSequence=useRef(0);
+  const scope=JSON.stringify([token,clientId,accountId,session.user.activeWarehouseId]);
+  const currentScope=useRef(scope);currentScope.current=scope;
+  // FIX: refresh the list without closing the selected assembly; account/branch changes do close it.
+  useEffect(()=>{setAssembly(null);openSequence.current++;return()=>{openSequence.current++};},[scope]);
+  useEffect(()=>{if(operational&&assembly)detailRef.current?.scrollIntoView({behavior:'smooth',block:'start'});},[operational,assembly?.requestId]);
   const closedPlan=(p: NonNullable<LamodaOverview>['plans'][number])=>['DONE','CANCELLED','REJECTED'].includes(p.assembly?.request?.status ?? '');
   const selected = accounts.find(c => c.id === accountId);
   useEffect(() => {
@@ -54,7 +60,7 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   useEffect(() => {
     let current = true;
     setOverview(null); setCandidates(null); setPreview(null); setPreviewPlan(''); setFile(null); setTitle(''); setRemoteShipmentId(''); setWarehouses([]); setWarehouseId(''); setForm(emptyForm());
-    setReference('');setPreviewId('');setAssembly(null);setMappingQuery('');setMappingChoice(null);
+    setReference('');setPreviewId('');setMappingQuery('');setMappingChoice(null);
     if (!accountId) { setLoading(false); return; }
     setLoading(true);
     Promise.all([fetchLamodaOverview(token, accountId), fetchLamodaWarehouses(token, accountId)])
@@ -66,6 +72,11 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
     setBusy(true); setError(''); setNotice('');
     try { await action(); } catch (e) { setError(e instanceof Error ? e.message : 'Операция не выполнена.'); }
     finally { setBusy(false); }
+  }
+  async function openAssembly(requestId:string) {
+    const requestedScope=scope,sequence=++openSequence.current;setAssembly(null);
+    const data=await fetchFboPlan(token,requestId);
+    if(currentScope.current===requestedScope&&sequence===openSequence.current)setAssembly(data);
   }
   function sync(kind: LamodaResource) { void run(async () => { const result = await syncLamoda(token, accountId, kind); setNotice(result.message); setRevision(v => v + 1); }); }
   function save(e: FormEvent) {
@@ -124,14 +135,14 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
         <button disabled={disabled||!canWrite||!warehouseId||!reference}>Загрузить состав поставки</button>
       </form>
       </div><aside className="lamoda-operational-list"><h3>Сборки Lamoda</h3>{operational && <div className="lamoda-tabs"><button aria-pressed={planView==='active'} onClick={()=>setPlanView('active')}>Активные</button><button aria-pressed={planView==='closed'} onClick={()=>setPlanView('closed')}>Завершённые</button><button disabled={disabled} onClick={()=>setRevision(v=>v+1)}>Обновить</button></div>}
-      {overview?.plans.filter(p=>!operational||(planView==='closed')===closedPlan(p)).map(p => <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.assembly?.request ? `№${p.assembly.request.number} · ${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p><button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>{p.assembly && <button disabled={disabled} onClick={()=>void run(async()=>setAssembly(await fetchFboPlan(token,p.assembly!.requestId)))}>Открыть сборку</button>}</div>)}
+      {overview?.plans.filter(p=>!operational||(planView==='closed')===closedPlan(p)).map(p => <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.assembly?.request ? `№${p.assembly.request.number} · ${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p><button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>{p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}</div>)}
       </aside>
-      {preview && <div className="lamoda-card"><h3>Проверка: {previewPlan}</h3><p>{preview.message}</p>{preview.unresolvedRows.length > 0 && <p role="alert">Нет однозначного соответствия в строках: {preview.unresolvedRows.join(', ')}</p>}{overview?.assemblyEnabled && preview.canAssemble && <button disabled={disabled||!canWrite||!previewId} onClick={()=>void run(async()=>{const result=await createLamodaAssembly(token,accountId,previewId);setNotice(`Создана сборка №${result.number}. Плановое количество сохранено; дефицит, если он есть, остаётся в плане.`);setRevision(v=>v+1);})}>Создать сборку и резерв</button>}{preview.availability && <div className="lamoda-scroll"><table><thead><tr><th>Товар</th><th>В плане</th><th>Доступно</th><th>В чужих резервах</th><th>Не хватает</th></tr></thead><tbody>{preview.availability.lines.map((l, i) => <tr key={i}><td>{l.name ?? l.barcode}</td><td>{l.requestedQuantity}</td><td>{l.availableQuantity}</td><td>{l.reservedQuantity}</td><td>{l.shortageQuantity}</td></tr>)}</tbody></table></div>}</div>}
+      {preview && <div className="lamoda-card"><h3>Проверка: {previewPlan}</h3><p>{preview.message}</p>{preview.unresolvedRows.length > 0 && <p role="alert">Нет однозначного соответствия в строках: {preview.unresolvedRows.join(', ')}</p>}{overview?.assemblyEnabled && preview.canAssemble && <button disabled={disabled||!canWrite||!previewId} onClick={()=>void run(async()=>{const result=await createLamodaAssembly(token,accountId,previewId);setNotice(`Создана сборка №${result.number}. Плановое количество сохранено; дефицит, если он есть, остаётся в плане.`);setRevision(v=>v+1);if(operational)await openAssembly(result.id);})}>Создать сборку и резерв</button>}{preview.availability && <div className="lamoda-scroll"><table><thead><tr><th>Товар</th><th>В плане</th><th>Доступно</th><th>В чужих резервах</th><th>Не хватает</th></tr></thead><tbody>{preview.availability.lines.map((l, i) => <tr key={i}><td>{l.name ?? l.barcode}</td><td>{l.requestedQuantity}</td><td>{l.availableQuantity}</td><td>{l.reservedQuantity}</td><td>{l.shortageQuantity}</td></tr>)}</tbody></table></div>}</div>}
     </div>}
     {tab === 'fbs' && <><p>Загруженные заказы пока не создают сборок и резервов WMS. До запуска обработки FBS остатки в Lamoda не публикуются.</p><button disabled={disabled || !canManage || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('ORDERS')}>Загрузить заказы</button><button disabled={disabled || !canManage || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('FBS_SHIPMENTS')}>Загрузить отгрузки FBS</button></>}
     {!customerMode && tab === 'returns' && <><p>Это ожидаемые возвраты Lamoda. Доступный остаток увеличивается только после физической приёмки в WMS.</p><button disabled={disabled || !canManage || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('RETURNS')}>Загрузить ожидаемые возвраты</button></>}
     {(!operational || tab !== 'fbo') && ['fbo', 'fbs', 'returns'].includes(tab) && <div className="lamoda-scroll"><table><thead><tr><th>Номер</th><th>ID Lamoda</th><th>Статус Lamoda</th><th>Последняя загрузка</th></tr></thead><tbody>{documents.map(d => <tr key={d.id}><td>{d.number}</td><td>{d.remoteId}</td><td>{d.status}</td><td>{date(d.syncedAt)}</td></tr>)}</tbody></table><p>Показано до 500 документов. Поставки и возвраты загружаются за период ±90 дней; заказы — с последней успешной загрузки, при первом запуске за 90 дней.</p></div>}
     {!customerMode && tab === 'log' && <div className="lamoda-scroll"><table><thead><tr><th>Время</th><th>Операция</th><th>Результат</th><th>Записей</th></tr></thead><tbody>{overview?.exchanges.map(e => <tr key={e.id}><td>{date(e.createdAt)}</td><td>{e.operation}</td><td>{({ RUNNING: 'Выполняется', SUCCEEDED: 'Завершено', FAILED: 'Ошибка' } as Record<string, string>)[e.status] ?? e.status} {e.errorCode}</td><td>{e.itemCount}</td></tr>)}</tbody></table></div>}
-    {assembly&&<FboTwoStagePanel initial={assembly} accessToken={token} userId={session.user.id} canWrite={!customerMode&&canManage} onClose={()=>setAssembly(null)}/> }
+    {assembly&&<div ref={detailRef} className={operational?'lamoda-assembly-detail':undefined} aria-label="Выбранная сборка Lamoda"><FboTwoStagePanel key={assembly.requestId} embedded={operational} initial={assembly} accessToken={token} userId={session.user.id} canWrite={!customerMode&&canManage} onClose={()=>{openSequence.current++;setAssembly(null);setRevision(v=>v+1);}}/></div> }
   </section>;
 }

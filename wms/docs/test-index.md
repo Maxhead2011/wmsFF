@@ -1,3 +1,7 @@
+Prepared / 2026-10-28: Lamoda shared FBO execution opens inline after assembly creation; list refresh preserves selection, scope change drops stale response. Web-only follow-up to PR720; API/APK/schema/sold unchanged. Runtime regression28 and full API3851/web524 passed. [Scope and tests](lamoda-inline-assembly.md).
+
+Published PR720 / 2026-10-28: separate marketplace workspaces and scoped client directory; customer connected tiles, staff filtered clients, Lamoda client-card maintenance. Panthera opaque Ozon/FBY/Lamoda surfaces and text removal width fixed. API3851/web524 passed (150/2 skipped), runtime PostgreSQL24/full API health, candidate/public browser24 and CSS regression6 passed. Exact4 API/7 web overlay, schema/APK236/sold unchanged. Baseline `2026-10-28-marketplace-workspaces`, sourceParityVerified=false. [Details](marketplace-workspaces.md).
+
 Prepared PR720 / 2026-10-28: exact marketplace workspace overlay; branch-aware directory preserved, separate four FBO/FBS markets, client filtering, client-card maintenance. Panthera opaque Ozon/FBY/Lamoda surfaces and text removal width. Runtime PostgreSQL24/full API health, browser24 and CSS regression6 passed. Own WMS only; schema/APK/sold unchanged. See [details](marketplace-workspaces.md).
 
 Prepared / 2026-10-28: scoped marketplace client directory, customer-only connected tiles, operational Lamoda layout and client-card maintenance. Own-WMS flags default off; not published. See [plan, affected functions and validation](marketplace-workspaces.md).
