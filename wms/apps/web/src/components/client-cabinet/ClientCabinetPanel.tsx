@@ -63,6 +63,7 @@ import { ReceiptBatchesPanel } from '../warehouse/ReceiptBatchesPanel';
 import { ClientCabinetTables } from './ClientCabinetTables';
 import type { BrowserNotificationPermission } from './ClientCabinetNotifications';
 import { ClientMarketplaceConnections } from './ClientMarketplaceConnections';
+import { ClientLamodaConnections } from './ClientLamodaConnections';
 import { canManageClientMarketplaceApi } from './clientMarketplaceAccess';
 import { ClientCabinetFilterPresets } from './ClientCabinetFilterPresets';
 import {
@@ -814,7 +815,8 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             />
           ) : null}
           {canManageMarketplaceApi ? (
-            <ClientMarketplaceConnections accessToken={session.accessToken} client={view.client} />
+            <><ClientMarketplaceConnections accessToken={session.accessToken} client={view.client} />
+            {import.meta.env.VITE_LAMODA_ENABLED === 'true' && <ClientLamodaConnections key={view.client.id} session={session} clientId={view.client.id} />}</>
           ) : null}
 
           <ClientCabinetMetrics

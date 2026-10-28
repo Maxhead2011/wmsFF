@@ -12,4 +12,8 @@ describe('FBO marketplace list separation',()=>{
     expect(isWbFboRequest({...row,ozonShipment:null})).toBe(true);
     expect(isWbFboRequest(row)).toBe(true);
   });
+  // TEST: Lamoda must not fall through to the WB list.
+  it('excludes Lamoda assemblies',()=>{
+    expect(isWbFboRequest({...row,lamodaAssembly:{requestId:'lamoda'}})).toBe(false);
+  });
 });

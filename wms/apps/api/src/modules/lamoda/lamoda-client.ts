@@ -1,8 +1,9 @@
 import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
+import { LamodaCommand, lamodaPathId, prepareLamodaCommand } from './lamoda-commands';
 
 export type LamodaCredentials = { oauthClientId: string; secret: string; sellerId: string };
 export class LamodaApiError extends Error {
-  constructor(public readonly code: string, public readonly status?: number) {
+  constructor(public readonly code: string, public readonly status?: number, public readonly outcome?: 'REJECTED' | 'UNKNOWN') {
     // FIX: never propagate remote bodies (which can contain credentials/customer data).
     super(`Lamoda: ${code}${status ? ` (${status})` : ''}`);
   }
@@ -48,7 +49,7 @@ export const lamodaResources = Object.keys(resources) as LamodaResource[];
 const base = 'https://public-api-seller.lamoda.ru/api/v2';
 type Token = { value: string; until: number };
 
-// FIX: this adapter only reads business data. No generic method/body proxy or write switch.
+// FIX: operational writes are allow-listed, gated and never automatically retried.
 export class LamodaClient {
   private tokens = new Map<string, Token>();
   private pending = new Map<string, Promise<Token>>();
@@ -103,12 +104,81 @@ export class LamodaClient {
       }
     }
   }
+  async execute(c: LamodaCredentials, command: LamodaCommand): Promise<unknown> {
+    if (process.env.WMS_LAMODA_EXTERNAL_WRITES_ENABLED !== 'true') throw new LamodaApiError('WRITES_DISABLED', undefined, 'REJECTED');
+    let request: ReturnType<typeof prepareLamodaCommand>;
+    try { request = prepareLamodaCommand(command, c.sellerId); }
+    catch { throw new LamodaApiError('INVALID_COMMAND', undefined, 'REJECTED'); }
+    // Authentication happens before the business request: failure cannot have changed a shipment.
+    let token: Token;
+    try { token = await this.token(c); }
+    catch { throw new LamodaApiError('AUTH_FAILED', undefined, 'REJECTED'); }
+    let response: Response;
+    try {
+      response = await this.http(`${base}${request.path}`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token.value}`, 'Content-Type': 'application/json' },
+        body: request.body, redirect: 'error', signal: AbortSignal.timeout(20_000),
+      });
+    } catch { throw new LamodaApiError('TRANSPORT_ERROR', undefined, 'UNKNOWN'); }
+    if (!response.ok) {
+      const rejected = [400, 401, 403, 404, 405, 422, 429].includes(response.status);
+      throw new LamodaApiError('HTTP_ERROR', response.status, rejected ? 'REJECTED' : 'UNKNOWN');
+    }
+    // A malformed success response must not be treated as permission to repeat a write.
+    if (response.status === 204) return null;
+    try {
+      const bytes = await this.boundedBody(response);
+      return JSON.parse(bytes.toString('utf8'));
+    } catch { throw new LamodaApiError('INVALID_WRITE_RESPONSE', response.status, 'UNKNOWN'); }
+  }
+  private async boundedBody(response: Response): Promise<Buffer> {
+    const reader = response.body?.getReader();
+    if (!reader) throw new LamodaApiError('EMPTY_RESPONSE');
+    const chunks: Uint8Array[] = []; let size = 0;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 10_000_000) { await reader.cancel(); throw new LamodaApiError('RESPONSE_TOO_LARGE'); }
+        chunks.push(value);
+      }
+      return Buffer.concat(chunks);
+    } finally { reader.releaseLock(); }
+  }
+  async packLabel(c: LamodaCredentials, orderId: string, packNumber: string, labelFormat = 'M'): Promise<Buffer> {
+    if (!['S', 'M', 'L'].includes(labelFormat)) throw new LamodaApiError('INVALID_LABEL_FORMAT');
+    const url = new URL(`${base}/orders/${lamodaPathId(orderId)}/packs/${lamodaPathId(packNumber)}/label`);
+    url.searchParams.set('sellerId', c.sellerId); url.searchParams.set('labelFormat', labelFormat);
+    const token = await this.token(c);
+    let response: Response;
+    try { response = await this.http(url.toString(), { headers: { Authorization: `Bearer ${token.value}` }, redirect: 'error', signal: AbortSignal.timeout(20_000) }); }
+    catch { throw new LamodaApiError('TRANSPORT_ERROR'); }
+    if (!response.ok) throw new LamodaApiError('HTTP_ERROR', response.status);
+    const bytes = await this.boundedBody(response);
+    if (response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/pdf' || bytes.subarray(0,5).toString('ascii') !== '%PDF-') throw new LamodaApiError('INVALID_PDF');
+    return bytes;
+  }
   async check(c: LamodaCredentials) {
     // Verify seller access too, rather than treating OAuth success as a working connection.
     // FIX: v2 catalog requires country even for a one-row connection check.
     const data = await this.get(c, '/nomenclatures', { country: 'RU', page: '1', limit: '1' });
     if (!Array.isArray(data.nomenclatures) || record(data.meta).page !== 1) throw new LamodaApiError('INVALID_PAGE');
     return data;
+  }
+  // FIX: fetch every planned line through the fixed API host and verify seller ownership.
+  async fboShipment(c: LamodaCredentials, id: string) {
+    const path=`/fbo/shipments/${lamodaPathId(id)}`;
+    const shipment=await this.get(c,path,{});
+    if(shipment.id!==id||String(shipment.sellerId)!==c.sellerId) throw new LamodaApiError('SHIPMENT_SCOPE_MISMATCH');
+    const items:Record<string,unknown>[]=[];
+    for(let page=1;page<=40;page++) {
+      const response=await this.get(c,`${path}/items`,{page:String(page),limit:'25'}),meta=record(response.meta);
+      if(!Array.isArray(response.items)||meta.page!==page||!Number.isSafeInteger(meta.totalPages)||Number(meta.totalPages)<1||response.items.length>25) throw new LamodaApiError('INVALID_PAGE');
+      items.push(...response.items.map(record));
+      if(page===meta.totalPages) return {shipment,items};
+    }
+    throw new LamodaApiError('SYNC_PAGE_LIMIT');
   }
   async collection(c: LamodaCredentials, kind: LamodaResource, params: Record<string, string> = {}) {
     const resource = resources[kind];

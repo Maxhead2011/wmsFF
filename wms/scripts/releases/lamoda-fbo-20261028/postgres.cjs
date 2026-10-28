@@ -1,0 +1,39 @@
+// TEST: real Prisma + additive migration on disposable PostgreSQL, never production.
+require('reflect-metadata');const assert=require('node:assert/strict');
+assert.equal(process.env.NODE_ENV,'test');assert.equal(new URL(process.env.DATABASE_URL).hostname,'lamoda-test-pg');
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const {LamodaService}=require(dir+'modules/lamoda/lamoda.service');const {ClientScopeService}=require(dir+'modules/auth/client-scope.service');
+const {LamodaModule}=require(dir+'modules/lamoda/lamoda.module');const {ClientRequestsModule}=require(dir+'modules/client-requests/client-requests.module');const {ClientRequestsService}=require(dir+'modules/client-requests/client-requests.service');
+const {sealSecret,openSecret,LamodaApiError}=require(dir+'modules/lamoda/lamoda-client');const xlsx=require('xlsx');
+(async()=>{let passed=0;
+ assert(Reflect.getMetadata('imports',require(dir+'app.module').AppModule).includes(LamodaModule));assert(Reflect.getMetadata('exports',ClientRequestsModule).includes(ClientRequestsService));assert.equal(typeof ClientRequestsService.prototype.previewAvailability,'function');passed++;
+ const w=await p.warehouse.create({data:{code:'LAMODA_TEST',name:'Test'}}),c=await p.client.create({data:{code:'LAMODA_TEST',name:'Test'}}),u=await p.user.create({data:{email:'lamoda@test.invalid',passwordHash:'disabled',name:'Test'}}),sku=await p.sku.create({data:{clientId:c.id,internalSku:'TEST',name:'Test',barcodes:{create:{value:'2048701988171'}}}});
+ await p.warehouseClient.create({data:{clientId:c.id,warehouseId:w.id,status:'ACTIVE'}});
+ const user={id:u.id,roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[]};let previewInput;
+ const service=new LamodaService(p,new ClientScopeService(),{previewAvailability:async input=>{previewInput=input;return {lines:[]}}});
+ const data={clientId:c.id,name:'Test',sellerId:'test-seller',oauthClientId:'test-oauth',secret:'synthetic-secret',fboEnabled:true,fbsEnabled:true};
+ const a=await service.create(data,user);assert(!('encryptedSecret'in a));const raw=await p.lamodaAccount.findUniqueOrThrow({where:{id:a.id}});assert(!raw.encryptedSecret.includes(data.secret));assert.equal(openSecret(raw.encryptedSecret,JSON.stringify([c.id,data.sellerId,data.oauthClientId])),data.secret);assert.throws(()=>openSecret(raw.encryptedSecret,'foreign'));passed++;
+ await assert.rejects(()=>service.create(data,user),/уже подключён/);await assert.rejects(()=>service.accounts(c.id,{...user,roleCodes:['CLIENT'],permissionCodes:['marketplace-api:read'],clientScopeMode:'LIMITED',clientIds:['foreign']}),/Нет доступа/);passed++;
+ service.remote={collection:async()=>[{sku:'LM01',name:'Test',barcode:'2048701988171',vendorCode:'A',size:'50'}],check:async()=>{}};
+ await service.sync(a.id,'CATALOG',user);const product=await p.lamodaProduct.findFirstOrThrow({where:{accountId:a.id}});assert.equal((await service.candidates(a.id,product.id,user))[0].id,sku.id);await service.link(a.id,product.id,sku.id,user);passed++;
+ const book=xlsx.utils.book_new();xlsx.utils.book_append_sheet(book,xlsx.utils.aoa_to_sheet([['ШК','Количество','Направление'],['2048701988171',2,'Москва'],['2048701988171',3,'Казань']]),'Поставка');const buf=xlsx.write(book,{type:'buffer',bookType:'xlsx'});
+ const body={title:'Draft',warehouseId:w.id};const plan=await service.importPlan(a.id,body,buf,user);assert.equal((await service.importPlan(a.id,body,buf,user)).id,plan.id);const result=await service.availability(a.id,plan.id,user);assert.equal(result.canAssemble,true);assert.equal(previewInput.items[0].quantity,5);assert.equal(await p.lamodaPlan.count(),1);passed++;
+
+ // TEST: real transaction, durable relation and replay do not consume stock.
+ const created=await service.createAssembly(a.id,plan.id,user);assert(created.id);assert.equal((await service.createAssembly(a.id,plan.id,user)).id,created.id);assert.equal(await p.clientRequest.count(),1);assert.equal((await p.clientRequestItem.findFirstOrThrow()).quantity,5);assert.equal((await p.lamodaFboAssembly.findUniqueOrThrow({where:{planId:plan.id}})).directions.length,2);passed++;
+ service.remote.fboShipment=async()=>({shipment:{id:'MPG123',sellerId:'test-seller',status:'CONFIRMED',warehouseCode:'SOFINO'},items:[{sku:'LM01',ean:'2048701988171',quantityPlanned:2,quantityAccepted:0}]});
+ const imported=await service.importShipment(a.id,{reference:'MPG123',warehouseId:w.id},user);assert.equal(imported.items[0].quantity,2);const linked=await service.createAssembly(a.id,imported.id,user);assert(linked.id!==created.id);passed++;
+ const duplicate=await service.importShipment(a.id,{reference:'MPG123',warehouseId:w.id,title:'Same remote, different title'},user);await assert.rejects(()=>service.createAssembly(a.id,duplicate.id,user));assert.equal(await p.clientRequest.count(),2);passed++;
+ const {ClientRequestMarketplaceFilesService}=require(dir+'modules/client-requests/client-request-marketplace-files.service');const files=new ClientRequestMarketplaceFilesService(p,new ClientScopeService());await assert.rejects(()=>files.getWbProductsTemplate(created.id,user),/Lamoda/);await assert.rejects(()=>files.getWbPackagingTemplate(created.id,user),/Lamoda/);passed++;
+
+ const {FboTwoStageService}=require(dir+'modules/tsd/fbo-two-stage.service');const tsd=new FboTwoStageService(p,new ClientScopeService(),{}, {}, {},files);const livePlan=await tsd.plan(created.id,user);assert.equal(livePlan.marketplace,'LAMODA');assert.equal(livePlan.directions.length,2);assert.equal(livePlan.packingByProductSupported,false);assert.equal(livePlan.reopenPackingBoxSupported,false);await assert.rejects(()=>tsd.wbFile(created.id,user));passed++;
+ process.env.WMS_LAMODA_FBO_ASSEMBLY_ENABLED='false';await assert.rejects(()=>tsd.plan(created.id,user));process.env.WMS_LAMODA_FBO_ASSEMBLY_ENABLED='true';passed++;
+
+ const {TsdAssemblyService}=require(dir+'modules/tsd/tsd-assembly.service');const queue=new TsdAssemblyService(p,new ClientScopeService(),{}, {}, {},tsd);const lamodaQueue=await queue.listActiveRequests(user,'fbo-pick','LAMODA');assert.equal(lamodaQueue.length,2);assert.equal((await queue.listActiveRequests(user,'fbo-pick','WB')).length,0);assert.equal((await queue.listActiveRequests(user,'fbo-pick','OZON')).length,0);passed++;
+ service.remote.collection=async()=>{throw new LamodaApiError('TEST_PAGE_FAILURE')};await assert.rejects(()=>service.sync(a.id,'ORDERS',user));assert.equal((await p.lamodaAccount.findUniqueOrThrow({where:{id:a.id}})).ordersSyncedAt,null);assert.equal(await p.lamodaProduct.count(),1);assert.equal((await p.lamodaExchange.findFirstOrThrow({where:{operation:'ORDERS'}})).status,'FAILED');passed++;
+ service.remote.collection=async()=>[{sku:'LM01',name:'Test',barcode:'2048701988172',size:'50'}];await service.sync(a.id,'CATALOG',user);const changed=await p.lamodaProduct.findUniqueOrThrow({where:{id:product.id}});assert.equal(changed.linkState,'REVIEW');assert.equal(changed.skuId,null);passed++;
+ await service.update(a.id,{secret:'rotated'},user);const updated=await p.lamodaAccount.findUniqueOrThrow({where:{id:a.id}});assert.equal(openSecret(updated.encryptedSecret,JSON.stringify([c.id,data.sellerId,data.oauthClientId])),'rotated');await service.update(a.id,{isActive:false},user);await assert.rejects(()=>service.sync(a.id,'CATALOG',user),/отключено/);passed++;
+ assert.equal(await p.stockBalance.count(),0);assert.equal(await p.stockMovement.count(),0);assert.equal(await p.clientRequest.count(),2);assert.equal(await p.productMark.count(),0);passed++;
+ process.env.WMS_LAMODA_ENABLED='false';await assert.rejects(()=>service.accounts(c.id,user));passed++;
+ console.log(JSON.stringify({passed,isolated:true,noStockChanges:true}));
+})().finally(()=>p.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});

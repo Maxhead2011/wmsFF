@@ -1,5 +1,16 @@
+Prepared / 2026-10-28: combined Yandex FBY and existing Lamoda FBO; Lamoda credentials in client card, equal 2/4/1 marketplace tiles, LOGOFF APK236. API3846/web519; Android267 per flavor; candidate PostgreSQL31 and browser16 passed. Not published. [Details](yandex-fby.md).
+
 Prepared / 2026-10-28: Yandex FBY import and Excel/manual assembly, scoped preview/binding, separate TSD queue and equal marketplace tiles. Feature flags default off; not published. See [FBY implementation and release checklist](yandex-fby.md).
 
+Published PR714 / 2026-10-28: CLIENT access to own Lamoda FBO plans through existing request rights. Excel/ID import, availability and replay-safe assembly allowed; credential management remains administrative. Exact2 API/4 web overlay; schema/APK235/roles/business records/sold WMS unchanged. API3811 plus new controller-guard test, web513 passed;155/2 skipped. TypeScript, disposable PostgreSQL19/full Nest health, customer browser10 and admin13 passed; public customer browser10 and live read-only Lukin account/warehouses verified. Baseline `2026-10-28-lamoda-client`, sourceParityVerified=false. [Details](lamoda-contour.md).
+
+Prepared / 2026-10-28: scoped Lamoda FBO planning for CLIENT users with existing client-requests rights. Credential management remains API-admin only; no role grants. Exact2 API/4 web overlay on 2026-10-28-lamoda-fbo. API3811 and new route-guard test passed, web513 passed;155/2 skipped, dedicated KIZ DB suites excluded. Candidate client browser10 and admin browser13 passed; API/web TypeScript passed. Schema/APK/external writes/sold WMS unchanged. See [Lamoda scope](lamoda-contour.md).
+
+Published PR711+712 / 2026-10-28: Lamoda FBO Excel/ID imports, replay-safe OUTBOUND assembly and isolated LOGOFF TSD queue/packing, APK235. API3810/web512 passed,155/2 skipped; all3 Android flavors, TypeScript with isolated Prisma types, runtime PostgreSQL17/full Nest health, candidate/public browser13 passed. Exact13 API/7 web files, two additive tables; own-image assembly gate enabled, external writes disabled, sold untouched. Baseline `2026-10-28-lamoda-fbo`, sourceParityVerified=false. Live account works; no client shipment yet for physical end-to-end test. [Details](lamoda-contour.md).
+
+Prepared / 2026-10-28: Lamoda FBO Excel and existing-shipment ID import, immutable plan-to-request binding and directed TSD assembly. Branch feature/lamoda-fbo-imports; not published. WMS_LAMODA_FBO_ASSEMBLY_ENABLED gates creation/picking; sold installation unchanged. External shipment writes remain disabled. Real cabinet URL awaits a client example. See [Lamoda scope](lamoda-contour.md).
+
+In progress / 2026-10-26: feature/lamoda-operations adds gated validated commands, bounded PDF labels and a durable command-journal component. Not published or connected to warehouse actions; external writes remain disabled. See [Lamoda scope](lamoda-contour.md).
 Published PR709 / 2026-10-28: Lamoda check/catalog now supply country=RU; catalog pages25 (was100). API3773/web510 passed,150/2 skipped; dedicated KIZ DB suites excluded. Actual candidate and published OAuth201/catalog200 verified. One API file; baseline `2026-10-28-lamoda-country`, sourceParityVerified=false. Web/APK/schema/keys/business data/sold WMS unchanged. [Details](lamoda-country-fix.md).
 
 Prepared / 2026-10-28: Lamoda connection/catalog validation fix. Seller 1060287436 authorization succeeds; catalog HTTP400 reproduced without required country and HTTP200 with RU. Catalog page limit corrected from100 to25, previous10000-row/time caps preserved. Exact one API runtime file; source parity verified for that module. API3773/web510 passed;150/2 skipped; two dedicated KIZ DB suites excluded. TypeScript and3 candidate runtime checks passed. Own-WMS deployment only; sold/web/APK/schema/credentials/business records unchanged. [Details](lamoda-country-fix.md).
@@ -362,3 +373,5 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: [request removal](request-removal.md). Additive ADMIN/OWNER API, shared ownership guards, request/Ozon buttons; default-off own-WMS flag; no schema or physical stock changes.
+
+Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.

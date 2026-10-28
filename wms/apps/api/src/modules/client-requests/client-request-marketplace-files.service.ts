@@ -94,6 +94,8 @@ export class ClientRequestMarketplaceFilesService {
     assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
     if (process.env.WMS_YANDEX_FBY_ENABLED === 'true' && await this.prisma.yandexFbyShipment.findUnique({ where: { requestId } }))
       throw new BadRequestException('Для FBY не формируются файлы Wildberries.');
+    // FIX: generic WB download endpoints must not export Lamoda assemblies either.
+    if(process.env.WMS_LAMODA_ENABLED === 'true' && await this.prisma.lamodaFboAssembly.findUnique({where:{requestId}})) throw new BadRequestException('Это сборка Lamoda. Файлы WB для неё не формируются.');
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Файлы WB доступны только для заявок на отгрузку.');
     }

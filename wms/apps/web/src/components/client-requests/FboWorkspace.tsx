@@ -9,7 +9,7 @@ const Lamoda=lazy(()=>import('../lamoda/LamodaPanel').then(m=>({default:m.Lamoda
 // FIX: preserve the existing Ozon workflow while placing WB Excel/manual requests next to it.
 export function FboWorkspace({session}:{session:AuthSession}) {
   const [market,setMarket]=useState<'wb'|'ozon'|'lamoda'|'yandex'|null>(null);
-  const canReadLamoda=import.meta.env.VITE_LAMODA_ENABLED==='true'&&session.user.permissionCodes.some(p=>p==='system:admin'||p==='marketplace-api:read');
+  const canReadLamoda=import.meta.env.VITE_LAMODA_ENABLED==='true'&&(session.user.permissionCodes.some(p=>p==='system:admin'||p==='marketplace-api:read')||(session.user.roleCodes.includes('CLIENT')&&session.user.permissionCodes.includes('client-requests:read')));
   const canReadWb=session.user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:read');
   const canReadYandex=import.meta.env.VITE_YANDEX_FBY_ENABLED==='true'&&canReadWb;
   return <section aria-label="FBO"><div className="section-heading"><div><p className="eyebrow">Поставки на склады маркетплейсов</p><h2>FBO</h2></div></div>

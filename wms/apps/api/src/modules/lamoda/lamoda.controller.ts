@@ -1,14 +1,15 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, StreamableFile, UploadedFile, UseInterceptors, BadRequestException } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
+import { RequirePermissions, RequireAnyPermissions } from '../auth/decorators/require-permissions.decorator';
 import type { AuthUser } from '../auth/auth.types';
 import { LamodaService } from './lamoda.service';
-import { LamodaCreateAccountDto, LamodaUpdateAccountDto, LamodaSyncDto, LamodaLinkDto, LamodaImportDto } from './lamoda.dto';
+import { LamodaCreateAccountDto, LamodaUpdateAccountDto, LamodaSyncDto, LamodaLinkDto, LamodaImportDto, LamodaImportShipmentDto } from './lamoda.dto';
 import { templateWorkbook } from './lamoda-policy';
 
 @Controller('lamoda')
-@RequirePermissions('marketplace-api:read')
+// FIX: service still requires CLIENT role and scoped access for customer plan operations.
+@RequireAnyPermissions('marketplace-api:read', 'marketplace-api:write', 'client-requests:read')
 export class LamodaController {
   constructor(private readonly service: LamodaService) {}
   @Get('accounts')
@@ -40,13 +41,19 @@ export class LamodaController {
     return new StreamableFile(templateWorkbook(), { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: 'attachment; filename="Lamoda-FBO.xlsx"' });
   }
   @Post('accounts/:id/plans/import')
-  @RequirePermissions('marketplace-api:write')
+  @RequireAnyPermissions('marketplace-api:write', 'client-requests:write')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024 } }))
   importPlan(@Param('id') id: string, @Body() body: LamodaImportDto, @UploadedFile() file: Express.Multer.File | undefined, @CurrentUser() user: AuthUser) {
     if (!file?.buffer) throw new BadRequestException('Выберите Excel-файл.');
     return this.service.importPlan(id, body, file.buffer, user);
   }
   @Post('accounts/:id/plans/:planId/availability')
-  @RequirePermissions('marketplace-api:write')
+  @RequireAnyPermissions('marketplace-api:write', 'client-requests:write')
   availability(@Param('id') id: string, @Param('planId') planId: string, @CurrentUser() user: AuthUser) { return this.service.availability(id, planId, user); }
+  @Post('accounts/:id/plans/from-shipment')
+  @RequireAnyPermissions('marketplace-api:write', 'client-requests:write')
+  fromShipment(@Param('id') id:string,@Body() body:LamodaImportShipmentDto,@CurrentUser() user:AuthUser) { return this.service.importShipment(id,body,user); }
+  @Post('accounts/:id/plans/:planId/assembly')
+  @RequireAnyPermissions('marketplace-api:write', 'client-requests:write')
+  assembly(@Param('id') id:string,@Param('planId') planId:string,@CurrentUser() user:AuthUser) { return this.service.createAssembly(id,planId,user); }
 }

@@ -256,7 +256,7 @@ export function ClientMarketplaceConnections({ accessToken, client }: ClientMark
     <section className="client-marketplace-panel" aria-label="API маркетплейсов">
       <div className="client-marketplace-panel__heading">
         <div>
-          <h3>API для FBS и карточек товаров</h3>
+          <h3>Кабинеты и подключения маркетплейсов</h3>
           <span>Ключ хранится в карточке клиента и используется всеми модулями WMS</span>
         </div>
         <div className="client-marketplace-panel__heading-actions">

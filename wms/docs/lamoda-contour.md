@@ -1,4 +1,37 @@
+Published PR714. Baseline `2026-10-28-lamoda-client`; exact2 API/4 web changes, source parity false. Public customer browser10 and live read-only Lukin access verified. No production data mutations.
+
+## Client planning access — 28.10.2026
+
+The Lamoda tile and planning routes accept CLIENT users with client-requests:read/write. Every service call still validates the selected client; writes require writable membership and are blocked for demo users. Excel and existing-shipment imports, availability and assembly creation use these scoped rights. API connection, secret rotation, catalog sync and product mapping remain administrative. The customer view opens Plans FBO directly and never renders credential controls.
+
+Regression: the client-role test failed before the fix; service, controller metadata, rendered workspace and actual-runtime browser tests cover planning, read-only membership and forbidden management. Candidate database tests:19 passed on disposable PostgreSQL with synthetic data; full Nest application health passed. Customer browser10 and administrative browser13 passed. No business record or existing role is changed by deployment.
+
 # Lamoda — подготовительный контур, 26.10.2026
+
+## Продолжение в работе: `feature/lamoda-operations`
+
+Локально добавлены `lamoda-commands.ts`, закреплённые схемы официального API,
+методы `LamodaClient.execute/packLabel` и `lamoda-operation-journal.ts`.
+Отправки ограничены перечнем методов, валидируются до OAuth и требуют отдельного
+`WMS_LAMODA_EXTERNAL_WRITES_ENABLED=true` (по умолчанию выключен).
+Таймаут, 5xx, неоднозначный HTTP и повреждённый успешный ответ означают UNKNOWN,
+автоматического повтора бизнес-запроса нет. PDF проверяется по MIME и сигнатуре,
+чтение ограничено 10 МБ. Форматы этикеток S/M/L соответствуют спецификации.
+
+Подготовлена дополнительная миграция `20261026160000_lamoda_operations`.
+Журнал использует уникальный ключ кабинета/операции, хеш состава и атомарный переход
+PENDING → SENDING. SENDING после перезапуска не возвращается автоматически в очередь.
+Неопределённый результат требует сверки. Ответы с персональными данными в журнал не пишутся.
+
+**Не опубликовано.** Журнал пока является внутренним компонентом, не подключён
+к пользовательским маршрутам и складской сборке. Миграция на сервер не применялась.
+Следующий этап: сохранение подтверждённых внешних идентификаторов, сверка зависших
+операций, создание складских заявок и интеграция ТСД. Не включать внешние записи
+до завершения этих этапов и проверки с подключённым клиентом.
+
+Проверки: 60 тестов Lamoda API/контрактов и 5 тестов журнала прошли;
+Общий API-прогон: 3709 passed, 150 skipped; две специальные KIZ integration suites исключены. TypeScript и Prisma schema прошли. Тест журнала использует изолированное хранилище в памяти:
+это не заменяет проверку миграции и конкурентных запросов на PostgreSQL.
 
 Ветка `feature/lamoda-contour`, база PR689/PR690 (`276e7fac`, `feature/wb-print-check`), объединена без потери последнего выпуска.
 **Опубликовано 26.10.2026, PR691. Это первый этап плана, а не готовый полный коннектор FBO/FBS.**
@@ -133,3 +166,23 @@ SHA-256 скачанного OpenAPI:
 Точный runtime и схема сверены с кандидатом после публикации; health OK. Публичный интерфейс прошёл 10 сценариев с перехватом всех API-вызовов на синтетические данные. Реальный read-only smoke проверил таблицы и доступность раздела без создания подключений/товаров.
 Ключ хранится в серверном `.env`, добавлена передача `WMS_LAMODA_SECRET_KEY` только API. Миграция записана в `_prisma_migrations`. Резервная копия БД/конфигурации находится в защищённой серверной папке выпуска.
 Откат: `logoff-api:before-lamoda-preparation-20261026` и `logoff-web:before-lamoda-preparation-20261026`; конфигурация сохраняется отдельно. При откате не удалять ключ, если уже появились подключения: он нужен для расшифровки. Новые таблицы автоматически не удаляются.
+
+## Prepared FBO import and assembly / 2026-10-28
+
+Excel creates a plan; existing-shipment import reads ID, warehouse and quantityPlanned from Lamoda. Confirmed unambiguous SKU mappings are required before a separate action creates an OUTBOUND request/reservation and durable LamodaFboAssembly binding. Repeated creation returns the same request. Shortage never silently reduces the plan. Existing two-stage stock/reservation/KIZ guards remain; boxless and source-box picking and direction packing use the shared pipeline. Lamoda cannot export WB files.
+
+Files: lamoda-fbo-policy.ts (ID/quantity/mapping); lamoda-client.ts/fboShipment; lamoda.service.ts/importShipment,createAssembly; controller/DTO; Prisma LamodaFboAssembly and migration20261028120000; client-requests.service.ts and client-request-marketplace-files.service.ts; fbo-two-stage.service.ts; LamodaPanel.tsx/FboTwoStagePanel.tsx/fboRequestScope.ts/api.ts; Android FboTwoStageScreen.java; administration-internal-api.service.ts registry.
+
+Release needs additive migration, new APK and own-installation-only WMS_LAMODA_FBO_ASSEMBLY_ENABLED=true. Preserve existing two-stage/unboxed flags. Lukin FBO account was verified28Oct; FBS disabled, live shipment list empty. Actual cabinet URL and physical end-to-end cycle still unverified. This imports existing Lamoda shipments; it does not create remote shipments.
+
+Pre-integration checks: web506 passed/2 skipped; all three Android flavor unit suites passed; isolated synthetic PostgreSQL table constraints5 passed (not full runtime migration parity). Exact runtime migration, candidate/browser/public checks remain mandatory before release.
+
+Release candidate2026-10-28: integrated PR710; API3809 passed/155 skipped (dedicated KIZ DB suite excluded), web512/2, TypeScript API/web and all three Android flavor suites passed. APK235 LOGOFF only. A first highly parallel API run timed out in an existing PDF test; complete four-worker rerun passed. Candidate uses12 API files, two additive tables, Lamoda UI and one WB list filter overlay. Browser13 isolated scenarios passed. Remote shipment creation/stock publication still disabled; live shipment list empty.
+
+Final pre-publication audit found the TSD marketplace entry missing. Follow-up fix/lamoda-tsd-entry adds the LOGOFF-only Lamoda button/title and SQL queue filter in tsd-assembly.service.ts. WB/Ozon exclude Lamoda before pagination, and a disabled Lamoda gate rejects its queue. Regression lamoda-tsd-queue.spec.ts failed before and passes after; Android menu test also asserts the button. PR711 remains unpublished until this correction and final candidate validation.
+
+## Published FBO assembly / 2026-10-28
+
+PR711 and PR712 are deployed. API sha256:a5d976c0cad870e1c7496dbac353c7ace696405f4f7f000265cb60a77ab4abf5; web sha256:f8605e9c64b86247ab7e8e502629d30153161d5ca9de761cd9e0a1797d22450e. LOGOFF APK235 is signed with the existing release certificate. Both migrations were applied transactionally with migration ledger entries after a root-only DB backup. Public hashes and health passed; other containers unchanged. Live read-only verification: one active account, assembly gate true, external writes false, zero assembly bindings/operations at deployment. Public browser13 uses synthetic intercepted API fixtures, not real warehouse mutations. Real physical shipment remains untested because the client has not created one.
+
+Rollback tags: logoff-api:before-lamoda-fbo-20261028 and logoff-web:before-lamoda-fbo-20261028. Additive tables remain on rollback; do not delete newly created bindings or secrets. New API supports prior workflows; install APK235 to expose the Lamoda menu on TSD.

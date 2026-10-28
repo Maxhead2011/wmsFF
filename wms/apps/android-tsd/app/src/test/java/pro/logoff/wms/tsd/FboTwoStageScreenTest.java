@@ -38,6 +38,14 @@ public class FboTwoStageScreenTest {
             } finally {screen.close();}
         }
     }
+    // TEST: Lamoda is never presented as WB and never exposes WB downloads.
+    @Test public void lamodaHasOwnTitleAndNoWbExport() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("COMPLETED");p.marketplace="LAMODA";
+            FboTwoStageScreen screen=open(a,p,false,new AtomicInteger());
+            try{View root=a.findViewById(android.R.id.content);assertNotNull(find(root,"FBO Lamoda"));assertNull(find(root,"для WB"));assertNull(find(root,"файл WB"));}finally{screen.close();}
+        }
+    }
     // TEST: an off-route box needs a successful read before scanning products; no stock command on location scans.
     @Test public void alternativeBoxIsValidatedWithoutStockMutation() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
@@ -684,7 +692,7 @@ public class FboTwoStageScreenTest {
                 find(root,"FBO").performClick();root=a.findViewById(android.R.id.content);
                 assertNotNull(find(root,"Сборка FBO"));assertNotNull(find(root,"Упаковка FBO"));
                 find(root,"Сборка FBO").performClick();root=a.findViewById(android.R.id.content);
-                assertNotNull(find(root,"FBO WB"));assertNotNull(find(root,"FBO Ozon"));
+                assertNotNull(find(root,"FBO WB"));assertNotNull(find(root,"FBO Ozon"));assertNotNull(find(root,"FBO Lamoda")); // TEST: reachable only in the LOGOFF marketplace menu.
                 a.onBackPressed();assertNotNull(find(a.findViewById(android.R.id.content),"Упаковка FBO"));
             } else {assertNotNull(find(root,"Упаковка FBS"));assertNotNull(find(root,"Сборка FBO Ozon"));assertNull(find(root,"Упаковка FBO"));}
             a.getSharedPreferences("logoff_wms_tsd_session",0).edit().clear().commit();

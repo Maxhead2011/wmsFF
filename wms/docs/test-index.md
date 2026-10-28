@@ -1,4 +1,9 @@
+Prepared / 2026-10-28: combined Yandex FBY and existing Lamoda FBO; Lamoda credentials in client card, equal 2/4/1 marketplace tiles, LOGOFF APK236. API3846/web519; Android267 per flavor; candidate PostgreSQL31 and browser16 passed. Not published. [Details](yandex-fby.md).
+
 Prepared / 2026-10-28: Yandex FBY import and Excel/manual assembly, scoped preview/binding, separate TSD queue and equal marketplace tiles. Feature flags default off; not published. See [FBY implementation and release checklist](yandex-fby.md).
+Published PR714 / 2026-10-28: CLIENT access to own Lamoda FBO plans through existing request rights. Excel/ID import, availability and replay-safe assembly allowed; credential management remains administrative. Exact2 API/4 web overlay; schema/APK235/roles/business records/sold WMS unchanged. API3811 plus new controller-guard test, web513 passed;155/2 skipped. TypeScript, disposable PostgreSQL19/full Nest health, customer browser10 and admin13 passed; public customer browser10 and live read-only Lukin account/warehouses verified. Baseline `2026-10-28-lamoda-client`, sourceParityVerified=false. [Details](lamoda-contour.md).
+
+Prepared / 2026-10-28: scoped Lamoda FBO planning for CLIENT users with existing client-requests rights. Credential management remains API-admin only; no role grants. Exact2 API/4 web overlay on 2026-10-28-lamoda-fbo. API3811 and new route-guard test passed, web513 passed;155/2 skipped, dedicated KIZ DB suites excluded. Candidate client browser10 and admin browser13 passed; API/web TypeScript passed. Schema/APK/external writes/sold WMS unchanged. See [Lamoda scope](lamoda-contour.md).
 
 Published PR707 / 2026-10-27: client service lists skip writes to unchanged standard services and existing client price bindings. Exact two methods/one API file; own-image WMS_BILLING_SERVICE_READ_FAST_ENABLED. API3772/web510 passed;155/2 skipped; dedicated KIZ DB suite unavailable. TypeScript, targeted30, candidate read-only70ms and published read-only47ms for identical367 Bushkova services passed. Web/APK/prices/invoices/sold WMS unchanged. Baseline `2026-10-27-billing-read-fast`; sourceParityVerified=false. [Details](billing-service-read-performance.md).
 
@@ -334,3 +339,12 @@ Published PR606 Eleonora account correction: legacy Elya ID differed from actual
 
 
 Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal.spec.ts (15), scripts/releases/request-removal-20261024/browser.cjs (8 compiled UI) and postgres.cjs (9 isolated DB). API3590/web476; TypeScript passed. See [scope and limitations](request-removal.md).
+
+## Lamoda FBO imports (prepared2026-10-28)
+- lamoda-fbo-import.spec.ts: ID safety, planned quantities, exact mappings/direction quotas. lamoda.service.spec.ts: assembly gate, request/binding, replay, unmapped rejection. lamoda-client.spec.ts: detail/items pagination and seller isolation. lamoda-wb-isolation.spec.ts: both WB exports blocked.
+- fboRequestScope.spec.ts/FboTwoStagePanel.spec.tsx: Lamoda excluded from WB/exports. Android FboTwoStageScreenTest: Lamoda title/no WB export. Full logoff/ffullhab/platform suites passed.
+- Synthetic DB constraint proof5: work/lamoda-contour/fbo-db-proof.json; not full runtime migration parity.
+
+Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.
+
+Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB suite excluded), web512/2; TypeScript using separately generated Prisma client to avoid shared workspace artifacts; Android logoff/ffullhab/platform passed; PostgreSQL runtime migration parity and17 tests/full Nest health; candidate/public browser13; baseline guards. Public fixtures intercepted every API call. Physical end-to-end cycle awaits client shipment.
