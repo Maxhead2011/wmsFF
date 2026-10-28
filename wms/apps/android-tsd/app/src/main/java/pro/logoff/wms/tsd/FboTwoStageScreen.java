@@ -43,6 +43,16 @@ final class FboTwoStageScreen {
     private TsdFboPlan plan;
     private EditText input;
     private boolean busy,closed,routeStale;
+    // FIX: asynchronous print completion refreshes only this active Lamoda screen.
+    private final LamodaPrintRefresh lamodaPrintRefresh = new LamodaPrintRefresh(
+        new LamodaPrintRefresh.Scheduler() {
+            public void post(Runnable action,long delay){handler.postDelayed(action,delay);}
+            public void cancel(Runnable action){handler.removeCallbacks(action);}
+        }, this::canRefreshLamodaPrint, this::refresh);
+    private boolean canRefreshLamodaPrint(){
+        return ready()&&!closed&&quantityDialog==null&&state.barcode.isEmpty()
+            &&(input==null||input.getText().length()==0);
+    }
     private boolean manualPackingScan,packingErrorSpeech;
     // FIX: isolate explicit packing modes to our application; sold flavors retain their flow.
     private enum PackingMode { MENU, NEW_BOXES, WHOLE_BOXES, MANUAL }
@@ -208,7 +218,7 @@ final class FboTwoStageScreen {
     }
     boolean canLeave(){return !busy&&state.pending()==null;}
     EditText scannerField(){return quantityInput!=null?quantityInput:input;}
-    void close(){closed=true;if(scanFeedback!=null)scanFeedback.close();if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);if(statusCheck!=null)handler.removeCallbacks(statusCheck);executor.shutdownNow();}
+    void close(){closed=true;lamodaPrintRefresh.close();if(scanFeedback!=null)scanFeedback.close();if(quantityDialog!=null)quantityDialog.dismiss();handler.removeCallbacks(automatic);if(statusCheck!=null)handler.removeCallbacks(statusCheck);executor.shutdownNow();}
     private void text(LinearLayout root,String value){TextView v=new TsdUi.Label(activity);v.setText(value);v.setTextSize(19);v.setTextColor(Color.BLACK);v.setPadding(0,9,0,9);root.addView(v);}
     private void card(LinearLayout root,String value,int color){text(root,value);root.getChildAt(root.getChildCount()-1).setBackgroundColor(color);}
     private void button(LinearLayout root,String title,boolean enabled,Runnable action){Button b=new TsdUi.Button(activity);b.setText(title);b.setAllCaps(false);b.setEnabled(enabled&&!busy);b.setOnClickListener(v->action.run());root.addView(b);}
@@ -610,7 +620,7 @@ final class FboTwoStageScreen {
     private void refresh(){if(busy||closed)return;busy=true;render();executor.execute(()->{try{Response<TsdFboPlan> res=api.getFboPlanAtLocation(session.authorizationHeader(),id,state.pallet,state.source).execute();if(!res.isSuccessful()||res.body()==null)throw new Exception(error(res));TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;routeStale=false;if(state.pending()==null){String scanned=state.barcode,target=state.target;state.reconcile(plan,packing);
                 // FIX: migrate stale unmarked picking checkpoints left by older APKs; pending commands are excluded above.
                 if("PICKING".equals(screenPhase())&&!state.barcode.isEmpty()&&unmarkedLine(state.barcode,false)){state.barcode="";state.productKiz="";state.productReady=false;}
-                reconcilePickingMode();if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();render();});}});}
+                reconcilePickingMode();if(packingMode==PackingMode.MANUAL&&!target.isEmpty()&&target.equals(state.target))state.barcode=scanned;}busy=false;lamodaPrintRefresh.observe(plan,BuildConfig.FLAVOR);render();});}catch(Exception e){handler.post(()->{if(closed)return;busy=false;if(!routeStale)message="Не удалось обновить: "+e.getMessage();lamodaPrintRefresh.failed();render();});}});}
     private boolean fastConfirmation(){return "logoff".equals(BuildConfig.FLAVOR)&&((plan!=null&&plan.fastAcknowledgementSupported)||prefs.getBoolean(pendingKey+":fast",false));}
     // FIX: the compact receipt clears the durable request before any route recalculation.
     private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
@@ -671,7 +681,7 @@ final class FboTwoStageScreen {
             text(root,unit.label.name+" · размер "+unit.label.size+" · ШК Lamoda "+unit.label.barcode);
             if("PRINTED".equals(unit.printStatus))button(root,"Сканировать новую этикетку",ready(),()->confirmLamodaRelabel(unit));
             else if(unit.printStatus==null||"FAILED".equals(unit.printStatus))button(root,"Печать 2 этикеток 58 × 40",ready(),()->chooseLamodaPrinter(unit));
-            else text(root,"Этикетка в очереди. Обновите состояние печати.");
+            else text(root,"Этикетка в очереди. Проверяем завершение печати автоматически…");
         }
     }
     // FIX: warehouse barcode and physical KIZ resolve the unit on the scoped server.
@@ -699,7 +709,8 @@ final class FboTwoStageScreen {
             List<TsdPrintStation> stations=response.body();handler.post(()->{if(closed)return;busy=false;render();
                 if(stations.isEmpty()){message="Нет станций печати на связи. Запустите агент печати.";render();return;}
                 String[] names=new String[stations.size()];for(int i=0;i<names.length;i++)names[i]=stations.get(i).name;
-                new AlertDialog.Builder(activity).setTitle("Станция переклейки Lamoda").setItems(names,(d,n)->printLamodaUnit(unit,stations.get(n).id)).setNegativeButton("Назад",null).show();
+                AlertDialog chooser=new AlertDialog.Builder(activity).setTitle("Станция переклейки Lamoda").setItems(names,(d,n)->printLamodaUnit(unit,stations.get(n).id)).setNegativeButton("Назад",null).create();
+                quantityDialog=chooser;chooser.setOnDismissListener(d->{quantityDialog=null;});chooser.show();
             });
         }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message=e.getMessage();render();});}});
     }
@@ -707,8 +718,8 @@ final class FboTwoStageScreen {
         if(!ready())return;busy=true;render();Map<String,String> body=new LinkedHashMap<>();body.put("unitId",unit.id);body.put("stationId",station);body.put("printId",UUID.randomUUID().toString());
         executor.execute(()->{try{Response<TsdRelabelPrintJob> response=api.lamodaFboRelabelPrint(session.authorizationHeader(),id,body).execute();
             if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
-            handler.post(()->{if(closed)return;busy=false;message="Печать отправлена. После выхода этикеток обновите экран и подтвердите новый ШК.";refresh();});
-        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message="Проверьте состояние печати кнопкой «Обновить»: "+e.getMessage();render();});}});
+            handler.post(()->{if(closed)return;busy=false;message="Печать отправлена. Ожидаем этикетки; следующий шаг появится автоматически.";refresh();});
+        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message="Проверяем состояние отправленной печати: "+e.getMessage();refresh();});}});
     }
     private void confirmLamodaRelabel(TsdFboPlan.RelabelUnit unit){
         if(!ready())return;
@@ -736,7 +747,7 @@ final class FboTwoStageScreen {
             if(!res.isSuccessful()||res.body()==null){boolean rejected=FboFeedback.definitiveRejection(res.code());String detail=error(res);handler.post(()->{if(closed)return;if(rejected&&prefs.edit().remove(pendingKey).commit()){rejectConfirmedScan(payload);if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target="";}busy=false;feedbackColor=Color.rgb(254,202,202);message=detail;packingErrorSpeech=true;
                 // FIX: a definitive stock/route conflict must not leave the picker on a stale box.
                 if(res.code()==409&&rejected&&!packingScanRecovery())refresh();else render();});return;}
-            TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;
+            TsdFboPlan next=res.body();handler.post(()->{if(closed)return;plan=next;busy=false;lamodaPrintRefresh.observe(plan,BuildConfig.FLAVOR);
                 // FIX: clear the held product and durable command in one preferences commit.
                 SharedPreferences.Editor confirmation=prefs.edit().remove(pendingKey);
                 Map<String,String> position=state.confirmedPosition(payload);
