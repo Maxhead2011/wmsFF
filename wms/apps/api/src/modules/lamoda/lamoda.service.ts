@@ -19,13 +19,15 @@ export class LamodaService {
   private readonly remote = new LamodaClient();
   constructor(private readonly db: PrismaService, private readonly scopes: ClientScopeService, private readonly requests: ClientRequestsService) {}
 
-  private guard(user: AuthUser, mode: 'read' | 'write') {
+  private guard(user: AuthUser, mode: 'read' | 'write', planning = false) {
     if (process.env.WMS_LAMODA_ENABLED !== 'true') throw new NotFoundException();
-    if (!user.permissionCodes.includes('system:admin') && !user.permissionCodes.includes(`marketplace-api:${mode}`)) throw new ForbiddenException('Нужны права на API маркетплейсов.');
+    // FIX: customers may operate their scoped plans, without API administration privileges.
+    const customerPlan = planning && user.roleCodes.includes('CLIENT') && user.permissionCodes.includes(`client-requests:${mode}`);
+    if (!customerPlan && !user.permissionCodes.includes('system:admin') && !user.permissionCodes.includes(`marketplace-api:${mode}`)) throw new ForbiddenException('Нужны права на API маркетплейсов.');
     if (mode === 'write' && user.isDemo) throw new ForbiddenException('Изменения Lamoda недоступны в демонстрационном кабинете.');
   }
-  private async account(id: string, user: AuthUser, mode: 'read' | 'write') {
-    this.guard(user, mode);
+  private async account(id: string, user: AuthUser, mode: 'read' | 'write', planning = false) {
+    this.guard(user, mode, planning);
     const account = await this.db.lamodaAccount.findUnique({ where: { id } });
     if (!account) throw new NotFoundException('Подключение Lamoda не найдено.');
     this.scopes.requireClientAccess(user, account.clientId, mode);
@@ -40,7 +42,7 @@ export class LamodaService {
     throw error;
   }
   async accounts(clientId: string, user: AuthUser) {
-    this.guard(user, 'read');
+    this.guard(user, 'read', true);
     this.scopes.requireClientAccess(user, text(clientId, 'Клиент'), 'read');
     return this.db.lamodaAccount.findMany({ where: { clientId }, select: accountSelect, orderBy: { name: 'asc' } });
   }
@@ -90,7 +92,7 @@ export class LamodaService {
     } catch (error) { return this.fail(error); }
   }
   async overview(id: string, user: AuthUser) {
-    await this.account(id, user, 'read');
+    await this.account(id, user, 'read', true);
     const [products, documents, plans, exchanges] = await Promise.all([
       this.db.lamodaProduct.findMany({ where: { accountId: id }, include: { sku: { select: { id: true, name: true, internalSku: true } } }, orderBy: { remoteSku: 'asc' }, take: 1000 }),
       this.db.lamodaDocument.findMany({ where: { accountId: id }, orderBy: { syncedAt: 'desc' }, take: 500 }),
@@ -100,7 +102,7 @@ export class LamodaService {
     return { products, documents, plans, exchanges, externalWritesEnabled: false, assemblyEnabled: lamodaAssemblyEnabled(), limits: { products: 1000, documents: 500, plans: 100 } };
   }
   async warehouses(id: string, user: AuthUser) {
-    const c = await this.account(id, user, 'read');
+    const c = await this.account(id, user, 'read', true);
     const links = await this.db.warehouseClient.findMany({ where: { clientId: c.clientId, status: 'ACTIVE', ...warehouseScopeWhere(user), warehouse: { isActive: true } }, select: { warehouse: { select: { id: true, name: true } } } });
     return links.map(row => row.warehouse);
   }
@@ -190,7 +192,7 @@ export class LamodaService {
     }, { isolationLevel: 'Serializable' });
   }
   async importPlan(id: string, body: { title: string; warehouseId: string; remoteShipmentId?: string }, buffer: Buffer, user: AuthUser) {
-    const c = await this.account(id, user, 'write');
+    const c = await this.account(id, user, 'write', true);
     if (!c.fboEnabled) throw new BadRequestException('FBO не включено.');
     const title = text(body.title, 'Название'), warehouseId = text(body.warehouseId, 'Филиал');
     assertWarehouseAccess(user, { warehouseId }, 'write');
@@ -203,7 +205,7 @@ export class LamodaService {
       create: { accountId: id, warehouseId, title, remoteShipmentId, importHash, items }, update: {} });
   }
   async availability(id: string, planId: string, user: AuthUser) {
-    const c = await this.account(id, user, 'write');
+    const c = await this.account(id, user, 'write', true);
     const plan = await this.db.lamodaPlan.findFirst({ where: { id: planId, accountId: id } });
     if (!plan) throw new NotFoundException('План не найден.');
     assertWarehouseAccess(user, plan, 'write');
@@ -223,7 +225,7 @@ export class LamodaService {
     return { unresolvedRows: unresolved, availability, canAssemble: lamodaAssemblyEnabled() && !unresolved.length, message: 'Предварительный расчёт FBO. Черновик не резервирует товар. Перед запуском сборки потребуется повторная проверка.' };
   }
   async importShipment(id:string,body:{reference:string;warehouseId:string;title?:string},user:AuthUser) {
-    const c=await this.account(id,user,'write');
+    const c=await this.account(id,user,'write',true);
     if(!c.fboEnabled||!c.isActive) throw new BadRequestException('Нужно активное подключение FBO.');
     assertWarehouseAccess(user,body,'write');
     if(!await this.db.warehouseClient.findFirst({where:{clientId:c.clientId,warehouseId:body.warehouseId,status:'ACTIVE',warehouse:{isActive:true}}})) throw new BadRequestException('Клиент не активен в выбранном филиале.');
@@ -239,7 +241,7 @@ export class LamodaService {
     if(!['NEW','CONFIRMED','DRAFT','VALIDATION','READY_FOR_SHIPMENT'].includes(String(shipment.status))) throw new ConflictException(`Поставка Lamoda недоступна для новой сборки: ${String(shipment.status)}.`);
   }
   async createAssembly(id:string,planId:string,user:AuthUser) {
-    const c=await this.account(id,user,'write');
+    const c=await this.account(id,user,'write',true);
     if(!lamodaAssemblyEnabled()) throw new BadRequestException('Создание сборок Lamoda пока выключено.');
     if(!user.permissionCodes.some(p=>['system:admin','client-requests:write'].includes(p))) throw new ForbiddenException('Нужны права создания складских заявок.');
     if(!c.isActive||!c.fboEnabled) throw new BadRequestException('Нужно активное подключение FBO.');

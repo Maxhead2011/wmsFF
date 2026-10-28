@@ -39,6 +39,17 @@ describe('Lamoda warehouse assembly',()=>{
   db.clientRequest={create:vi.fn(async()=>({id:'r',number:1}))};db.clientRequestEvent={create:vi.fn()};
   return plan;
  }
+ // TEST: customer request permissions suffice only for own plans; API management stays restricted.
+ it('lets a writable customer create an own assembly without API administration rights',async()=>{
+  assemblyFixture();const customer={...user,permissionCodes:['client-requests:read','client-requests:write']};
+  expect(await service.createAssembly('a','plan',customer)).toEqual({id:'r',number:1});
+  await expect(service.createAssembly('a','plan',{...customer,clientIds:['foreign'],writableClientIds:['foreign']})).rejects.toThrow();
+  await expect(service.createAssembly('a','plan',{...customer,writableClientIds:[]})).rejects.toThrow();
+  await expect(service.createAssembly('a','plan',{...customer,permissionCodes:['client-requests:read']})).rejects.toThrow();
+  await expect(service.update('a',{secret:'new'},customer)).rejects.toThrow();
+  await expect(service.check('a',customer)).rejects.toThrow();
+  await expect(service.sync('a','CATALOG',customer)).rejects.toThrow();
+ });
  it('creates the common reservation demand with a durable Lamoda relation',async()=>{
   assemblyFixture();expect(await service.createAssembly('a','plan',user)).toEqual({id:'r',number:1});
   expect(db.clientRequest.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({type:'OUTBOUND',status:'SUBMITTED',items:{create:[{skuId:'s',barcode:'12345678',quantity:2}]}})}));
