@@ -1,9 +1,13 @@
+import { lazy, Suspense } from 'react';
+import { workspaceEnabled } from '../../lib/marketplaceWorkspace';
+const LamodaMaintenance = lazy(() => import('../lamoda/LamodaPanel').then(m => ({ default: m.LamodaPanel })));
 import { useEffect, useRef, useState } from 'react';
 import { fetchLamodaAccounts, createLamodaAccount, updateLamodaAccount, checkLamodaAccount, type AuthSession, type LamodaAccount } from '../../lib/api';
 
 const empty = () => ({ name: '', sellerId: '', oauthClientId: '', secret: '', fboEnabled: true, fbsEnabled: false });
 // FIX: manage the existing Lamoda accounts in the client card without copying credentials.
 export function ClientLamodaConnections({ session, clientId }: { session: AuthSession; clientId: string }) {
+  const [maintenance,setMaintenance]=useState(false);
   const [rows,setRows]=useState<LamodaAccount[]>([]),[form,setForm]=useState(empty),[open,setOpen]=useState(false);
   const [selected,setSelected]=useState<LamodaAccount|null>(null),[busy,setBusy]=useState(false),[loading,setLoading]=useState(true);
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[revision,setRevision]=useState(0);
@@ -35,5 +39,6 @@ export function ClientLamodaConnections({ session, clientId }: { session: AuthSe
       {!selected&&<><label><input type="checkbox" checked={form.fboEnabled} disabled={busy} onChange={e=>setForm(v=>({...v,fboEnabled:e.target.checked}))}/>FBO</label><label><input type="checkbox" checked={form.fbsEnabled} disabled={busy} onChange={e=>setForm(v=>({...v,fbsEnabled:e.target.checked}))}/>FBS</label></>}
       <div className="client-marketplace-panel__heading-actions"><button type="submit" className="primary-button" disabled={busy||!writable}>Сохранить Lamoda</button><button type="button" className="icon-text-button" disabled={busy} onClick={()=>{setOpen(false);setForm(empty())}}>Отмена</button></div>
     </form>}
+    {workspaceEnabled() && rows.length > 0 && <><button className="icon-text-button" onClick={()=>setMaintenance(v=>!v)}>Каталог и обслуживание Lamoda</button>{maintenance && <Suspense fallback={<p>Загрузка…</p>}><LamodaMaintenance key={clientId} session={session} maintenanceClientId={clientId}/></Suspense>}</>}
   </section>;
 }

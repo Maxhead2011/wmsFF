@@ -1,4 +1,4 @@
-export type FbyAccount = { id: string; accountName: string | null; sellerId: string | null; client: { name: string } };
+export type FbyAccount = { id: string; isActive?: boolean; accountName: string | null; sellerId: string | null; client: { name: string } };
 export type FbyInput = { warehouseId: string; reference?: string; items?: { barcode: string; quantity: number }[]; mappings?: { offerId: string; barcode: string }[]; destination?: string; title?: string };
 export type FbyPreview = { previewHash: string; canCreate: boolean; destination: string; desiredDate: string | null; lines: { offerId?: string; barcode: string; name: string; size: string | null; quantity: number; resolved: boolean }[]; availability: { canCommit: boolean; lines: { barcode: string | null; availableQuantity: number; reservedQuantity: number; shortageQuantity: number }[] } | null };
 export type FbyRequest = { id: string; number: number; title: string; status: string; warehouseId: string; destinationCity: string | null; items: { quantity: number }[]; yandexFbyShipment: { remoteNumber: string | null; remoteStatus: string | null; checkedAt: string | null } };
@@ -19,7 +19,7 @@ export type LamodaCandidate = {id:string;name:string;internalSku:string;size:str
 export type LamodaOverview = {
   products:{id:string;name:string;remoteSku:string;externalSku:string|null;barcode:string|null;size:string|null;skuId:string|null;linkState:string;isPresent:boolean;sku:LamodaCandidate|null}[];
   documents:{id:string;kind:LamodaResource;remoteId:string;number:string;status:string;syncedAt:string}[];
-  plans:{id:string;title:string;createdAt:string;assembly?:{requestId:string}|null;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
+  plans:{id:string;title:string;createdAt:string;assembly?:{requestId:string;request?:{number:number;status:string}}|null;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
   exchanges:{id:string;operation:string;status:string;errorCode:string|null;createdAt:string;itemCount:number}[];
   externalWritesEnabled:false;assemblyEnabled:boolean;limits:{products:number;documents:number;plans:number};
 };
@@ -88,6 +88,8 @@ export type AuthSession = {
 };
 
 export type ClientSummary = {
+  marketplaceConnections?: Array<{marketplace: string; isActive: boolean}>;
+  lamodaAccounts?: Array<{isActive: boolean; fboEnabled: boolean; fbsEnabled: boolean}>;
   id: string;
   ownCompanyId?: string | null;
   ownCompany?: {
@@ -7769,10 +7771,11 @@ export function fetchOperationsStatistics(accessToken: string, filter: {
   return request<OperationsStatisticsReport>(withQuery('/operations-statistics', filter), { accessToken });
 }
 
-export async function fetchClients(accessToken: string, options: { includeArchived?: boolean } = {}) {
+export async function fetchClients(accessToken: string, options: { includeArchived?: boolean; marketplaceDirectory?: boolean } = {}) {
   return request<ClientSummary[]>(
     withQuery('/clients', {
       includeArchived: options.includeArchived ? 'true' : undefined,
+      marketplaceDirectory: options.marketplaceDirectory ? 'true' : undefined,
     }),
     {
       accessToken,

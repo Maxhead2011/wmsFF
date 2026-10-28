@@ -1,3 +1,4 @@
+import { fetchWorkspaceClients, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ConfirmDialog } from '../common/ConfirmDialog';
@@ -19,7 +20,7 @@ export function YandexFbyPanel({session}:{session:AuthSession}) {
  const [binding,setBinding]=useState<FbyRequest|null>(null),[plan,setPlan]=useState<FboPlan|null>(null);
  const [confirmation,setConfirmation]=useState<{request:FbyRequest;action:'DONE'|'CANCELLED'}|null>(null);
  const [key,setKey]=useState(()=>crypto.randomUUID());
- useEffect(()=>{let active=true;fetchClients(token).then(v=>{if(active)setClients(v)}).catch(e=>{if(active)setError(e.message)});return()=>{active=false}},[token]);
+ useEffect(()=>{let active=true;fetchWorkspaceClients(token, 'YANDEX_MARKET').then(v=>{if(active){setClients(v);if(v.length===1)setClientId(v[0].id)}}).catch(e=>{if(active)setError(e.message)});return()=>{active=false}},[token]);
  useEffect(()=>{let active=true;epoch.current++;setAccounts([]);setAccountId('');setRows([]);setPreview(null);setBinding(null);setPlan(null);setConfirmation(null);setBusy(false);
   if(clientId)fetchFbyAccounts(token,clientId).then(v=>{if(active){setAccounts(v);setAccountId(v[0]?.id??'')}}).catch(e=>{if(active)setError(e.message)});
   return()=>{active=false};},[token,clientId]);
@@ -34,11 +35,11 @@ export function YandexFbyPanel({session}:{session:AuthSession}) {
   const items=mode==='local'?text.split(/\r?\n/).filter(s=>s.trim()).map((s,i)=>{const values=s.split(/[;\t]/);if(values.length!==2||!values[0].trim()||!/^\d+$/.test(values[1].trim()))throw new Error(`Строка ${i+1}: укажите ШК; количество.`);return{barcode:values[0].trim(),quantity:Number(values[1])}}):undefined;
   return {warehouseId,title,destination,...(mode==='remote'?{reference,mappings:Object.entries(mappings).filter(([,barcode])=>barcode.trim()).map(([offerId,barcode])=>({offerId,barcode:barcode.trim()}))}:{items})};
  }
- const disabled=busy||!writable||!accountId;
+ const disabled=busy||!writable||!accountId||accounts.find(a=>a.id===accountId)?.isActive===false;
  return <section className="yandex-fby" aria-label="Поставки Яндекс Маркет FBY">
   <h2>Яндекс Маркет · FBY</h2>
   <div className="fby-selectors"><label>Клиент<select disabled={busy} value={clientId} onChange={e=>setClientId(e.target.value)}><option value="">Выберите клиента</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-  <label>Кабинет<select disabled={busy} value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Выберите кабинет</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.client.name} · {a.accountName||'Яндекс'} · {a.sellerId}</option>)}</select></label></div>
+  <label>Кабинет<select disabled={busy} value={accountId} onChange={e=>setAccountId(e.target.value)}><option value="">Выберите кабинет</option>{accounts.map(a=><option key={a.id} value={a.id}>{a.client.name} · {a.accountName||'Яндекс'} · {a.sellerId}{a.isActive===false?' · отключён':''}</option>)}</select></label></div>
   {clientId&&!accounts.length&&<p>Нужен активный кабинет Яндекса в настройках клиента с доступом к поставкам FBY.</p>}
   {error&&<p role="alert" className="error-message">{error}</p>}{notice&&<p role="status">{notice}</p>}
   {confirmation&&createPortal(<ConfirmDialog title={confirmation.action==='DONE'?'Подтвердить сдачу':'Отменить сборку'} message={`Сборка №${confirmation.request.number}`} isBusy={busy} onCancel={()=>setConfirmation(null)} onConfirm={()=>void run(()=>confirmation.action==='DONE'?updateClientRequestStatus(token,confirmation.request.id,{status:'DONE'}):cancelClientRequest(token,confirmation.request.id),()=>{setConfirmation(null);setRevision(v=>v+1);setNotice('Статус сборки сохранён.')})}/>,document.body)}
