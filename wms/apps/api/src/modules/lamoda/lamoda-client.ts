@@ -165,6 +165,20 @@ export class LamodaClient {
     if (!Array.isArray(data.nomenclatures) || record(data.meta).page !== 1) throw new LamodaApiError('INVALID_PAGE');
     return data;
   }
+  // FIX: fetch every planned line through the fixed API host and verify seller ownership.
+  async fboShipment(c: LamodaCredentials, id: string) {
+    const path=`/fbo/shipments/${lamodaPathId(id)}`;
+    const shipment=await this.get(c,path,{});
+    if(shipment.id!==id||String(shipment.sellerId)!==c.sellerId) throw new LamodaApiError('SHIPMENT_SCOPE_MISMATCH');
+    const items:Record<string,unknown>[]=[];
+    for(let page=1;page<=40;page++) {
+      const response=await this.get(c,`${path}/items`,{page:String(page),limit:'25'}),meta=record(response.meta);
+      if(!Array.isArray(response.items)||meta.page!==page||!Number.isSafeInteger(meta.totalPages)||Number(meta.totalPages)<1||response.items.length>25) throw new LamodaApiError('INVALID_PAGE');
+      items.push(...response.items.map(record));
+      if(page===meta.totalPages) return {shipment,items};
+    }
+    throw new LamodaApiError('SYNC_PAGE_LIMIT');
+  }
   async collection(c: LamodaCredentials, kind: LamodaResource, params: Record<string, string> = {}) {
     const resource = resources[kind];
     if (!resource) throw new LamodaApiError('UNKNOWN_RESOURCE');

@@ -25,6 +25,39 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
+// TEST: Lamoda imports own one OUTBOUND demand and cannot bypass scope or product mapping.
+describe('Lamoda warehouse assembly',()=>{
+ function assemblyFixture(){
+  vi.stubEnv('WMS_LAMODA_FBO_ASSEMBLY_ENABLED','true');user.permissionCodes=['marketplace-api:read','marketplace-api:write','client-requests:write'];
+  const plan={id:'plan',accountId:'a',warehouseId:'w',title:'Lamoda',remoteShipmentId:null,items:[{barcode:'12345678',quantity:2,article:'',destination:'B'}]};
+  db.lamodaPlan.findFirst.mockResolvedValue(plan);
+  db.lamodaFboAssembly={findUnique:vi.fn(async()=>null),create:vi.fn()};
+  db.lamodaAccount.findFirst=vi.fn(async()=>account);db.$queryRaw=vi.fn();
+  db.warehouseClient={findFirst:vi.fn(async()=>({}))};
+  db.lamodaProduct.findMany.mockResolvedValue([{remoteSku:'lm',barcode:'12345678',externalSku:'a',skuId:'s',isPresent:true,linkState:'CONFIRMED'}]);
+  db.sku={findMany:vi.fn(async()=>[{id:'s',barcodes:[{value:'12345678'}]}])};
+  db.clientRequest={create:vi.fn(async()=>({id:'r',number:1}))};db.clientRequestEvent={create:vi.fn()};
+  return plan;
+ }
+ it('creates the common reservation demand with a durable Lamoda relation',async()=>{
+  assemblyFixture();expect(await service.createAssembly('a','plan',user)).toEqual({id:'r',number:1});
+  expect(db.clientRequest.create).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({type:'OUTBOUND',status:'SUBMITTED',items:{create:[{skuId:'s',barcode:'12345678',quantity:2}]}})}));
+  expect(db.lamodaFboAssembly.create).toHaveBeenCalledTimes(1);
+ });
+ it('returns the existing request without creating another reservation',async()=>{
+  assemblyFixture();db.lamodaFboAssembly.findUnique.mockResolvedValue({request:{id:'r',number:1}});
+  expect(await service.createAssembly('a','plan',user)).toEqual({id:'r',number:1});expect(db.clientRequest.create).not.toHaveBeenCalled();
+ });
+ it('rejects unresolved identities before creating a request',async()=>{
+  assemblyFixture();db.lamodaProduct.findMany.mockResolvedValue([]);
+  await expect(service.createAssembly('a','plan',user)).rejects.toThrow('соответствие');expect(db.clientRequest.create).not.toHaveBeenCalled();
+ });
+ it('does not mutate when assembly gate or warehouse rights are absent',async()=>{
+  assemblyFixture();vi.stubEnv('WMS_LAMODA_FBO_ASSEMBLY_ENABLED','false');
+  await expect(service.createAssembly('a','plan',user)).rejects.toThrow('выключено');expect(db.clientRequest.create).not.toHaveBeenCalled();
+ });
+});
+
 // TEST: scope, sync consistency, mapping changes and existing reservations.
 describe('Lamoda service isolation', () => {
   // TEST: a successful check of old credentials must not certify a concurrently replaced account.

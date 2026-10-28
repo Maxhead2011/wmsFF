@@ -158,3 +158,13 @@ SHA-256 скачанного OpenAPI:
 Точный runtime и схема сверены с кандидатом после публикации; health OK. Публичный интерфейс прошёл 10 сценариев с перехватом всех API-вызовов на синтетические данные. Реальный read-only smoke проверил таблицы и доступность раздела без создания подключений/товаров.
 Ключ хранится в серверном `.env`, добавлена передача `WMS_LAMODA_SECRET_KEY` только API. Миграция записана в `_prisma_migrations`. Резервная копия БД/конфигурации находится в защищённой серверной папке выпуска.
 Откат: `logoff-api:before-lamoda-preparation-20261026` и `logoff-web:before-lamoda-preparation-20261026`; конфигурация сохраняется отдельно. При откате не удалять ключ, если уже появились подключения: он нужен для расшифровки. Новые таблицы автоматически не удаляются.
+
+## Prepared FBO import and assembly / 2026-10-28
+
+Excel creates a plan; existing-shipment import reads ID, warehouse and quantityPlanned from Lamoda. Confirmed unambiguous SKU mappings are required before a separate action creates an OUTBOUND request/reservation and durable LamodaFboAssembly binding. Repeated creation returns the same request. Shortage never silently reduces the plan. Existing two-stage stock/reservation/KIZ guards remain; boxless and source-box picking and direction packing use the shared pipeline. Lamoda cannot export WB files.
+
+Files: lamoda-fbo-policy.ts (ID/quantity/mapping); lamoda-client.ts/fboShipment; lamoda.service.ts/importShipment,createAssembly; controller/DTO; Prisma LamodaFboAssembly and migration20261028120000; client-requests.service.ts and client-request-marketplace-files.service.ts; fbo-two-stage.service.ts; LamodaPanel.tsx/FboTwoStagePanel.tsx/fboRequestScope.ts/api.ts; Android FboTwoStageScreen.java; administration-internal-api.service.ts registry.
+
+Release needs additive migration, new APK and own-installation-only WMS_LAMODA_FBO_ASSEMBLY_ENABLED=true. Preserve existing two-stage/unboxed flags. Lukin FBO account was verified28Oct; FBS disabled, live shipment list empty. Actual cabinet URL and physical end-to-end cycle still unverified. This imports existing Lamoda shipments; it does not create remote shipments.
+
+Pre-integration checks: web506 passed/2 skipped; all three Android flavor unit suites passed; isolated synthetic PostgreSQL table constraints5 passed (not full runtime migration parity). Exact runtime migration, candidate/browser/public checks remain mandatory before release.

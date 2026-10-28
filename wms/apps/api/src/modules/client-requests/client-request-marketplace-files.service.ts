@@ -92,6 +92,8 @@ export class ClientRequestMarketplaceFilesService {
     }
     this.clientScopes.requireClientAccess(user, request.clientId, 'read');
     assertWarehouseAccess(user, request, 'read', 'Заявка не найдена в выбранном филиале.');
+    // FIX: generic WB download endpoints must not export Lamoda assemblies either.
+    if(process.env.WMS_LAMODA_ENABLED === 'true' && await this.prisma.lamodaFboAssembly.findUnique({where:{requestId}})) throw new BadRequestException('Это сборка Lamoda. Файлы WB для неё не формируются.');
     if (request.type !== ClientRequestType.OUTBOUND) {
       throw new BadRequestException('Файлы WB доступны только для заявок на отгрузку.');
     }

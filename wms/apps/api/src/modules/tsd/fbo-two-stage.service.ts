@@ -1,3 +1,4 @@
+import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { alternativeFboPickingEnabled, prioritizeAlternativeFboBox } from './fbo-alternative-picking';
 import { ozonReopenSupported, reopenOzonBox } from './ozon-reopen-box';
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
@@ -94,7 +95,10 @@ export class FboTwoStageService {
         return {request,plan:await this.snapshot(tx,request)};
     }
     private async snapshot(tx: Prisma.TransactionClient, r: Request, context: Record<string, unknown> = {}) {
-        const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
+        const ozonShipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: r.id } }) : null;
+        const lamoda = process.env.WMS_LAMODA_ENABLED === 'true' ? await tx.lamodaFboAssembly.findUnique({where:{requestId:r.id}}) : null;
+        if(lamoda && !lamodaAssemblyEnabled()) throw new BadRequestException('Сборка Lamoda выключена.');
+        const shipment = ozonShipment ?? (lamoda ? {...lamoda,integration:null} : null);
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
         // FIX: expose persisted physical progress to the web monitor, including who scanned each unit.
@@ -187,14 +191,14 @@ export class FboTwoStageService {
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
-            marketplace: shipment ? 'OZON' : 'WILDBERRIES',
+            marketplace: lamoda ? 'LAMODA' : shipment ? 'OZON' : 'WILDBERRIES',
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
             unboxedPickingSupported: unboxed,
-            reopenPackingBoxSupported: ozonReopenSupported(shipment),
-            packingByProductSupported: !!shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
+            reopenPackingBoxSupported: ozonReopenSupported(ozonShipment),
+            packingByProductSupported: !!ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
             packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
-            packingSuggestions: shipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
-                ? ozonPackingSuggestions(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
+            packingSuggestions: ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
+                ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
@@ -222,7 +226,10 @@ export class FboTwoStageService {
             const r = await this.load(tx, id, user, 'write');
             this.requireFbo(r);
             // FIX: persisted JSON can change property order after a terminal restart.
-            const shipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: id } }) : null;
+            const ozonShipment = process.env.WMS_OZON_FBO_IMPORT_ENABLED === 'true' ? await tx.ozonFboShipment.findUnique({ where: { requestId: id } }) : null;
+        const lamoda = process.env.WMS_LAMODA_ENABLED === 'true' ? await tx.lamodaFboAssembly.findUnique({where:{requestId:id}}) : null;
+        if(lamoda && !lamodaAssemblyEnabled()) throw new BadRequestException('Сборка Lamoda выключена.');
+        const shipment = ozonShipment ?? (lamoda ? {...lamoda,integration:null} : null);
             const directions = shipment?.directions as OzonDirection[] | undefined;
             const key = `${id}:${dto.operationId}`, payloadHash = hash([
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
@@ -350,7 +357,7 @@ export class FboTwoStageService {
                 const target = await this.box(tx, r, dto.targetBoxCode);
                 await this.requireIdleBox(tx, target.id, id);
                 const parcel = await tx.fboAssemblyBox.findUnique({where:{activeBoxId:target.id}});
-                await reopenOzonBox(tx, shipment, id, parcel, dto.direction);
+                await reopenOzonBox(tx, ozonShipment, id, parcel, dto.direction);
             }
             else if (dto.action === 'OPEN_BOX') {
                 requirePacking();
@@ -579,7 +586,7 @@ export class FboTwoStageService {
     }
     async wbFile(id: string, user: AuthUser) {
         const plan = await this.plan(id, user);
-        if (plan.marketplace === 'OZON') throw new BadRequestException('Это поставка Ozon. Файл WB для неё не формируется.');
+        if (plan.marketplace !== 'WILDBERRIES') throw new BadRequestException('Файл WB формируется только для сборки Wildberries.');
         if (plan.phase !== 'COMPLETED')
             throw new ConflictException('Сначала подтвердите все короба поставки.');
         return this.files.getWbPackagingTemplate(id, user);

@@ -858,6 +858,7 @@ model LamodaDocument {
 }
 
 model LamodaPlan {
+  assembly LamodaFboAssembly?
   id String @id @default(uuid())
   accountId String
   warehouseId String
@@ -882,6 +883,17 @@ model LamodaExchange {
   finishedAt DateTime?
   account LamodaAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
   @@index([accountId, createdAt])
+}
+
+// FIX: one plan and one remote Lamoda shipment can own only one warehouse request.
+model LamodaFboAssembly {
+  requestId String @id
+  planId String @unique
+  externalKey String? @unique
+  directions Json
+  request ClientRequest @relation(fields: [requestId], references: [id], onDelete: Restrict)
+  plan LamodaPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
 }
 
 model Client {
@@ -1921,6 +1933,7 @@ model InventoryBoxRescanRequest {
 }
 
 model ClientRequest {
+  lamodaAssembly LamodaFboAssembly?
   ozonShipment                 OzonFboShipment?
   id                           String                     @id @default(uuid())
   number                       Int                        @unique @default(autoincrement())

@@ -26,6 +26,14 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: Lamoda is never presented as WB and never exposes WB downloads.
+    @Test public void lamodaHasOwnTitleAndNoWbExport() throws Exception {
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("COMPLETED");p.marketplace="LAMODA";
+            FboTwoStageScreen screen=open(a,p,false,new AtomicInteger());
+            try{View root=a.findViewById(android.R.id.content);assertNotNull(find(root,"FBO Lamoda"));assertNull(find(root,"для WB"));assertNull(find(root,"файл WB"));}finally{screen.close();}
+        }
+    }
     // TEST: an off-route box needs a successful read before scanning products; no stock command on location scans.
     @Test public void alternativeBoxIsValidatedWithoutStockMutation() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;

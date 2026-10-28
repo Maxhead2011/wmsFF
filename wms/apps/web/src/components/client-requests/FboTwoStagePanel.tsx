@@ -41,7 +41,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       if(!next.route.some(r=>r.pallet===pallet))setPallet('');
       if(!next.boxes.some(b=>b.code===target&&!b.closed) || next.phase!=='PACKING')setTarget('');
       if(dto.action==='OPEN_BOX')setTarget(dto.targetBoxCode??'');
-      if(dto.action==='FINISH'&&next.marketplace!=='OZON')void download();
+      if(dto.action==='FINISH'&&next.marketplace!=='OZON'&&next.marketplace!=='LAMODA')void download();
     }catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить операцию.');if((e as {rejected?:boolean}).rejected){localStorage.removeItem(storageKey);setPending(null);}}
     finally{inFlight.current=false;setBusy(false);setTimeout(()=>field.current?.focus(),0);}
   }
@@ -62,7 +62,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   return <div ref={panel} className={embedded?"fbo-inline-execution":"online-execution-modal"} role={embedded?"region":"dialog"} aria-modal={embedded?undefined:true} aria-label="Двухэтапная сборка ФБО"><section className={embedded?"fbo-inline-execution__panel":"online-execution-modal__panel"} style={embedded?{display:"block",width:"100%",minWidth:0}:{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     {/* FIX: standard header enables retained la_panthera windows; reads never trap the user. */}
     <header className={embedded?"fbo-inline-execution__header":"online-execution-modal__header"} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
-    <h2>FBO {plan.marketplace==='OZON'?'Ozon':'WB'} {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
+    <h2>FBO {plan.marketplace==='LAMODA'?'Lamoda':plan.marketplace==='OZON'?'Ozon':'WB'} {plan.number ? `· №${String(plan.number).padStart(6,'0')}` : ''} · {plan.title}</h2>
     <div className={embedded?"fbo-inline-execution__actions":"online-execution-modal__actions"}><button type="button" className="icon-button" aria-label="Закрыть" title="Закрыть" disabled={busy&&!refreshing} onClick={onClose}>×</button></div>
     </header>
     {plan.marketplace==='OZON'&&canWrite&&<OzonStockAdjustment requestId={plan.requestId} accessToken={accessToken} disabled={busy||!!pending} onLockChange={setAdjusting} onChanged={()=>void refresh()}/>}
@@ -92,8 +92,8 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
       {plan.wholeBoxes.length>0&&<p>Целые короба к добавлению: {plan.wholeBoxes.join(', ')}</p>}
       <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.packed!==plan.needed||plan.boxes.some(b=>!b.closed)||(!canWrite||adjusting)} onClick={()=>void command('SORTED')}>Короба разобраны</button></>}
     {['PACKING','CONTROL','COMPLETED'].includes(plan.phase)&&<ul>{plan.boxes.map(b=><li key={b.code}>{b.code} {b.direction ? `· ${b.direction}` : ''} · {b.quantity} ед. · {b.confirmed?'Подтверждён':b.closed?'Закрыт':'Открыт'}</li>)}</ul>}
-    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.boxes.some(b=>!b.confirmed)||(!canWrite||adjusting)} onClick={()=>void command('FINISH')}>{plan.marketplace==='OZON'?'Завершить проверку направлений':'Завершить проверку и сформировать файл WB'}</button></>}
-    {plan.phase==='COMPLETED'&&plan.marketplace!=='OZON'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
+    {plan.phase==='CONTROL'&&<><p>Подтверждено коробов {plan.boxes.filter(b=>b.confirmed).length} из {plan.boxes.length}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.boxes.some(b=>!b.confirmed)||(!canWrite||adjusting)} onClick={()=>void command('FINISH')}>{(plan.marketplace==='OZON'||plan.marketplace==='LAMODA')?'Завершить проверку направлений':'Завершить проверку и сформировать файл WB'}</button></>}
+    {plan.phase==='COMPLETED'&&plan.marketplace!=='OZON'&&plan.marketplace!=='LAMODA'&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} onClick={()=>void download()}>Скачать файл WB</button>}
     <p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy} onClick={()=>void refresh()}>Обновить</button> <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy&&!refreshing} onClick={onClose}>Закрыть</button></p>
   </section></div>;
 }

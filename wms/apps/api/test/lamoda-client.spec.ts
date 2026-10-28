@@ -9,6 +9,14 @@ afterEach(() => vi.unstubAllEnvs());
 
 // TEST: contracts pin the actual Lamoda v2 envelopes, isolation and read-only transport.
 describe('Lamoda adapter', () => {
+  // TEST: importing a shipment reads all planned lines and rejects foreign seller responses.
+  it('reads shipment items page by page and verifies seller ownership',async()=>{
+    const http=vi.fn().mockResolvedValueOnce(token()).mockResolvedValueOnce(json({id:'MPG1',sellerId:'seller'})).mockResolvedValueOnce(page('items',[{sku:'one'}],1,2)).mockResolvedValueOnce(page('items',[{sku:'two'}],2,2));
+    expect((await new LamodaClient(http).fboShipment(credentials,'MPG1')).items).toHaveLength(2);
+    expect(http.mock.calls[2][0]).toContain('/fbo/shipments/MPG1/items?page=1&limit=25&sellerId=seller');
+    const bad=vi.fn().mockResolvedValueOnce(token()).mockResolvedValueOnce(json({id:'MPG1',sellerId:'foreign'}));
+    await expect(new LamodaClient(bad).fboShipment(credentials,'MPG1')).rejects.toThrow('SHIPMENT_SCOPE_MISMATCH');expect(bad).toHaveBeenCalledTimes(2);
+  });
   it('encrypts secrets with authenticated account binding and random IV', () => {
     vi.stubEnv('WMS_LAMODA_SECRET_KEY', Buffer.alloc(32, 7).toString('base64'));
     const value = sealSecret('password', 'account-1');

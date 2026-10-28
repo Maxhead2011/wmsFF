@@ -7,6 +7,13 @@ import type { FboPlan } from '../../lib/api';
 const base:FboPlan={requestId:'r',title:'1029',phase:'PACKING',needed:2,picked:2,packed:2,looseRemaining:0,shortage:0,compositionChanged:false,wholeBoxes:[],lines:[],route:[],boxes:[{code:'FFL_1',quantity:2,wholeBox:false,closed:true,confirmed:false}]};
 const render=(plan:FboPlan)=>renderToStaticMarkup(<FboTwoStagePanel initial={plan} accessToken="test" userId="picker" canWrite onClose={()=>{}}/>);
 describe('FBO packing and final box control',()=>{
+  // TEST: a completed Lamoda assembly never offers a WB spreadsheet.
+  it('shows Lamoda with direction quotas and no WB export',()=>{
+    const p={...base,marketplace:'LAMODA',directions:[{name:'BYKOVO',needed:2,packed:2,items:[]}]};
+    expect(render(p)).toContain('Lamoda');expect(render(p)).toContain('BYKOVO');
+    expect(render({...p,phase:'COMPLETED'})).not.toContain('Скачать файл WB');
+    expect(render({...p,phase:'CONTROL'})).not.toContain('сформировать файл WB');
+  });
   // TEST: embedded execution must not activate overlay or retained-window handlers.
   it('renders embedded execution as a normal region while preserving the default dialog',()=>{
     const html=renderToStaticMarkup(<FboTwoStagePanel initial={base} accessToken="test" userId="picker" canWrite embedded onClose={()=>{}}/>);

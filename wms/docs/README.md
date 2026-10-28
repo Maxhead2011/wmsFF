@@ -1,3 +1,5 @@
+Prepared / 2026-10-28: Lamoda FBO Excel and existing-shipment ID import, immutable plan-to-request binding and directed TSD assembly. Branch feature/lamoda-fbo-imports; not published. WMS_LAMODA_FBO_ASSEMBLY_ENABLED gates creation/picking; sold installation unchanged. External shipment writes remain disabled. Real cabinet URL awaits a client example. See [Lamoda scope](lamoda-contour.md).
+
 In progress / 2026-10-26: feature/lamoda-operations adds gated validated commands, bounded PDF labels and a durable command-journal component. Not published or connected to warehouse actions; external writes remain disabled. See [Lamoda scope](lamoda-contour.md).
 
 Published PR695 / 2026-10-26: official local WB/Ozon/Yandex Market icons in FBS and WB/Ozon in FBO. Web504 passed/2 skipped, TypeScript,14 candidate/public browser scenarios and8 baseline guard tests passed. Seven-file web overlay; API/schema/APK/business records/sold WMS unchanged. Baseline `2026-10-26-marketplace-icons`, sourceParityVerified=false. Rollback `logoff-web:before-marketplace-icons-20261026`.
