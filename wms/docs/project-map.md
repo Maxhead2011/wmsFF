@@ -1,5 +1,7 @@
 Prepared / 2026-10-28: print-only Lamoda article/card/barcode lookup and explicit Lamoda barcode labels; warehouse identities/defaults unchanged. Confirmed active client-scoped mappings only; exact agent guard, no inventory writes, sold unchanged. Not published. [Scope and evidence](lamoda-print-barcodes.md).
 
+Prepared / 2026-10-28: Lamoda unit-label printing and physical barcode confirmation before packing; exact five API modules, four additive columns, web and LOGOFF APK237. Preserves PR733 review/counters/removal. Not published. [Scope and checks](lamoda-fbo-relabel.md).
+
 Published PR733 / 2026-10-28: Lamoda created plans open persisted assemblies instead of disabled draft review; stale-list existingRequest recovery, no false original-plan shortage, preview cleared after creation. API3875/web532 passed (150/2 skipped), TypeScript/build, baseline guards8, candidate/public browser50+11+5. Exact3 web overlay on PR731; API/schema/APK236/sold and request2506 unchanged. Baseline `2026-10-28-lamoda-existing`, sourceParityVerified=false. [Details](lamoda-existing-review.md).
 
 Published PR731 / 2026-10-28: missing Lamoda active-request badge added; scoped persisted assemblies count separately from WB/Ozon, drafts and terminal requests excluded. API3875/web531 passed (155/2 skipped), TypeScript, runtime PostgreSQL5/full API health and browser5 passed. Exact1 API/3web overlay on PR729; schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-counts`, sourceParityVerified=false. [Details](fbo-active-card-counts.md).

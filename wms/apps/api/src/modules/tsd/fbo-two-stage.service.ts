@@ -1,4 +1,6 @@
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
+import { readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
+import { buildTsdRelabelLabel } from './tsd-relabel-label';
 import { alternativeFboPickingEnabled, prioritizeAlternativeFboBox } from './fbo-alternative-picking';
 import { ozonReopenSupported, reopenOzonBox } from './ozon-reopen-box';
 import { ozonPackingSuggestions, prepareOzonProductBox } from './ozon-packing-suggestion';
@@ -47,6 +49,58 @@ export class FboTwoStageService {
             return false;
         await this.load(this.prisma, requestId, user, 'read');
         return isFboTwoStageRequest(this.prisma, requestId);
+    }
+    // FIX: the print is tied to one physical picked unit and one immutable Lamoda identity.
+    async relabelStations(id:string,user:AuthUser) {
+        const r=await this.load(this.prisma,id,user,'write');
+        if(process.env.WMS_LAMODA_FBO_RELABEL_ENABLED!=='true'||!lamodaAssemblyEnabled()||!await this.prisma.lamodaFboAssembly.findUnique({where:{requestId:id}})) throw new NotFoundException();
+        this.requireFbo(r);
+        return this.prisma.fbsPrintStation.findMany({where:{enabled:true,labelWidthMm:58,labelHeightMm:40,lastSeenAt:{gt:new Date(Date.now()-45000)}},select:{id:true,name:true,printerName:true},orderBy:{name:'asc'}});
+    }
+    async printLamodaRelabel(id:string,body:{unitId?:string;printId?:string;stationId?:string},user:AuthUser) {
+        await this.relabelStations(id,user);
+        if(!body.unitId||!body.stationId||!body.printId||! /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.printId)) throw new BadRequestException('Укажите единицу, станцию и номер операции печати.');
+        const r=await this.load(this.prisma,id,user,'write');
+        const binding=await this.prisma.lamodaFboAssembly.findUniqueOrThrow({where:{requestId:id}});
+        if(!binding.relabelLabels&&!r.client.relabelingEnabled) throw new ConflictException('Переклейка не включена для клиента.');
+        const labels=await readLamodaRelabelLabels(this.prisma,binding);
+        const unit=await this.prisma.fboAssemblyUnit.findFirst({where:{id:body.unitId,requestId:id,state:'PICKED'}});
+        const label=labels.find(l=>l.skuId===unit?.skuId);
+        if(!unit||!label||unit.lamodaRelabelConfirmedAt) throw new ConflictException('Единица не ожидает переклейки.');
+        const sku=r.items.find(i=>i.skuId===unit.skuId)?.sku;
+        if(!sku) throw new ConflictException('Карточка товара недоступна.');
+        const image=await buildTsdRelabelLabel(label.barcode,{...sku,name:label.name,article:label.article,size:label.size},r.client.name);
+        return this.prisma.$transaction(async tx=>{
+            await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;
+            const current=await this.load(tx,id,user,'write');
+            if(!['SUBMITTED','APPROVED','IN_WORK'].includes(current.status)) throw new ConflictException('Сборка уже завершена.');
+            const b=await tx.lamodaFboAssembly.findUniqueOrThrow({where:{requestId:id}});
+            if(!b.relabelLabels&&!current.client.relabelingEnabled) throw new ConflictException('Настройки переклейки изменились.');
+            if(JSON.stringify(await readLamodaRelabelLabels(tx,b))!==JSON.stringify(labels)) throw new ConflictException('Соответствие изменилось. Повторите печать.');
+            const u=await tx.fboAssemblyUnit.findFirst({where:{id:body.unitId,requestId:id,state:'PICKED'}});
+            if(!u||u.lamodaRelabelConfirmedAt) throw new ConflictException('Единица уже обработана.');
+            if(!b.relabelLabels) {
+                if(await tx.fboAssemblyUnit.count({where:{requestId:id,state:'PACKED'}})) throw new ConflictException('После упаковки нужна отдельная сверка переклейки.');
+                await tx.lamodaFboAssembly.update({where:{requestId:id},data:{relabelLabels:labels}});
+            }
+            const status=(job:{historyId:string;status:string;stationId:string;stickerCode:string|null;assemblyId:string;requestId:string;source:string;errorMessage:string|null})=>{
+                if(job.assemblyId!==u.id||job.requestId!==id||job.source!=='TSD_RELABEL'||job.stickerCode!==label.barcode) throw new ConflictException('Номер печати уже занят другим заданием.');
+                return {printId:job.historyId,status:job.status,stationId:job.stationId,barcode:job.stickerCode,error:job.errorMessage,copies:2};
+            };
+            const previous=u.lamodaRelabelPrintId?await tx.fbsPrintJob.findUnique({where:{historyId:u.lamodaRelabelPrintId}}):null;
+            // Lost HTTP responses and double clicks never enqueue an additional label.
+            if(previous&&previous.status!=='FAILED') return status(previous);
+            const reused=await tx.fbsPrintJob.findUnique({where:{historyId:body.printId}});
+            if(reused) return status(reused);
+            const station=await tx.fbsPrintStation.findFirst({where:{id:body.stationId,enabled:true,labelWidthMm:58,labelHeightMm:40,lastSeenAt:{gt:new Date(Date.now()-45000)}}});
+            if(!station) throw new ConflictException('Станция печати не на связи или формат не 58 × 40 мм.');
+            const job=await tx.fbsPrintJob.create({data:{stationId:station.id,historyId:body.printId!,assemblyId:u.id,requestId:id,requestNumber:current.number,
+                orderId:`LAMODA-RELABEL:${current.number}`,kiz:label.barcode,warehouseName:current.client.name,productName:label.name,
+                stickerCode:label.barcode,stickerMime:'image/png',stickerBase64:image,source:'TSD_RELABEL',requestedById:user.id,requestedBy:user.name,deviceCode:user.deviceCode??null}});
+            await tx.fboAssemblyUnit.update({where:{id:u.id},data:{lamodaRelabelPrintId:job.historyId}});
+            await tx.auditLog.create({data:{userId:user.id,action:'LAMODA_FBO_RELABEL_PRINT',entity:'FboAssemblyUnit',entityId:u.id,payload:{requestId:id,printId:job.historyId,barcode:label.barcode,copies:2}}});
+            return status(job);
+        },{isolationLevel:'Serializable',timeout:30000});
     }
     private async load(db: Prisma.TransactionClient, id: string, user: AuthUser, mode: 'read' | 'write') {
         const r = await db.clientRequest.findUnique({ where: { id }, include });
@@ -102,11 +156,16 @@ export class FboTwoStageService {
         const shipment = ozonShipment ?? (lamoda ? {...lamoda,integration:null} : null);
         const assembly = await tx.fboAssembly.findUnique({ where: { requestId: r.id }, include: { units: true, boxes: true } });
         const units = assembly?.units ?? [];
+        // FIX: a persisted requirement survives later edits to the client's settings.
+        const relabelRequired=!!lamoda&&(!!lamoda.relabelLabels||r.client.relabelingEnabled&&process.env.WMS_LAMODA_FBO_RELABEL_ENABLED==='true');
+        const relabelLabels=relabelRequired?await readLamodaRelabelLabels(tx,lamoda!):[];
+        const relabelUnits=relabelRequired?units.filter(u=>u.state==='PICKED'&&!u.lamodaRelabelConfirmedAt):[];
+        const relabelJobs=relabelUnits.length?await tx.fbsPrintJob.findMany({where:{historyId:{in:relabelUnits.map(u=>u.lamodaRelabelPrintId).filter((s):s is string=>!!s)}},select:{historyId:true,status:true,errorMessage:true}}):[];
         // FIX: expose persisted physical progress to the web monitor, including who scanned each unit.
         const actors = await tx.user.findMany({ where: { id: { in: [...new Set(units.flatMap(u => [u.pickedByUserId, u.packedByUserId]).filter((id): id is string => !!id))] } }, select: { id: true, name: true } });
         const actorNames = new Map(actors.map(a => [a.id, a.name]));
         const lines = remainingFboLines(r.items, units).map(i => ({ id: i.id, skuId: i.skuId!, barcode: i.barcode!,
-            barcodes: fboBarcodeAliases(i, r.items), // FIX: expose receipt aliases without changing the request barcode.
+            barcodes: [...new Set([...fboBarcodeAliases(i, r.items),...relabelLabels.filter(l=>l.skuId===i.skuId).map(l=>l.barcode)])], // FIX: allow the frozen Lamoda target at packing without rewriting stock identities.
             name: i.name || i.sku!.name, article: i.sku!.article, size: i.sku!.size, requiresKiz: (i.sku!.needsChestnyZnak && !i.sku!.isUnmarked) || units.some(u => u.skuId === i.skuId && !!u.markId),
             needed: i.needed, picked: i.picked, packed: i.packed, remaining: i.remaining }));
         const demand: Record<string, number> = {};
@@ -193,6 +252,10 @@ export class FboTwoStageService {
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         return { alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: yandex ? 'YANDEX_MARKET' : lamoda ? 'LAMODA' : shipment ? 'OZON' : 'WILDBERRIES',
+            relabelRequired,
+            relabelUnits:relabelUnits.map(u=>({id:u.id,skuId:u.skuId,sourceBarcode:u.barcode,kiz:u.kiz,pickedByUserId:u.pickedByUserId,
+                label:relabelLabels.find(l=>l.skuId===u.skuId),printId:u.lamodaRelabelPrintId,
+                printStatus:relabelJobs.find(j=>j.historyId===u.lamodaRelabelPrintId)?.status??null})),
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
             unboxedPickingSupported: unboxed,
             reopenPackingBoxSupported: ozonReopenSupported(ozonShipment),
@@ -236,6 +299,7 @@ export class FboTwoStageService {
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
                 ...(directions ? [dto.direction ?? null] : []),
                 ...(dto.undoOperationId === undefined ? [] : [dto.undoOperationId]),
+                ...(dto.relabelUnitId === undefined ? [] : [dto.relabelUnitId]),
             ]);
             const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
             if (previous) {
@@ -261,6 +325,14 @@ export class FboTwoStageService {
             if (a.compositionHash !== composition(r))
                 throw new ConflictException('Состав заявки изменён после начала отбора. Нужна сверка собранных единиц.');
             const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: id, state: { not: 'RETURNED' } } });
+            const relabelRequired=!!lamoda&&(!!lamoda.relabelLabels||r.client.relabelingEnabled&&process.env.WMS_LAMODA_FBO_RELABEL_ENABLED==='true');
+            const relabelLabels=relabelRequired?await readLamodaRelabelLabels(tx,lamoda!):[];
+            if(relabelRequired&&dto.action.startsWith('MANUAL_')) throw new ConflictException('Для Lamoda требуется поштучная проверка переклейки.');
+            if(relabelRequired&&!lamoda!.relabelLabels) {
+                if(units.some(u=>u.state==='PACKED')) throw new ConflictException('Переклейку нельзя включить после упаковки. Нужна сверка заявки.');
+                await tx.lamodaFboAssembly.update({where:{requestId:id},data:{relabelLabels}});
+            }
+            if(relabelRequired&&['SORTED','CONFIRM_BOX','FINISH'].includes(dto.action)) for(const u of units) assertLamodaRelabelPacked(true,u.lamodaRelabelConfirmedAt);
             const directionBoxes = directions ? await tx.fboAssemblyBox.findMany({ where: { requestId: id } }) : [];
             if (directions && ['SORTED', 'FINISH'].includes(dto.action) && directionProgress(directions, directionBoxes, units).some(d => d.items.some(i => i.packed !== i.quantity)))
                 throw new ConflictException('Не все направления упакованы в количестве из файла клиента.');
@@ -393,9 +465,11 @@ export class FboTwoStageService {
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
                 // FIX: packing accepts the same registered SKU aliases as picking; KIZ/state checks remain mandatory.
-                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' && fboBarcodeMatches(u.skuId, dto.barcode, r.items) && (mark ? u.markId === mark.id : !u.markId));
+                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' &&
+                    (relabelRequired?!!u.lamodaRelabelConfirmedAt&&relabelLabels.some(l=>l.skuId===u.skuId&&l.barcode===dto.barcode):fboBarcodeMatches(u.skuId, dto.barcode, r.items)) && (mark ? u.markId === mark.id : !u.markId));
                 if (!unit)
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
+                assertLamodaRelabelPacked(relabelRequired,unit.lamodaRelabelConfirmedAt);
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);
                 const holding = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${id}` } });
                 const movement = await this.move(tx, r, unit.skuId, holding.id, target.id, 'PACKING', 'PACKING', 1, key, user);
@@ -426,6 +500,7 @@ export class FboTwoStageService {
                 const picked = units.filter(u => u.wholeBox && u.sourceBoxId === box.id && u.state === 'PICKED');
                 if (!picked.length)
                     throw new ConflictException('Этот короб не отобран целиком или уже добавлен.');
+                for(const unit of picked) assertLamodaRelabelPacked(relabelRequired,unit.lamodaRelabelConfirmedAt);
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, dto.direction, picked);
                 await tx.fboAssemblyBox.create({ data: { requestId: id, boxId: box.id, activeBoxId: box.id, boxCode: box.code, wholeBox: true, closedAt: new Date(), ...(directions ? { direction: dto.direction } : {}) } });
                 await tx.fboAssemblyUnit.updateMany({ where: { id: { in: picked.map(u => u.id) } }, data: { state: 'PACKED', targetBoxId: box.id, targetBoxCode: box.code, packedAt: new Date(), packedByUserId: user.id } });
@@ -484,6 +559,18 @@ export class FboTwoStageService {
                 await tx.fboAssemblyUnit.updateMany({ where: { requestId: id }, data: { activeMarkId: null } });
                 await tx.fboAssemblyBox.updateMany({ where: { requestId: id }, data: { activeBoxId: null } });
                 await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'COMPLETED' } });
+            }
+            else if(dto.action==='RELABEL_UNIT') {
+                if(!relabelRequired) throw new ConflictException('Переклейка Lamoda не требуется.');
+                const unit=units.find(u=>u.id===dto.relabelUnitId&&u.state==='PICKED');
+                const label=relabelLabels.find(l=>l.skuId===unit?.skuId);
+                if(!unit||!label) throw new ConflictException('Единица или этикетка Lamoda недоступна.');
+                if(unit.lamodaRelabelConfirmedAt) throw new ConflictException('Переклейка уже подтверждена.');
+                const job=unit.lamodaRelabelPrintId?await tx.fbsPrintJob.findUnique({where:{historyId:unit.lamodaRelabelPrintId}}):null;
+                if(job?.requestId!==id||job.assemblyId!==unit.id||job.stickerCode!==label.barcode||job.source!=='TSD_RELABEL') throw new ConflictException('Нет задания печати для этой единицы.');
+                assertLamodaRelabelScan(label.barcode,dto.barcode,job.status);
+                if(unit.markId&&identity(dto.kiz??'')!==identity(unit.kiz??'')) throw new ConflictException('Подтвердите КИЗ этой единицы после переклейки.');
+                await tx.fboAssemblyUnit.update({where:{id:unit.id},data:{lamodaRelabelConfirmedAt:new Date(),lamodaRelabelConfirmedBy:user.id}});
             }
             else if (dto.action !== 'START')
                 throw new BadRequestException('Неизвестное действие.');

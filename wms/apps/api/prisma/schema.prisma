@@ -887,6 +887,8 @@ model LamodaExchange {
 
 // FIX: one plan and one remote Lamoda shipment can own only one warehouse request.
 model LamodaFboAssembly {
+  // FIX: immutable replacement-label identities for an assembly requiring relabeling.
+  relabelLabels Json?
   requestId String @id
   planId String @unique
   externalKey String? @unique
@@ -3862,6 +3864,10 @@ model OzonFboOrderBinding {
 }
 
 model FboAssemblyUnit {
+  // FIX: physical relabel evidence belongs to one picked unit, not a SKU counter.
+  lamodaRelabelPrintId String?
+  lamodaRelabelConfirmedAt DateTime?
+  lamodaRelabelConfirmedBy String?
   id String @id @default(uuid())
   requestId String
   requestItemId String
