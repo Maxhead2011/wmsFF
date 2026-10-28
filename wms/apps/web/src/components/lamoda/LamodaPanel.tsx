@@ -11,7 +11,7 @@ import { importLamodaShipment, createLamodaAssembly, fetchFboPlan, type FboPlan 
 import { FboTwoStagePanel } from '../client-requests/FboTwoStagePanel';
 
 type Tab = 'connection' | 'catalog' | 'fbo' | 'fbs' | 'returns' | 'log';
-const tabs: [Tab, string][] = [['connection', 'Подключение'], ['catalog', 'Товары'], ['fbo', 'Планы FBO'], ['fbs', 'Заказы FBS'], ['returns', 'Возвраты'], ['log', 'Журнал обмена']];
+const tabs: [Tab, string][] = [['connection', 'Подключение'], ['catalog', 'Товары и соответствия'], ['fbo', 'Планы FBO'], ['fbs', 'Заказы FBS'], ['returns', 'Возвраты'], ['log', 'Журнал обмена']];
 const date = (value: string | null) => value ? new Date(value).toLocaleString('ru-RU') : 'Не проверено';
 const linkLabels: Record<string, string> = { CONFIRMED: 'Подтверждено', UNLINKED: 'Не сопоставлено', REVIEW: 'Нужна повторная сверка' };
 const emptyForm = () => ({ name: 'Lamoda', sellerId: '', oauthClientId: '', secret: '', fboEnabled: true, fbsEnabled: false });
@@ -31,6 +31,7 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
   const [title, setTitle] = useState(''), [remoteShipmentId, setRemoteShipmentId] = useState(''), [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<LamodaPreview | null>(null), [previewPlan, setPreviewPlan] = useState('');
   const [candidates, setCandidates] = useState<{ productId: string; rows: LamodaCandidate[] } | null>(null);
+  const [mappingQuery,setMappingQuery]=useState(''),[mappingChoice,setMappingChoice]=useState<LamodaCandidate|null>(null);
   const [revision, setRevision] = useState(0), [loading, setLoading] = useState(false);
   const [reference,setReference]=useState(''),[previewId,setPreviewId]=useState('');
   const [assembly,setAssembly]=useState<FboPlan|null>(null);
@@ -49,7 +50,7 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
   useEffect(() => {
     let current = true;
     setOverview(null); setCandidates(null); setPreview(null); setPreviewPlan(''); setFile(null); setTitle(''); setRemoteShipmentId(''); setWarehouses([]); setWarehouseId(''); setForm(emptyForm());
-    setReference('');setPreviewId('');setAssembly(null);
+    setReference('');setPreviewId('');setAssembly(null);setMappingQuery('');setMappingChoice(null);
     if (!accountId) { setLoading(false); return; }
     setLoading(true);
     Promise.all([fetchLamodaOverview(token, accountId), fetchLamodaWarehouses(token, accountId)])
@@ -79,7 +80,7 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
       <label>Клиент<select value={clientId} disabled={busy} onChange={e => setClientId(e.target.value)}><option value="">Выберите клиента</option>{clients.map(c => <option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>
       <label>Кабинет Lamoda<select value={accountId} disabled={busy || !clientId} onChange={e => setAccountId(e.target.value)}><option value="">{customerMode ? "Выберите кабинет" : "Новое подключение"}</option>{accounts.map(c => <option key={c.id} value={c.id}>{c.name} · {c.sellerId}{c.isActive ? '' : ' · отключено'}</option>)}</select></label>
     </div>
-    <nav className="lamoda-tabs" aria-label="Разделы Lamoda">{tabs.filter(([key])=>!customerMode||key==='fbo').map(([key, label]) => <button key={key} disabled={busy || (key !== 'connection' && !accountId)} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}</nav>
+    <nav className="lamoda-tabs" aria-label="Разделы Lamoda">{tabs.filter(([key])=>!customerMode||key==='fbo'||key==='catalog').map(([key, label]) => <button key={key} disabled={busy || (key !== 'connection' && !accountId)} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}</nav>
     {notice && <p role="status">{notice}</p>}{error && <p role="alert" className="lamoda-error">{error}</p>}{loading && <p role="status">Загружаю данные…</p>}
     {!customerMode && tab === 'connection' && <>
       {selected ? <div className="lamoda-card"><h3>{selected.name}</h3><p>Seller ID: {selected.sellerId} · {selected.fboEnabled ? 'FBO ' : ''}{selected.fbsEnabled ? 'FBS' : ''}</p><p>Проверка доступа: {date(selected.checkedAt)}</p>
@@ -88,11 +89,21 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
         <form onSubmit={e => { e.preventDefault(); void run(async () => { await updateLamodaAccount(token, accountId, { secret: form.secret }); setForm(emptyForm()); setAccounts(await fetchLamodaAccounts(token, clientId)); setNotice('Секрет обновлён. Повторите проверку доступа.'); }); }}><label>Новый Client secret<input type="password" autoComplete="new-password" value={form.secret} onChange={e => setForm({ ...form, secret: e.target.value })} disabled={!canManage || disabled} /></label><button disabled={!canManage || disabled || !form.secret}>Заменить секрет</button></form>
       </div> : <form onSubmit={save} className="lamoda-card"><h3>Подключить кабинет</h3><div className="lamoda-fields">{(['name', 'sellerId', 'oauthClientId', 'secret'] as const).map((key, i) => <label key={key}>{['Название', 'Seller ID', 'OAuth Client ID', 'Client secret'][i]}<input required type={key === 'secret' ? 'password' : 'text'} autoComplete={key === 'secret' ? 'new-password' : 'off'} value={form[key]} onChange={e => setForm({ ...form, [key]: e.target.value })} disabled={!canManage || busy} /></label>)}</div><label><input type="checkbox" checked={form.fboEnabled} onChange={e => setForm({ ...form, fboEnabled: e.target.checked })} disabled={!canManage || busy} />FBO</label><label><input type="checkbox" checked={form.fbsEnabled} onChange={e => setForm({ ...form, fbsEnabled: e.target.checked })} disabled={!canManage || busy} />FBS</label><button disabled={!canManage || busy || !clientId}>Сохранить подключение</button></form>}
     </>}
-    {!customerMode && tab === 'catalog' && overview && <>
-      <button disabled={disabled || !canManage || !selected?.isActive} onClick={() => sync('CATALOG')}>Загрузить каталог Lamoda</button>
-      <p>Соответствие подтверждается вручную по точному штрихкоду. Остатки при этом не меняются. Показано до {overview.limits.products} товаров.</p>
-      <div className="lamoda-scroll"><table><thead><tr><th>Товар Lamoda</th><th>ШК</th><th>Размер</th><th>Товар WMS</th><th>Сверка</th></tr></thead><tbody>{overview.products.map(p => <tr key={p.id}><td>{p.name}<small>{p.remoteSku} · {p.externalSku}</small></td><td>{p.barcode ?? 'Нет ШК'}</td><td>{p.size ?? '—'}</td><td>{p.sku?.name ?? 'Не связан'}</td><td>{p.isPresent ? linkLabels[p.linkState] ?? p.linkState : 'Нет в последней загрузке'}<button disabled={disabled || !p.isPresent || !p.barcode} onClick={() => void run(async () => setCandidates({ productId: p.id, rows: await fetchLamodaCandidates(token, accountId, p.id) }))}>Проверить соответствие</button></td></tr>)}</tbody></table></div>
-      {candidates && <div className="lamoda-card"><h3>Кандидаты для {overview.products.find(p => p.id === candidates.productId)?.name}</h3>{!candidates.rows.length && <p>Совпадений по штрихкоду нет. Проверьте карточки товаров.</p>}{candidates.rows.map(s => <p key={s.id}>{s.name} · {s.internalSku} · {s.size} · {s.color} <button disabled={disabled || !canManage} onClick={() => void run(async () => { await linkLamodaProduct(token, accountId, candidates.productId, s.id); setNotice('Соответствие сохранено.'); setRevision(v => v + 1); })}>Подтвердить</button></p>)}</div>}
+    {tab === 'catalog' && overview && <>
+      {!customerMode && <button disabled={disabled || !canManage || !selected?.isActive} onClick={() => sync('CATALOG')}>Загрузить каталог Lamoda</button>}
+      <p>Свяжите карточку Lamoda с товаром своего склада. ШК и артикулы могут различаться. Сверьте модель, цвет и размер перед подтверждением. Остатки и исходные карточки не меняются. Показано {overview.products.length} из максимум {overview.limits.products} товаров.</p>
+
+      {candidates && <div className="lamoda-card" role="region" aria-label="Ручное соответствие">
+        <h3>Ручное соответствие</h3>
+        {overview.products.filter(p=>p.id===candidates.productId).map(p=><p key={p.id}><strong>Lamoda: {p.name}</strong><br/>Артикул: {p.externalSku ?? '—'} · ШК: {p.barcode ?? '—'} · Размер: {p.size ?? '—'}<br/>Текущее соответствие: {p.sku?.name ?? 'Не задано'}</p>)}
+        <form onSubmit={e=>{e.preventDefault();void run(async()=>{setMappingChoice(null);setCandidates({...candidates,rows:await fetchLamodaCandidates(token,accountId,candidates.productId,mappingQuery)});});}}><label>Поиск товара WMS<input value={mappingQuery} maxLength={200} placeholder="Название, наш артикул или ШК" disabled={disabled} onChange={e=>{setMappingQuery(e.target.value);setMappingChoice(null);}}/></label><button disabled={disabled}>Найти товар WMS</button></form>
+        {!candidates.rows.length && <p>Товар не найден. Введите наше название, артикул или штрихкод — они могут отличаться от Lamoda.</p>}
+        {candidates.rows.length===100 && <p>Показаны первые 100 товаров. Уточните поиск.</p>}
+        {candidates.rows.map(s=><p key={s.id}>{s.name} · Артикул: {s.internalSku} · Размер: {s.size ?? '—'} · Цвет: {s.color ?? '—'} · ШК: {s.barcodes?.map(b=>b.value).join(', ') || 'Нет ШК'} <button disabled={disabled||!canWrite} onClick={()=>setMappingChoice(s)}>Выбрать</button></p>)}
+        {mappingChoice && <div><p><strong>WMS: {mappingChoice.name}</strong><br/>Артикул: {mappingChoice.internalSku} · ШК: {mappingChoice.barcodes?.map(b=>b.value).join(', ')} · Размер: {mappingChoice.size ?? '—'} · Цвет: {mappingChoice.color ?? '—'}</p><p>Подтвердите, что это один товар, цвет и размер. Новая связь заменит прежнюю для будущих сборок; созданные сборки не изменятся.</p><button disabled={disabled||!canWrite} onClick={()=>void run(async()=>{await linkLamodaProduct(token,accountId,candidates.productId,mappingChoice.id);setNotice('Соответствие сохранено.');setRevision(v=>v+1);})}>Подтвердить соответствие</button></div>}
+        <button disabled={disabled} onClick={()=>{setCandidates(null);setMappingChoice(null);}}>Закрыть соответствие</button>
+      </div>}
+      <div className="lamoda-scroll"><table><thead><tr><th>Товар Lamoda / артикул</th><th>ШК Lamoda</th><th>Размер</th><th>Товар WMS / артикул / ШК</th><th>Сверка</th></tr></thead><tbody>{overview.products.map(p => <tr key={p.id}><td>{p.name}<small>SKU: {p.remoteSku} · Артикул: {p.externalSku ?? '—'}</small></td><td>{p.barcode ?? 'Нет ШК'}</td><td>{p.size ?? '—'}</td><td>{p.sku ? <>{p.sku.name}<small>{p.sku.internalSku} · {p.sku.size} · {p.sku.color}</small><small>{p.sku.barcodes?.map(b=>b.value).join(', ')}</small></> : 'Не связан'}</td><td>{p.isPresent ? linkLabels[p.linkState] ?? p.linkState : 'Нет в последней загрузке'}<button disabled={disabled || !p.isPresent} onClick={() => void run(async () => {setMappingQuery('');setMappingChoice(null);setCandidates({ productId: p.id, rows: await fetchLamodaCandidates(token, accountId, p.id) });})}>Сопоставить с товаром WMS</button></td></tr>)}</tbody></table></div>
     </>}
     {tab === 'fbo' && selected?.fboEnabled && <>
       {!customerMode && <button disabled={disabled || !canManage || !selected.isActive} onClick={() => sync('FBO_SHIPMENTS')}>Загрузить поставки Lamoda</button>}

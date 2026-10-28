@@ -31,9 +31,9 @@ export class LamodaController {
   @RequirePermissions('marketplace-api:write')
   sync(@Param('id') id: string, @Body() body: LamodaSyncDto, @CurrentUser() user: AuthUser) { return this.service.sync(id, body.kind, user); }
   @Get('accounts/:id/products/:productId/candidates')
-  candidates(@Param('id') id: string, @Param('productId') productId: string, @CurrentUser() user: AuthUser) { return this.service.candidates(id, productId, user); }
+  candidates(@Param('id') id: string, @Param('productId') productId: string, @CurrentUser() user: AuthUser, @Query('q') q?: string) { return this.service.candidates(id, productId, user, q); }
   @Post('accounts/:id/products/:productId/link')
-  @RequirePermissions('marketplace-api:write')
+  @RequireAnyPermissions('marketplace-api:write', 'client-requests:write')
   link(@Param('id') id: string, @Param('productId') productId: string, @Body() body: LamodaLinkDto, @CurrentUser() user: AuthUser) { return this.service.link(id, productId, body.skuId, user); }
   @Get('accounts/:id/template')
   async template(@Param('id') id: string, @CurrentUser() user: AuthUser) {

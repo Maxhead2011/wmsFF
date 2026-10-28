@@ -151,6 +151,7 @@ describe('Lamoda service isolation', () => {
       { barcode: '87654321', quantity: 2, article: '', destination: 'B' },
     ] });
     db.lamodaProduct.findMany.mockResolvedValue([{ barcode: '12345678', skuId: 'sku' }]);
+    db.sku={findMany:vi.fn(async()=>[{id:'sku',barcodes:[{value:'12345678'}]}])};
     const result = await service.availability('a', 'p', user);
     expect(result.unresolvedRows).toEqual([4]);
     expect(requests.previewAvailability.mock.calls[0][0]).toEqual({ clientId: 'c', warehouseId: 'warehouse', type: 'OUTBOUND', items: [{ skuId: 'sku', barcode: '12345678', quantity: 12 }] });
