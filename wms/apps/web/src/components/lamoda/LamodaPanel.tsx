@@ -9,6 +9,7 @@ import {
 import './lamoda.css';
 import { importLamodaShipment, createLamodaAssembly, fetchFboPlan, type FboPlan } from '../../lib/api';
 import { FboTwoStagePanel } from '../client-requests/FboTwoStagePanel';
+import { LamodaStockReview } from './LamodaStockReview';
 
 type Tab = 'connection' | 'catalog' | 'fbo' | 'fbs' | 'returns' | 'log';
 const tabs: [Tab, string][] = [['connection', 'Подключение'], ['catalog', 'Товары и соответствия'], ['fbo', 'Планы FBO'], ['fbs', 'Заказы FBS'], ['returns', 'Возвраты'], ['log', 'Журнал обмена']];
@@ -119,7 +120,17 @@ export function LamodaPanel({ session }: { session: AuthSession }) {
         <button disabled={disabled||!canWrite||!warehouseId||!reference}>Загрузить состав поставки</button>
       </form>
       {overview?.plans.map(p => <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p><button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>{p.assembly && <button disabled={disabled} onClick={()=>void run(async()=>setAssembly(await fetchFboPlan(token,p.assembly!.requestId)))}>Открыть сборку</button>}</div>)}
-      {preview && <div className="lamoda-card"><h3>Проверка: {previewPlan}</h3><p>{preview.message}</p>{preview.unresolvedRows.length > 0 && <p role="alert">Нет однозначного соответствия в строках: {preview.unresolvedRows.join(', ')}</p>}{overview?.assemblyEnabled && preview.canAssemble && <button disabled={disabled||!canWrite||!previewId} onClick={()=>void run(async()=>{const result=await createLamodaAssembly(token,accountId,previewId);setNotice(`Создана сборка №${result.number}. Плановое количество сохранено; дефицит, если он есть, остаётся в плане.`);setRevision(v=>v+1);})}>Создать сборку и резерв</button>}{preview.availability && <div className="lamoda-scroll"><table><thead><tr><th>Товар</th><th>В плане</th><th>Доступно</th><th>В чужих резервах</th><th>Не хватает</th></tr></thead><tbody>{preview.availability.lines.map((l, i) => <tr key={i}><td>{l.name ?? l.barcode}</td><td>{l.requestedQuantity}</td><td>{l.availableQuantity}</td><td>{l.reservedQuantity}</td><td>{l.shortageQuantity}</td></tr>)}</tbody></table></div>}</div>}
+      {preview && <LamodaStockReview key={previewId} preview={preview} title={previewPlan} disabled={disabled||!canWrite||!previewId||!overview?.assemblyEnabled}
+        onCreate={quantities => void run(async () => {
+          try {
+            const result = await createLamodaAssembly(token, accountId, previewId, quantities);
+            setNotice(`Создана сборка №${result.number}. Зарезервирован выбранный состав.`); setRevision(v => v + 1);
+          } catch (e) {
+            // FIX: a new reservation after preview must return the operator to current shortages.
+            try { setPreview(await previewLamodaPlan(token, accountId, previewId)); } catch { setPreview(null); }
+            throw e;
+          }
+        })}/>}
     </>}
     {!customerMode && tab === 'fbs' && <><p>Загруженные заказы пока не создают сборок и резервов WMS. До запуска обработки FBS остатки в Lamoda не публикуются.</p><button disabled={disabled || !canWrite || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('ORDERS')}>Загрузить заказы</button><button disabled={disabled || !canWrite || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('FBS_SHIPMENTS')}>Загрузить отгрузки FBS</button></>}
     {!customerMode && tab === 'returns' && <><p>Это ожидаемые возвраты Lamoda. Доступный остаток увеличивается только после физической приёмки в WMS.</p><button disabled={disabled || !canWrite || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('RETURNS')}>Загрузить ожидаемые возвраты</button></>}

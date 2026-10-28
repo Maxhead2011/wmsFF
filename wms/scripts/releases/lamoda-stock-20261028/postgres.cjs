@@ -24,8 +24,17 @@ const {lamodaStockAvailability}=require('/app/apps/api/dist/modules/lamoda/lamod
  const fbs=await p.clientRequest.create({data:{clientId:c.id,warehouseId:w.id,type:'OUTBOUND',status:'SUBMITTED',title:'FBS',items:{create:{skuId:sku.id,barcode:'12345678',quantity:3}}},include:{items:true}});
  const task=await p.fbsTsdAssembly.create({data:{clientId:c.id,connectionId:'test',orderId:'test',requestId:fbs.id,requestItemId:fbs.items[0].id,skuId:sku.id,stockWarehouseId:w.id,productName:'Test',barcodes:['12345678'],storageBoxes:[],itemCount:3,status:'RESERVED',deviceCode:'TEST'}});
  await assert.rejects(()=>create(8),/доступно 7/);assert.equal(await p.lamodaFboAssembly.count(),0);assert.equal(await p.clientRequest.count(),1);passed++;
+ // TEST: preview is read-only; a confirmed correction creates only available demand.
+ const correctionPlan=await plan(8),preview=await service.availability(account.id,correctionPlan.id,user);
+ assert.equal(preview.canAssemble,false);assert.equal(preview.canAdjust,true);assert.equal(preview.availability.lines[0].shortageQuantity,1);
+ assert.equal(await p.lamodaFboAssembly.count(),0);
+ const corrected=await service.createAssembly(account.id,correctionPlan.id,user,{quantities:[{skuId:sku.id,quantity:7}]});
+ assert.equal((await p.clientRequestItem.findFirstOrThrow({where:{requestId:corrected.id}})).quantity,7);
+ assert.equal((await p.lamodaPlan.findUniqueOrThrow({where:{id:correctionPlan.id}})).items[0].quantity,8);
+ assert.equal(await p.auditLog.count({where:{entityId:corrected.id,action:'LAMODA_ASSEMBLY_COMPOSITION_ADJUSTED'}}),1);
+ await p.clientRequest.update({where:{id:corrected.id},data:{status:'CANCELLED'}});passed++;
  const exactPlan=await plan(7),created=await service.createAssembly(account.id,exactPlan.id,user);
- assert.equal((await service.createAssembly(account.id,exactPlan.id,user)).id,created.id);assert.equal(await p.lamodaFboAssembly.count(),1);assert.equal((await p.stockBalance.findUniqueOrThrow({where:{id:balance.id}})).quantity,10);passed++;
+ assert.equal((await service.createAssembly(account.id,exactPlan.id,user)).id,created.id);assert.equal(await p.lamodaFboAssembly.count(),2);assert.equal((await p.stockBalance.findUniqueOrThrow({where:{id:balance.id}})).quantity,10);passed++;
  await assert.rejects(()=>create(1),/доступно 0/);passed++;
  await p.clientRequest.update({where:{id:created.id},data:{status:'CANCELLED'}});
  await p.stockBalance.update({where:{id:balance.id},data:{quantity:9}});

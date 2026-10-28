@@ -11,3 +11,11 @@
 .lamoda-card{padding:16px;border:1px solid #dce4eb;border-radius:12px}
 .lamoda-scroll{overflow:auto}.lamoda-workspace table{width:100%;border-collapse:collapse}.lamoda-workspace th,.lamoda-workspace td{text-align:left;padding:10px;border-bottom:1px solid #dce4eb;vertical-align:top}
 .lamoda-workspace small{display:block}.lamoda-error{color:#b42318}
+/* FIX: keep the shortage review readable and its table scroll contained on narrow screens. */
+.lamoda-stock-review{min-width:0;max-width:100%;box-sizing:border-box}
+.lamoda-stock-review table{min-width:880px}
+.lamoda-stock-review input[type=number]{min-width:92px;max-width:120px;box-sizing:border-box}
+.lamoda-stock-warning{border-left:4px solid #dc8b21;padding:12px;background:rgba(220,139,33,.12)}
+.lamoda-stock-review tr[data-shortage=true]{background:rgba(220,139,33,.08)}
+.lamoda-stock-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.lamoda-stock-review .lamoda-stock-create{font-weight:700}

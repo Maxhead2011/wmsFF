@@ -1,9 +1,34 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { receiptAllows, receiptRules } from '../warehouse/receipt-channel-policy';
 
 type Demand = { skuId: string; barcode: string; quantity: number };
+export type LamodaQuantity = { skuId: string; quantity: number };
+
+// FIX: corrections only reduce the selected warehouse demand; the imported plan remains immutable.
+export function adjustLamodaComposition(
+  original: { items: Demand[]; directions: { name: string; items: Demand[] }[] },
+  quantities?: LamodaQuantity[],
+) {
+  if (quantities === undefined) return original;
+  const limits = new Map(original.items.map(i => [i.skuId, i.quantity]));
+  const selected = new Map<string, number>();
+  if (!Array.isArray(quantities) || quantities.length !== limits.size) throw new BadRequestException('Передайте количество каждого товара из проверенного плана.');
+  for (const row of quantities) {
+    if (!row || !limits.has(row.skuId) || selected.has(row.skuId) || !Number.isSafeInteger(row.quantity)
+      || row.quantity < 0 || row.quantity > limits.get(row.skuId)!) throw new BadRequestException('Корректировка может только уменьшать количество товаров исходного плана. Повторите проверку.');
+    selected.set(row.skuId, row.quantity);
+  }
+  if (![...selected.values()].some(n => n > 0)) throw new BadRequestException('Нет доступного товара для сборки. Заявка не создана.');
+  const remaining = new Map(selected);
+  const directions = original.directions.map(d => ({ ...d, items: d.items.map(i => {
+    const quantity = Math.min(i.quantity, remaining.get(i.skuId) ?? 0);
+    remaining.set(i.skuId, (remaining.get(i.skuId) ?? 0) - quantity);
+    return { ...i, quantity };
+  }).filter(i => i.quantity > 0) })).filter(d => d.items.length);
+  return { items: original.items.map(i => ({ ...i, quantity: selected.get(i.skuId)! })).filter(i => i.quantity > 0), directions };
+}
 
 // FIX: run on the creation transaction's snapshot, never trust an earlier UI preview.
 // AVAILABLE has already lost picked units; the canonical reader subtracts only remaining demand.

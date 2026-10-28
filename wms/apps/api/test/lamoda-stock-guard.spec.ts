@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { lamodaStockAvailability, assertLamodaStockAvailable } from '../src/modules/lamoda/lamoda-stock-guard';
+import { lamodaStockAvailability, assertLamodaStockAvailable, adjustLamodaComposition } from '../src/modules/lamoda/lamoda-stock-guard';
 import { wbReservationQuantities } from '../src/common/stock/wb-order-stock-lifecycle';
 import { receiptRules } from '../src/modules/warehouse/receipt-channel-policy';
 vi.mock('../src/common/stock/wb-order-stock-lifecycle', () => ({ wbReservationQuantities: vi.fn() }));
@@ -13,6 +13,30 @@ beforeEach(() => {
 });
 afterEach(() => vi.clearAllMocks());
 const demand = (quantity: number) => [{ skuId: 'sku', barcode: '12345678', quantity }];
+
+// TEST: corrections are explicit reductions, including removal, without rewriting the source plan.
+describe('Lamoda composition correction', () => {
+  const plan = () => ({ items: [...demand(6), {skuId:'absent',barcode:'87654321',quantity:2}], directions: [
+    {name:'A',items:demand(4)}, {name:'B',items:[...demand(2),{skuId:'absent',barcode:'87654321',quantity:2}]},
+  ] });
+  it('reduces direction quantities consistently and removes empty directions', () => {
+    const source=plan();const before=JSON.stringify(source);
+    const result=adjustLamodaComposition(source,[{skuId:'sku',quantity:3},{skuId:'absent',quantity:0}]);
+    expect(result.items).toEqual(demand(3));expect(result.directions).toEqual([{name:'A',items:demand(3)}]);
+    expect(JSON.stringify(source)).toBe(before);
+  });
+  it.each([
+    [{skuId:'sku',quantity:7},{skuId:'absent',quantity:0}],
+    [{skuId:'sku',quantity:-1},{skuId:'absent',quantity:1}],
+    [{skuId:'sku',quantity:1.5},{skuId:'absent',quantity:0}],
+    [{skuId:'sku',quantity:1}],
+    [{skuId:'sku',quantity:1},{skuId:'sku',quantity:1}],
+    [{skuId:'sku',quantity:1},{skuId:'foreign',quantity:0}],
+    [{skuId:'sku',quantity:0},{skuId:'absent',quantity:0}],
+  ])('rejects invalid/empty corrections %#', (...quantities) => {
+    expect(()=>adjustLamodaComposition(plan(),quantities)).toThrow();
+  });
+});
 
 // TEST: only remaining demand is subtracted, once, from approved physical stock.
 describe('Lamoda transaction stock guard', () => {

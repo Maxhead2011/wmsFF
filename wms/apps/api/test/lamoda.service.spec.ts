@@ -26,6 +26,9 @@ beforeEach(() => {
     lamodaProduct: { findMany: vi.fn(async () => []), updateMany: vi.fn(), upsert: vi.fn() },
     lamodaDocument: { upsert: vi.fn() },
     lamodaPlan: { findFirst: vi.fn() },
+    lamodaFboAssembly: { findUnique: vi.fn(async () => null) },
+    client: { findUniqueOrThrow: vi.fn(async () => ({ storesWithoutBoxes: false })) },
+    stockBalance: { findMany: vi.fn(async () => []) },
     auditLog: { create: vi.fn() },
     $transaction: vi.fn(async (fn: any) => fn(db)),
   };
@@ -68,6 +71,36 @@ describe('Lamoda warehouse assembly',()=>{
   assemblyFixture();vi.mocked(receiptRules).mockResolvedValue(new Map([['box',{fbo:false,fbs:true,stockAvailable:true} as any]]));
   await expect(service.createAssembly('a','plan',user)).rejects.toThrow('доступно 0');
   expect(db.clientRequest.create).not.toHaveBeenCalled();
+ });
+ // TEST: stock preview must expose a shortage before creation, with a separate correction step.
+ it('blocks the create action in the preview when stock is insufficient',async()=>{
+  assemblyFixture();db.stockBalance.findMany.mockResolvedValue([]);
+  requests.previewAvailability.mockResolvedValue({canCommit:false,lines:[{shortageQuantity:2}]});
+  const preview=await service.availability('a','plan',user);
+  expect(preview.canAssemble).toBe(false);
+ });
+ it('creates only explicitly corrected quantities and keeps the imported plan unchanged',async()=>{
+  const plan=assemblyFixture();
+  await (service.createAssembly as any)('a','plan',user,{quantities:[{skuId:'s',quantity:1}]});
+  expect(db.clientRequest.create.mock.calls[0][0].data.items.create[0].quantity).toBe(1);
+  expect(db.lamodaFboAssembly.create.mock.calls[0][0].data.directions[0].items[0].quantity).toBe(1);
+  expect(plan.items[0].quantity).toBe(2);
+  expect(db.auditLog.create).toHaveBeenCalled();
+ });
+ // TEST: a valid earlier correction cannot consume a newly added FBS reservation.
+ it('rechecks corrected quantities when another order reserved the stock after preview',async()=>{
+  assemblyFixture();expect((await service.availability('a','plan',user)).canAssemble).toBe(true);
+  vi.mocked(wbReservationQuantities).mockResolvedValue(new Map([['s',2]]));
+  await expect(service.createAssembly('a','plan',user,{quantities:[{skuId:'s',quantity:1}]})).rejects.toThrow('доступно 0');
+  expect(db.clientRequest.create).not.toHaveBeenCalled();expect(db.auditLog.create).not.toHaveBeenCalled();
+ });
+ it('requires the remote supply to match the corrected composition before reserving',async()=>{
+  const plan:any=assemblyFixture();plan.remoteShipmentId='remote';
+  remote.fboShipment=vi.fn(async()=>({shipment:{status:'NEW',warehouseCode:'B'},items:[{sku:'lm',ean:'12345678',quantityPlanned:2}]}));
+  await expect(service.createAssembly('a','plan',user,{quantities:[{skuId:'s',quantity:1}]})).rejects.toThrow('не совпадает');
+  expect(db.clientRequest.create).not.toHaveBeenCalled();
+  remote.fboShipment.mockResolvedValue({shipment:{status:'NEW',warehouseCode:'B'},items:[{sku:'lm',ean:'12345678',quantityPlanned:1}]});
+  await expect(service.createAssembly('a','plan',user,{quantities:[{skuId:'s',quantity:1}]})).resolves.toEqual({id:'r',number:1});
  });
  // TEST: customer request permissions suffice only for own plans; API management stays restricted.
  it('lets a writable customer create an own assembly without API administration rights',async()=>{
@@ -174,7 +207,7 @@ describe('Lamoda service isolation', () => {
     expect(db.lamodaDocument.upsert.mock.calls[0][0].where.accountId_kind_remoteId.remoteId).toBe('internal');
     expect(db.lamodaAccount.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ ordersSyncedAt: expect.any(Date) }) }));
   });
-  it('combines repeated plan lines before asking the existing scoped availability calculator', async () => {
+  it('combines repeated plan lines before calculating stock and reservations', async () => {
     db.lamodaPlan.findFirst.mockResolvedValue({ id: 'p', accountId: 'a', warehouseId: 'warehouse', items: [
       { barcode: '12345678', quantity: 5, article: '', destination: 'A' },
       { barcode: '12345678', quantity: 7, article: '', destination: 'B' },
@@ -184,7 +217,8 @@ describe('Lamoda service isolation', () => {
     db.sku={findMany:vi.fn(async()=>[{id:'sku',barcodes:[{value:'12345678'}]}])};
     const result = await service.availability('a', 'p', user);
     expect(result.unresolvedRows).toEqual([4]);
-    expect(requests.previewAvailability.mock.calls[0][0]).toEqual({ clientId: 'c', warehouseId: 'warehouse', type: 'OUTBOUND', items: [{ skuId: 'sku', barcode: '12345678', quantity: 12 }] });
+    expect(result.availability.lines).toEqual([expect.objectContaining({ skuId: 'sku', barcode: '12345678', requestedQuantity: 12, shortageQuantity: 12 })]);
+    expect(wbReservationQuantities).toHaveBeenCalledWith(db,'c',['sku'],'warehouse',undefined);
     expect(result.canAssemble).toBe(false);
   });
   it('never falls back to ambiguous barcode matches and never previews a foreign branch', async () => {

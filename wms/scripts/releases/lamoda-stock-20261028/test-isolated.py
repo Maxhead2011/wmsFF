@@ -1,4 +1,4 @@
-# TEST: never connect to production; mount the two candidate modules over the verified image.
+# TEST: never connect to production; mount the four candidate modules over the verified image.
 from pathlib import Path
 import subprocess, json, time, base64
 root = Path('/opt/logoff-wms/wms/work/lamoda-stock-20261028')
@@ -17,12 +17,12 @@ try:
       '-e','WMS_LAMODA_SECRET_KEY='+base64.b64encode(bytes(range(32))).decode(),
       '-e','WMS_RECEIPT_CHANNELS_ENABLED=false','-e','NODE_PATH=/app/node_modules:/app/apps/api/node_modules']
  mounts=[]
- for name in ['lamoda.service.js','lamoda-stock-guard.js']:
+ for name in ['lamoda.service.js','lamoda-stock-guard.js','lamoda.controller.js','lamoda.dto.js']:
   mounts += ['-v',f'{root}/{name}:/app/apps/api/dist/modules/lamoda/{name}:ro']
  run('run','--rm',*env,'--entrypoint','sh',image,'-c','cd /app/apps/api && pnpm exec prisma db push --schema prisma/schema.prisma --skip-generate')
  result=run('run','--rm','-i',*env,*mounts,'--entrypoint','node',image,input=(root/'postgres.cjs').read_bytes(),capture_output=True)
  print(result.stdout.decode())
- proof=json.loads(result.stdout.decode().splitlines()[-1]);assert proof['passed']==6
+ proof=json.loads(result.stdout.decode().splitlines()[-1]);assert proof['passed']==7
  (root/'db-proof.json').write_text(json.dumps(proof))
 except subprocess.CalledProcessError as error:
  if error.stdout: print(error.stdout.decode())
