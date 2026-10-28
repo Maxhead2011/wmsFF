@@ -1,4 +1,4 @@
-Prepared: Lamoda existing-request review routes to the persisted assembly; draft correction remains before creation. Web-only PR731 overlay; no stock or request writes. [Details](lamoda-existing-review.md).
+Published PR733 / 2026-10-28: Lamoda created plans open persisted assemblies instead of disabled draft review; stale-list existingRequest recovery, no false original-plan shortage, preview cleared after creation. API3875/web532 passed (150/2 skipped), TypeScript/build, baseline guards8, candidate/public browser50+11+5. Exact3 web overlay on PR731; API/schema/APK236/sold and request2506 unchanged. Baseline `2026-10-28-lamoda-existing`, sourceParityVerified=false. [Details](lamoda-existing-review.md).
 
 Published PR731 / 2026-10-28: missing Lamoda active-request badge added; scoped persisted assemblies count separately from WB/Ozon, drafts and terminal requests excluded. API3875/web531 passed (155/2 skipped), TypeScript, runtime PostgreSQL5/full API health and browser5 passed. Exact1 API/3web overlay on PR729; schema/APK236/sold unchanged. Baseline `2026-10-28-lamoda-counts`, sourceParityVerified=false. [Details](fbo-active-card-counts.md).
 
