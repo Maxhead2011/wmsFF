@@ -8,6 +8,16 @@ const preview: LamodaPreview = {canAdjust:true,canAssemble:false,message:'Про
   {skuId:'absent',name:'Платье',barcode:'87654321',requestedQuantity:2,reservedQuantity:0,availableQuantity:0,shortageQuantity:2},
 ]}};
 afterEach(()=>vi.unstubAllGlobals());
+// TEST: an existing request must not look like a broken draft or count its own reserve as a new shortage.
+it('replaces draft correction with a link to the existing assembly',()=>{
+  const existing = {...preview, canAdjust:false, existingRequest:{id:'existing',number:2506}};
+  const html=renderToStaticMarkup(<LamodaStockReview preview={existing} title="ламо" disabled={false} onCreate={()=>{}} onOpen={()=>{}}/>);
+  expect(html).toContain('Открыть сборку №2506');
+  expect(html).not.toContain('type="number"');
+  expect(html).not.toContain('В исходном плане не хватает');
+  expect(html).not.toContain('Создать сборку и резерв');
+  expect(html).not.toContain('Скорректировать по доступному остатку');
+});
 // TEST: shortages are visible before a request exists; rendering never creates demand.
 it('shows identifiers, reserves, deficits and a disabled create button for the original demand',()=>{
   const onCreate=vi.fn();const html=renderToStaticMarkup(<LamodaStockReview preview={preview} title="План" disabled={false} onCreate={onCreate}/>);

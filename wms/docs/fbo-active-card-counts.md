@@ -1,6 +1,6 @@
 # Счётчики активных заявок FBO
 
-Подготовлено 28.10.2026 в `fix/fbo-active-card-counts`; не опубликовано.
+Опубликовано 28.10.2026 через PR729. Итоговый baseline: `2026-10-28-fbo-counts`.
 База исходников: 110c728f / PR722, опубликованный baseline по паспорту —
 `2026-10-28-lamoda-inline`. Перед выпуском обязательна новая сверка сервера:
 `sourceParityVerified=false`, полная сборка не является кандидатом выпуска.
@@ -56,3 +56,9 @@ TypeScript API/web и Vite build прошли. У сборки есть пред
 Кандидат: PostgreSQL5 и запуск полного API; браузер счётчиков5 и регрессия
 маркетплейсов/Lamoda50 с синтетическим API. Никакие рабочие заявки тесты не меняли.
 Скрипты воспроизводимости — scripts/releases/fbo-counts-20261028.
+
+После публикации: health/public hashes passed, browser5 with synthetic API passed; live authenticated count endpoint returned 200 (WB2/Ozon3 in current actor scope), anonymous401. Rollback tags: logoff-api:before-fbo-counts-20261028 and logoff-web:before-fbo-counts-20261028. Other containers unchanged.
+
+Follow-up prepared: Lamoda tile now counts its persisted active ClientRequests through lamodaAssembly; drafts without requests are excluded. Same scope/status rules; no deployment yet. API response adds lamoda; WB/Ozon classification preserved. Tests cover the tile and separate count.
+
+Lamoda follow-up published via PR731. Baseline 2026-10-28-lamoda-counts; API3875/web531 and TypeScript passed; runtime PostgreSQL5/full API health and browser5 passed. Rollback tags logoff-api:before-lamoda-counts-20261028 and logoff-web:before-lamoda-counts-20261028.

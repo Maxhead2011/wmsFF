@@ -83,7 +83,7 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   async function openAssembly(requestId:string) {
     const requestedScope=scope,sequence=++openSequence.current;setAssembly(null);
     const data=await fetchFboPlan(token,requestId);
-    if(currentScope.current===requestedScope&&sequence===openSequence.current)setAssembly(data);
+    if(currentScope.current===requestedScope&&sequence===openSequence.current){setAssembly(data);setPreview(null);setPreviewId('');}
   }
   function sync(kind: LamodaResource) { void run(async () => { const result = await syncLamoda(token, accountId, kind); setNotice(result.message); setRevision(v => v + 1); }); }
   function save(e: FormEvent) {
@@ -150,19 +150,20 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
       {operational && <div className="lamoda-tabs lamoda-list-tabs"><button aria-pressed={planView==='active'} onClick={()=>setPlanView('active')}>Активные</button><button aria-pressed={planView==='closed'} onClick={()=>setPlanView('closed')}>Завершённые</button></div>}
       {!loading && !visiblePlans.length && <p>{!accountId ? 'Выберите клиента и кабинет Lamoda.' : planView==='closed' ? 'Завершённых сборок пока нет.' : 'Активных сборок пока нет. Нажмите «Создать сборку», чтобы загрузить файл или поставку Lamoda.'}</p>}
       <div className={compact ? 'lamoda-assembly-cards' : undefined}>
-      {visiblePlans.map(p => !compact ? <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.assembly?.request ? `№${p.assembly.request.number} · ${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p><button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>{p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}</div> : <div className="lamoda-card lamoda-assembly-card" key={p.id}>
+      {visiblePlans.map(p => !compact ? <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.assembly?.request ? `№${p.assembly.request.number} · ${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p>{!p.assembly && <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>}{p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}</div> : <div className="lamoda-card lamoda-assembly-card" key={p.id}>
         {compact && p.assembly?.request && <h3>№{String(p.assembly.request.number).padStart(5,'0')}</h3>}
         <strong>{p.title}</strong>
         <p>{p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {p.warehouse.name}</p>
         <p>Создана: {date(p.createdAt)}</p>
         <p className={compact ? 'lamoda-plan-status' : undefined}>{p.assembly?.request ? `${compact ? '' : `№${p.assembly.request.number} · `}${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p>
-        <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>
+        {!p.assembly && <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>}
         {/* FIX: reuse server-authorized removal with the assembly request ID, never a draft plan ID. */}
         {p.assembly?.request && <RequestRemovalButton request={{id:p.assembly.requestId,number:p.assembly.request.number,title:p.title,type:'OUTBOUND',status:p.assembly.request.status}}/>}
         {p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}
       </div>)}
       </div></aside>
-      {preview && <LamodaStockReview key={previewId} preview={preview} title={previewPlan} disabled={disabled||!canWrite||!previewId||!overview?.assemblyEnabled}
+      {preview && <LamodaStockReview key={previewId} preview={preview} title={previewPlan} disabled={disabled||(preview.existingRequest?false:!canWrite||!previewId||!overview?.assemblyEnabled)}
+        onOpen={requestId=>void run(()=>openAssembly(requestId))}
         onCreate={quantities => void run(async () => {
           let result;
           try {
@@ -172,6 +173,8 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
             try { setPreview(await previewLamodaPlan(token, accountId, previewId)); } catch { setPreview(null); }
             throw e;
           }
+          // FIX: discard the draft review after creation; subsequent work uses the persisted request.
+          setPreview(null);setPreviewId('');
           setNotice(`Создана сборка №${result.number}. Зарезервирован выбранный состав.`); setRevision(v => v + 1);
           if (operational) await openAssembly(result.id);
         })}/>}

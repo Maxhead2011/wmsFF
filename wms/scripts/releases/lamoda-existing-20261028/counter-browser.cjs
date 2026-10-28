@@ -1,0 +1,38 @@
+// TEST: actual deployed shell + proposed UI, synthetic API only; no live orders or reservations.
+const fs=require('fs'),path=require('path'),http=require('http'),assert=require('node:assert/strict');
+const {chromium}=require('C:/Users/La_pa/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+const root=path.resolve(process.argv[2]),out=root+(process.env.WEB_ORIGIN?'/public-counter-browser':'/counter-browser');fs.mkdirSync(out,{recursive:true});
+const user={id:'lamoda-test',email:'test@example.invalid',name:'Тест',roleCodes:['OWNER'],permissionCodes:['system:admin','client-requests:read','client-requests:write','catalog:read','stock:read'],clientScopeMode:'LIMITED',clientIds:['demo'],writableClientIds:['demo'],warehouseIds:[],writableWarehouseIds:[]};
+let attempts=0,accepted=0,free=5,passed=0,counter={wb:205,ozon:1,lamoda:3},countError=false;const errors=[],bodies=[];
+const plan={id:'p',title:'Проверка дефицита',warehouse:{name:'ФФ Москва'},createdAt:new Date().toISOString(),items:[{quantity:8},{quantity:2}]};
+const server=http.createServer((req,res)=>{const name=new URL(req.url,'http://test').pathname;let file=path.resolve(root+'/web/payload','.'+name);if(!file.startsWith(root+path.sep))return res.end();if(!fs.existsSync(file))file=path.resolve(root+'/web-base','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../lamoda-counts-release/web/payload','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../lamoda-counts-release/web-base','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../fbo-counts-release/web/payload','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../fbo-counts-release/web-base','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../lamoda-layout-release-20261028/web/payload','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../lamoda-inline-release-20261028/web/payload','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../marketplace-workspaces-release-20261028/web/payload','.'+name);if(!fs.existsSync(file))file=path.resolve(root+'/../marketplace-workspaces-release-20261028/web-base','.'+name);if(!fs.existsSync(file)||fs.statSync(file).isDirectory())file=root+'/web/payload/index.html';res.setHeader('Content-Type',({'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'})[path.extname(file)]||'application/octet-stream');res.end(fs.readFileSync(file));});
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=process.env.WEB_ORIGIN||'http://127.0.0.1:'+server.address().port;const browser=await chromium.launch({channel:'msedge',headless:true});let page;
+try{const context=await browser.newContext({viewport:{width:1440,height:1050}});await context.route('**/*',async route=>{
+ const req=route.request(),url=new URL(req.url());if(!url.pathname.startsWith('/api/'))return url.origin===origin?route.continue():route.abort();const p=url.pathname.replace(/^\/api(?:\/v1)?/,'');let data=[];
+ if(p==='/client-requests/fbo-active-counts'){if(countError)return route.fulfill({status:500,contentType:'application/json',body:JSON.stringify({message:'test error'})});data=counter;}
+ else if(p==='/auth/me')data=user;
+ else if(p==='/clients')data=[{id:'demo',status:'ACTIVE',clientKind:'LEGAL_ENTITY',code:'TEST',name:'Учебный клиент',marketplaceConnections:[],lamodaAccounts:[{isActive:true,fboEnabled:true}]}];
+ else if(p==='/lamoda/accounts')data=[{id:'a',clientId:'demo',name:'Lamoda',sellerId:'test',isActive:true,fboEnabled:true,fbsEnabled:false}];
+ else if(p==='/lamoda/accounts/a')data={products:[],documents:[],plans:[plan],exchanges:[],assemblyEnabled:true,limits:{products:1000,documents:500,plans:100}};
+ else if(p==='/lamoda/accounts/a/warehouses')data=[{id:'msk',name:'ФФ Москва'}];
+ else if(p==='/lamoda/accounts/a/plans/p/availability')data={canAssemble:false,canAdjust:true,unresolvedRows:[],message:'Черновик не резервирует товар.',availability:{lines:[
+  {skuId:'s',name:'Костюм зимний',article:'Зима',size:'52',barcode:'12345678',requestedQuantity:8,reservedQuantity:8-free,availableQuantity:free,shortageQuantity:8-free},
+  {skuId:'absent',name:'Платье',size:'50',barcode:'87654321',requestedQuantity:2,reservedQuantity:0,availableQuantity:0,shortageQuantity:2}]}};
+ else if(p==='/lamoda/accounts/a/plans/p/assembly'){
+  attempts++;const body=req.postDataJSON();bodies.push(body);assert.deepEqual(body.quantities,[{skuId:'s',quantity:free},{skuId:'absent',quantity:0}]);
+  if(attempts===1){free=4;return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({message:'Новый заказ ФБС: доступно 4. Заявка не создана.'})});}
+  accepted++;plan.assembly={requestId:'request',request:{number:123,status:'SUBMITTED'}};data={id:'request',number:123};
+ }else if(p==='/tsd/requests/request/fbo')data={requestId:'request',number:123,title:'Lamoda fixture',marketplace:'LAMODA',phase:'NOT_STARTED',needed:4,picked:0,packed:0,shortage:0,route:[],boxes:[],wholeBoxes:[],history:[],lines:[{id:'i',skuId:'s',name:'Костюм зимний',barcode:'12345678',needed:4,picked:0,packed:0,remaining:4}],directions:[]};
+ else if(req.method()!=='GET')throw Error('Unexpected write '+p);
+ await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(data)});
+});await context.addInitScript(u=>{localStorage.setItem('logoff-wms-session',JSON.stringify({accessToken:'isolated-test',tokenType:'Bearer',user:u}));localStorage.setItem('logoff-wms-ui-theme:'+u.id,'modern');},user);
+page=await context.newPage();page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));await page.goto(origin,{waitUntil:"domcontentloaded",timeout:60000});await page.locator('aside').getByRole('button',{name:'FBO',exact:true}).click();const wb=page.getByRole('button',{name:/FBO WB/}),ozon=page.getByRole('button',{name:/FBO Ozon/});
+const lm=page.getByRole('button',{name:/lamoda/});await lm.getByText('3 заявки',{exact:true}).waitFor();
+await wb.getByText('205 заявок',{exact:true}).waitFor();await ozon.getByText('1 заявка',{exact:true}).waitFor();passed++;
+await page.screenshot({path:out+'/counts.png',fullPage:true});
+counter={wb:0,ozon:0,lamoda:0};await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await lm.getByText('0 заявок',{exact:true}).waitFor();await wb.getByText('0 заявок',{exact:true}).waitFor();await ozon.getByText('0 заявок',{exact:true}).waitFor();passed++;
+countError=true;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await lm.getByText('Не удалось загрузить',{exact:true}).waitFor();await wb.getByText('Не удалось загрузить',{exact:true}).waitFor();assert.equal(await wb.getByText('0 заявок',{exact:true}).count(),0);passed++;
+countError=false;counter={wb:12,ozon:22,lamoda:12};await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await lm.getByText('12 заявок',{exact:true}).waitFor();await wb.getByText('12 заявок',{exact:true}).waitFor();await ozon.getByText('22 заявки',{exact:true}).waitFor();passed++;
+assert.deepEqual(errors,[]);passed++;
+const crypto=require('crypto'),payload=root+'/web/payload';const webHashes=Object.fromEntries(['index.html','assets/workspace-lamoda-existing-20261028.js','assets/workspace-lamoda-existing-20261028.css'].map(n=>[n,crypto.createHash('sha256').update(fs.readFileSync(payload+'/'+n)).digest('hex')]));const proof={passed,syntheticApi:true,errors,webHashes};fs.writeFileSync(root+(process.env.WEB_ORIGIN?'/public-counter-proof.json':'/counter-proof.json'),JSON.stringify(proof));console.log(JSON.stringify(proof));
+}finally{await browser.close();server.close();}})().catch(e=>{console.error(e);server.close();process.exitCode=1});

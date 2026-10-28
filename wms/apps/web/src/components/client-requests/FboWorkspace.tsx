@@ -13,7 +13,7 @@ export function FboWorkspace({session}:{session:AuthSession}) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [directoryError, setDirectoryError] = useState('');
   const countScope = JSON.stringify([session.accessToken, session.user.activeWarehouseId, session.user.clientIds]);
-  const [counts, setCounts] = useState<{scope:string; value?:{wb:number;ozon:number}; error?:boolean} | null>(null);
+  const [counts, setCounts] = useState<{scope:string; value?:{wb:number;ozon:number;lamoda:number}; error?:boolean} | null>(null);
   const canReadCounts = workspaceEnabled() && session.user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:read');
   // FIX: discard late responses from another branch/session and refresh after returning to the screen.
   useEffect(() => {
@@ -33,7 +33,7 @@ export function FboWorkspace({session}:{session:AuthSession}) {
     document.addEventListener('visibilitychange',refresh);
     return ()=>{active=false;window.clearInterval(timer);window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};
   },[canReadCounts,countScope,market,session.accessToken]);
-  const countBadge=(key:'wb'|'ozon')=>canReadCounts ? <FboActiveCount count={counts?.scope===countScope?counts.value?.[key]:undefined} error={counts?.scope===countScope&&counts.error} /> : null;
+  const countBadge=(key:'wb'|'ozon'|'lamoda')=>canReadCounts ? <FboActiveCount count={counts?.scope===countScope?counts.value?.[key]:undefined} error={counts?.scope===countScope&&counts.error} /> : null;
 
   useEffect(() => { let active = true; setClients([]); setDirectoryError(''); if (workspaceEnabled()) fetchWorkspaceClients(session.accessToken).then(v => { if(active) setClients(v); }).catch(() => { if(active) setDirectoryError('Не удалось загрузить подключённые площадки. Обновите страницу.'); }); return () => { active=false; }; }, [session.accessToken]);
   const canReadLamoda=visibleMarket(session,clients,'LAMODA')&&import.meta.env.VITE_LAMODA_ENABLED==='true'&&(session.user.permissionCodes.some(p=>p==='system:admin'||p==='marketplace-api:read')||(session.user.roleCodes.includes('CLIENT')&&session.user.permissionCodes.includes('client-requests:read')));
@@ -42,7 +42,7 @@ export function FboWorkspace({session}:{session:AuthSession}) {
   return <section aria-label="FBO"><div className="section-heading"><div><p className="eyebrow">Поставки на склады маркетплейсов</p><h2>FBO</h2></div></div>
     {directoryError&&<p role="alert">{directoryError}</p>}<div className="fbo-marketplaces">{canReadWb&&<button className="fbs-marketplace-card fbs-marketplace-card--wb" aria-pressed={market==='wb'} onClick={()=>setMarket('wb')}><span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/wb.svg" alt="" /></span><span className="fbs-marketplace-card__content"><strong>FBO WB</strong>{countBadge('wb')}<span>Заявки из Excel и созданные вручную</span></span></button>}
       {visibleMarket(session,clients,'OZON')&&<button className="fbs-marketplace-card fbs-marketplace-card--ozon" aria-pressed={market==='ozon'} onClick={()=>setMarket('ozon')}><span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/ozon.png" alt="" /></span><span className="fbs-marketplace-card__content"><strong>FBO Ozon</strong>{countBadge('ozon')}<span>Планы, короба и поставки Ozon</span></span></button>}
-    {canReadLamoda&&<button className="fbs-marketplace-card fbs-marketplace-card--lamoda" aria-pressed={market==='lamoda'} onClick={()=>setMarket('lamoda')}><span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/lamoda.jpg" alt="" /></span><span className="fbs-marketplace-card__content"><strong className="lamoda-wordmark" role="img" aria-label="lamoda" /><span>{workspaceEnabled() ? 'Поставки из файла или кабинета Lamoda' : 'Подключение, каталог и подготовка FBO/FBS'}</span></span></button>}
+    {canReadLamoda&&<button className="fbs-marketplace-card fbs-marketplace-card--lamoda" aria-pressed={market==='lamoda'} onClick={()=>setMarket('lamoda')}><span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/lamoda.jpg" alt="" /></span><span className="fbs-marketplace-card__content"><strong className="lamoda-wordmark" role="img" aria-label="lamoda" />{countBadge('lamoda')}<span>{workspaceEnabled() ? 'Поставки из файла или кабинета Lamoda' : 'Подключение, каталог и подготовка FBO/FBS'}</span></span></button>}
     {canReadYandex&&<button className="fbs-marketplace-card fbs-marketplace-card--yandex" aria-pressed={market==='yandex'} onClick={()=>setMarket('yandex')}><span className="fbs-marketplace-card__brand" aria-hidden="true"><img src="/brand/yandex-market.png" alt="" /></span><span className="fbs-marketplace-card__content"><strong>Яндекс Маркет · FBY</strong><span>Поставка из кабинета, Excel или вручную</span></span></button>}</div>
     <Suspense fallback={<p className="inline-status">Загружаю заявки…</p>}>{market==='wb'&&canReadWb?<Requests session={session} fboOnly/>:market==='ozon'?<Ozon session={session}/>:market==='lamoda'&&canReadLamoda?<Lamoda session={session}/>:market==='yandex'&&canReadYandex?<Yandex session={session}/>:null}</Suspense>
   </section>;
