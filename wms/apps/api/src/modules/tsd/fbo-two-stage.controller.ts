@@ -15,6 +15,10 @@ import { TsdAuditInterceptor } from './tsd-audit.interceptor';
 @UseInterceptors(TsdAuditInterceptor)
 export class FboTwoStageController {
   constructor(private readonly fbo: FboTwoStageService) {}
+  @Post('lamoda-relabel/resolve')
+  @RequirePermissions('stock:write')
+  relabelResolve(@Param('id') id:string,@Body() body:{barcode?:string;kiz?:string},@CurrentUser() user:AuthUser) { return this.fbo.resolveLamodaRelabel(id,body??{},user); }
+
   @Get('lamoda-relabel/stations')
   @RequirePermissions('stock:write')
   relabelStations(@Param('id') id:string,@CurrentUser() user:AuthUser) { return this.fbo.relabelStations(id,user); }

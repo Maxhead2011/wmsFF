@@ -665,13 +665,32 @@ final class FboTwoStageScreen {
     private void renderLamodaRelabel(LinearLayout root){
         if(!"logoff".equals(BuildConfig.FLAVOR)||!plan.relabelRequired||plan.relabelUnits==null)return;
         text(root,"Переклейка Lamoda: ожидает проверки "+plan.relabelUnits.size()+" шт.");
+        button(root,"Сканировать товар для переклейки",ready()&&!plan.relabelUnits.isEmpty(),()->scanLamodaSource());
         for(TsdFboPlan.RelabelUnit unit:plan.relabelUnits){
-            if(unit.label==null)continue;
-            String label=unit.label.name+" · "+unit.label.size+" · "+unit.label.barcode;
-            text(root,label+" · печать: "+(unit.printStatus==null?"не отправлена":unit.printStatus));
+            if(!unit.id.equals(relabelUnitId)||unit.label==null)continue;
+            text(root,unit.label.name+" · размер "+unit.label.size+" · ШК Lamoda "+unit.label.barcode);
             if("PRINTED".equals(unit.printStatus))button(root,"Сканировать новую этикетку",ready(),()->confirmLamodaRelabel(unit));
             else if(unit.printStatus==null||"FAILED".equals(unit.printStatus))button(root,"Печать 2 этикеток 58 × 40",ready(),()->chooseLamodaPrinter(unit));
+            else text(root,"Этикетка в очереди. Обновите состояние печати.");
         }
+    }
+    // FIX: warehouse barcode and physical KIZ resolve the unit on the scoped server.
+    private void scanLamodaSource(){
+        LinearLayout form=new LinearLayout(activity);form.setOrientation(LinearLayout.VERTICAL);
+        EditText source=new EditText(activity);source.setSingleLine(true);source.setHint("Сканируйте складской ШК");form.addView(source);
+        EditText mark=new EditText(activity);mark.setSingleLine(true);mark.setHint("КИЗ, если товар маркирован");form.addView(mark);
+        AlertDialog dialog=new AlertDialog.Builder(activity).setTitle("Товар для переклейки Lamoda").setView(form).setNegativeButton("Назад",null).setPositiveButton("Найти соответствие",null).create();
+        quantityDialog=dialog;dialog.setOnDismissListener(d->{quantityDialog=null;});
+        dialog.setOnShowListener(d->{source.requestFocus();dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(source.getText().toString().trim().isEmpty()){source.setError("Сканируйте ШК");return;}
+            Map<String,String> body=new LinkedHashMap<>();body.put("barcode",source.getText().toString().trim());
+            if(!mark.getText().toString().trim().isEmpty())body.put("kiz",mark.getText().toString().trim());
+            dialog.dismiss();busy=true;relabelUnitId="";render();
+            executor.execute(()->{try{Response<TsdFboPlan.RelabelUnit> response=api.lamodaFboRelabelResolve(session.authorizationHeader(),id,body).execute();
+                if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
+                handler.post(()->{if(closed)return;busy=false;relabelUnitId=response.body().id;message="Соответствие Lamoda найдено. Проверьте товар и размер.";refresh();});
+            }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message=e.getMessage();render();});}});
+        });});dialog.show();
     }
     private void chooseLamodaPrinter(TsdFboPlan.RelabelUnit unit){
         if(!ready())return;busy=true;render();executor.execute(()->{try{
