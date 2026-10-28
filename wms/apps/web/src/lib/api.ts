@@ -24,7 +24,7 @@ export type LamodaOverview = {
   externalWritesEnabled:false;assemblyEnabled:boolean;limits:{products:number;documents:number;plans:number};
 };
 export type LamodaQuantity = { skuId: string; quantity: number };
-export type LamodaPreview = {unresolvedRows:number[];canAssemble:boolean;canAdjust:boolean;remoteShipmentId?:string|null;message:string;availability:{lines:{skuId:string;name:string|null;article?:string|null;size?:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
+export type LamodaPreview = {existingRequest?:{id:string;number:number}|null;unresolvedRows:number[];canAssemble:boolean;canAdjust:boolean;remoteShipmentId?:string|null;message:string;availability:{lines:{skuId:string;name:string|null;article?:string|null;size?:string|null;barcode:string|null;requestedQuantity:number;availableQuantity:number;reservedQuantity:number;shortageQuantity:number}[]}|null};
 const lamodaPath=(id:string)=>'/lamoda/accounts/'+encodeURIComponent(id);
 export const fetchLamodaAccounts=(accessToken:string,clientId:string)=>request<LamodaAccount[]>('/lamoda/accounts?clientId='+encodeURIComponent(clientId),{accessToken});
 export const createLamodaAccount=(accessToken:string,body:{clientId:string;name:string;sellerId:string;oauthClientId:string;secret:string;fboEnabled:boolean;fbsEnabled:boolean})=>request<LamodaAccount>('/lamoda/accounts',{accessToken,method:'POST',body});

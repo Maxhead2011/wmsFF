@@ -11,8 +11,9 @@ export function reviewLamodaQuantities(lines: Line[], values: Record<string, str
   return { quantities, total, valid: valid && total > 0 };
 }
 
-export function LamodaStockReview({ preview, title, disabled, onCreate }: {
+export function LamodaStockReview({ preview, title, disabled, onCreate, onOpen }: {
   preview: LamodaPreview; title: string; disabled: boolean; onCreate: (quantities: LamodaQuantity[]) => void;
+  onOpen?: (requestId: string) => void;
 }) {
   const lines = preview.availability?.lines ?? [];
   const original = () => Object.fromEntries(lines.map(l => [l.skuId, String(l.requestedQuantity)]));
@@ -22,6 +23,12 @@ export function LamodaStockReview({ preview, title, disabled, onCreate }: {
   const planned = lines.reduce((n, l) => n + l.requestedQuantity, 0);
   const shortage = lines.reduce((n, l) => n + l.shortageQuantity, 0);
   const locked = disabled || !preview.canAdjust || preview.unresolvedRows.length > 0;
+  // FIX: original import quantities and free stock are not the composition of an existing request.
+  if (preview.existingRequest) return <section className="lamoda-card lamoda-stock-review" aria-label="Проверка остатков Lamoda">
+    <h3>Сборка уже создана · №{preview.existingRequest.number}</h3>
+    <p>Корректировка исходного плана доступна до создания заявки. Актуальный состав и ход отбора показаны в сборке. Исходный файл сохраняется отдельно.</p>
+    {onOpen && <button type="button" disabled={disabled} onClick={() => onOpen(preview.existingRequest!.id)}>Открыть сборку №{preview.existingRequest.number}</button>}
+  </section>;
   return <section className="lamoda-card lamoda-stock-review" aria-label="Проверка остатков Lamoda">
     <h3>Проверка: {title}</h3><p>{preview.message}</p>
     {preview.unresolvedRows.length > 0 && <p role="alert">Сначала сопоставьте товары в строках: {preview.unresolvedRows.join(', ')}</p>}
