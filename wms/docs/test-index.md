@@ -1,3 +1,5 @@
+Prepared / 2026-10-29: FBS keeps the manually selected request after pending-operation recovery; own-WMS server flag prevents new assignments without requestId. Selected-request completion and manual exit are preserved. LOGOFF245, not published. [Details](fbs-explicit-request.md).
+
 Опубликовано PR765: КИЗ клиента, LOGOFF244; baseline `2026-10-29-kiz-client-guard`. Проверки API4018/web555/Android885/PostgreSQL12/runtime26 и live4 пройдены. [Паспорт](kiz-client-duplicate-guard.md).
 
 КИЗ клиента: `kiz-client-registry.spec.ts`, `kiz-client-receipt.spec.ts`, `kiz-client-review.spec.ts`, `kiz-receipt-conflict-transport.spec.ts`, `kiz-shipment-gates.spec.ts`; release scripts receipt/reuse/shipment/transport runtime + isolated PostgreSQL + full Nest health. Web/source/runtime browser и все Android flavors, включая сохранённую озвучку Софии. [Сценарии](kiz-client-duplicate-guard.md).

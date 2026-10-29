@@ -1,3 +1,5 @@
+Prepared / 2026-10-29: FBS keeps the manually selected request after pending-operation recovery; own-WMS server flag prevents new assignments without requestId. Selected-request completion and manual exit are preserved. LOGOFF245, not published. [Details](fbs-explicit-request.md).
+
 Опубликовано PR765: КИЗ клиента, LOGOFF244; baseline `2026-10-29-kiz-client-guard`. Проверки API4018/web555/Android885/PostgreSQL12/runtime26 и live4 пройдены. [Паспорт](kiz-client-duplicate-guard.md).
 
 КИЗ: [дубли при приёмке и повторная отгрузка только через администратора](kiz-client-duplicate-guard.md). Общая идентичность клиента, история, красный экран LOGOFF244; флаги только нашей WMS.
