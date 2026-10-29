@@ -1,0 +1,11 @@
+Limit  (cost=0.43..13.92 rows=1 width=444) (actual time=0.062..0.063 rows=0 loops=1)
+  Buffers: shared hit=7
+  ->  Index Scan using "AuditLog_contour_createdAt_id_idx" on "AuditLog"  (cost=0.43..13.92 rows=1 width=444) (actual time=0.061..0.062 rows=0 loops=1)
+        Index Cond: (("createdAt" >= (now() - '00:01:30'::interval)) AND ("createdAt" <= now()))
+        Filter: ((entity = 'ClientRequest'::text) AND (action = ANY ('{FBO_PACK_UNIT,FBO_PACK_PRODUCT,FBO_MANUAL_PACK_UNIT,FBO_PACK_BOX}'::text[])) AND ((payload #> '{contourScan,schemaVersion}'::text[]) = '1'::jsonb))
+        Rows Removed by Filter: 3
+        Buffers: shared hit=7
+Planning:
+  Buffers: shared hit=187 read=22
+Planning Time: 2.866 ms
+Execution Time: 0.128 ms

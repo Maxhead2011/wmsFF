@@ -1,5 +1,10 @@
 {
-  "status": "prepared-not-deployed",
+  "status": "published",
+  "pullRequest": 769,
+  "mergeCommit": "93211822278cb13883665fd67b34ce9f291e2446",
+  "publishedImage": "sha256:e96334e56c8416fb770b6eee459a46c15ace932d672c29a12e03410404664db4",
+  "currentBaseline": "baselines/our-wms/2026-10-29-fbo-video-caption",
+  "publishedFlagValue": true,
   "branch": "feature/fbo-video-caption-snapshot",
   "sourceRef": "ab4c8550a567d0fe02ef9b33f1b07a5e4c745743",
   "sourceParityVerified": false,

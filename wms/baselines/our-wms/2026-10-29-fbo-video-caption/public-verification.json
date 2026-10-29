@@ -1,0 +1,18 @@
+{
+  "checkedAt": 1793300148.598894,
+  "image": "sha256:e96334e56c8416fb770b6eee459a46c15ace932d672c29a12e03410404664db4",
+  "restartCount": 0,
+  "health": "ok",
+  "running": true,
+  "uptimeStart": "2026-10-29T18:54:28.447854927Z",
+  "counts": {
+    "packingActions": 0,
+    "captions": 0,
+    "acceptedCaptions": 0,
+    "lastCaptionAt": null
+  },
+  "examples": [],
+  "exactRuntimeDelta": true,
+  "otherEnvironmentUnchanged": true,
+  "otherContainersUnchanged": true
+}

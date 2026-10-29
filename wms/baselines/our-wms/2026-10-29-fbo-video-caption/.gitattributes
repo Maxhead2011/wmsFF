@@ -1,0 +1,4 @@
+api-schema.prisma -text -diff
+*.tar.gz -text -diff
+public-verification.json -text
+index-exporter-proof.txt -text
