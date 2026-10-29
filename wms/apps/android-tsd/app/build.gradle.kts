@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 242 // FIX: restore KIZ focus after barcode scanning in compact packing.
-            versionName = "0.1.242-fbo-compact-focus"
+            versionCode = 243 // FIX: Sofia's account-bound offline tank voice pack.
+            versionName = "0.1.243-sofia-tanks-voice"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

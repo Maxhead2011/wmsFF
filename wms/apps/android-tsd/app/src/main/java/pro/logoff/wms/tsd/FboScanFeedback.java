@@ -6,7 +6,7 @@ import android.media.SoundPool;
 import java.util.HashSet;
 import java.util.Set;
 
-// FIX: bundled female speech works offline and never depends on a TTS engine installed on the TSD.
+// FIX: bundled speech works offline and never depends on a TTS engine installed on the TSD.
 interface FboScanFeedback {
     void play(boolean accepted);
     default void prompt(FboPackingVoice.Cue cue) {}
@@ -19,6 +19,7 @@ interface FboScanFeedback {
     final class Voice implements FboScanFeedback {
         private SoundPool pool;
         private final Set<Integer> loaded = new HashSet<>();
+        private final java.util.Map<Integer,Integer> samples = new java.util.HashMap<>();
         private int hit, miss, repeat, pending, stream;
         private final PersonalScanVoice personal;
         private final java.util.Map<PersonalEventVoice.Cue,Integer> events = new java.util.EnumMap<>(PersonalEventVoice.Cue.class);
@@ -35,26 +36,34 @@ interface FboScanFeedback {
                     loaded.add(sample);
                     if (pending == sample) playSample(sample);
                 });
-                hit = pool.load(context, (personal.personal?R.raw.eleonora_hit:R.raw.fbo_scan_hit), 1);
-                miss = pool.load(context, (personal.personal?R.raw.eleonora_miss:R.raw.fbo_scan_miss), 1);
-                prompts.put(FboPackingVoice.Cue.BOX, pool.load(context, (personal.personal?R.raw.eleonora_box:R.raw.fbo_pack_box), 1));
-                prompts.put(FboPackingVoice.Cue.BARCODE, pool.load(context, (personal.personal?R.raw.eleonora_barcode:R.raw.fbo_pack_barcode), 1));
-                prompts.put(FboPackingVoice.Cue.KIZ, pool.load(context, (personal.personal?R.raw.eleonora_kiz:R.raw.fbo_pack_kiz), 1));
-                // FIX: the user-provided new-barcode recording also fills Eleonora's missing cue.
-                prompts.put(FboPackingVoice.Cue.NEW_BARCODE, pool.load(context, R.raw.fbs_new_barcode, 1));
-                prompts.put(FboPackingVoice.Cue.PUT, pool.load(context, (personal.personal?R.raw.eleonora_put:R.raw.fbo_pack_put), 1));
-                prompts.put(FboPackingVoice.Cue.ERROR, pool.load(context, (personal.personal?R.raw.eleonora_error:R.raw.fbo_pack_error), 1));
-                prompts.put(FboPackingVoice.Cue.CLOSED, pool.load(context, (personal.personal?R.raw.eleonora_closed:R.raw.fbo_pack_closed), 1));
-                if(personal.personal)repeat=pool.load(context,R.raw.eleonora_repeat,1);
+                // FIX: route the same confirmed events to each account's offline recordings.
+                hit = loadSample(context, personal.resource(R.raw.fbo_scan_hit,R.raw.eleonora_hit,R.raw.sofia_tanks_hit));
+                miss = loadSample(context, personal.resource(R.raw.fbo_scan_miss,R.raw.eleonora_miss,R.raw.sofia_tanks_miss));
+                prompts.put(FboPackingVoice.Cue.BOX, loadSample(context, personal.resource(R.raw.fbo_pack_box,R.raw.eleonora_box,R.raw.sofia_tanks_begin)));
+                prompts.put(FboPackingVoice.Cue.BARCODE, loadSample(context, personal.resource(R.raw.fbo_pack_barcode,R.raw.eleonora_barcode,R.raw.sofia_tanks_target)));
+                prompts.put(FboPackingVoice.Cue.KIZ, loadSample(context, personal.resource(R.raw.fbo_pack_kiz,R.raw.eleonora_kiz,R.raw.sofia_tanks_locked)));
+                prompts.put(FboPackingVoice.Cue.NEW_BARCODE, loadSample(context, personal.resource(R.raw.fbs_new_barcode,R.raw.fbs_new_barcode,R.raw.sofia_tanks_reset)));
+                prompts.put(FboPackingVoice.Cue.PUT, loadSample(context, personal.resource(R.raw.fbo_pack_put,R.raw.eleonora_put,R.raw.sofia_tanks_put)));
+                prompts.put(FboPackingVoice.Cue.ERROR, loadSample(context, personal.resource(R.raw.fbo_pack_error,R.raw.eleonora_error,R.raw.sofia_tanks_armor)));
+                prompts.put(FboPackingVoice.Cue.CLOSED, loadSample(context, personal.resource(R.raw.fbo_pack_closed,R.raw.eleonora_closed,R.raw.sofia_tanks_ready)));
                 if(personal.personal){
-                    events.put(PersonalEventVoice.Cue.FBS_OPEN,pool.load(context,R.raw.eleonora_event_fbs_open,1));
-                    events.put(PersonalEventVoice.Cue.FBS_DONE,pool.load(context,R.raw.eleonora_event_fbs_done,1));
-                    events.put(PersonalEventVoice.Cue.FBS_EMPTY,pool.load(context,R.raw.eleonora_event_fbs_empty,1));
-                    events.put(PersonalEventVoice.Cue.RECOUNT,pool.load(context,R.raw.eleonora_event_recount,1));
-                    events.put(PersonalEventVoice.Cue.KIZ_CHECK,pool.load(context,R.raw.eleonora_event_kiz_check,1));
-                    events.put(PersonalEventVoice.Cue.PALLET,pool.load(context,R.raw.eleonora_event_pallet,1));
+                    repeat=loadSample(context,personal.resource(0,R.raw.eleonora_repeat,R.raw.sofia_tanks_repeat));
+                    events.put(PersonalEventVoice.Cue.FBS_OPEN,loadSample(context,personal.resource(0,R.raw.eleonora_event_fbs_open,R.raw.sofia_tanks_start)));
+                    events.put(PersonalEventVoice.Cue.FBS_DONE,loadSample(context,personal.resource(0,R.raw.eleonora_event_fbs_done,R.raw.sofia_tanks_ready)));
+                    events.put(PersonalEventVoice.Cue.FBS_EMPTY,loadSample(context,personal.resource(0,R.raw.eleonora_event_fbs_empty,R.raw.sofia_tanks_empty)));
+                    events.put(PersonalEventVoice.Cue.RECOUNT,loadSample(context,personal.resource(0,R.raw.eleonora_event_recount,R.raw.sofia_tanks_begin)));
+                    events.put(PersonalEventVoice.Cue.KIZ_CHECK,loadSample(context,personal.resource(0,R.raw.eleonora_event_kiz_check,R.raw.sofia_tanks_start)));
+                    events.put(PersonalEventVoice.Cue.PALLET,loadSample(context,personal.resource(0,R.raw.eleonora_event_pallet,R.raw.sofia_tanks_move)));
                 }
             } catch (RuntimeException unavailable) { close(); }
+        }
+        // FIX: several Sofia events share a phrase; decode each recording only once per session.
+        private int loadSample(Context context,int resource){
+            Integer existing=samples.get(resource);
+            if(existing!=null)return existing;
+            int sample=pool.load(context,resource,1);
+            samples.put(resource,sample);
+            return sample;
         }
         public void play(boolean accepted) { scan(accepted,"scan:miss"); }
         public void scan(boolean accepted,String errorKey) {
@@ -84,7 +93,7 @@ interface FboScanFeedback {
         }
         public void close() {
             SoundPool previous = pool;
-            pool = null; pending = 0; stream = 0; loaded.clear();
+            pool = null; pending = 0; stream = 0; loaded.clear(); samples.clear();
             if (previous != null) {
                 try { previous.release(); } catch (RuntimeException ignored) { }
             }

@@ -1,0 +1,45 @@
+{
+  "versionCode": 243,
+  "versionName": "0.1.243-sofia-tanks-voice",
+  "passed": 858,
+  "failures": 0,
+  "flavors": {
+    "Logoff": {
+      "tests": 286,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Ffullhab": {
+      "tests": 286,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "Platform": {
+      "tests": 286,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "approvedClips": 13,
+  "events": 17,
+  "existingRawAssetsUnchanged": 25,
+  "unsignedSha256": "2f85d3fe0c54274b9fd8aa1eed8559f4faca2e52dabdbb80ec80c7fb9c03da50",
+  "unsignedBytes": 5939016,
+  "redReproduced": true,
+  "signedApk": "logoff-tsd-sofia-tanks-voice-243.apk",
+  "signedBytes": 5956719,
+  "signedSha256": "de646513ae9686f2b8b6c86c00f43abdc8731b70576dc6c74947dd9506f613bc",
+  "certificateSha256": "52916d7797ade50cc1c50bba8787b9d2307b1e5dfd4ea725bd7c3be0e64f989b",
+  "signedPayloadVerified": true,
+  "published": false,
+  "previousApkVersion": 242,
+  "previousApkCertificateMatches": true,
+  "baselineGuardTests": 8,
+  "baseline": "2026-10-29-fbo-modal-rows",
+  "integrationBase": "0a66124f",
+  "accountReadOnlyVerified": true,
+  "physicalTerminalVerified": false
+}
