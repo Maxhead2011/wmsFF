@@ -45,3 +45,5 @@ Official reference checked 29.10.2026: https://academy.lamoda.ru/articles/prodaz
 UI shows readiness and a refresh button. The new scoped template endpoint accepts no commercial data. Existing API and fully priced workbook remain unchanged. Files: actual builder, submission composition/view/template, service/controller, route registry20->21, API helper and submission panel. Tests reproduce missing export before implementation, blank (not zero) prices, KIZ, unfinished/unchecked rejection and no writes.
 
 Template pre-release checks: API3965/150 skipped, web539/2 skipped, TypeScript both, baseline8, isolated PostgreSQL10/full health, browser9.
+
+Published PR749: public browser9 passed; health and public hashes match. API sha256:52a3c754f319f3a1d00a8246c0eb938c9d2cc0ab2bccf923cfa6b24d96e1dc3f, web sha256:0c4c3e9179d10226a3641705a6923ff93a706a8b823ac724e1b288c93ffabb43. Schema/APK239 and other containers unchanged. Baseline contains684 API files.
