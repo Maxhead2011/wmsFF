@@ -1,3 +1,5 @@
+Prepared / 2026-10-29: FBO Ozon defaults to all permitted clients and uses WB-style rows with client in composition, existing Ozon deadline/actions and cursor paging. Own-WMS opt-in; API3975/web542, TypeScript/build and baseline8 passed. Exact runtime/browser/database candidate checks precede publication. No stock/schema/APK/sold changes. [Details](ozon-all-clients-list.md).
+
 Applied PR757 / 2026-10-29: audited data-only binding of WMS2506 to manually created Lamoda MPG100007386, with factual composition checks and existing status refresh. No runtime changes. [Operation](lamoda-manual-link-2506.md).
 
 Published PR755 / 2026-10-29: LOGOFF TSD242 restores KIZ focus after scanner Enter in compact FBO packing with guarded delayed autofocus. Regression RED/GREEN; Android280 per flavor (840 total), release build, signing/payload, public hashes and health passed. Exactly3 download-file overlay on PR753; API/schema/other containers/sold unchanged. Baseline `2026-10-29-fbo-compact-focus`, sourceParityVerified=false. Terminal installation required. [Details](fbo-compact-kiz-focus.md).
