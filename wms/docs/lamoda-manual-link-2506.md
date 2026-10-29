@@ -9,3 +9,5 @@ Apply creates a SUCCEEDED manual-file receipt and operation journal, sets Lamoda
 Validation:7 automatic guard tests; dry-run21 matched; full transaction rehearsal rolled back with persisted receipt still null. Full API/web regressions run before commit. Runtime hashes for the three used Lamoda modules match the published template baseline; latest TSD242-only update verified. Execute only after merged PR using the guarded local wrapper (work/lamoda-link-2506/run.py), with fresh image verification and release lock.
 
 Full regressions: API3965 passed/150 skipped; web539 passed/2 skipped. No source/runtime code changed.
+
+Applied after merged PR757 on29.10.2026. Existing refresh succeeded and returned VALIDATION. Receipt links WMS2506 to MPG100007386, external number1;21 units. Payload hash0bb5f9a9e3a9b9b1cfc865efcfa5dab3f704c0a1b6048b086a70d453412b89f0. Physical assembly/request status assertions passed. The operation is recorded in AuditLog as LAMODA_MANUAL_SHIPMENT_LINKED. No runtime publication or external creation occurred.
