@@ -53,9 +53,19 @@ function PantheraWindowSurface({ active, onOpen, onRetain, children, dock }: {
       }
       // Explicit operational dialogs only: confirmations and native date pickers keep their behavior.
       surface.querySelectorAll<HTMLElement>('.online-execution-modal, .fbs-assembly-dialog-backdrop').forEach(element => {
-        if (entries.has(element)) return;
-        const header = element.querySelector<HTMLElement>('.online-execution-modal__header, .fbs-assembly-dialog__heading');
+        // FIX: marketplace shells retain the embedded assembly's guarded close header.
+        const header = element.querySelector<HTMLElement>('.online-execution-modal__header, .fbs-assembly-dialog__heading, .fbo-inline-execution__header');
         if (!header) return;
+        const existing = entries.get(element);
+        if (existing) {
+          // FIX: loading can replace the header; keep this window's minimized state and button.
+          if (!header.contains(existing.button)) {
+            const close = header.querySelector<HTMLButtonElement>('button[title="Закрыть"], button[aria-label="Закрыть"]');
+            if (close?.parentElement) close.parentElement.insertBefore(existing.button, close);
+            else header.append(existing.button);
+          }
+          return;
+        }
         const title = header.querySelector('h2,h3')?.textContent?.trim() || element.getAttribute('aria-label') || 'Окно WMS';
         const button = document.createElement('button');
         button.type = 'button'; button.className = 'icon-button panthera-window-minimize';

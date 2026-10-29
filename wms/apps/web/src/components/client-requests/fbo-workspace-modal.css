@@ -1,0 +1,10 @@
+/* FIX: sibling windows escape container-type clipping, preserving WB modal behavior. */
+.fbo-workspace-modal {position:fixed;inset:0;z-index:70;display:flex;align-items:center;justify-content:center;padding:24px;background:rgb(15 23 42 / .45);box-sizing:border-box;}
+.fbo-workspace-modal > .fbo-workspace-modal__panel {display:block;width:min(1180px,100%);max-width:100%;max-height:calc(100dvh - 48px);overflow:auto;overscroll-behavior:contain;padding:24px;box-sizing:border-box;border:1px solid var(--line,#dce5e9);border-radius:16px;background:var(--surface,#fff);color:var(--ink,#34434f);box-shadow:0 22px 70px #0f172a38;}
+.fbo-workspace-modal__panel > .online-execution-modal__header {display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;}
+.fbo-workspace-modal__panel h2 {overflow-wrap:anywhere;}
+.fbo-workspace-modal__panel .fbo-inline-execution__header {flex-wrap:wrap;gap:12px;}
+.fbo-workspace-modal__panel .online-execution-table-wrap {max-width:100%;overflow-x:auto;}
+.fbo-workspace-modal__panel .ozfbo-customer-workspace {margin:0;padding:0;}
+.fbo-workspace-modal__panel > .lamoda-workspace {padding:0;border:0;}
+@media(max-width:650px){.fbo-workspace-modal{padding:8px;}.fbo-workspace-modal > .fbo-workspace-modal__panel{padding:14px;max-height:calc(100dvh - 16px);}.fbo-workspace-modal__panel h2{font-size:20px;}}

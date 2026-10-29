@@ -1,0 +1,12 @@
+/* FIX: Lamoda operational rows match Ozon/WB without changing maintenance or FBS tables. */
+.lamoda-ozon-layout .lamoda-assembly-table-wrap{max-width:100%;overflow-x:auto;border:1px solid var(--line,#dce5e9);border-radius:14px;background:var(--surface,#fff);}
+.lamoda-ozon-layout .lamoda-assembly-table{width:100%;table-layout:fixed;border-collapse:collapse;color:var(--ink,#34434f);background:var(--surface,#fff);}
+.lamoda-assembly-table th{text-transform:uppercase;font-size:13px;}
+.lamoda-ozon-layout .lamoda-assembly-table th,.lamoda-ozon-layout .lamoda-assembly-table td{padding:16px;vertical-align:top;border-bottom:1px solid var(--line,#dce5e9);overflow-wrap:anywhere;}
+.lamoda-assembly-table th:nth-child(1){width:18%;}.lamoda-assembly-table th:nth-child(2){width:30%;}.lamoda-assembly-table th:nth-child(3){width:22%;}.lamoda-assembly-table th:nth-child(4){width:19%;}.lamoda-assembly-table th:nth-child(5){width:11%;}
+.lamoda-assembly-table tr:last-child td{border-bottom:0;}.lamoda-assembly-table tr[data-selected]{background:color-mix(in srgb,var(--surface,#fff) 90%,#9270af);}
+.lamoda-assembly-table p{margin:8px 0;line-height:1.45;}.lamoda-row-number{font-size:22px;}.lamoda-row-client{padding-bottom:12px;border-bottom:1px solid var(--line,#dce5e9);}.lamoda-row-client strong{margin-right:8px;}
+.lamoda-row-status{display:inline-block;border-radius:10px;padding:8px;background:color-mix(in srgb,var(--surface,#fff) 85%,#48a68b);}
+.lamoda-row-buttons{display:grid;gap:8px;margin-top:12px;}.lamoda-ozon-layout .lamoda-assembly-table button{width:100%;margin:0;min-height:42px;border-radius:10px;white-space:normal;overflow-wrap:anywhere;}
+@container(max-width:1000px){.lamoda-assembly-table{min-width:950px;}}
+@container(max-width:650px){.lamoda-ozon-layout .lamoda-assembly-table{min-width:0;}.lamoda-assembly-table thead{display:none;}.lamoda-assembly-table tbody,.lamoda-assembly-table tr,.lamoda-assembly-table td{display:block;width:auto;}.lamoda-assembly-table tr{border-bottom:2px solid var(--line,#dce5e9);}.lamoda-ozon-layout .lamoda-assembly-table td{padding:12px;border:0;}.lamoda-assembly-table td::before{content:attr(data-label);display:block;font-size:12px;font-weight:700;text-transform:uppercase;margin-bottom:6px;}}
