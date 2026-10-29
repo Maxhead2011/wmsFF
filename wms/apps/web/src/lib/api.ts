@@ -8847,11 +8847,11 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 
 export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
 export type OzonEditDeadline={orderId:string;orderNumber:string;editDeadlineAt?:string|null;checkedAt?:string};
-export type OzonCustomerRequest={editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export type OzonCustomerRequest={clientId?:string;clientName?:string;clientCode?:string;warehouseName?:string|null;createdAt?:string;itemCount?:number;itemsPreview?:{name:string|null;barcode:string|null;quantity:number}[];editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
 export type OzonCustomerWarehouse = {id:string;name:string};
 // FIX: use the same explicit branch for the list and both multipart import steps.
 export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}
-export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string,view:'active'|'completed'='active'){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):'')+'&view='+view,{accessToken});}
+export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string,view:'active'|'completed'='active',options:{allClients?:boolean;beforeNumber?:number}={}){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):'')+'&view='+view+(options.allClients?'&allClients=true':'')+(options.beforeNumber?'&beforeNumber='+options.beforeNumber:''),{accessToken});}
 function ozonCustomerForm(payload:OutboundRequestXlsxPayload & {warehouseId?:string}){const form=outboundRequestXlsxForm(payload);appendOptional(form,'warehouseId',payload.warehouseId);return form;}
 export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
 export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload & {warehouseId?:string}) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',ozonCustomerForm(payload),accessToken);}

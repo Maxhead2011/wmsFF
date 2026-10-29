@@ -41,19 +41,37 @@ export class OzonFboImportService {
     throw new BadRequestException(choices.length ? 'Выберите филиал.' : 'У клиента нет активного филиала.');
   }
   // FIX: the Ozon screen lists the same assemblies it creates, within client and branch scope.
-  async list(clientId: string, user: AuthUser, selectedWarehouseId?: string, view: string = 'active') {
+  async list(clientId: string, user: AuthUser, selectedWarehouseId?: string, view: string = 'active', allClients?: string, beforeNumber?: string) {
     if (process.env.WMS_OZON_FBO_IMPORT_ENABLED !== 'true') throw new NotFoundException('Импорт ФБО Ozon выключен.');
-    if (!clientId?.trim()) throw new BadRequestException('Выберите клиента.');
-    this.scopes.requireClientAccess(user, clientId, 'read');
-    const warehouseId = await this.resolveWarehouse(clientId, user, 'read', selectedWarehouseId);
+    if (allClients !== undefined && allClients !== 'true' && allClients !== 'false') throw new BadRequestException('Неизвестный режим списка сборок.');
+    // FIX: opt-in affects reads only; imports keep their explicit client/branch requirements.
+    const all = allClients === 'true' && process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true';
+    if (!all && !clientId?.trim()) throw new BadRequestException('Выберите клиента.');
+    if (beforeNumber !== undefined && (!all || typeof beforeNumber !== 'string' || !/^[1-9]\d*$/.test(beforeNumber) || !Number.isSafeInteger(Number(beforeNumber)))) throw new BadRequestException('Некорректный номер страницы сборок.');
+    let clientFilter: ReturnType<ClientScopeService['resolveClientFilter']> = clientId;
+    let warehouseId: string | undefined;
+    if (all) {
+      clientFilter = this.scopes.resolveClientFilter(user, clientId?.trim() || undefined);
+      const fixed = effectiveWarehouseId(user, 'read') ?? (!(user.roleCodes ?? []).includes('CLIENT') ? user.activeWarehouseId : null);
+      const selected = selectedWarehouseId?.trim();
+      if (fixed && selected && fixed !== selected) throw new BadRequestException('Выбранный филиал недоступен в текущем контуре.');
+      warehouseId = fixed || selected || undefined;
+    } else {
+      this.scopes.requireClientAccess(user, clientId, 'read');
+      warehouseId = await this.resolveWarehouse(clientId, user, 'read', selectedWarehouseId);
+    }
     // FIX: filter before take; completed packing alone does not mean handover.
     if (view !== 'active' && view !== 'completed') throw new BadRequestException('Неизвестный список сборок.');
     const closed = [ClientRequestStatus.DONE, ClientRequestStatus.CANCELLED, ClientRequestStatus.REJECTED];
-    const rows = await this.db.clientRequest.findMany({where:{clientId,warehouseId,ozonShipment:{isNot:null},
+    const rows = await this.db.clientRequest.findMany({where:{clientId:clientFilter,warehouseId,ozonShipment:{isNot:null},
+      ...(beforeNumber !== undefined ? {number:{lt:Number(beforeNumber)}} : {}),
       status: view === 'completed' ? {in:closed} : {notIn:closed}},
-      orderBy:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
-        items:{select:{quantity:true}},ozonShipment:{select:{directions:true,integration:true}},fboAssembly:{select:{phase:true}}}});
+      orderBy:all?{number:'desc'}:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
+        ...(all?{clientId:true,createdAt:true,client:{select:{name:true,code:true}},warehouse:{select:{name:true}}}:{}),
+        items:{select:{quantity:true,...(all?{name:true,barcode:true}:{})}},ozonShipment:{select:{directions:true,integration:true}},fboAssembly:{select:{phase:true}}}});
     return rows.map(r=>({id:r.id,number:r.number,title:r.title,status:r.status,desiredDate:r.desiredDate,destinationCity:r.destinationCity,
+      ...(all?{clientId:r.clientId,clientName:r.client?.name??null,clientCode:r.client?.code??null,warehouseName:r.warehouse?.name??null,createdAt:r.createdAt,
+        itemCount:r.items.length,itemsPreview:r.items.slice(0,3).map(i=>({name:i.name??null,barcode:i.barcode??null,quantity:i.quantity}))}:{}),
       editDeadlines:r.ozonShipment?.integration?supplyOrders(r.ozonShipment.integration as SupplyIntegration).map(o=>({orderId:o.orderId,orderNumber:o.orderNumber,editDeadlineAt:o.editDeadlineAt??null,checkedAt:o.checkedAt})):[],
       quantity:r.items.reduce((s,i)=>s+i.quantity,0),directions:(r.ozonShipment!.directions as unknown[]).length,phase:r.fboAssembly?.phase??'NOT_STARTED'}));
   }
