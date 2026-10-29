@@ -40,3 +40,14 @@ export class LamodaAssemblyDto {
   @IsOptional() @IsArray() @ArrayMaxSize(1000) @ValidateNested({ each: true }) @Type(() => LamodaQuantityDto)
   quantities?: LamodaQuantityDto[];
 }
+export class LamodaSubmissionPriceDto {
+  @IsString() @IsNotEmpty() @MaxLength(200) skuId!:string;
+  @IsInt() @Min(1) priceMinor!:number;
+}
+export class LamodaSubmissionDto {
+  @IsString() @IsNotEmpty() @MaxLength(200) externalShipmentId!:string;
+  @IsIn(['BYKOVO','SOFINO']) warehouseCode!:string;
+  @IsString() @MaxLength(10) plannedDate!:string;
+  @IsArray() @ArrayMaxSize(5000) @ValidateNested({each:true}) @Type(()=>LamodaSubmissionPriceDto)
+  prices!:LamodaSubmissionPriceDto[];
+}

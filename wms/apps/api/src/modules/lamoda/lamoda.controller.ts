@@ -6,11 +6,34 @@ import type { AuthUser } from '../auth/auth.types';
 import { LamodaService } from './lamoda.service';
 import { LamodaCreateAccountDto, LamodaUpdateAccountDto, LamodaSyncDto, LamodaLinkDto, LamodaImportDto, LamodaImportShipmentDto, LamodaAssemblyDto } from './lamoda.dto';
 import { templateWorkbook } from './lamoda-policy';
+import { LamodaSubmissionDto } from './lamoda.dto';
+import { actualLamodaWorkbook } from './lamoda-actual-shipment';
 
 @Controller('lamoda')
 // FIX: service still requires CLIENT role and scoped access for customer plan operations.
 @RequireAnyPermissions('marketplace-api:read', 'marketplace-api:write', 'client-requests:read')
 export class LamodaController {
+  @Post('accounts/:id/assemblies/:requestId/submission/reset')
+  @RequireAnyPermissions('marketplace-api:write','client-requests:write')
+  resetSubmission(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser){return this.service.submission(id,requestId,user,'reset');}
+  @Get('accounts/:id/assemblies/:requestId/submission')
+  submission(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser){return this.service.submission(id,requestId,user,'view');}
+  @Post('accounts/:id/assemblies/:requestId/submission/preview')
+  @RequireAnyPermissions('marketplace-api:write','client-requests:write')
+  previewSubmission(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser,@Body() body:LamodaSubmissionDto){return this.service.submission(id,requestId,user,'preview',body);}
+  @Post('accounts/:id/assemblies/:requestId/submission/send')
+  @RequireAnyPermissions('marketplace-api:write','client-requests:write')
+  sendSubmission(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser,@Body() body:LamodaSubmissionDto){return this.service.submission(id,requestId,user,'send',body);}
+  @Post('accounts/:id/assemblies/:requestId/submission/refresh')
+  @RequireAnyPermissions('marketplace-api:write','client-requests:write')
+  refreshSubmission(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser){return this.service.submission(id,requestId,user,'refresh');}
+  @Post('accounts/:id/assemblies/:requestId/submission/file')
+  @RequireAnyPermissions('marketplace-api:write','client-requests:write')
+  async submissionFile(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser,@Body() body:LamodaSubmissionDto){
+    const result=await this.service.submission(id,requestId,user,'preview',body);
+    if(!('payload' in result))throw new BadRequestException('Нет состава поставки.');
+    return new StreamableFile(actualLamodaWorkbook(result.payload),{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',disposition:'attachment; filename="Lamoda-shipment.xlsx"'});
+  }
   constructor(private readonly service: LamodaService) {}
   @Get('accounts')
   accounts(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.service.accounts(clientId, user); }
