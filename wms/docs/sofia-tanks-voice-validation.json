@@ -34,12 +34,21 @@
   "signedSha256": "de646513ae9686f2b8b6c86c00f43abdc8731b70576dc6c74947dd9506f613bc",
   "certificateSha256": "52916d7797ade50cc1c50bba8787b9d2307b1e5dfd4ea725bd7c3be0e64f989b",
   "signedPayloadVerified": true,
-  "published": false,
+  "published": true,
   "previousApkVersion": 242,
   "previousApkCertificateMatches": true,
   "baselineGuardTests": 8,
   "baseline": "2026-10-29-fbo-modal-rows",
   "integrationBase": "0a66124f",
   "accountReadOnlyVerified": true,
-  "physicalTerminalVerified": false
+  "physicalTerminalVerified": false,
+  "pr": 763,
+  "publicUrl": "https://wms.logoff.pro/downloads/logoff-tsd-sofia-tanks-voice-243.apk",
+  "publishedWebImage": "sha256:4f4ac23ce16bdb0aab407ca9b900af9899399a74aa6ddc5c254ec37ece6b207d",
+  "publishedBaseline": "2026-10-29-sofia-tanks-voice",
+  "publicHashesVerified": true,
+  "health": "ok",
+  "apiUnchangedFiles": 684,
+  "unchangedWebFiles": 3188,
+  "otherContainersUnchanged": true
 }
