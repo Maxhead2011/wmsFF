@@ -1,0 +1,270 @@
+{
+  "pack": "sofia-tanks",
+  "sourcePage": "https://zvukipro.com/games/2310-zvuki-iz-igry-world-of-tanks.html",
+  "accountId": "f89c0efe-dcd2-4dfa-9cea-e35c0c492f83",
+  "flavor": "logoff",
+  "format": "WAV PCM signed 16-bit little-endian, mono, 22050 Hz",
+  "conversion": "Approved preview MP3s decoded to PCM without additional cuts, gain or effects.",
+  "clips": [
+    {
+      "id": "hit",
+      "phrase": "Есть пробитие!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_hit.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618815463_probitie1.mp3",
+      "sourceWindowSeconds": null,
+      "approvedPreviewSha256": "9c86ee8ec531d3e114a9852542234fe6f57a999d6ef97ecfeef2e56a3ab08058",
+      "sha256": "52c2ab183f85af3d636e3ecb90656e7ae1c0fdbab967049e0c3271519f78d66e",
+      "durationSeconds": 1.201,
+      "bytes": 53052
+    },
+    {
+      "id": "miss",
+      "phrase": "Не пробил!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_miss.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-05/1622217845_ne-probil.mp3",
+      "sourceWindowSeconds": null,
+      "approvedPreviewSha256": "4356ecc7d09faa1859fbff9b681e228c6642d5eb0c2c28fbce883ed76a29dbb7",
+      "sha256": "73eb4d5d6886303febac756143a8d91c84dcbfb48dcc01c0670a572b1e85ea35",
+      "durationSeconds": 0.827,
+      "bytes": 36564
+    },
+    {
+      "id": "repeat",
+      "phrase": "Рикошет!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_repeat.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-07/1625628744_rikoshet1.mp3",
+      "sourceWindowSeconds": null,
+      "approvedPreviewSha256": "4953cf84709d650c65bb94a019e0d442c05af8857412f6a16c6e836c8448a2cd",
+      "sha256": "cca509f4d7fdfa4682608c9ccd9e8af9bb8f3ce690fd2f5d0a39db135d0fc53a",
+      "durationSeconds": 0.744,
+      "bytes": 32896
+    },
+    {
+      "id": "start",
+      "phrase": "В бой!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_start.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        0.73,
+        1.5
+      ],
+      "approvedPreviewSha256": "c292cff113b33e058c1239a333be18a47e50892b71414afb5425d683aa08951c",
+      "sha256": "d52f48d35205af52c81a66b35768e3956ca7c3cf7cc0b53cbbc3297c5eb64b4b",
+      "durationSeconds": 0.77,
+      "bytes": 34036
+    },
+    {
+      "id": "begin",
+      "phrase": "Бой начинается!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_begin.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        2.95,
+        4.29
+      ],
+      "approvedPreviewSha256": "8f21cf5c6a3da00f30d610451a35475faa0e1782ac6228536034e88f4e4fbe79",
+      "sha256": "0f82f315d55287b06e68038c4db286f1c5fda4dae1fe0e39e0eb46e7aff7c463",
+      "durationSeconds": 1.34,
+      "bytes": 59172
+    },
+    {
+      "id": "put",
+      "phrase": "Попадание!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_put.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        8.78,
+        9.65
+      ],
+      "approvedPreviewSha256": "74b6baf8b4bb4242bc46ebcd52ce2c079de860dd69f605114f40d4b1169e88ef",
+      "sha256": "538ac4e669186debd41a196ac5b56de1bb29791e09e36fd11bb7596a2beb70c7",
+      "durationSeconds": 0.847,
+      "bytes": 37446
+    },
+    {
+      "id": "armor",
+      "phrase": "Броня не пробита!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_armor.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        9.7,
+        11.12
+      ],
+      "approvedPreviewSha256": "4ea84a597792a86a443e806fdc720595501125e61987077328637fa08893c897",
+      "sha256": "9447f539da212391ef21b9dd925790873418656901c7bb5638be78df5b116efa",
+      "durationSeconds": 1.167,
+      "bytes": 51554
+    },
+    {
+      "id": "ready",
+      "phrase": "Готов!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_ready.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        26.82,
+        27.48
+      ],
+      "approvedPreviewSha256": "88498992082bbacc648c721838ac193f7901c4b01a958df8e24e2e527dba4bbb",
+      "sha256": "ff96c962ba206114ee0d350470781ac9e10d43e7626abed26f9c31bc78f04464",
+      "durationSeconds": 0.66,
+      "bytes": 29184
+    },
+    {
+      "id": "move",
+      "phrase": "Можно ехать!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_move.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        37.55,
+        38.44
+      ],
+      "approvedPreviewSha256": "4bb1b622a7ec1a0fc6fb74fc80e11d760c8ae8478abf589cb5136ee67059f075",
+      "sha256": "eb3a6a0835c5389c3a6ea05ad8823a622a0615d71174390269962bbe91f506ca",
+      "durationSeconds": 0.883,
+      "bytes": 39038
+    },
+    {
+      "id": "locked",
+      "phrase": "Цель захвачена!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_locked.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        103.12,
+        104.05
+      ],
+      "approvedPreviewSha256": "965a3ebe404138bb96a51143f4f26ff8f4f7a9152f64117b87a4233ca2377341",
+      "sha256": "f2b14ad24167cb30bd39b66ead6fcba726c4532a414cd181c62aaa78e0056b51",
+      "durationSeconds": 0.93,
+      "bytes": 41090
+    },
+    {
+      "id": "target",
+      "phrase": "Цель понял!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_target.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        104.06,
+        104.79
+      ],
+      "approvedPreviewSha256": "a3c141f8e8700a43e2657663278d19da967db7179ac027131e267639be212156",
+      "sha256": "bdd036d73a589da619a2923eb7fa3944585b95e189a937b69c7d904efe4a2cf5",
+      "durationSeconds": 0.73,
+      "bytes": 32272
+    },
+    {
+      "id": "empty",
+      "phrase": "Цель потеряна!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_empty.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        104.8,
+        105.83
+      ],
+      "approvedPreviewSha256": "efca66a2b094e0020722fe558d98cbc2401ea1acfd035c562a2a53763c8a1169",
+      "sha256": "1a41802c4936400dc835508e7f8600ea19eefe5db8854cd9be5ea6f3c498b748",
+      "durationSeconds": 1.03,
+      "bytes": 45502
+    },
+    {
+      "id": "reset",
+      "phrase": "Отставить цель!",
+      "file": "apps/android-tsd/app/src/main/res/raw/sofia_tanks_reset.wav",
+      "sourceUrl": "https://zvukipro.com/uploads/files/2021-04/1618810258_frazy-jekipazha-world-of-tank.mp3",
+      "sourceWindowSeconds": [
+        108.18,
+        109.38
+      ],
+      "approvedPreviewSha256": "adc3812096017ee3595a175f81295b8945840768c3dd449a4c346d073655cf75",
+      "sha256": "16456c4153f8e6ea3dd79bd1d901a24f4e9cf21de6a73f6bc85f538171031533",
+      "durationSeconds": 1.2,
+      "bytes": 52998
+    }
+  ],
+  "events": [
+    {
+      "id": "SCAN_HIT",
+      "label": "Успешный скан",
+      "clip": "hit"
+    },
+    {
+      "id": "SCAN_MISS",
+      "label": "Ошибка сканирования",
+      "clip": "miss"
+    },
+    {
+      "id": "SCAN_REPEAT",
+      "label": "Повтор той же ошибки",
+      "clip": "repeat"
+    },
+    {
+      "id": "FBS_OPEN",
+      "label": "Начало сборки FBS",
+      "clip": "start"
+    },
+    {
+      "id": "FBS_DONE",
+      "label": "Сборка FBS завершена",
+      "clip": "ready"
+    },
+    {
+      "id": "FBS_EMPTY",
+      "label": "Нет доступного задания FBS",
+      "clip": "empty"
+    },
+    {
+      "id": "BOX",
+      "label": "Нужно отсканировать короб",
+      "clip": "begin"
+    },
+    {
+      "id": "BARCODE",
+      "label": "Короб выбран — нужен ШК товара",
+      "clip": "target"
+    },
+    {
+      "id": "KIZ",
+      "label": "Товар выбран — нужен КИЗ",
+      "clip": "locked"
+    },
+    {
+      "id": "NEW_BARCODE",
+      "label": "Нужно отсканировать новый ШК",
+      "clip": "reset"
+    },
+    {
+      "id": "PUT",
+      "label": "Товар принят в короб",
+      "clip": "put"
+    },
+    {
+      "id": "ERROR",
+      "label": "Ошибка при упаковке",
+      "clip": "armor"
+    },
+    {
+      "id": "CLOSED",
+      "label": "Закрытие короба подтверждено",
+      "clip": "ready"
+    },
+    {
+      "id": "PACKED_BOX",
+      "label": "Упаковка целого короба подтверждена",
+      "clip": "hit"
+    },
+    {
+      "id": "RECOUNT",
+      "label": "Открыт пересчёт",
+      "clip": "begin"
+    },
+    {
+      "id": "KIZ_CHECK",
+      "label": "Открыта проверка КИЗ",
+      "clip": "start"
+    },
+    {
+      "id": "PALLET",
+      "label": "Открыта работа с паллетами",
+      "clip": "move"
+    }
+  ]
+}
