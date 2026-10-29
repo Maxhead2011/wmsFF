@@ -38,7 +38,16 @@ public class TsdFboPlan {
     public List<Box> boxes;
     public List<String> wholeBoxes;
     public static class Line {
-        public String id, skuId, barcode, name, article, size;
+        public String id, skuId, barcode, name, article, size, productDisplayText;
+        // FIX: loose picking uses the same client presentation as tasks in a box route.
+        public String displayLabel() {
+            if(productDisplayText!=null&&!productDisplayText.trim().isEmpty())return productDisplayText;
+            StringBuilder label=new StringBuilder();
+            for(String value:new String[]{name,article,size,barcode})if(value!=null&&!value.trim().isEmpty()){
+                if(label.length()>0)label.append(" · ");label.append(value);
+            }
+            return label.length()>0?label.toString():"Товар";
+        }
         public List<String> barcodes;
         public boolean requiresKiz;
         public int needed, picked, packed, remaining;
