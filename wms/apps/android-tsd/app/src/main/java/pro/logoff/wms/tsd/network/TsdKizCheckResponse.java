@@ -6,4 +6,7 @@ public class TsdKizCheckResponse {
     public String boxCode;
     public String skuName;
     public String message;
+    public boolean clientKizGuardEnabled;
+    public String code;
+    public TsdKizDuplicateInfo duplicateInfo;
 }

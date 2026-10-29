@@ -18,3 +18,15 @@ it('offers physical reuse only when server allows it',()=>{
  expect(render({physicalReuseAllowed:true})).not.toContain('disabled="">Разрешить использовать');
  expect(render({physicalReuseAllowed:true,active:false})).toContain('disabled="">Разрешить использовать');
 });
+
+// TEST: pending client-guard cases stay reachable in the sole administrative queue.
+it('keeps unresolved old cases and their pagination with the client guard',()=>{
+ const row={createdAt:'2026-01-01T00:00:00Z',status:'OPEN'};
+ expect(reviewWeek({items:[row],nextCursor:'more'},Date.parse('2026-10-29'),true)).toEqual({items:[row],nextCursor:'more'});
+});
+it('identifies FBO context and exposes an explicit refusal',()=>{
+ const row:KizReviewCase={id:'1',taskId:'GUARD:FBO:client:request',status:'OPEN',active:true,decision:'REVIEW',createdAt:'2026-10-29',updatedAt:'2026-10-29',resolution:null,reason:null,decidedByName:null,
+  snapshot:{scope:'FBO',productName:'Товар',requestNumber:1813,orderId:'',article:null,barcode:null,boxCode:null,workerName:null},kizIdentity:'k',attempts:1,physicalReuseAllowed:true,evidence:{circulation:null,history:[]}};
+ const html=renderToStaticMarkup(<KizReviewCard row={row} disabled={false} onInspect={()=>{}} onDecision={()=>{}}/>);
+ expect(html).toContain('FBO');expect(html).toContain('Отказать');expect(html).not.toContain('заказ WB');
+});

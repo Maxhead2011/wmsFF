@@ -9,6 +9,10 @@ export type TsdOperationResult = {
   message?: string;
   reviewReason?: TsdReviewReason;
   resolutionMessage?: string;
+  // FIX: optional fields keep old scanners compatible while identifying a late receipt conflict.
+  code?: 'KIZ_DUPLICATE';
+  duplicate?: true;
+  duplicateInfo?: Record<string, unknown>;
   serverTime: string;
 };
 

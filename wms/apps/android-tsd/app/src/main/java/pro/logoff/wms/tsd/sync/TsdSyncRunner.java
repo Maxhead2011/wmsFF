@@ -33,6 +33,7 @@ public class TsdSyncRunner {
     // FIX: a closed box does not wait behind unrelated batches. Drain only its scans.
     public TsdSyncSummary syncReceiptBatch(String authorization, String closeKey) {
         int sent = 0, applied = 0, rejected = 0, retried = 0;
+        List<TsdOperationResponse> kizConflicts = new ArrayList<>();
         String message = "Нет операций для синхронизации";
         for (int page = 0; page < 21; page++) {
             List<PendingOperation> operations = outbox.pendingReceiptBatch(closeKey);
@@ -43,11 +44,12 @@ public class TsdSyncRunner {
             rejected += part.rejected;
             retried += part.retried;
             message = part.message;
+            kizConflicts.addAll(part.kizConflicts);
             // FIX: rejected/held scans leave the outbox; let the server decide if their box can close.
             if (part.retried > 0 || (part.applied == 0 && part.rejected == 0)
                 || (!"logoff".equals(pro.logoff.wms.tsd.BuildConfig.FLAVOR) && part.rejected > 0)) break;
         }
-        return new TsdSyncSummary(sent, applied, rejected, retried, message);
+        return new TsdSyncSummary(sent, applied, rejected, retried, message, kizConflicts);
     }
 
     private TsdSyncSummary syncOperations(String authorization, List<PendingOperation> operations) {
@@ -82,11 +84,22 @@ public class TsdSyncRunner {
             int rejected = 0;
             int retried = 0;
             List<String> decisionMessages = new ArrayList<>();
+            List<TsdOperationResponse> kizConflicts = new ArrayList<>();
 
             for (PendingOperation operation : operations) {
                 TsdOperationResponse item = byKey.get(operation.operationKey);
                 String operatorMessage = operatorMessage(item);
                 String status = item == null ? null : item.status;
+                // FIX: successful retries never become duplicates, even with stale response details.
+                if (item != null && "logoff".equals(pro.logoff.wms.tsd.BuildConfig.FLAVOR)
+                    && "receipt_scan".equals(operation.operationType) && "KIZ_DUPLICATE".equals(item.code)
+                    && ("NEEDS_REVIEW".equals(status) || "REJECTED".equals(status))) {
+                    item.clientId = operation.payload.get("clientId");
+                    item.kiz = operation.payload.get("kiz");
+                    item.boxCode = operation.payload.get("boxCode");
+                    item.sourceDocument = operation.payload.get("sourceDocument");
+                    kizConflicts.add(item);
+                }
                 if ("APPLIED".equals(status) || "ACCEPTED".equals(status) || "ALREADY_APPLIED".equals(status)) {
                     outbox.markSynced(operation.operationKey, operatorMessage);
                     applied++;
@@ -115,7 +128,7 @@ public class TsdSyncRunner {
                 summaryMessage = "Синхронизация завершена. Решения: " + firstMessages(decisionMessages);
             }
 
-            return new TsdSyncSummary(operations.size(), applied, rejected, retried, summaryMessage);
+            return new TsdSyncSummary(operations.size(), applied, rejected, retried, summaryMessage, kizConflicts);
         } catch (Exception error) {
             for (PendingOperation operation : operations) {
                 outbox.markRetry(operation.operationKey, error.getMessage() == null ? "Ошибка сети" : error.getMessage());

@@ -102,6 +102,9 @@ import pro.logoff.wms.tsd.network.TsdTransferResponse;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
 import pro.logoff.wms.tsd.network.TsdKizCheckResponse;
+import pro.logoff.wms.tsd.network.TsdKizDuplicateInfo;
+import pro.logoff.wms.tsd.network.TsdKizReviewResponse;
+import pro.logoff.wms.tsd.network.TsdOperationResponse;
 import pro.logoff.wms.tsd.network.TsdInventoryBox;
 import pro.logoff.wms.tsd.network.TsdInventoryDashboard;
 import pro.logoff.wms.tsd.network.TsdInventoryLine;
@@ -268,6 +271,10 @@ public class MainActivity extends Activity {
     private String pendingReceiptBarcode = "";
     private TsdSkuInfo pendingReceiptSku;
     private boolean pendingReceiptRequiresKiz;
+    // FIX: a confirmed conflict remains visible until the worker explicitly puts the item aside.
+    private boolean receiptClientKizGuardEnabled;
+    private final List<TsdOperationResponse> receiptKizConflicts = new ArrayList<>();
+    private boolean receiptKizReviewBusy;
     private boolean receiptCheckingKiz;
     private boolean niimbotPrintBusy;
     private boolean appUpdateBusy;
@@ -3795,6 +3802,26 @@ public class MainActivity extends Activity {
         applyScreenFeedback(root, receiptFeedbackColor);
         root.addView(header());
         root.addView(title("Приемка товара"));
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptKizConflicts.isEmpty()) {
+            TsdOperationResponse conflict = receiptKizConflicts.get(0);
+            applyScreenFeedback(root, BOX_NOT_NEEDED_RED);
+            ReceiptKizWarningView.render(root, conflict);
+            if (receiptKizConflicts.size() > 1) root.addView(messageView("Отложить товаров: " + receiptKizConflicts.size()));
+            if (receiptClientKizGuardEnabled && (conflict.duplicateInfo == null || conflict.duplicateInfo.reviewId == null)) {
+                Button review = primaryMenuButton(receiptKizReviewBusy ? "Передаю на проверку…" : "Передать на проверку", view -> submitReceiptKizReview(conflict));
+                review.setEnabled(!receiptKizReviewBusy); root.addView(review);
+            } else if (conflict.duplicateInfo != null && conflict.duplicateInfo.reviewId != null) {
+                root.addView(messageView("Передано в «КИЗ → Проверки КИЗ»."));
+            }
+            if (!statusMessage.isEmpty()) root.addView(messageView(statusMessage));
+            Button next = primaryMenuButton("Сканировать другой товар", view -> {
+                receiptKizConflicts.remove(0);
+                clearPendingReceiptProductFields(); receiptFeedbackColor = receiptKizConflicts.isEmpty() ? 0 : BOX_NOT_NEEDED_RED;
+                statusMessage = "Товар отложен. Сканируйте другой товар."; renderReceiptScreen();
+            });
+            next.setEnabled(!receiptKizReviewBusy); root.addView(next);
+            setScrollableContent(root); refreshHeaderText(); return;
+        }
         if (!statusMessage.isEmpty()) {
             root.addView(receiptFeedbackColor == 0 ? messageView(statusMessage) : feedbackView(statusMessage, receiptFeedbackColor));
         }
@@ -8395,6 +8422,7 @@ public class MainActivity extends Activity {
     }
 
     private void submitReceiptInput() {
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptKizConflicts.isEmpty()) return;
         if (receiptKizAuditMode) {
             handleReceiptKizAuditScan();
             return;
@@ -8646,6 +8674,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleReceiptBarcodeScan() {
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptKizConflicts.isEmpty()) return;
         if ("logoff".equals(BuildConfig.FLAVOR) && receiptBarcodeLookupBusy) return;
         if ("logoff".equals(BuildConfig.FLAVOR) && receiptCloseBatch != null) return;
         TsdSession session = safeSession();
@@ -8721,6 +8750,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleReceiptKizScan() {
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptKizConflicts.isEmpty()) return;
         if (receiptCheckingKiz) {
             return;
         }
@@ -8737,10 +8767,16 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
-        String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+        String normalizedKiz = receiptKizKey(kiz);
         if (receiptKizValues.contains(normalizedKiz)) {
             String duplicateBox = receiptKizBoxes.get(normalizedKiz);
             statusMessage = duplicateKizMessage(kiz, duplicateBox, true);
+            if ("logoff".equals(BuildConfig.FLAVOR) && receiptClientKizGuardEnabled) {
+                TsdKizDuplicateInfo info = new TsdKizDuplicateInfo();
+                info.identity = ReceiptKizIdentity.key("", kiz, true).substring(1);
+                info.currentBoxCode = duplicateBox; info.productName = pendingReceiptSku == null ? null : pendingReceiptSku.name;
+                showReceiptKizConflict(kiz, info, statusMessage, null);
+            }
             receiptFeedbackColor = BOX_NOT_NEEDED_RED;
             scanInput.setText("");
             renderReceiptScreen();
@@ -8756,6 +8792,8 @@ public class MainActivity extends Activity {
 
         String barcode = pendingReceiptBarcode;
         TsdSkuInfo sku = pendingReceiptSku;
+        final String checkedClientId = receiptClientId;
+        final String checkedReceiptScope = receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode;
         receiptCheckingKiz = true;
         if (scanInput != null) {
             scanInput.setEnabled(false);
@@ -8764,20 +8802,23 @@ public class MainActivity extends Activity {
             try {
                 WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
                 Response<TsdKizCheckResponse> response = api
-                    .checkReceiptKiz(session.authorizationHeader(), receiptClientId, kiz)
+                    .checkReceiptKiz(session.authorizationHeader(), checkedClientId, kiz)
                     .execute();
                 if (!response.isSuccessful() || response.body() == null) {
                     throw new IOException("HTTP " + response.code());
                 }
                 TsdKizCheckResponse result = response.body();
                 mainHandler.post(() -> {
+                    if ("logoff".equals(BuildConfig.FLAVOR) && (!session.hasSameAccessToken(safeSession()) || !checkedReceiptScope.equals(receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode))) return;
                     receiptCheckingKiz = false;
                     online = true;
+                    receiptClientKizGuardEnabled = "logoff".equals(BuildConfig.FLAVOR) && result.clientKizGuardEnabled;
                     if (result.duplicate) {
                         statusMessage = result.message == null || result.message.trim().isEmpty()
                             ? duplicateKizMessage(kiz, result.boxCode, false)
                             : result.message + "\nКИЗ: " + kiz;
                         receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                        if (receiptClientKizGuardEnabled) showReceiptKizConflict(kiz, result.duplicateInfo, result.message, null);
                         renderReceiptScreen();
                         return;
                     }
@@ -8785,6 +8826,7 @@ public class MainActivity extends Activity {
                 });
             } catch (Throwable error) {
                 mainHandler.post(() -> {
+                    if ("logoff".equals(BuildConfig.FLAVOR) && (!session.hasSameAccessToken(safeSession()) || !checkedReceiptScope.equals(receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode))) return;
                     receiptCheckingKiz = false;
                     online = false;
                     receiptFeedbackColor = BOX_NOT_NEEDED_RED;
@@ -8801,6 +8843,7 @@ public class MainActivity extends Activity {
     }
 
     private void addReceiptItem(String barcode, String kiz, TsdSkuInfo sku, String message) {
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptKizConflicts.isEmpty()) return;
         if ("logoff".equals(BuildConfig.FLAVOR) && receiptCloseBatch != null) return;
         if (!receiptUsesBoxes()) {
             enqueueUnboxedReceiptItem(barcode, kiz, sku, message);
@@ -8810,7 +8853,7 @@ public class MainActivity extends Activity {
         added.secondBarcodeScan = receiptBarcodeRescan.evidence();
         receiptCurrentItems.add(added);
         if (kiz != null && !kiz.trim().isEmpty()) {
-            String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+            String normalizedKiz = receiptKizKey(kiz);
             receiptKizValues.add(normalizedKiz);
             receiptKizBoxes.put(normalizedKiz, receiptBoxCode);
         }
@@ -8830,7 +8873,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (kiz != null && !kiz.trim().isEmpty()) {
-            String normalizedKiz = kiz.trim().toUpperCase(Locale.ROOT);
+            String normalizedKiz = receiptKizKey(kiz);
             receiptKizValues.add(normalizedKiz);
             receiptKizBoxes.put(normalizedKiz, "Без короба");
         }
@@ -8844,7 +8887,7 @@ public class MainActivity extends Activity {
         renderReceiptScreen();
 
         runBackground(() -> {
-            outbox.enqueueReceipt(
+            PendingOperation receiptOperation = outbox.enqueueReceipt(
                 clientId,
                 barcode,
                 kiz,
@@ -8859,13 +8902,16 @@ public class MainActivity extends Activity {
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
+            PendingOperation savedReceipt = outbox.findOperation(receiptOperation.operationKey);
             mainHandler.post(() -> {
+                if ("logoff".equals(BuildConfig.FLAVOR) && (!session.hasSameAccessToken(safeSession()) || !clientId.equals(receiptClientId))) return;
                 online = summary.retried == 0;
+                captureReceiptKizConflicts(summary);
                 if (summary.rejected > 0) {
                     receiptFeedbackColor = BOX_NOT_NEEDED_RED;
                     statusMessage = "ОШИБКА ПРИЕМКИ\n" + summary.message;
                 } else {
-                    receiptAcceptedItems += 1;
+                    if (!"logoff".equals(BuildConfig.FLAVOR) || (savedReceipt != null && savedReceipt.status == pro.logoff.wms.tsd.data.OperationStatus.SYNCED)) receiptAcceptedItems += 1;
                     receiptFeedbackColor = 0;
                     statusMessage = summary.retried > 0
                         ? "Товар сохранен в очереди и будет передан в WMS после восстановления связи."
@@ -9035,6 +9081,7 @@ public class MainActivity extends Activity {
                         : summary.rejected > 0
                             ? "Короб " + closedBoxCode + " ещё не закрыт. " + summary.message + ". Операции сохранены в очереди."
                             : "Короб " + closedBoxCode + " сохранён в очереди и ожидает подтверждения закрытия WMS.";
+                    captureReceiptKizConflicts(summary);
                     renderReceiptScreen();
                     refreshQueue(null);
                 });
@@ -9077,6 +9124,7 @@ public class MainActivity extends Activity {
     }
 
     private void resetReceiptState() {
+        receiptKizConflicts.clear(); receiptClientKizGuardEnabled = false; receiptKizReviewBusy = false;
         if (receiptBoxAutoOpenTask != null) {
             mainHandler.removeCallbacks(receiptBoxAutoOpenTask);
             receiptBoxAutoOpenTask = null;
@@ -9188,6 +9236,11 @@ public class MainActivity extends Activity {
                 online = true;
                 statusMessage = summary.message + ": отправлено " + summary.sent + ", принято " + summary.applied +
                     ", отклонено " + summary.rejected + ", на повтор " + summary.retried;
+                // FIX: a delayed receipt denial after a network retry has the same visible stop.
+                if ("logoff".equals(BuildConfig.FLAVOR) && session.hasSameAccessToken(safeSession())) {
+                    captureReceiptKizConflicts(summary);
+                    if (screen == Screen.RECEIPT && !receiptKizConflicts.isEmpty()) renderReceiptScreen();
+                }
                 refreshQueue(statusMessage);
             });
         });
@@ -10953,6 +11006,62 @@ public class MainActivity extends Activity {
             location = "Дубль уже есть в WMS.";
         }
         return "ДУБЛЬ КИЗ\n" + location + "\nКИЗ: " + kiz;
+    }
+
+    private String receiptKizKey(String kiz) {
+        return ReceiptKizIdentity.key(receiptClientId, kiz, "logoff".equals(BuildConfig.FLAVOR) && receiptClientKizGuardEnabled);
+    }
+
+    private void showReceiptKizConflict(String kiz, TsdKizDuplicateInfo info, String message, String operationKey) {
+        TsdOperationResponse conflict = new TsdOperationResponse();
+        conflict.code = "KIZ_DUPLICATE"; conflict.status = "NEEDS_REVIEW"; conflict.duplicate = true;
+        conflict.kiz = kiz; conflict.clientId = receiptClientId; conflict.boxCode = receiptBoxCode;
+        conflict.sourceDocument = receiptSourceDocument; conflict.duplicateInfo = info; conflict.message = message;
+        conflict.operationKey = operationKey == null ? UUID.randomUUID().toString() : operationKey;
+        receiptKizConflicts.add(conflict); receiptFeedbackColor = BOX_NOT_NEEDED_RED; statusMessage = "";
+    }
+
+    private void captureReceiptKizConflicts(TsdSyncSummary summary) {
+        if (!"logoff".equals(BuildConfig.FLAVOR)) return;
+        for (TsdOperationResponse conflict : summary.kizConflicts) {
+            if (!receiptClientId.equals(conflict.clientId)) continue;
+            boolean exists = false;
+            for (TsdOperationResponse previous : receiptKizConflicts) if (conflict.operationKey.equals(previous.operationKey)) exists = true;
+            if (!exists) receiptKizConflicts.add(conflict);
+            receiptClientKizGuardEnabled = true; receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+        }
+    }
+
+    private void submitReceiptKizReview(TsdOperationResponse conflict) {
+        if (!"logoff".equals(BuildConfig.FLAVOR) || !receiptClientKizGuardEnabled || receiptKizReviewBusy) return;
+        TsdSession session = safeSession(); if (session == null) return;
+        Map<String, String> body = new LinkedHashMap<>();
+        body.put("clientId", conflict.clientId); body.put("kiz", conflict.kiz); body.put("operationKey", conflict.operationKey);
+        if (conflict.boxCode != null && !conflict.boxCode.isEmpty()) body.put("boxCode", conflict.boxCode);
+        if (conflict.sourceDocument != null) body.put("sourceDocument", conflict.sourceDocument);
+        receiptKizReviewBusy = true; statusMessage = ""; renderReceiptScreen();
+        executor.execute(() -> {
+            try {
+                Response<TsdKizReviewResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL).reviewReceiptKiz(session.authorizationHeader(), body).execute();
+                if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
+                TsdKizReviewResponse result = response.body();
+                mainHandler.post(() -> {
+                    if (!session.hasSameAccessToken(safeSession()) || !receiptKizConflicts.contains(conflict)) return;
+                    receiptKizReviewBusy = false;
+                    if (conflict.duplicateInfo == null) conflict.duplicateInfo = new TsdKizDuplicateInfo();
+                    conflict.duplicateInfo.reviewId = result.id;
+                    statusMessage = result.message == null ? "Передано в «КИЗ → Проверки КИЗ»." : result.message;
+                    renderReceiptScreen();
+                });
+            } catch (Exception error) {
+                mainHandler.post(() -> {
+                    if (!session.hasSameAccessToken(safeSession()) || !receiptKizConflicts.contains(conflict)) return;
+                    receiptKizReviewBusy = false;
+                    statusMessage = "Не удалось подтвердить передачу на проверку. Повторите действие. " + error.getMessage();
+                    renderReceiptScreen();
+                });
+            }
+        });
     }
 
     private String normalizeBoxCode(String value) {

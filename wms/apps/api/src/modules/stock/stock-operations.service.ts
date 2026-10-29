@@ -1,3 +1,4 @@
+import { assertClientRequestKizShipment, finishClientRequestKizShipment, withClientKizReview } from '../../common/kiz-client-review';
 import { receiptFboPlan, saveReceiptFboCharges } from '../billing/receipt-processing-fbo';
 import { assertReceiptTransfer, assertReceiptStockAvailable, pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -11,6 +12,7 @@ import { restoreWrittenOffSortingUnit, type WrittenOffSortingInput } from './sor
 import { reconcileAdminSortingUnit, type AdminSortingUnitInput } from './sorting-admin-unit-reconciliation';
 import { receiveSkuCollectionSortingUnit } from './sorting-sku-collection-receipt';
 import * as XLSX from 'xlsx';
+import { assertNewReceiptKiz, clientKizGuardEnabled, recordClientKizReceipt } from '../../common/kiz-client-registry';
 import {
   BillingChargeSource,
   BillingChargeStatus,
@@ -2040,7 +2042,7 @@ export class StockOperationsService {
     const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `ship-request:${dto.requestId}`;
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await withClientKizReview(this.prisma, user, () => this.prisma.$transaction(async (tx) => {
       // FIX: serialize FBO confirmations before checking stock and billing idempotency.
       if (fboShipment) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${dto.requestId} FOR UPDATE`;
       const doneAt = new Date();
@@ -2108,6 +2110,9 @@ export class StockOperationsService {
         throw new BadRequestException('Отгрузка доступна только после упаковки заявки.');
       }
 
+      // FIX: manual shipment cannot bypass the client-scoped KIZ review.
+      await assertClientRequestKizShipment(tx, request, user);
+
       await this.ensurePackedStockIsInShipping(
         tx,
         request,
@@ -2156,6 +2161,7 @@ export class StockOperationsService {
       }
 
       await captureShippedKizHistory(tx, request.id, doneAt);
+      await finishClientRequestKizShipment(tx, request);
       await this.archiveEmptyFboBoxes(tx, request.id, user);
       await tx.clientRequest.update({
         where: { id: request.id },
@@ -2182,7 +2188,7 @@ export class StockOperationsService {
         shippedLines: this.formatFulfillmentLines(plan, 'shippedQuantity'),
       };
     // FIX: large FBO shipments must not expire at Prisma's default five seconds.
-    }, fboShipment ? { maxWait: 10_000, timeout: 180_000 } : undefined);
+    }, fboShipment ? { maxWait: 10_000, timeout: 180_000 } : undefined));
 
     const logistics =
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
@@ -2209,7 +2215,7 @@ export class StockOperationsService {
     const warehouseId = this.resolveWritableWarehouseId(user);
     const baseKey = dto.idempotencyKey ?? `manual-ship-request:${dto.requestId}`;
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await withClientKizReview(this.prisma, user, () => this.prisma.$transaction(async (tx) => {
       const doneAt = new Date();
       const existingMovement = await tx.stockMovement.findFirst({
         where: {
@@ -2261,6 +2267,9 @@ export class StockOperationsService {
           clientId: request.clientId,
         };
       }
+
+      // FIX: manual shipment cannot bypass the client-scoped KIZ review.
+      await assertClientRequestKizShipment(tx, request, user);
 
       // FIX: packaging still describes the full request; stock allocation contains only unshipped units.
       const packageItems = wbOrderStockLifecycleEnabled()
@@ -2318,6 +2327,7 @@ export class StockOperationsService {
       }
 
       await captureShippedKizHistory(tx, request.id, doneAt);
+      await finishClientRequestKizShipment(tx, request);
       await this.archiveEmptyFboBoxes(tx, request.id, user);
       await tx.clientRequest.update({
         where: { id: request.id },
@@ -2343,7 +2353,7 @@ export class StockOperationsService {
         shippedLines: this.formatFulfillmentLines(plan, 'shippedQuantity'),
         packages,
       };
-    });
+    }));
 
     const logistics =
       result.status === 'APPLIED' || result.status === 'ALREADY_APPLIED'
@@ -2409,11 +2419,19 @@ export class StockOperationsService {
       const status = dto.status ?? StockStatus.RECEIVING;
       const kiz = dto.kiz?.trim();
 
+      // FIX: claim the client-scoped physical identity before any quantity is added.
+      if (kiz && clientKizGuardEnabled()) {
+        if (dto.quantity !== 1) throw new BadRequestException('Один КИЗ соответствует одной единице товара.');
+        const freshReceipt = await assertNewReceiptKiz(tx, { clientId: dto.clientId, kiz, operationKey: dto.idempotencyKey,
+          warehouseId: operationWarehouseId });
+        if (!freshReceipt) return { idempotencyKey: dto.idempotencyKey, status: 'ALREADY_APPLIED' };
+      }
+
       if (sku.needsChestnyZnak && !sku.isUnmarked && !kiz && !dto.allowReceiptError) {
         throw new BadRequestException('Для товара нужен КИЗ. Сканируйте КИЗ перед закрытием короба.');
       }
 
-      if (kiz) {
+      if (kiz && !clientKizGuardEnabled()) {
         const existingKiz = await tx.productMark.findFirst({
           where: {
             clientId: dto.clientId,
@@ -2482,6 +2500,11 @@ export class StockOperationsService {
           }
           throw caught;
         }
+        await recordClientKizReceipt(tx, { clientId: dto.clientId, kiz, operationKey: dto.idempotencyKey,
+          warehouseId: box?.warehouseId ?? operationWarehouseId, skuId: sku.id, boxCode: box?.code,
+          productName: sku.name, barcode: dto.barcode, receivedAt: movement.createdAt,
+          sourceDocument: dto.sourceDocument, userId: user.id,
+          source: movementType === 'RECEIPT' ? 'RECEIPT' : 'LEGACY_UNKNOWN' });
       }
 
       return {

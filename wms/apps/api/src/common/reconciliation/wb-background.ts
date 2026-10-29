@@ -3,6 +3,7 @@ import { finalizeWbOrderShipment } from '../stock/wb-order-stock-lifecycle';
 import { reconcileDoneRequestPacking, doneRequestPackingEnabled } from '../stock/done-request-packing';
 import { reconcileFbsRequestStatus } from '../stock/fbs-request-auto-status';
 import { runReconciliationJobs, type ReconciliationJob } from './queue';
+import { withClientKizReview } from '../kiz-client-review';
 const chunks = <T>(a:T[],n=1000) => Array.from({length:Math.ceil(a.length/n)},(_,i)=>a.slice(i*n,(i+1)*n));
 
 // FIX: bounded background reconciliation. Never invoked by a read-only screen request.
@@ -34,10 +35,10 @@ export async function reconcileWbBackground(db:PrismaService, clientId:string, o
       run:async()=>{
         const full=await db.fbsTsdAssembly.findUniqueOrThrow({where:{id:task.id}});
         const order=incoming??await localOrder(full),changes:any[]=[];
-        await db.$transaction(async tx=>{
+        await withClientKizReview(db,{id:full.workerUserId??null},()=>db.$transaction(async tx=>{
           await finalizeWbOrderShipment(tx,task.id,print?'PRINT_CONFIRMED':done?'WMS_REQUEST_SHIPPED':'WB_SHIPMENT_CONFIRMED',JSON.parse(JSON.stringify(order)),print?.printedAt??undefined);
           if(print?.printedAt)await reconcileFbsRequestStatus(tx,task.requestId,{stage:'SOS_PRINT',occurredAt:print.printedAt,actorId:full.workerUserId},changes);
-        },{timeout:30_000});
+        },{timeout:30_000}));
         await notify(changes);
       }});
   }

@@ -1,3 +1,4 @@
+import {assertClientKizUse} from '../../common/kiz-client-review';
 import {BadRequestException,ConflictException} from '@nestjs/common';
 import {randomUUID} from 'node:crypto';
 import type {Prisma} from '@prisma/client';
@@ -22,6 +23,7 @@ export async function pickUnboxed(tx:Prisma.TransactionClient,r:any,lines:any[],
  const marked=(line.sku.needsChestnyZnak&&!line.sku.isUnmarked)||!!await tx.productMark.findFirst({where:{clientId:r.clientId,skuId:line.skuId,boxId:null,status:'AVAILABLE',stockMovement:{warehouseId:r.warehouseId}}});
  if(marked&&!dto.kiz)throw new BadRequestException('После ШК отсканируйте КИЗ.');
  const mark=dto.kiz?await exactMark(tx,dto.kiz):null;
+ if(mark)await assertClientKizUse(tx,{scope:'FBO',clientId:r.clientId,warehouseId:r.warehouseId,requestId:r.id,kiz:mark.value,skuId:line.skuId,boxId:null},user); // FIX: check history before treating storage status as permission.
  if(mark){
   const evidence=mark.stockMovementId?await tx.stockMovement.findUnique({where:{id:mark.stockMovementId}}):null;
   if(mark.clientId!==r.clientId||mark.skuId!==line.skuId||mark.boxId!==null||mark.status!=='AVAILABLE'||evidence?.warehouseId!==r.warehouseId)
