@@ -105,7 +105,7 @@ export class LamodaClient {
     }
   }
   async execute(c: LamodaCredentials, command: LamodaCommand): Promise<unknown> {
-    if (process.env.WMS_LAMODA_EXTERNAL_WRITES_ENABLED !== 'true') throw new LamodaApiError('WRITES_DISABLED', undefined, 'REJECTED');
+    if (process.env.WMS_LAMODA_EXTERNAL_WRITES_ENABLED !== 'true' && !(command.kind === 'FBO_CREATE' && process.env.WMS_LAMODA_FBO_SUBMISSION_ENABLED === 'true')) throw new LamodaApiError('WRITES_DISABLED', undefined, 'REJECTED');
     let request: ReturnType<typeof prepareLamodaCommand>;
     try { request = prepareLamodaCommand(command, c.sellerId); }
     catch { throw new LamodaApiError('INVALID_COMMAND', undefined, 'REJECTED'); }

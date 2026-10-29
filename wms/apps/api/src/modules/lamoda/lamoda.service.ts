@@ -2,6 +2,7 @@ import { BadGatewayException, BadRequestException, ConflictException, ForbiddenE
 import { adjustLamodaComposition, assertLamodaStockAvailable, lamodaStockAvailability, type LamodaQuantity } from './lamoda-stock-guard';
 import { Prisma, type LamodaAccount } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { LamodaSubmission, type SubmissionForm } from './lamoda-submission';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AuthUser } from '../auth/auth.types';
 import { ClientScopeService } from '../auth/client-scope.service';
@@ -17,6 +18,18 @@ export type LamodaAccountInput = { clientId: string; name: string; sellerId: str
 
 @Injectable()
 export class LamodaService {
+  async submission(accountId:string,requestId:string,user:AuthUser,action:'view'|'preview'|'send'|'refresh'|'reset',form?:SubmissionForm) {
+    if(process.env.WMS_LAMODA_FBO_SUBMISSION_ENABLED!=='true')throw new NotFoundException('Оформление поставок Lamoda пока выключено.');
+    const c=await this.account(accountId,user,action==='view'?'read':'write',true);
+    if(!c.fboEnabled||!c.isActive)throw new BadRequestException('Нужно активное подключение Lamoda FBO.');
+    const service=new LamodaSubmission(this.db,this.remote);
+    if(action==='view')return service.view(accountId,requestId,user);
+    if(action==='reset')return service.resetRejected(accountId,requestId,user);
+    if(action==='refresh')return service.refresh(accountId,requestId,user,this.credentials(c));
+    if(!form)throw new BadRequestException('Заполните данные поставки.');
+    if(action==='preview')return service.preview(accountId,requestId,user,form);
+    return service.send(accountId,requestId,user,form,this.credentials(c));
+  }
   private readonly remote = new LamodaClient();
   constructor(private readonly db: PrismaService, private readonly scopes: ClientScopeService, private readonly requests: ClientRequestsService) {}
 

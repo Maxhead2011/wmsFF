@@ -1,0 +1,30 @@
+import {useEffect,useState} from 'react';
+import {resetLamodaSubmission,getLamodaSubmission,previewLamodaSubmission,sendLamodaSubmission,refreshLamodaSubmission,fileLamodaSubmission,type LamodaSubmissionView,type LamodaSubmissionReceipt,type LamodaSubmissionForm} from '../../lib/api';
+const shipmentStatuses:Record<string,string>={NEW:'Новая',SENT:'Отправлена',CONFIRMED:'Подтверждена',DRAFT:'Черновик',CANCELLED:'Отменена',CHANGING_WAREHOUSE:'Перевод на другой склад',VALIDATION:'Проверка Lamoda',VALIDATION_ERROR:'Ошибка проверки Lamoda',READY_FOR_SHIPMENT:'Готова к отгрузке',UNLOADING_NEEDED:'Требуется разгрузка',UNLOADING:'Разгрузка',UNLOADED:'Разгружена',PROCESSING:'Обработка',CLOSED:'Закрыта',REJECTED:'Отклонена',RECEIVED:'Получена',CANCEL_PENDING:'Ожидание отмены'};
+export const lamodaShipmentStatus=(status?:string)=>status?shipmentStatuses[status.toUpperCase()]??status:'Статус не обновлён';
+// FIX: keyed by account/request at the parent; prices and confirmations never leak across clients.
+export function LamodaSubmissionPanel({token,accountId,requestId,canWrite}:{token:string;accountId:string;requestId:string;canWrite:boolean}){
+ const [view,setView]=useState<LamodaSubmissionView|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+ const [number,setNumber]=useState(''),[warehouse,setWarehouse]=useState('BYKOVO'),[date,setDate]=useState(''),[prices,setPrices]=useState<Record<string,string>>({});
+ const [preview,setPreview]=useState<LamodaSubmissionReceipt['payload']|null>(null),[confirmed,setConfirmed]=useState(false);
+ useEffect(()=>{let active=true;getLamodaSubmission(token,accountId,requestId).then(v=>{if(active)setView(v);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false};},[token,accountId,requestId]);
+ useEffect(()=>{setPreview(null);setConfirmed(false);},[number,warehouse,date,prices]);
+ const form=():LamodaSubmissionForm=>({externalShipmentId:number,warehouseCode:warehouse,plannedDate:date,prices:(view?.items??[]).map(i=>{const value=(prices[i.skuId]??'').trim().replace(',','.');if(!/^\d+(?:\.\d{1,2})?$/.test(value))throw new Error('Введите цену с точностью до копеек.');return {skuId:i.skuId,priceMinor:Math.round(Number(value)*100)};})});
+ async function run(action:()=>Promise<void>){setBusy(true);setError('');try{await action();}catch(e){setError(e instanceof Error?e.message:'Не удалось выполнить операцию.');}finally{setBusy(false);}}
+ const receipt=view?.receipt;
+ const labels:Record<string,string>={SENDING:'Отправляется / требуется сверка',SUCCEEDED:'Поставка создана',UNKNOWN:'Ответ не подтверждён — повтор заблокирован',REJECTED:'Lamoda отклонила отправку'};
+ return <section className="lamoda-card" aria-label="Оформление поставки Lamoda"><h3>Поставка Lamoda по факту сборки</h3>
+ <p>После завершения контроля коробов проверьте цены по УПД. КИЗ и количество берутся из фактической упаковки. УПД оформляется через ЭДО, слот — в Gate Management.</p>
+ {error&&<p role="alert">{error}</p>}
+ {view?.remoteShipmentId&&<p>Уже привязана поставка {view.remoteShipmentId}. Новую создавать не нужно.</p>}
+ {receipt?<div><p role="status">{labels[receipt.state]??receipt.state} · {receipt.remoteId??'Номер Lamoda ещё не получен'} · {lamodaShipmentStatus(receipt.remoteStatus)}</p>{receipt.error&&<p role="alert">{receipt.error}. {receipt.state==='REJECTED'?'Проверьте реквизиты поставки, цены и доступ кабинета. Затем нажмите «Исправить».':'Нажмите «Обновить статус Lamoda». До сверки не создавайте эту поставку повторно.'}</p>}<p>Проверено: {new Date(receipt.updatedAt).toLocaleString('ru-RU')}</p><button disabled={busy||!canWrite} onClick={()=>void run(async()=>{const r=await refreshLamodaSubmission(token,accountId,requestId);setView(v=>v?{...v,receipt:r}:v);})}>Обновить статус Lamoda</button>{receipt.state==='REJECTED'&&<button disabled={busy||!canWrite} onClick={()=>void run(async()=>{await resetLamodaSubmission(token,accountId,requestId);setView(v=>v?{...v,receipt:null}:v);setPreview(null);setConfirmed(false);})}>Исправить</button>}</div>:view&&!view.remoteShipmentId&&<>
+ <fieldset disabled={busy||!canWrite}><label>Номер поставки / УПД<input value={number} onChange={e=>setNumber(e.target.value)}/></label><label>Склад Lamoda<select value={warehouse} onChange={e=>setWarehouse(e.target.value)}><option value="BYKOVO">Быково</option><option value="SOFINO">Софьино</option></select></label><label>Дата поставки<input type="date" value={date} onChange={e=>setDate(e.target.value)}/></label>
+ <table><thead><tr><th>Товар</th><th>Количество</th><th>Цена за единицу с НДС, ₽</th></tr></thead><tbody>{view.items.map(i=><tr key={i.skuId}><td>{i.name} · {i.size}</td><td>{i.quantity}</td><td><input aria-label={`Цена ${i.name}`} inputMode="decimal" value={prices[i.skuId]??''} onChange={e=>setPrices(p=>({...p,[i.skuId]:e.target.value}))}/></td></tr>)}</tbody></table>
+ <button onClick={()=>void run(async()=>{setPreview((await previewLamodaSubmission(token,accountId,requestId,form())).payload);})}>Проверить фактический состав</button></fieldset>
+ {preview&&<><p>Проверено: {preview.items.reduce((s,i)=>s+i.quantity,0)} шт., КИЗ: {preview.items.reduce((s,i)=>s+(i.markingCodes?.length??0),0)}.</p><table><tbody>{preview.items.map((i,n)=><tr key={n}><td>{i.externalSku}</td><td>{i.ean}</td><td>{i.quantity} шт.</td><td>{(i.price.amount/100).toFixed(2)} ₽</td></tr>)}</tbody></table>
+ <button disabled={busy||!canWrite} onClick={()=>void run(async()=>{const blob=await fileLamodaSubmission(token,accountId,requestId,form());const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='Lamoda-shipment.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);})}>Скачать файл Lamoda</button>
+ <label><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>Подтверждаю цены и состав. Эту поставку ещё не загружали в кабинет Lamoda.</label>
+ <button disabled={busy||!canWrite||!confirmed} onClick={()=>void run(async()=>{const r=await sendLamodaSubmission(token,accountId,requestId,form());setView(v=>v?{...v,receipt:r}:v);})}>Создать поставку в Lamoda</button></>}
+ </>}
+ </section>;
+}

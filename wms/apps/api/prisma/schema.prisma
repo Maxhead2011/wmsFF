@@ -887,6 +887,7 @@ model LamodaExchange {
 
 // FIX: one plan and one remote Lamoda shipment can own only one warehouse request.
 model LamodaFboAssembly {
+  submission Json?
   // FIX: immutable replacement-label identities for an assembly requiring relabeling.
   relabelLabels Json?
   requestId String @id
