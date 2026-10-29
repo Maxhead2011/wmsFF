@@ -10,6 +10,7 @@ import { confirmedUnplacedFboBoxes } from './fbo-unplaced-picking';
 import { fboBarcodeAliases, fboBarcodeMatches } from './fbo-barcode-aliases';
 import {unboxedFboEnabled,unboxedFree,pickUnboxed} from './fbo-unboxed-picking';
 import { rememberPackedUnit, packedUnitForUndo } from './fbo-packing-undo';
+import {createFboVideoCaption, type FboVideoCaptionContext} from './fbo-video-caption';
 import { assertSupplyMutable } from '../client-requests/ozon-supply-policy';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { assertDirectionCapacity, directionProgress, type OzonDirection } from './ozon-fbo-directions';
@@ -317,6 +318,8 @@ export class FboTwoStageService {
                     throw new ConflictException('Номер операции уже использован с другими данными.');
                 return;
             }
+            // FIX: retain the exact unit accepted by this operation for the atomic video audit.
+            let contourUnit: FboVideoCaptionContext['unit'];
             // FIX: preserve idempotent replay above, freeze changes after an Ozon send.
             assertSupplyMutable(shipment?.integration, dto.action);
             if (!['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(r.status))
@@ -490,6 +493,7 @@ export class FboTwoStageService {
                         throw new ConflictException('КИЗ перемещён после отбора. Нужна сверка.');
                 }
                 const packedUnit = await tx.fboAssemblyUnit.update({ where: { id: unit.id }, data: { state: 'PACKED', targetBoxId: target.id, targetBoxCode: target.code, packedAt: new Date(), packedByUserId: user.id } });
+                contourUnit = packedUnit;
                 await rememberPackedUnit(tx, packedUnit, user.id, key);
             }
             else if (dto.action === 'UNDO_PACK_UNIT') {
@@ -587,7 +591,9 @@ export class FboTwoStageService {
             else if (dto.action !== 'START')
                 throw new BadRequestException('Неизвестное действие.');
             await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });
-            await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { ...(dto.undoOperationId ? { undoOperationId: dto.undoOperationId } : {}), operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
+            const contourScan = await createFboVideoCaption(tx, {requestId: id, operationId: dto.operationId, action: dto.action, user,
+                unit: contourUnit, barcode: dto.barcode, kiz: dto.kiz, boxNumber: dto.sourceBoxCode});
+            await tx.auditLog.create({ data: { userId: user.id, action: `FBO_${dto.action}`, entity: 'ClientRequest', entityId: id, payload: { ...(contourScan ? {contourScan} : {}), ...(dto.undoOperationId ? { undoOperationId: dto.undoOperationId } : {}), operationId: dto.operationId, palletCode: dto.palletCode, sourceBoxCode: dto.sourceBoxCode, targetBoxCode: dto.targetBoxCode, barcode: dto.barcode } } });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 60000 });
         // FIX: retry only rolled-back serialization conflicts, retaining the durable operation id.
         for (let attempt = 0; ; attempt++) {
