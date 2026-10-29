@@ -320,6 +320,17 @@ final class FboTwoStageScreen {
         return true;
     }
 
+    // FIX: loose stock has no box route; show demand from the server before the scan field.
+    private void unboxedPickingContents(LinearLayout root) {
+        if(!unboxedPicking()||packing||!"PICKING".equals(screenPhase())||plan.lines==null)return;
+        boolean heading=false;
+        for(TsdFboPlan.Line line:plan.lines)if(line.remaining>0){
+            if(!heading){text(root,"Товары к отбору");heading=true;}
+            card(root,line.displayLabel()+"\nНужно: "+line.needed+" · Отобрано: "+line.picked+
+                " · Осталось: "+line.remaining,Color.rgb(241,245,249));
+        }
+    }
+
     // FIX: show only the selected destination; no additional stock requests or local counting.
     private void directionContents(LinearLayout root) {
         if(!"logoff".equals(BuildConfig.FLAVOR)||!packing||!"PACKING".equals(screenPhase()))return;
@@ -428,6 +439,7 @@ final class FboTwoStageScreen {
                 for(TsdFboPlan.Box b:plan.boxes)if(!packingChoices()||(!"PACKING".equals(plan.phase)&&!"PICKING".equals(plan.phase))||!b.wholeBox)text(root,b.code+(b.direction==null?"":" · "+b.direction)+" · "+b.quantity+" ед. · "+(b.closed?"Закрыт":"Открыт"));
             }
             else {
+                unboxedPickingContents(root);
                 String hint="ШК товара";
                 if("CONTROL".equals(screenPhase()))hint="ШК короба поставки";
                 else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";

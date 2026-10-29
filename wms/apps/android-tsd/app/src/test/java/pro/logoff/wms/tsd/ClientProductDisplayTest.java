@@ -7,6 +7,16 @@ import pro.logoff.wms.tsd.network.TsdFbsAssemblyResponse;
 import pro.logoff.wms.tsd.network.TsdFboPlan;
 
 public class ClientProductDisplayTest {
+    // TEST: a server without presentation settings still identifies loose stock, including leading-zero barcodes.
+    @Test public void looseFboLineKeepsLegacyIdentityAndConfiguredCaption() {
+        TsdFboPlan.Line line=new TsdFboPlan.Line();line.name="Monitor";line.article="Hawkeye";line.size="M";line.barcode="00123";
+        assertEquals("Monitor · Hawkeye · M · 00123",line.displayLabel());
+        line.productDisplayText="Hawkeye · 00123";
+        assertEquals("Hawkeye · 00123",line.displayLabel());
+        line.productDisplayText=" ";assertEquals("Monitor · Hawkeye · M · 00123",line.displayLabel());
+        assertEquals("00123",line.barcode);
+        assertEquals("Товар",new TsdFboPlan.Line().displayLabel());
+    }
     @Test public void fbsPresentationKeepsScannerDataAndLegacyDefault() {
         // TEST: hiding a barcode affects its caption only, including a leading zero.
         TsdFbsAssemblyResponse.Product p = new TsdFbsAssemblyResponse.Product();
