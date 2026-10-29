@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 240 // FIX: preserve the selected partial-pick box during route refresh.
-            versionName = "0.1.240-fbo-partial-source"
+            versionCode = 241 // FIX: show remaining products when picking without boxes.
+            versionName = "0.1.241-fbo-unboxed-display"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
