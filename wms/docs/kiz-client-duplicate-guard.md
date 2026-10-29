@@ -37,3 +37,7 @@
 Автотесты: `kiz-client-registry`, `kiz-client-receipt`, `kiz-client-review`, `kiz-receipt-conflict-transport`, `kiz-shipment-gates`; API transport веба и красный экран; Android identity/view/sync и все flavor suites. Runtime scripts проверяют реальные опубликованные модули; PostgreSQL — конкурентный приход, повтор, общий claim/receipt lock и повторный заказ той же заявки. `test-isolated.py` запускает целый API без доступа к внешним сервисам.
 
 Исторический тест печати `kiz-duplicate.integration.spec.ts` запускается отдельно только с собственной БД `KIZ_DUPLICATE_TEST_DATABASE_URL`; его отсутствие не заменяет новые обязательные PostgreSQL-проверки.
+
+## Опубликовано
+
+PR765 объединён в `feature/wb-print-check`, сборка проверена на сайте. Серверный флаг включён. LOGOFF244 требуется установить на ТСД; версия сохраняет озвучку Софии. [Паспорт baseline](../baselines/our-wms/2026-10-29-kiz-client-guard/README.md).

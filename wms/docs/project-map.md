@@ -1,3 +1,5 @@
+Опубликовано PR765: КИЗ клиента, LOGOFF244; baseline `2026-10-29-kiz-client-guard`. Проверки API4018/web555/Android885/PostgreSQL12/runtime26 и live4 пройдены. [Паспорт](kiz-client-duplicate-guard.md).
+
 КИЗ клиента: `common/kiz-client-registry.ts` → приёмка/импорт/исправление/ТСД; `common/kiz-client-review.ts` → FBS/FBO/SOS/ручное списание. Durable registry + контекстные решения, общий lock. UI: ReceiptDuplicateNotice / ReceiptKizWarningView. [Карта изменения](kiz-client-duplicate-guard.md).
 
 Published PR763 / 2026-10-29: LOGOFF TSD243 adds Sofia's approved offline tank voice pack (13 recordings / 17 existing events), selected by immutable account ID in LOGOFF only. Android286 per flavor (858 total), release/lintVital, baseline8, signed payload/certificate and existing25 raw-resource hashes passed. Exact3 download-file overlay on PR761; other3188 web files, all684 API files/schema/other containers/sold unchanged. Public APK/version/hash/health verified; terminal installation required. Baseline `2026-10-29-sofia-tanks-voice`, sourceParityVerified=false. [Details](sofia-tanks-voice.md).
