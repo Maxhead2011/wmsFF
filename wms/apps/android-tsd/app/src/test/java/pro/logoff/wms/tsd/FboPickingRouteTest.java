@@ -6,6 +6,18 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboPickingRouteTest {
+    // TEST: only the active source on its actual pallet survives partial-to-whole reclassification.
+    @Test public void selectedPartialSourceSurvivesOnlyWhileServerStillAllocatesIt(){
+        TsdFboPlan p=new TsdFboPlan();TsdFboPlan.Route a=row("A",true,false,9),b=row("B",false,false,6);
+        a.pallet="P";b.pallet="P";p.route=Arrays.asList(a,b);
+        assertEquals(Arrays.asList(a,b),FboPickingRoute.select(p,FboPickingRoute.Mode.PARTIAL,"A","P"));
+        assertEquals(Collections.singletonList(b),FboPickingRoute.select(p,FboPickingRoute.Mode.PARTIAL,"A","OTHER"));
+        assertEquals(Collections.singletonList(b),FboPickingRoute.select(p,FboPickingRoute.Mode.PARTIAL,"MISSING","P"));
+        assertEquals(Collections.singletonList(a),FboPickingRoute.select(p,FboPickingRoute.Mode.WHOLE_BOXES,"B","P"));
+        a.tasks.get(0).quantity=0;
+        assertEquals(Collections.singletonList(b),FboPickingRoute.select(p,FboPickingRoute.Mode.PARTIAL,"A","P"));
+        assertEquals(2,p.route.size());assertTrue(a.wholeBox);
+    }
     // TEST: every allocated row appears exactly once; quantities and the original route order are retained.
     @Test public void partitionPreservesAllocationIncludingMixedTasksAndBins(){
         TsdFboPlan p=new TsdFboPlan();p.reusablePackingEnabled=true;

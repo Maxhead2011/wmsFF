@@ -61,7 +61,9 @@ final class FboTwoStageScreen {
     private FboPickingRoute.Mode pickingMode=FboPickingRoute.Mode.MENU;
     private boolean unboxedPicking(){return plan!=null&&plan.unboxedPickingSupported&&"logoff".equals(BuildConfig.FLAVOR);}
     private boolean pickingChoices(){return !packing&&!unboxedPicking()&&"logoff".equals(BuildConfig.FLAVOR);}
-    private List<TsdFboPlan.Route> pickingRoute(){return pickingChoices()?FboPickingRoute.select(plan,pickingMode):plan.route;}
+    private List<TsdFboPlan.Route> pickingRoute(){return pickingChoices()?FboPickingRoute.select(plan,pickingMode,state.source,state.pallet):plan.route;}
+    // FIX: keeping a reclassified source never changes the operator's unit-picking mode.
+    private boolean showWholePicking(TsdFboPlan.Route row){return !pickingChoices()||pickingMode==FboPickingRoute.Mode.WHOLE_BOXES||FboScanState.reusableBin(plan,row.boxCode);}
     private void choosePickingMode(FboPickingRoute.Mode mode){
         if(!ready()||!state.barcode.isEmpty())return;
         boolean hadLocation=!state.pallet.isEmpty()||!state.source.isEmpty();
@@ -455,12 +457,12 @@ final class FboTwoStageScreen {
                     }
                     text(root,"Осталось отобрать "+(plan.needed-plan.picked));TsdFboPlan.Route r=source();
                     if(r!=null){card(root,r.boxCode+" · "+r.pallet+" · "+r.zone,Color.rgb(187,247,208));for(TsdFboPlan.Task t:r.tasks)text(root,"Отберите "+t.quantity+" ед. · "+t.displayLabel(t.name+" · "+t.barcode));
-                        if(r.wholeBox&&"logoff".equals(BuildConfig.FLAVOR))card(root,(FboScanState.reusableBin(plan,r.boxCode)?"Отобрать весь товар, бокс остаётся на стеллаже · ":"Короб уезжает целиком · ")+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
+                        if(r.wholeBox&&showWholePicking(r)&&"logoff".equals(BuildConfig.FLAVOR))card(root,(FboScanState.reusableBin(plan,r.boxCode)?"Отобрать весь товар, бокс остаётся на стеллаже · ":"Короб уезжает целиком · ")+r.wholeBoxQuantity+" ед.",Color.rgb(187,247,208));
                         if(r.recount)text(root,"Для целого короба требуется актуализация: количество и КИЗ расходятся.");
                         // FIX: picking and transferring the surplus are explicit choices, never automatic writes.
                         if(!pickingChoices()||pickingMode==FboPickingRoute.Mode.PARTIAL)button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
                         if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
-                        if(r.wholeBox&&(!pickingChoices()||!r.recount))button(root,FboScanState.wholePickTitle(plan,r.boxCode),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
+                        if(r.wholeBox&&showWholePicking(r)&&(!pickingChoices()||!r.recount))button(root,FboScanState.wholePickTitle(plan,r.boxCode),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
                         if(state.pallet.isEmpty()){
