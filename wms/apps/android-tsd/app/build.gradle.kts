@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 243 // FIX: Sofia's account-bound offline tank voice pack.
-            versionName = "0.1.243-sofia-tanks-voice"
+            versionCode = 244 // FIX: client KIZ duplicate guard; preserve Sofia offline tank voice.
+            versionName = "0.1.244-kiz-duplicate-stop"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

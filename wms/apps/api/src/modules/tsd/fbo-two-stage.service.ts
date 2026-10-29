@@ -1,3 +1,5 @@
+import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
+import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { resolveLamodaRelabelUnit, readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
 import { buildTsdRelabelLabel } from './tsd-relabel-label';
@@ -288,6 +290,7 @@ export class FboTwoStageService {
             shortage: Object.values(demand).reduce((s, n) => s + n, 0), compositionChanged: !!assembly && assembly.compositionHash !== composition(r) };
     }
     async act(id: string, dto: FboActionDto, user: AuthUser) {
+        return withClientKizReview(this.prisma,user,async()=>{
         if (!fboTwoStageEnabled())
             throw new NotFoundException('Двухэтапная сборка ФБО выключена.');
         await this.lock.assertStockMovementsAllowed();
@@ -353,7 +356,7 @@ export class FboTwoStageService {
             };
             if (unboxedFboEnabled() && r.client.storesWithoutBoxes && (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX')) {
                 requirePhase('PICKING');
-                await pickUnboxed(tx,r,lines,dto,key,user,this.move.bind(this),this.exactMark.bind(this));
+                await pickUnboxed(tx,r,lines,dto,key,user,this.move.bind(this),(db: any, code: string) => this.exactMark(db,code,r.clientId));
             }
             else if (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX') {
                 if (directions && dto.action === 'PICK_BOX') throw new ConflictException('Для распределения по направлениям отбирайте товар поштучно.');
@@ -394,7 +397,7 @@ export class FboTwoStageService {
                     const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
                     if (marked && !dto.kiz)
                         throw new BadRequestException('После ШК отсканируйте КИЗ.');
-                    const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
+                    const mark = dto.kiz ? await this.exactMark(tx, dto.kiz, r.clientId) : null;
                     if (mark && (mark.clientId !== r.clientId || mark.skuId !== line.skuId || mark.boxId !== source.id || mark.status !== 'AVAILABLE'))
                         throw new ConflictException('Этот КИЗ не доступен в указанном коробе для данного товара.');
                     chosen = [{ skuId: line.skuId!, mark }];
@@ -407,7 +410,8 @@ export class FboTwoStageService {
                     const line = lines.find(l => l.skuId === pick.skuId && l.remaining > 0)!;
                     line.remaining--;
                     if (pick.mark) {
-                        const resolved = await this.exactMark(tx, pick.mark.value);
+                        await assertClientKizUse(tx,{scope:'FBO',clientId:r.clientId,warehouseId:r.warehouseId!,requestId:r.id,kiz:pick.mark.value,skuId:pick.skuId,boxId:source.id},user);
+                        const resolved = await this.exactMark(tx, pick.mark.value, r.clientId);
                         if (resolved.id !== pick.mark.id)
                             throw new ConflictException('Неоднозначный КИЗ.');
                     }
@@ -470,7 +474,7 @@ export class FboTwoStageService {
                     : await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
-                const mark = dto.kiz ? await this.exactMark(tx, dto.kiz) : null;
+                const mark = dto.kiz ? await this.exactMark(tx, dto.kiz, r.clientId) : null;
                 // FIX: packing accepts the same registered SKU aliases as picking; KIZ/state checks remain mandatory.
                 const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' &&
                     (relabelRequired?!!u.lamodaRelabelConfirmedAt&&relabelLabels.some(l=>l.skuId===u.skuId&&l.barcode===dto.barcode):fboBarcodeMatches(u.skuId, dto.barcode, r.items)) && (mark ? u.markId === mark.id : !u.markId));
@@ -549,6 +553,7 @@ export class FboTwoStageService {
                 await tx.fboAssemblyBox.update({ where: { id: b.id }, data: { confirmedAt: new Date(), confirmedByUserId: user.id } });
             }
             else if (dto.action === 'FINISH') {
+                await assertClientRequestKizShipment(tx,r,user); // FIX: whole cartons and partial picks share the final gate.
                 requirePhase('CONTROL');
                 const boxes = await tx.fboAssemblyBox.findMany({ where: { requestId: id } });
                 if (!boxes.length || boxes.some(b => !b.confirmedAt) || lines.some(l => l.packed !== l.needed))
@@ -594,6 +599,7 @@ export class FboTwoStageService {
             }
         }
         return this.plan(id, user);
+        },id);
     }
     private async box(tx: Prisma.TransactionClient, r: Request, code?: string) {
         if (!code)
@@ -626,7 +632,8 @@ export class FboTwoStageService {
         if ((await this.busyBoxes(tx, [boxId], requestId, allowUntouchedRoutes)).has(boxId))
             throw new ConflictException('Короб участвует в актуализации или другой активной сборке.');
     }
-    private async exactMark(tx: Prisma.TransactionClient, kiz: string) {
+    private async exactMark(tx: Prisma.TransactionClient, kiz: string, clientId?: string) {
+        if(clientKizGuardEnabled()&&clientId){const mark=await clientPhysicalMark(tx,clientId,kiz);if(!mark)throw new ConflictException('КИЗ не найден у клиента.');return mark;}
         const key = identity(kiz);
         const rows = await tx.productMark.findMany({ where: { OR: [key, ']d2' + key, ']D2' + key].map(p => ({ value: { startsWith: p.replace(/[\\%_]/g, '\\$&') } })) } });
         const matches = rows.filter(m => identity(m.value) === key);

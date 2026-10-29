@@ -13,6 +13,7 @@ import { TsdPayloadParser } from './tsd-payload.parser';
 import { TsdReceiptService } from './tsd-receipt.service';
 import { ReceiptBarcodeReviewService } from './receipt-barcode-review.service';
 import { receiptBarcodeReviewEnabled } from './receipt-barcode-policy';
+import { receiptConflictFromError } from './kiz-receipt-conflict';
 
 @Injectable()
 export class TsdSyncService {
@@ -72,6 +73,10 @@ export class TsdSyncService {
     }
     try {
       if (user.deviceCode && operation.deviceId !== user.deviceCode) {
+        // FIX: an invalid device token cannot overwrite another terminal's durable receipt.
+        if (process.env.WMS_KIZ_CLIENT_GUARD_ENABLED === 'true') {
+          return this.operationLog.result(operation, 'REJECTED', 'Операция пришла не от устройства из access token.', TsdReviewReason.DEVICE_MISMATCH);
+        }
         return await this.operationLog.recordResult(
           operation,
           'REJECTED',
@@ -82,7 +87,7 @@ export class TsdSyncService {
 
       const existing = await this.operationLog.findExisting(operation.operationKey);
       if (existing) {
-        return this.operationLog.existingResult(operation, existing);
+        return this.operationLog.existingResult(operation, existing, user);
       }
 
       if (operation.operationType === 'move_scan') {
@@ -220,6 +225,9 @@ export class TsdSyncService {
         'NEEDS_REVIEW',
         caught instanceof Error ? caught.message : 'Приемка ТСД требует разбора.',
         TsdReviewReason.RECEIPT_FAILED,
+        undefined,
+        receiptConflictFromError(caught),
+        { clientId: payload.clientId, warehouseId: user.activeWarehouseId },
       );
     }
   }

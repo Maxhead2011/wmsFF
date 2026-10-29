@@ -1,0 +1,98 @@
+{
+  "typecheck": true,
+  "api": {
+    "success": true,
+    "numTotalTests": 4173,
+    "numPassedTests": 4018,
+    "numFailedTests": 0,
+    "numPendingTests": 155
+  },
+  "web": {
+    "success": true,
+    "numTotalTests": 557,
+    "numPassedTests": 555,
+    "numFailedTests": 0,
+    "numPendingTests": 2
+  },
+  "verification": {
+    "base": {
+      "api": "sha256:b99d8dafcf402fbdf04f4baca725a0a680b7ddd8a555126e324dd5263d56b4be",
+      "web": "sha256:4f4ac23ce16bdb0aab407ca9b900af9899399a74aa6ddc5c254ec37ece6b207d"
+    },
+    "images": {
+      "api": "sha256:56c804ffc2dab2ac817a2cd452f62840a16927ef0fdf21070d881a38ddafbdad",
+      "web": "sha256:7362d9a62e27c993452abb6c2a3caa8963ff3e2de0f828a34b7dfc5a8cee5b60"
+    },
+    "hashes": {
+      "api": {
+        "common/kiz-review-queue.js": "9a30eae0384ddc04b654ae719199a9f10e11049a10a44db05c87a35b265aba51",
+        "common/kiz-client-registry.js": "6326feb3e85b22aecada2c3018af5392a3885e1830e51bcfaf2aae29a48c49c4",
+        "common/kiz-client-review.js": "1b83c50b7f06bc491cefa90e0efc23b0c7ebd690d9a4e1620a678b1a0f2d8a3c",
+        "common/reconciliation/wb-background.js": "3e6ec33eee32ae52576734634cf9f4e5afe2eb52dfd8571ef244e1634b79c27c",
+        "common/stock/wb-order-stock-lifecycle.js": "9b44c89993109894153a267b9a6f455c2343c326ed7bb75376fab62432cb5e09",
+        "modules/stock/stock-operations.service.js": "bf62c5e23f6c6f25d2c610fec213c57b3089d0cfbb3999a5dea990dca910ef4c",
+        "modules/tsd/kiz-receipt-conflict.js": "f2dc74f2b4914975c6a20d03fe1aef102b98795fe30654022a0006bd6b1a4e65",
+        "modules/tsd/fbo-two-stage.service.js": "619439abded8c265324fc5a3412dbb27699797754b507684e648b0fe89f298fb",
+        "modules/tsd/tsd-receipt.service.js": "f71408c3cabaa406e0664190b0d86d928aa1766d734535c5134735bd0e2da3f4",
+        "modules/tsd/tsd-device.controller.js": "eaf977d14ee693142652b09f96bc2f824a1a90101fa5b3e60b5fe71d68d9f8c8",
+        "modules/tsd/tsd-operation-log.service.js": "34ba722fac36e0ab2a76387a28b648803bcaff5105991ab041f5ef5c580232e1",
+        "modules/tsd/fbo-unboxed-picking.js": "1031dfe19af411e1aa9ac15e28349ddbd2372fbbae507565d3cb9bcd86b51625",
+        "modules/tsd/tsd-sync.service.js": "34349864170e989cdeb8e62f601116882a436bb26137143adbb7a9a3c143bf6f",
+        "modules/tsd/tsd-review.service.js": "bcc51d6cceded29a3031d6b8e09e4be6ab15b0a0c5df06e7eecbb0b620e84772",
+        "modules/warehouse/warehouse.service.js": "ab9354651aaec8d11df67c6f639c4aaba0ff0cc9b105ef7dd0d1a4487bbbb523",
+        "modules/marketplace-connections/marketplace-connections.service.js": "e0df618eea68f7cd062cecec43ec4b63652e5e6d6b9998ff0728adc63fc3d6cf",
+        "modules/imports/imports.service.js": "05916a8e97a3416e577d429e4179888b2920a66f84698e68edb1c7a159fe35d3",
+        "modules/administration/administration-internal-api.service.js": "98ce84b1510183204c5c1df082323e7053cd49a0000fccf85f8f01f8950e7ce8"
+      },
+      "web": {
+        "index.html": "45890a3192e757cd3499eabea336232b9b3555eaecf12576c4c5f90679346ae0",
+        "assets/kiz-client-guard-20261029.js": "853af9fd246b8171bd9c917696a22bdcb8bb3bf3c893ea6f0f251b5492638975",
+        "downloads/logoff-tsd.apk": "bb45142cf15f30e8eddaa991751636eedcca77e4e8b540934efc5b2e69fafdd4",
+        "downloads/logoff-tsd.json": "2177818b33b50a70435ce04944b7883cd2e2990e28058ee9aaa435c799044f0d",
+        "downloads/logoff-tsd-kiz-duplicate-stop-244.apk": "bb45142cf15f30e8eddaa991751636eedcca77e4e8b540934efc5b2e69fafdd4"
+      }
+    },
+    "schemaSha256": "e92ec0b0c2717b70a85023a4ec929a54e756ff9140e0d8112726f205fb733819"
+  },
+  "db": {
+    "passed": 12,
+    "isolatedPostgres": true,
+    "clientCount": 2,
+    "receipt-runtime.cjs": {
+      "passed": 8,
+      "syntheticOnly": true
+    },
+    "reuse-runtime.cjs": {
+      "passed": 8,
+      "actualRuntime": true,
+      "syntheticOnly": true
+    },
+    "shipment-runtime.cjs": {
+      "passed": 7,
+      "syntheticOnly": true,
+      "runtime": "/app/apps/api/dist"
+    },
+    "transport-runtime.cjs": {
+      "passed": 3,
+      "actualRuntime": true,
+      "syntheticOnly": true
+    },
+    "image": "sha256:56c804ffc2dab2ac817a2cd452f62840a16927ef0fdf21070d881a38ddafbdad",
+    "fullApiHealth": true,
+    "syntheticOnly": true
+  },
+  "android": {
+    "tests": 885,
+    "perFlavor": 295,
+    "versionCode": 244,
+    "sha256": "bb45142cf15f30e8eddaa991751636eedcca77e4e8b540934efc5b2e69fafdd4",
+    "sofiaAssetsPreserved": 13
+  },
+  "browser": {
+    "source": 10,
+    "runtime": 16,
+    "preserved": 7
+  },
+  "baselineGuards": 8,
+  "dedicatedLegacyKizPrintIntegration": "not configured; excluded as before; new isolated PostgreSQL proof is mandatory"
+}

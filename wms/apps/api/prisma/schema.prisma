@@ -1618,8 +1618,28 @@ model ProductMark {
   updatedAt       DateTime       @updatedAt
 
   @@unique([clientId, value])
+  @@index([clientId, value(ops: raw("text_pattern_ops"))], map: "ProductMark_client_kiz_prefix_idx")
   @@index([clientId, skuId, status])
   @@index([boxId])
+}
+
+// FIX: immutable client-scoped identity survives mark moves, relabels and archival.
+model KizClientRegistry {
+  clientId         String
+  identity         String
+  firstReceivedAt  DateTime? @db.Timestamptz
+  firstBoxCode     String?
+  firstWarehouseId String?
+  productName      String?
+  barcode          String?
+  skuId            String?
+  operationKey     String?
+  sourceDocument   String?
+  userId           String?
+  source           String
+  createdAt        DateTime @default(now()) @db.Timestamptz
+
+  @@id([clientId, identity])
 }
 
 model StockBalance {
@@ -1738,6 +1758,7 @@ model ShippedKizHistory {
   @@index([requestId])
   @@index([orderId])
   @@index([kiz])
+  @@index([clientId, kiz(ops: raw("text_pattern_ops"))], map: "ShippedKizHistory_client_kiz_prefix_idx")
 }
 
 // ADDED: токен True API хранится только в зашифрованном виде; закрытый ключ УКЭП здесь не хранится.
@@ -2990,6 +3011,7 @@ model FbsTsdAssembly {
 
   @@unique([marketplace, connectionId, orderId])
   @@unique([clientId, kiz])
+  @@index([clientId, kiz(ops: raw("text_pattern_ops"))], map: "FbsTsdAssembly_client_kiz_prefix_idx")
   @@index([deviceCode, status, updatedAt])
   @@index([requestId, status])
   @@index([clientId, status])
@@ -3891,6 +3913,8 @@ model FboAssemblyUnit {
   @@index([requestId, state])
   @@index([sourceBoxId, state])
   @@index([targetBoxId, state])
+  // FIX: bounded canonical KIZ history lookup for the client shipment guard.
+  @@index([kiz(ops: raw("text_pattern_ops"))], map: "FboAssemblyUnit_kiz_prefix_idx")
 }
 
 model FboAssemblyAction {

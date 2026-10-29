@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { clientKizGuardEnabled, withReceiptErrorKizGuard } from '../../common/kiz-client-registry';
 import { Prisma, TsdOperationStatus, TsdReviewReason } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -498,7 +499,8 @@ export class TsdReviewService {
     operation: { id: string; operationKey: string; operationType: string; payload: Prisma.JsonValue; reviewReason: TsdReviewReason | null; serverMessage: string | null; deviceId: string },
     dto: ResolveTsdReviewDto,
     user: AuthUser,
-  ) {
+    guardTx?: Prisma.TransactionClient,
+  ): Promise<any> {
     if (operation.operationType !== 'receipt_scan') {
       throw new BadRequestException('Принять с ошибкой можно только строку приемки товара.');
     }
@@ -507,8 +509,17 @@ export class TsdReviewService {
     const payload = this.payloadParser.parseReceiptPayload(operation.payload as Record<string, unknown>);
     this.clientScopes.requireClientAccess(user, payload.clientId, 'write');
 
+    // FIX: use the actual receipt transaction for both the duplicate guard and every write.
+    if (clientKizGuardEnabled() && payload.kiz && !guardTx) {
+      return withReceiptErrorKizGuard(this.prisma, { clientId: payload.clientId, kiz: payload.kiz,
+        operationKey: `${operation.operationKey}:accepted-with-error`, warehouseId: user.activeWarehouseId,
+        skuId: payload.skuId, barcode: payload.barcode, sourceDocument: payload.sourceDocument, userId: user.id },
+      tx => this.acceptReceiptWithError(operation, dto, user, tx));
+    }
+    const db = guardTx ?? this.prisma;
+
     const duplicate = payload.kiz
-      ? await this.prisma.productMark.findFirst({
+      ? await db.productMark.findFirst({
           where: {
             clientId: payload.clientId,
             value: { equals: payload.kiz, mode: Prisma.QueryMode.insensitive },
@@ -543,10 +554,11 @@ export class TsdReviewService {
         allowReceiptError: true,
       },
       user,
+      ...(guardTx ? [guardTx] as [Prisma.TransactionClient] : [] as []),
     );
 
     const resolutionMessage = `Принято с ошибкой в короб ${payload.boxCode}: ${payload.quantity} шт.${duplicateText}`.trim();
-    const updated = await this.prisma.tsdOperation.update({
+    const updated = await db.tsdOperation.update({
       where: { id: operation.id },
       data: {
         status: TsdOperationStatus.ACCEPTED,

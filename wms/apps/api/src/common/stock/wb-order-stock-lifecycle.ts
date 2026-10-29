@@ -1,5 +1,6 @@
 import { Prisma, StockStatus } from '@prisma/client';
 import { ConflictException } from '@nestjs/common';
+import { assertClientKizUse, finishClientKizUse } from '../kiz-client-review';
 
 // FIX: our WMS opts in; installations without the flag retain their current policy.
 export const wbOrderStockLifecycleEnabled = () => process.env.WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED === 'true';
@@ -127,6 +128,10 @@ export async function finalizeWbOrderShipment(db: Prisma.TransactionClient, asse
     -(manualShip._sum.quantity ?? 0) >= request.items.reduce((sum, item) => sum + item.quantity, 0));
   const alreadyShipped = Boolean(legacy) || wholeRequestShipped;
   const shippedAt = legacy?.shippedAt ?? (wholeRequestShipped ? manualShip!._min.createdAt! : occurredAt);
+  // FIX: SOS/background dispatch uses the same contextual KIZ permission before any debit.
+  const kizUse = task.kiz ? { scope: 'FBS' as const, clientId: task.clientId, warehouseId,
+    requestId: request.id, taskId: task.id, kiz: task.kiz, skuId: task.skuId, boxId: task.boxId } : null;
+  if (!alreadyShipped && kizUse) await assertClientKizUse(db, kizUse, { id: task.workerUserId ?? null });
   if (!alreadyShipped) {
     const movements = await db.stockMovement.findMany({ where: { clientId: task.clientId, warehouseId,
       idempotencyKey: { startsWith: `fbs-sticker-pick:${task.id}:` }, status: 'PACKING',
@@ -183,6 +188,7 @@ export async function finalizeWbOrderShipment(db: Prisma.TransactionClient, asse
       color: sku.color, size: sku.size, kiz: task.kiz, sourceBoxCode: task.boxCode, shippedAt,
     }] });
   }
+  if (!alreadyShipped && kizUse) await finishClientKizUse(db, kizUse);
   return fact;
 }
 

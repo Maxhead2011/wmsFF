@@ -97,6 +97,32 @@ public class ReceiptCloseSyncTest {
         }
     }
 
+    // TEST: conflicts on the first page survive later close replies and every failed unit stays rejected.
+    @Test public void lateDuplicateDetailsAreNotLostBetweenPages() {
+        ReceiptCloseBatch batch = batch(70);
+        FakeOutbox outbox = new FakeOutbox(batch);
+        TsdSyncSummary summary = new TsdSyncRunner(outbox, api(new ArrayList<>(), "DUPLICATE_SCANS", false), "device")
+            .syncReceiptBatch("auth", batch.closeKey);
+        assertFalse(batch.isConfirmed(outbox.findOperation(batch.closeKey)));
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            assertEquals(70, summary.kizConflicts.size());
+            assertEquals("client", summary.kizConflicts.get(0).clientId);
+            assertEquals("ORIGINAL", summary.kizConflicts.get(0).duplicateInfo.firstBoxCode);
+        } else assertTrue(summary.kizConflicts.isEmpty());
+        assertEquals(0, summary.applied);
+    }
+
+    // TEST: stale duplicate metadata on a safe replay must never make an accepted operation red.
+    @Test public void alreadyAppliedDoesNotBecomeDuplicate() {
+        ReceiptCloseBatch batch = batch(1);
+        FakeOutbox outbox = new FakeOutbox(batch);
+        TsdSyncSummary summary = new TsdSyncRunner(outbox, api(new ArrayList<>(), "DUPLICATE_ALREADY_APPLIED", false), "device")
+            .syncReceiptBatch("auth", batch.closeKey);
+        assertTrue(batch.isConfirmed(outbox.findOperation(batch.closeKey)));
+        assertTrue(summary.kizConflicts.isEmpty());
+        assertEquals(2, summary.applied);
+    }
+
     private WmsApi api(List<String> sent, String closeStatus, boolean offline) {
         return (WmsApi) Proxy.newProxyInstance(WmsApi.class.getClassLoader(), new Class<?>[]{WmsApi.class},
             (proxy, method, args) -> {
@@ -113,6 +139,12 @@ public class ReceiptCloseSyncTest {
                             TsdOperationResponse response = new TsdOperationResponse();
                             response.operationKey = operation.operationKey;
                             response.status = "HOLD_SCANS".equals(closeStatus) ? (close ? "APPLIED" : "NEEDS_REVIEW") : close ? closeStatus : "APPLIED";
+                            if ("DUPLICATE_SCANS".equals(closeStatus) || "DUPLICATE_ALREADY_APPLIED".equals(closeStatus)) {
+                                response.status = "DUPLICATE_ALREADY_APPLIED".equals(closeStatus) ? "ALREADY_APPLIED" : close ? "RETRY" : "NEEDS_REVIEW";
+                                response.code = "KIZ_DUPLICATE"; response.duplicate = true;
+                                response.duplicateInfo = new TsdKizDuplicateInfo();response.duplicateInfo.firstBoxCode="ORIGINAL";
+                                response.message = "ОТЛОЖИТЕ ТОВАР";
+                            }
                             if (close && "REJECTED".equals(closeStatus)) response.message = "Короб относится к другому филиалу.";
                             replies.add(response);
                         }
