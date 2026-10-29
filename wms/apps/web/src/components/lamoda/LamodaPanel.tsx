@@ -1,6 +1,8 @@
 import { LamodaSubmissionPanel } from './LamodaSubmissionPanel';
+import { LamodaAssemblyList } from './LamodaAssemblyList';
+import { FboWorkspaceModal } from '../client-requests/FboWorkspaceModal';
 import { fetchWorkspaceClients, workspaceEnabled } from '../../lib/marketplaceWorkspace';
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   fetchClients, fetchLamodaAccounts, fetchLamodaOverview, createLamodaAccount, checkLamodaAccount,
   syncLamoda, fetchLamodaCandidates, linkLamodaProduct, importLamodaPlan, previewLamodaPlan,
@@ -12,7 +14,7 @@ import './lamoda.css';
 import { importLamodaShipment, createLamodaAssembly, fetchFboPlan, type FboPlan } from '../../lib/api';
 import { FboTwoStagePanel } from '../client-requests/FboTwoStagePanel';
 import { LamodaStockReview } from './LamodaStockReview';
-import { RequestRemovalProvider, RequestRemovalButton } from '../client-requests/RequestRemoval';
+import { RequestRemovalProvider } from '../client-requests/RequestRemoval';
 
 type Tab = 'connection' | 'catalog' | 'fbo' | 'fbs' | 'returns' | 'log';
 const tabs: [Tab, string][] = [['connection', 'Подключение'], ['catalog', 'Товары и соответствия'], ['fbo', 'Планы FBO'], ['fbs', 'Заказы FBS'], ['returns', 'Возвраты'], ['log', 'Журнал обмена']];
@@ -27,7 +29,6 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   const compact = operational && mode === 'fbo';
   const [createOpen, setCreateOpen] = useState(false);
   const [createMethod, setCreateMethod] = useState<'file' | 'shipment'>('file');
-  const [columns, setColumns] = useState(6);
   const token = session.accessToken;
   const canManage = !session.user.isDemo && session.user.permissionCodes.some(p => p === 'system:admin' || p === 'marketplace-api:write');
   // FIX: customer planning uses existing request rights; credential controls stay administrative.
@@ -47,11 +48,12 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   const [assembly,setAssembly]=useState<FboPlan|null>(null);
   const [planView,setPlanView]=useState<'active'|'closed'>('active');
   const detailRef=useRef<HTMLDivElement>(null),openSequence=useRef(0);
+  const previousOverviewScope=useRef<string|null>(null);
   const scope=JSON.stringify([token,clientId,accountId,session.user.activeWarehouseId]);
   const currentScope=useRef(scope);currentScope.current=scope;
   // FIX: refresh the list without closing the selected assembly; account/branch changes do close it.
   useEffect(()=>{setAssembly(null);setCreateOpen(false);openSequence.current++;return()=>{openSequence.current++};},[scope]);
-  useEffect(()=>{if(operational&&assembly)detailRef.current?.scrollIntoView({behavior:'smooth',block:'start'});},[operational,assembly?.requestId]);
+  useEffect(()=>{if(operational&&!compact&&assembly)detailRef.current?.scrollIntoView({behavior:'smooth',block:'start'});},[operational,compact,assembly?.requestId]);
   const closedPlan=(p: NonNullable<LamodaOverview>['plans'][number])=>['DONE','CANCELLED','REJECTED'].includes(p.assembly?.request?.status ?? '');
   const selected = accounts.find(c => c.id === accountId);
   useEffect(() => {
@@ -67,7 +69,11 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   }, [token, clientId]);
   useEffect(() => {
     let current = true;
-    setOverview(null); setCandidates(null); setPreview(null); setPreviewPlan(''); setFile(null); setTitle(''); setRemoteShipmentId(''); setWarehouses([]); setWarehouseId(''); setForm(emptyForm());
+    // FIX: a same-account refresh keeps rows in place; a different account/branch clears them.
+    const overviewScope=JSON.stringify([token,accountId,session.user.activeWarehouseId]);
+    if(previousOverviewScope.current!==overviewScope)setOverview(null);
+    previousOverviewScope.current=overviewScope;
+    setCandidates(null); setPreview(null); setPreviewPlan(''); setFile(null); setTitle(''); setRemoteShipmentId(''); setWarehouses([]); setWarehouseId(''); setForm(emptyForm());
     setReference('');setPreviewId('');setMappingQuery('');setMappingChoice(null);
     if (!accountId) { setLoading(false); return; }
     setLoading(true);
@@ -97,7 +103,12 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
   const disabled = busy || loading;
   const documents = overview?.documents.filter(d => tab === 'fbo' ? d.kind === 'FBO_SHIPMENTS' : tab === 'fbs' ? ['ORDERS', 'FBS_SHIPMENTS'].includes(d.kind) : tab === 'returns' ? d.kind === 'RETURNS' : false) ?? [];
   const visiblePlans = overview?.plans.filter(p=>!operational||(planView==='closed')===closedPlan(p)) ?? [];
-  const content = <section className={`lamoda-workspace${compact ? ' lamoda-ozon-layout' : ''}`} aria-label="Lamoda" style={compact ? {'--lamoda-columns': columns} as CSSProperties : undefined}>
+  function closeAssembly(){openSequence.current++;setAssembly(null);setRevision(v=>v+1);}
+  const execution=assembly&&<FboTwoStagePanel key={assembly.requestId} embedded={operational} initial={assembly} accessToken={token} userId={session.user.id} canWrite={!customerMode&&canManage} onClose={closeAssembly}/>;
+  const submission=assembly&&<LamodaSubmissionPanel key={accountId+assembly.requestId} token={token} accountId={accountId} requestId={assembly.requestId} canWrite={canWrite}/>;
+  // FIX: keep both existing workflows in one window, with the guarded execution close action.
+  const assemblyContent=assembly&&<div ref={detailRef} className={compact?'lamoda-workspace lamoda-ozon-layout lamoda-assembly-detail':operational?'lamoda-assembly-detail':undefined} aria-label="Выбранная сборка Lamoda">{compact?<>{execution}{submission}</>:<>{submission}{execution}</>}</div>;
+  const content = <section className={`lamoda-workspace${compact ? ' lamoda-ozon-layout' : ''}`} aria-label="Lamoda">
     {compact && <header className="lamoda-page-header"><small>LOGOFF WMS · LAMODA</small><h2>Сборки Lamoda</h2></header>}
     {!compact && <h2>{maintenanceClientId ? 'Lamoda · обслуживание кабинета' : operational || customerMode ? mode==='fbs' ? 'Lamoda · заказы FBS' : 'Lamoda · поставки FBO' : 'Lamoda · подготовка подключения'}</h2>}
     {!compact && <p className="lamoda-note">{mode==='fbs' ? 'Заказы и отгрузки FBS Lamoda. Здесь доступны загруженные документы и их статусы; сборка и отправка остатков пока не подключены.' : 'Загрузите план из Excel или из существующей поставки Lamoda и проверьте состав. Отправка остатков и подтверждение отгрузок пока недоступны.'}</p>}
@@ -147,22 +158,12 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
         <button disabled={disabled||!canWrite||!warehouseId||!reference}>Загрузить состав поставки</button>
       </form>
       </div>}<aside className="lamoda-operational-list">
-      <div className="lamoda-list-header"><h3>{compact ? 'Единые сборки Lamoda' : 'Сборки Lamoda'}</h3>{compact && <label>Плиток в ряд<select aria-label="Плиток в ряд" value={columns} onChange={e=>setColumns(Number(e.target.value))}>{[4,5,6].map(n=><option key={n} value={n}>{n}</option>)}</select></label>}{operational && <button disabled={disabled || !accountId} onClick={()=>setRevision(v=>v+1)}>Обновить</button>}</div>
+      <div className="lamoda-list-header"><h3>{compact ? 'Единые сборки Lamoda' : 'Сборки Lamoda'}</h3>{operational && <button disabled={disabled || !accountId} onClick={()=>setRevision(v=>v+1)}>Обновить</button>}</div>
       {operational && <div className="lamoda-tabs lamoda-list-tabs"><button aria-pressed={planView==='active'} onClick={()=>setPlanView('active')}>Активные</button><button aria-pressed={planView==='closed'} onClick={()=>setPlanView('closed')}>Завершённые</button></div>}
       {!loading && !visiblePlans.length && <p>{!accountId ? 'Выберите клиента и кабинет Lamoda.' : planView==='closed' ? 'Завершённых сборок пока нет.' : 'Активных сборок пока нет. Нажмите «Создать сборку», чтобы загрузить файл или поставку Lamoda.'}</p>}
-      <div className={compact ? 'lamoda-assembly-cards' : undefined}>
-      {visiblePlans.map(p => !compact ? <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.assembly?.request ? `№${p.assembly.request.number} · ${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p>{!p.assembly && <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>}{p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}</div> : <div className="lamoda-card lamoda-assembly-card" key={p.id}>
-        {compact && p.assembly?.request && <h3>№{String(p.assembly.request.number).padStart(5,'0')}</h3>}
-        <strong>{p.title}</strong>
-        <p>{p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {p.warehouse.name}</p>
-        <p>Создана: {date(p.createdAt)}</p>
-        <p className={compact ? 'lamoda-plan-status' : undefined}>{p.assembly?.request ? `${compact ? '' : `№${p.assembly.request.number} · `}${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p>
-        {!p.assembly && <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>}
-        {/* FIX: reuse server-authorized removal with the assembly request ID, never a draft plan ID. */}
-        {p.assembly?.request && <RequestRemovalButton request={{id:p.assembly.requestId,number:p.assembly.request.number,title:p.title,type:'OUTBOUND',status:p.assembly.request.status}}/>}
-        {p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}
-      </div>)}
-      </div></aside>
+      {compact?<LamodaAssemblyList plans={visiblePlans} client={clients.find(c=>c.id===clientId)} disabled={disabled} canWrite={canWrite} selectedId={assembly?.requestId} onOpen={requestId=>void run(()=>openAssembly(requestId))} onReview={p=>void run(async()=>{setPreview(await previewLamodaPlan(token,accountId,p.id));setPreviewPlan(p.title);setPreviewId(p.id);})}/>:<div>
+      {visiblePlans.map(p => <div className="lamoda-card" key={p.id}><strong>{p.title}</strong><p>{p.assembly?.request ? `№${p.assembly.request.number} · ${({SUBMITTED:'Новая',IN_REVIEW:'На проверке',APPROVED:'Согласована',IN_WORK:'В работе',PACKED:'Упакована',DONE:'Сдана',CANCELLED:'Отменена',REJECTED:'Отклонена'} as Record<string,string>)[p.assembly.request.status] ?? p.assembly.request.status}` : 'Черновик'}</p><p>{p.warehouse.name} · {p.items.reduce((sum, i) => sum + i.quantity, 0)} шт. · {date(p.createdAt)}</p>{!p.assembly && <button disabled={disabled || !canWrite} onClick={() => void run(async () => { setPreview(await previewLamodaPlan(token, accountId, p.id)); setPreviewPlan(p.title);setPreviewId(p.id); })}>Проверить соответствия и остатки</button>}{p.assembly && <button disabled={disabled} onClick={()=>void run(()=>openAssembly(p.assembly!.requestId))}>Открыть сборку</button>}</div>)}
+      </div>}</aside>
       {preview && <LamodaStockReview key={previewId} preview={preview} title={previewPlan} disabled={disabled||(preview.existingRequest?false:!canWrite||!previewId||!overview?.assemblyEnabled)}
         onOpen={requestId=>void run(()=>openAssembly(requestId))}
         onCreate={quantities => void run(async () => {
@@ -184,8 +185,8 @@ export function LamodaPanel({ session, maintenanceClientId, mode = 'fbo' }: { se
     {!customerMode && tab === 'returns' && <><p>Это ожидаемые возвраты Lamoda. Доступный остаток увеличивается только после физической приёмки в WMS.</p><button disabled={disabled || !canManage || !selected?.fbsEnabled || !selected.isActive} onClick={() => sync('RETURNS')}>Загрузить ожидаемые возвраты</button></>}
     {(!operational || tab !== 'fbo') && ['fbo', 'fbs', 'returns'].includes(tab) && <div className="lamoda-scroll"><table><thead><tr><th>Номер</th><th>ID Lamoda</th><th>Статус Lamoda</th><th>Последняя загрузка</th></tr></thead><tbody>{documents.map(d => <tr key={d.id}><td>{d.number}</td><td>{d.remoteId}</td><td>{d.status}</td><td>{date(d.syncedAt)}</td></tr>)}</tbody></table><p>Показано до 500 документов. Поставки и возвраты загружаются за период ±90 дней; заказы — с последней успешной загрузки, при первом запуске за 90 дней.</p></div>}
     {!customerMode && tab === 'log' && <div className="lamoda-scroll"><table><thead><tr><th>Время</th><th>Операция</th><th>Результат</th><th>Записей</th></tr></thead><tbody>{overview?.exchanges.map(e => <tr key={e.id}><td>{date(e.createdAt)}</td><td>{e.operation}</td><td>{({ RUNNING: 'Выполняется', SUCCEEDED: 'Завершено', FAILED: 'Ошибка' } as Record<string, string>)[e.status] ?? e.status} {e.errorCode}</td><td>{e.itemCount}</td></tr>)}</tbody></table></div>}
-    {assembly&&<div ref={detailRef} className={operational?'lamoda-assembly-detail':undefined} aria-label="Выбранная сборка Lamoda"><LamodaSubmissionPanel key={accountId+assembly.requestId} token={token} accountId={accountId} requestId={assembly.requestId} canWrite={canWrite}/><FboTwoStagePanel key={assembly.requestId} embedded={operational} initial={assembly} accessToken={token} userId={session.user.id} canWrite={!customerMode&&canManage} onClose={()=>{openSequence.current++;setAssembly(null);setRevision(v=>v+1);}}/></div> }
+    {!compact&&assemblyContent}
   </section>;
   // FIX: scope changes dismiss stale confirmations; modal stays outside the CSS container.
-  return compact ? <RequestRemovalProvider key={scope} token={token} onRemoved={()=>{openSequence.current++;setAssembly(null);setPreview(null);setPreviewId('');setRevision(v=>v+1);}}>{content}</RequestRemovalProvider> : content;
+  return compact ? <RequestRemovalProvider key={scope} token={token} onRemoved={()=>{openSequence.current++;setAssembly(null);setPreview(null);setPreviewId('');setRevision(v=>v+1);}}>{content}{assemblyContent&&<FboWorkspaceModal>{assemblyContent}</FboWorkspaceModal>}</RequestRemovalProvider> : content;
 }

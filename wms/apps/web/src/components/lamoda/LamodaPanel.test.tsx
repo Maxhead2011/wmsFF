@@ -21,7 +21,7 @@ it('opens operational planning and moves technical actions to the client card', 
   expect(maintenance).toContain('Журнал обмена');
   expect(maintenance).not.toContain('type="password"');
 });
-// TEST: Ozon-style FBO landing keeps creation collapsed and the assemblies list full width.
+// TEST: Ozon-style FBO landing keeps creation collapsed and exposes rows instead of tile density.
 it('shows compact FBO toolbar and full-width list before opening creation', () => {
   vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED', 'true');
   const html=renderToStaticMarkup(<LamodaPanel session={session}/>);
@@ -29,7 +29,8 @@ it('shows compact FBO toolbar and full-width list before opening creation', () =
   expect(html).toContain('Создать сборку');
   expect(html).toContain('aria-expanded="false"');
   expect(html).toContain('Филиал WMS');
-  expect(html).toContain('Плиток в ряд');
+  expect(html).not.toContain('Плиток в ряд');
+  for(const column of ['Заявка','Состав','Срок / статус','Склад','Действия'])expect(html).toContain(`<th>${column}</th>`);
   expect(html).toContain('Завершённые');
   expect(html).not.toContain('type="file"');
   const fbs=renderToStaticMarkup(<LamodaPanel session={session} mode="fbs"/>);
