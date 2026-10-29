@@ -1,0 +1,16 @@
+{
+  "publicFileHashes": {
+    "downloads/logoff-tsd.apk": "de646513ae9686f2b8b6c86c00f43abdc8731b70576dc6c74947dd9506f613bc",
+    "downloads/logoff-tsd.json": "94cd81ab1d4cbfa6b311d84d4507bfe734623c6da9dc2b096ca250fdf817320e",
+    "downloads/logoff-tsd-sofia-tanks-voice-243.apk": "de646513ae9686f2b8b6c86c00f43abdc8731b70576dc6c74947dd9506f613bc"
+  },
+  "publicVersionCode": 243,
+  "health": "ok",
+  "apiUnchangedFiles": 684,
+  "schemaUnchanged": true,
+  "otherContainersUnchanged": true,
+  "unchangedWebFiles": 3188,
+  "androidTestsPassed": 858,
+  "baselineTestsPassed": 8,
+  "physicalTerminalVerified": false
+}
