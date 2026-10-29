@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 244 // FIX: client KIZ duplicate guard; preserve Sofia offline tank voice.
-            versionName = "0.1.244-kiz-duplicate-stop"
+            versionCode = 245 // FIX: retain the selected FBS request after retry; no automatic client switching.
+            versionName = "0.1.245-fbs-request-scope"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

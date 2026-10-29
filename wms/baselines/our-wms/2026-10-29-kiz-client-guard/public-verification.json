@@ -1,0 +1,25 @@
+{
+  "passed": 4,
+  "readOnly": true,
+  "flag": true,
+  "registry": [
+    {
+      "source": "RECEIPT",
+      "count": 89320
+    },
+    {
+      "source": "LEGACY_UNKNOWN",
+      "count": 15660
+    }
+  ],
+  "publicHashes": {
+    "index.html": "45890a3192e757cd3499eabea336232b9b3555eaecf12576c4c5f90679346ae0",
+    "assets/kiz-client-guard-20261029.js": "853af9fd246b8171bd9c917696a22bdcb8bb3bf3c893ea6f0f251b5492638975",
+    "downloads/logoff-tsd.apk": "bb45142cf15f30e8eddaa991751636eedcca77e4e8b540934efc5b2e69fafdd4",
+    "downloads/logoff-tsd.json": "2177818b33b50a70435ce04944b7883cd2e2990e28058ee9aaa435c799044f0d",
+    "downloads/logoff-tsd-kiz-duplicate-stop-244.apk": "bb45142cf15f30e8eddaa991751636eedcca77e4e8b540934efc5b2e69fafdd4"
+  },
+  "health": "ok",
+  "apkVersion": 244,
+  "pr": 765
+}

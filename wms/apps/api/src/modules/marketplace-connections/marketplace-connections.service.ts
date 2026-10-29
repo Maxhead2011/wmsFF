@@ -5799,6 +5799,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    // FIX: a lost TSD selection must not allocate another client's/marketplace's request.
+    // An existing assignment above remains resumable, including on older terminals.
+    if (!selectedRequestId && process.env.WMS_FBS_EXPLICIT_REQUEST_ENABLED === 'true') {
+      return this.emptyFbsTsdAssembly(
+        deviceCode,
+        user,
+        'Выберите FBS-заявку. После завершения сборки следующая заявка выбирается вручную.',
+      );
+    }
+
     const previousBatch = await this.prisma.fbsTsdAssembly.findFirst({
       where: {
         status: 'COMPLETED',
