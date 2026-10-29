@@ -1,0 +1,35 @@
+{
+  "publicFileHashes": {
+    "downloads/logoff-tsd.apk": "3c5c599a8891588600fcb69450d52d1c16d6438f8ec0334254b53c179aee04f1",
+    "downloads/logoff-tsd.json": "c3e29d987de5fd9550cfecca1719fab73866498b18514938db3c0a6e0fe7db23",
+    "downloads/logoff-tsd-fbs-request-scope-245.apk": "3c5c599a8891588600fcb69450d52d1c16d6438f8ec0334254b53c179aee04f1"
+  },
+  "publicVersionCode": 245,
+  "health": "ok",
+  "apiRuntimeFiles": 687,
+  "apiUnchangedFiles": 686,
+  "apiChangedFiles": [
+    "modules/marketplace-connections/marketplace-connections.service.js"
+  ],
+  "schemaUnchanged": true,
+  "otherContainersUnchanged": true,
+  "explicitRequestFlag": "true",
+  "otherApiEnvironmentUnchanged": true,
+  "previousFeatureFlagCount": 132,
+  "physicalTerminalVerified": false,
+  "runtimeTestsPassed": 56,
+  "liveHandlerReadOnly": {
+    "passed": 3,
+    "actualPublishedHandler": true,
+    "actualPrisma": true,
+    "transactionReadOnly": true,
+    "syntheticWorkerAndDevice": true,
+    "businessRecordsCreated": 0,
+    "marketplaceCalls": 0,
+    "states": [
+      "EMPTY",
+      "EMPTY",
+      "EMPTY"
+    ]
+  }
+}
