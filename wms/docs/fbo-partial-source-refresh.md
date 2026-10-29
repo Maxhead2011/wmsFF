@@ -1,7 +1,7 @@
 # Отбор из выбранного короба после пересчёта маршрута
 
-Подготовлено 29.10.2026, не опубликовано. Ветка `fix/fbo-partial-source-refresh`,
-целевой PR — `feature/wb-print-check`, база PR748 / LOGOFF ТСД239.
+Опубликовано 29.10.2026 через PR750 в `feature/wb-print-check`: LOGOFF ТСД240.
+База публикации — проверенный выпуск PR749 / LOGOFF ТСД239.
 
 В №2494 (Лукин, «Никольское») сотрудник сканировал исходные короба
 `FFL_LKB1310_063` и `FFL_LKB1310_064`. На 29.10.2026 15:58 МСК по ШК
@@ -38,4 +38,13 @@
 отсутствующий источник, нулевое выделенное количество и сохранение общего плана.
 Новые проверки помечены `// TEST`, изменения — `// FIX`.
 
-Validation: all277 Android tests passed in each flavor (LOGOFF/Ffullhab/Platform),831 total; LOGOFF release build and diff check passed. LOGOFF APK240 is prepared for publication.
+Validation: all277 Android tests passed in each flavor (LOGOFF/Ffullhab/Platform),831 total; LOGOFF release build and diff check passed. Baseline guards8 passed.
+
+Опубликованы только три файла скачивания APK. Остальные 3179 файлов веба,
+API, схема БД и остальные контейнеры сохранены. Проверены подпись и состав APK,
+публичные хеши файлов и health. База: `2026-10-29-fbo-partial-source`,
+`sourceParityVerified=false`.
+
+На физическом ТСД необходимо установить версию 240 и заново открыть сборку.
+Подтверждение работы сотрудником после установки пока не получено.
+APK SHA256: `ed6dc8707cb213446cb02853831cf6ae56f211bd948358f74ec9d08fd2f0c42a`.
