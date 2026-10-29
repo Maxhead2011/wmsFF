@@ -34,7 +34,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   },
   // FIX: isolated, opt-in Lamoda preparation routes; business writes are not exposed.
   {
-    id: 'lamoda', name: 'Lamoda — подключение и сборки FBO', prefixes: ['/lamoda'], routeCount: 20, // FIX: actual shipment preview/file/send/status/reset.
+    id: 'lamoda', name: 'Lamoda — подключение и сборки FBO', prefixes: ['/lamoda'], routeCount: 21, // FIX: actual shipment preview/file/send/status/reset.
     description: 'Подключение, каталог и соответствия, загрузка документов, черновики FBO и предварительная доступность.',
     logic: ['Доступ по клиенту и правам API; планы ограничены филиалом.', 'Секрет зашифрован, токены только в памяти процесса.', 'Excel и ID/ссылка создают планы; отдельная команда создаёт единственную складскую заявку и резерв. Отправка остатков и отгрузок выключена.'],
     dependencies: ['Основная БД', 'Lamoda Seller REST API v2', 'WMS_LAMODA_ENABLED', 'WMS_LAMODA_SECRET_KEY'],

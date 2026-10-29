@@ -18,12 +18,13 @@ export type LamodaAccountInput = { clientId: string; name: string; sellerId: str
 
 @Injectable()
 export class LamodaService {
-  async submission(accountId:string,requestId:string,user:AuthUser,action:'view'|'preview'|'send'|'refresh'|'reset',form?:SubmissionForm) {
+  async submission(accountId:string,requestId:string,user:AuthUser,action:'view'|'preview'|'send'|'refresh'|'reset'|'template',form?:SubmissionForm) {
     if(process.env.WMS_LAMODA_FBO_SUBMISSION_ENABLED!=='true')throw new NotFoundException('Оформление поставок Lamoda пока выключено.');
     const c=await this.account(accountId,user,action==='view'?'read':'write',true);
     if(!c.fboEnabled||!c.isActive)throw new BadRequestException('Нужно активное подключение Lamoda FBO.');
     const service=new LamodaSubmission(this.db,this.remote);
     if(action==='view')return service.view(accountId,requestId,user);
+    if(action==='template')return service.template(accountId,requestId,user);
     if(action==='reset')return service.resetRejected(accountId,requestId,user);
     if(action==='refresh')return service.refresh(accountId,requestId,user,this.credentials(c));
     if(!form)throw new BadRequestException('Заполните данные поставки.');
