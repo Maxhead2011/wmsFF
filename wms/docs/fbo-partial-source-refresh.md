@@ -38,4 +38,4 @@
 отсутствующий источник, нулевое выделенное количество и сохранение общего плана.
 Новые проверки помечены `// TEST`, изменения — `// FIX`.
 
-Validation: all277 Android tests passed in each flavor (LOGOFF/Ffullhab/Platform),831 total; LOGOFF release build and diff check passed. APK version remains239 for local verification; publication requires a new version.
+Validation: all277 Android tests passed in each flavor (LOGOFF/Ffullhab/Platform),831 total; LOGOFF release build and diff check passed. LOGOFF APK240 is prepared for publication.

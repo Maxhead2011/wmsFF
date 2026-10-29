@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 239 // FIX: refresh Lamoda packing and asynchronous relabel printing automatically.
-            versionName = "0.1.239-lamoda-auto-refresh"
+            versionCode = 240 // FIX: preserve the selected partial-pick box during route refresh.
+            versionName = "0.1.240-fbo-partial-source"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
