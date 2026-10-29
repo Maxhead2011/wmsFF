@@ -21,7 +21,10 @@ public class FboCompactPackingScreenTest {
  // TEST: opening and packing retain the input, avoid full GET, and lost replies use status only.
  @Test public void nextScanWithoutFullPlan()throws Exception{exercise(false);}
  @Test public void lostReplyUsesSameCompactState()throws Exception{exercise(true);}
- void exercise(boolean lose)throws Exception{
+ // TEST: scanner Enter finishes after barcode handling; the retained field must reclaim focus for KIZ.
+ @Test public void barcodeRestoresKizFocusAfterScannerEnter()throws Exception{exercise(false,true);}
+ void exercise(boolean lose)throws Exception{exercise(lose,false);}
+ void exercise(boolean lose,boolean testFocus)throws Exception{
   if(!"logoff".equals(BuildConfig.FLAVOR))return;
   try(var c=Robolectric.buildActivity(Activity.class).setup()){
    Activity a=c.get();String user=UUID.randomUUID().toString();a.getSharedPreferences("fbo-pending",0).edit().putString(user+":r:mode","NEW_BOXES").commit();
@@ -40,6 +43,17 @@ public class FboCompactPackingScreenTest {
    try{idle(screen);EditText input=screen.scannerField();input.setText("FFL_NEW");screen.submit();
     for(int i=0;i<300;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();Thread.sleep(10);if(((FboScanState)field(screen,"state")).pending()==null&&writes.get()>0)break;}
     idle(screen);assertEquals(1,reads.get());assertEquals(1,writes.get());assertEquals(lose?1:0,checks.get());assertSame(input,screen.scannerField());assertTrue(input.isEnabled());assertEquals("FFL_NEW",((FboScanState)field(screen,"state")).target);
+    if(testFocus){
+     c.visible().windowFocusChanged(true);
+     TsdFboPlan.Line line=new TsdFboPlan.Line();line.barcode="2051234567890";line.requiresKiz=true;line.picked=2;line.needed=2;p.lines.add(line);
+     input.setText(line.barcode);screen.submit();
+     android.view.View confirm=(android.view.View)field(screen,"compactSubmit");
+     confirm.setFocusableInTouchMode(true);confirm.requestFocus();assertFalse(input.hasFocus());
+     Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(100));
+     assertTrue(input.hasFocus());assertSame(input,screen.scannerField());
+     assertEquals(line.barcode,((FboScanState)field(screen,"state")).barcode);
+     assertEquals("",input.getText().toString());assertEquals(1,writes.get());
+    }
    }finally{screen.close();}
   }
  }

@@ -316,7 +316,11 @@ final class FboTwoStageScreen {
         compactEmpty.setEnabled(ready()&&target!=null&&!target.closed&&target.quantity==0&&state.barcode.isEmpty());
         compactModes.setEnabled(ready()&&state.barcode.isEmpty());compactRefresh.setEnabled(!busy&&state.pending()==null);compactBack.setEnabled(!busy&&state.pending()==null);
         compactRetry.setVisibility(state.pending()==null?android.view.View.GONE:android.view.View.VISIBLE);compactRetry.setEnabled(!busy&&state.pending()!=null);
-        if(ready())input.requestFocus();packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
+        if(ready())input.requestFocus();
+        // FIX: compact packing also restores KIZ focus after the scanner's trailing Enter.
+        EditText scanTarget=input;
+        AssemblyAutoFocus.request(scanTarget,()->!closed&&compactRoot!=null&&input==scanTarget&&ready()&&quantityDialog==null);
+        packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
         return true;
     }
 

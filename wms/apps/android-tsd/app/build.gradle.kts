@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 241 // FIX: show remaining products when picking without boxes.
-            versionName = "0.1.241-fbo-unboxed-display"
+            versionCode = 242 // FIX: restore KIZ focus after barcode scanning in compact packing.
+            versionName = "0.1.242-fbo-compact-focus"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
