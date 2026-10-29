@@ -1,4 +1,4 @@
-Prepared / 2026-10-29: FBS keeps the manually selected request after pending-operation recovery; own-WMS server flag prevents new assignments without requestId. Selected-request completion and manual exit are preserved. LOGOFF245, not published. [Details](fbs-explicit-request.md).
+Published PR767 / 2026-10-29: FBS automatic continuation stays inside the selected request. LOGOFF245 restores request/marketplace after pending-operation recovery; lost selection opens the list. Own-WMS `WMS_FBS_EXPLICIT_REQUEST_ENABLED=true` prevents new unscoped assignments. API4028/web555 passed (155/2 skipped), Android897, TypeScript/release, baseline8, actual runtime56 and RED/GREEN regressions. Exact1 API/3 download files; other686 API modules/schema/prior132 flags/environment/business data/sold unchanged. Baseline `2026-10-29-fbs-request-scope`, sourceParityVerified=false. Public hashes/health verified; terminal update required. [Details](fbs-explicit-request.md).
 
 Опубликовано PR765: КИЗ клиента, LOGOFF244; baseline `2026-10-29-kiz-client-guard`. Проверки API4018/web555/Android885/PostgreSQL12/runtime26 и live4 пройдены. [Паспорт](kiz-client-duplicate-guard.md).
 
