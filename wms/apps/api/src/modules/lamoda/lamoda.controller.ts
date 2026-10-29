@@ -13,6 +13,14 @@ import { actualLamodaWorkbook } from './lamoda-actual-shipment';
 // FIX: service still requires CLIENT role and scoped access for customer plan operations.
 @RequireAnyPermissions('marketplace-api:read', 'marketplace-api:write', 'client-requests:read')
 export class LamodaController {
+  // FIX: factual workbook without prices; sending still requires the strict submission DTO.
+  @Post('accounts/:id/assemblies/:requestId/submission/template')
+  @RequireAnyPermissions('marketplace-api:write','client-requests:write')
+  async submissionTemplate(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser){
+    const result=await this.service.submission(id,requestId,user,'template');
+    if(!Buffer.isBuffer(result))throw new BadRequestException('Нет файла поставки.');
+    return new StreamableFile(result,{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',disposition:'attachment; filename="Lamoda-actual-fill-prices.xlsx"'});
+  }
   @Post('accounts/:id/assemblies/:requestId/submission/reset')
   @RequireAnyPermissions('marketplace-api:write','client-requests:write')
   resetSubmission(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser){return this.service.submission(id,requestId,user,'reset');}

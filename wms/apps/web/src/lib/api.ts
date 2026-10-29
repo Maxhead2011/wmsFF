@@ -28,7 +28,7 @@ export type LamodaPreview = {existingRequest?:{id:string;number:number}|null;unr
 const lamodaPath=(id:string)=>'/lamoda/accounts/'+encodeURIComponent(id);
 export type LamodaSubmissionForm={externalShipmentId:string;warehouseCode:string;plannedDate:string;prices:{skuId:string;priceMinor:number}[]};
 export type LamodaSubmissionReceipt={state:string;remoteId?:string;remoteStatus?:string;error?:string;updatedAt:string;payload:{externalShipmentId:string;warehouseCode:string;plannedDate:string;items:{externalSku:string;ean:string;quantity:number;price:{amount:number};markingCodes?:string[]}[]}};
-export type LamodaSubmissionView={receipt:LamodaSubmissionReceipt|null;remoteShipmentId:string|null;items:{skuId:string;name:string;size:string|null;quantity:number}[]};
+export type LamodaSubmissionView={receipt:LamodaSubmissionReceipt|null;readyForTemplate?:boolean;remoteShipmentId:string|null;items:{skuId:string;name:string;size:string|null;quantity:number}[]};
 const submissionPath=(id:string,r:string)=>lamodaPath(id)+'/assemblies/'+encodeURIComponent(r)+'/submission';
 export const getLamodaSubmission=(accessToken:string,id:string,r:string)=>request<LamodaSubmissionView>(submissionPath(id,r),{accessToken});
 export const previewLamodaSubmission=(accessToken:string,id:string,r:string,body:LamodaSubmissionForm)=>request<{payload:LamodaSubmissionReceipt['payload']}>(submissionPath(id,r)+'/preview',{accessToken,method:'POST',body});
@@ -36,6 +36,7 @@ export const sendLamodaSubmission=(accessToken:string,id:string,r:string,body:La
 export const refreshLamodaSubmission=(accessToken:string,id:string,r:string)=>request<LamodaSubmissionReceipt>(submissionPath(id,r)+'/refresh',{accessToken,method:'POST'});
 export const resetLamodaSubmission=(accessToken:string,id:string,r:string)=>request(submissionPath(id,r)+'/reset',{accessToken,method:'POST'});
 export const fileLamodaSubmission=(accessToken:string,id:string,r:string,body:LamodaSubmissionForm)=>requestBlob(submissionPath(id,r)+'/file',accessToken,{method:'POST',body});
+export const templateLamodaSubmission=(accessToken:string,id:string,r:string)=>requestBlob(submissionPath(id,r)+'/template',accessToken,{method:'POST'});
 export const fetchLamodaAccounts=(accessToken:string,clientId:string)=>request<LamodaAccount[]>('/lamoda/accounts?clientId='+encodeURIComponent(clientId),{accessToken});
 export const createLamodaAccount=(accessToken:string,body:{clientId:string;name:string;sellerId:string;oauthClientId:string;secret:string;fboEnabled:boolean;fbsEnabled:boolean})=>request<LamodaAccount>('/lamoda/accounts',{accessToken,method:'POST',body});
 export const updateLamodaAccount=(accessToken:string,id:string,body:{secret?:string;isActive?:boolean})=>request<LamodaAccount>(lamodaPath(id),{accessToken,method:'PATCH',body});

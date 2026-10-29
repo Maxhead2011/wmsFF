@@ -35,3 +35,13 @@ Published API: sha256:f33531eec9e46367f3ca2b131201ac9ee781bf1288afdd41abe0166c04
 Published web: sha256:27b0d707b39797cbe0763e7c453cde8a10933da497d68b7e2d02081239467036
 
 Public browser6 passed, health and public asset hashes match. Other container IDs unchanged. Database dump saved before migration; former images retained for rollback. Baseline contains684 runtime files.
+
+## Blank-price factual template (29.10.2026)
+
+Separate download after completed assembly and confirmed boxes. No form inputs required: date/number/price cells stay empty, actual Seller SKU/EAN/quantity/KIZ are filled. Marked units remain one row each. Client must fill unit VAT-inclusive prices consistent with UPD plus shipment date/number before uploading to Lamoda. Template shares actual packing, quantity, mapping, frozen relabel and KIZ validation with API submission; it never creates a receipt, journal or stock movement. An existing API attempt blocks manual duplicate creation.
+
+Official reference checked 29.10.2026: https://academy.lamoda.ru/articles/prodazha-so-sklada-lamoda-fbo/postavki-fbo/rabota-s-faylom-postavki/
+
+UI shows readiness and a refresh button. The new scoped template endpoint accepts no commercial data. Existing API and fully priced workbook remain unchanged. Files: actual builder, submission composition/view/template, service/controller, route registry20->21, API helper and submission panel. Tests reproduce missing export before implementation, blank (not zero) prices, KIZ, unfinished/unchecked rejection and no writes.
+
+Template pre-release checks: API3965/150 skipped, web539/2 skipped, TypeScript both, baseline8, isolated PostgreSQL10/full health, browser9.

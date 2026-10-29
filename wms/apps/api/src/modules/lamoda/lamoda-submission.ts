@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, NotFoundException } from '@nest
 import type { Prisma } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
 import { assertWarehouseAccess } from '../client-requests/client-request-warehouse-scope';
-import { buildActualLamodaShipment } from './lamoda-actual-shipment';
+import { buildActualLamodaShipment,buildActualLamodaTemplate } from './lamoda-actual-shipment';
 import { LamodaClient, LamodaApiError, type LamodaCredentials } from './lamoda-client';
 import type { PrismaService } from '../../common/prisma/prisma.service';
 import { createHash } from 'node:crypto';
@@ -22,7 +22,7 @@ export class LamodaSubmission {
   return {b,receipt:rows[0]?.submission??null};
  }
  private async save(tx:Prisma.TransactionClient,id:string,r:Receipt){await tx.$executeRaw`UPDATE "LamodaFboAssembly" SET "submission"=${JSON.stringify(r)}::jsonb WHERE "requestId"=${id}`;}
- private async build(tx:Prisma.TransactionClient,accountId:string,id:string,user:AuthUser,form:SubmissionForm){
+ private async composition(tx:Prisma.TransactionClient,accountId:string,id:string,user:AuthUser,form?:SubmissionForm){
   const {b,receipt}=await this.context(tx,accountId,id,user);assertWarehouseAccess(user,b.plan,'write');
   if(b.plan.remoteShipmentId)throw new ConflictException('Сборка уже связана с поставкой Lamoda. Новая поставка не создаётся.');
   if(['CANCELLED','REJECTED'].includes(b.request.status))throw new ConflictException('Заявка отменена.');
@@ -32,23 +32,33 @@ export class LamodaSubmission {
   const lines=b.plan.items as unknown as Array<{barcode:string;article?:string;remoteSku?:string}>;
   const identities=b.request.items.map(item=>{
    const matches=cards.filter(c=>c.skuId===item.skuId&&lines.some(l=>l.barcode===c.barcode&&(!l.remoteSku||l.remoteSku===c.remoteSku)&&(!l.article||l.article===c.externalSku)));
-   const prices=form.prices.filter(p=>p.skuId===item.skuId);
-   if(matches.length!==1||prices.length!==1||!matches[0].externalSku)throw new BadRequestException('Укажите цену и подтвердите однозначное соответствие каждому товару.');
+   const prices=form?.prices.filter(p=>p.skuId===item.skuId);
+   if(matches.length!==1||(form&&prices?.length!==1)||!matches[0].externalSku)throw new BadRequestException('Подтвердите однозначное соответствие каждому товару; для отправки API укажите цены.');
    if(Array.isArray(b.relabelLabels)){
     const labels=b.relabelLabels as unknown as {skuId:string;barcode:string;article:string}[];
     const frozen=labels.filter(l=>l.skuId===item.skuId);
     if(frozen.length!==1||frozen[0].barcode!==matches[0].barcode||frozen[0].article!==matches[0].remoteSku)throw new ConflictException('Соответствие Lamoda изменилось после переклейки. Проверьте этикетки.');
    }
    if(assembly.units.filter(u=>u.skuId===item.skuId&&u.state==='PACKED').length!==item.quantity)throw new ConflictException('Факт упаковки отличается от состава заявки.');
-   return {skuId:item.skuId!,externalSku:matches[0].externalSku,ean:matches[0].barcode??'',priceMinor:prices[0].priceMinor};
+   return {skuId:item.skuId!,externalSku:matches[0].externalSku,ean:matches[0].barcode??'',priceMinor:prices?.[0]?.priceMinor};
   });
-  const payload=buildActualLamodaShipment({...form,identities,boxes:assembly.boxes,units:assembly.units.map(u=>({...u,requiresKiz:!!u.markId||b.request.items.some(i=>i.skuId===u.skuId&&i.sku?.needsChestnyZnak&&!i.sku.isUnmarked)}))});
+  return {receipt,identities,boxes:assembly.boxes,units:assembly.units.map(u=>({...u,requiresKiz:!!u.markId||b.request.items.some(i=>i.skuId===u.skuId&&i.sku?.needsChestnyZnak&&!i.sku.isUnmarked)}))};
+ }
+ private async build(tx:Prisma.TransactionClient,accountId:string,id:string,user:AuthUser,form:SubmissionForm){
+  const {receipt,...composition}=await this.composition(tx,accountId,id,user,form);
+  const payload=buildActualLamodaShipment({...form,...composition,identities:composition.identities.map(i=>({...i,priceMinor:i.priceMinor!}))});
   if(receipt&&!isDeepStrictEqual(receipt.payload,payload))throw new ConflictException('Состав уже зафиксирован для отправки. Сначала сверка с Lamoda.');
   return {payload,receipt};
  }
+ async template(accountId:string,id:string,user:AuthUser){return this.db.$transaction(async tx=>{
+  const {receipt,...composition}=await this.composition(tx,accountId,id,user);
+  if(receipt)throw new ConflictException('Отправка уже выполнялась. Сверьте её статус, прежде чем оформлять поставку вручную.');
+  return buildActualLamodaTemplate(composition);
+ },{isolationLevel:'RepeatableRead',timeout:30000});}
  async view(accountId:string,id:string,user:AuthUser){return this.db.$transaction(async tx=>{
   const {b,receipt}=await this.context(tx,accountId,id,user);
-  return {receipt,remoteShipmentId:b.plan.remoteShipmentId,items:b.request.items.map(i=>({skuId:i.skuId,name:i.name||i.sku?.name,size:i.sku?.size,quantity:i.quantity}))};
+  const assembly=await tx.fboAssembly.findUnique({where:{requestId:id},select:{phase:true}});
+  return {receipt,readyForTemplate:assembly?.phase==='COMPLETED'&&!receipt&&!b.plan.remoteShipmentId,remoteShipmentId:b.plan.remoteShipmentId,items:b.request.items.map(i=>({skuId:i.skuId,name:i.name||i.sku?.name,size:i.sku?.size,quantity:i.quantity}))};
  });}
  async preview(accountId:string,id:string,user:AuthUser,form:SubmissionForm){return this.db.$transaction(tx=>this.build(tx,accountId,id,user,form),{isolationLevel:'RepeatableRead',timeout:30000});}
  async send(accountId:string,id:string,user:AuthUser,form:SubmissionForm,c:LamodaCredentials){
