@@ -1,6 +1,6 @@
 # Lamoda FBO: actual shipment submission
 
-Prepared 29.10.2026 from PR746 / published PR745 baseline. Publication follows a merged PR into feature/wb-print-check and fresh image guards.
+Published PR747 on 29.10.2026 from PR746 / published PR745 baseline, through a merged PR into feature/wb-print-check and fresh image guards.
 
 ## Workflow
 
@@ -29,3 +29,9 @@ API full suite, web full suite, TypeScript API/web, regression baseline guards, 
 Official contract and workbook inspected on 29.10.2026. API price.amount is integer kopecks; Excel uses rubles. API documentNumber is a UUID, so an ordinary UPD number must not be substituted for that field. Workbook dates and EAN are strings. Export file has date row1, shipment number row2, blank document row3, headers row4, data row5 onwards; marked goods one row per unit.
 
 Final pre-release checks: API3959 passed /150 skipped, web539 passed /2 skipped; TypeScript API/web passed, baseline guards8, exact7 API delta verified, isolated PostgreSQL9 plus exact additive migration and full Nest health, candidate browser6. Existing skipped suites remain skipped.
+
+Published API: sha256:f33531eec9e46367f3ca2b131201ac9ee781bf1288afdd41abe0166c04aa5688
+
+Published web: sha256:27b0d707b39797cbe0763e7c453cde8a10933da497d68b7e2d02081239467036
+
+Public browser6 passed, health and public asset hashes match. Other container IDs unchanged. Database dump saved before migration; former images retained for rollback. Baseline contains684 runtime files.
