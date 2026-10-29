@@ -1,3 +1,5 @@
+Published PR761 / 2026-10-29. Baseline `2026-10-29-fbo-modal-rows`; web-only, API/schema/APK242 unchanged.
+
 # Окна сборок Ozon и Lamoda
 
 В нашей ВМС кнопки «Открыть сборку» и «Поставка и грузоместа Ozon» открывают
@@ -53,4 +55,4 @@ Lamoda FBS/обслуживание кабинета и legacy Ozon сохран
 
 Откат: `logoff-web:before-fbo-modal-rows-20261029`; бизнес-данные не затрагиваются.
 
-Validation before publication: API 3975 passed / 150 skipped; web 548 passed / 2 skipped; TypeScript/build; baseline guards 8; candidate browser 32; exact runtime graph guards 8; offline capture guards 5. Dedicated KIZ DB integration suites excluded; browser requests use synthetic fixtures.
+Validation before publication: API 3975 passed / 150 skipped; web 548 passed / 2 skipped; TypeScript/build; baseline guards 8; candidate/public browser 32 each; exact runtime graph guards 8; offline capture guards 5. Dedicated KIZ DB integration suites excluded; browser requests use synthetic fixtures.
