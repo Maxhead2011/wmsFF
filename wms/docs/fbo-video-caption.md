@@ -1,4 +1,6 @@
-# Atomic FBO video captions — prepared, not deployed
+# Atomic FBO video captions — published PR769
+
+Published on our WMS at 2026-10-29 18:54 UTC after successful CI and merge `93211822278cb13883665fd67b34ce9f291e2446`. Current API image is `sha256:e96334e56c8416fb770b6eee459a46c15ace932d672c29a12e03410404664db4`; the caption flag is enabled. [Verified current baseline](../baselines/our-wms/2026-10-29-fbo-video-caption/README.md).
 
 The camera archive needs product, article, barcode/KIZ, operator, box and packed/target quantities at the accepted operation. Fast ACK can omit its packing plan, including Ozon and PACK_PRODUCT. Today's catalog cannot reconstruct historical evidence.
 
@@ -20,9 +22,9 @@ Evidence contains request_id, operation_id, action, actor_id, nullable device_id
 
 ## Source/runtime provenance
 
-Branch `feature/fbo-video-caption-snapshot` starts at PR765 merge `ab4c8550a567d0fe02ef9b33f1b07a5e4c745743` from `publish` (`Maxhead2011/wmsFF`). Proposed PR target is the actual integration branch `feature/wb-print-check`, pending confirmation. Nothing pushed/deployed.
+Branch `feature/fbo-video-caption-snapshot` started at PR765 merge `ab4c8550a567d0fe02ef9b33f1b07a5e4c745743` and merged integration base `552cd0a7daa20aebd84c8226d024d3a40649b62e`. PR769 was merged into `feature/wb-print-check` after successful CI. The documentation conflict retained all records with explicit user approval.
 
-**Source parity is false.** Current captured production image: `sha256:5c9b375d8ccbad42664bfe34dbfd909bbb5f35c6a367ce9b797265c0f664ce70` (`logoff-api:fbs-request-scope-20261029`); FBO service SHA256 `619439abded8c265324fc5a3412dbb27699797754b507684e648b0fe89f298fb`. Source TS lacks some ACK/manual extensions. Its hook is a source reference for reconciliation, never a full runtime replacement.
+**Source parity is false.** The overlay was built on previous image `sha256:5c9b375d8ccbad42664bfe34dbfd909bbb5f35c6a367ce9b797265c0f664ce70`, with FBO service SHA256 `619439abded8c265324fc5a3412dbb27699797754b507684e648b0fe89f298fb`. Source TS lacks some ACK/manual extensions; its hook is a source reference for reconciliation, never a full runtime replacement. The published snapshot contains all 688 files; subsequent releases must start there.
 
 `scripts/releases/fbo-video-caption-20261029/patch.py` verifies all687 baseline file hashes and image, rejects mismatched anchors/existing output, transpiles only the new helper, and inserts exact hooks into the captured service. Candidate changes exactly2 modules (existing service + new helper); other686 files remain byte-identical. It emits payload/ and proof.json without deploying.
 
@@ -36,7 +38,7 @@ Before future release verify live image and complete inventory again. If changed
 
 ## Audit polling index and rollback
 
-Read-only probe: AuditLog about506k rows /476.7MB; recent-window lookup scanned ~234MB buffers in ~68ms even with no matches. Before enabling5-second audit polling apply own-WMS-only `audit-index.sql` after approval. It creates `(createdAt,id)` with CREATE INDEX CONCURRENTLY outside a transaction. Existing same-name index must be valid, ready, nonpartial and exactly defined; otherwise stop for review without automatic drop. Verify pg_indexes/pg_index and retain actual exporter EXPLAIN (ANALYZE,BUFFERS) afterward. Canonical operation lookup already has an entity/action/time index.
+Before the release, a read-only probe on AuditLog (about 506k rows / 476.7 MB) scanned ~234 MB buffers in ~68 ms even with no matches. Approved own-WMS-only `audit-index.sql` created `(createdAt,id)` with CREATE INDEX CONCURRENTLY outside a transaction. The index is valid/ready; actual exporter EXPLAIN uses Index Scan with 7 shared buffers and 0.128 ms execution. Existing same-name indexes must match the checked definition; no automatic drop. Canonical operation lookup already has an entity/action/time index.
 
 Rollback disables the caption flag and bridge audit polling and may restore the exact previous image. Keep the additive index and historical snapshots; no deletion or reverse schema migration.
 
@@ -46,4 +48,7 @@ Rollback disables the caption flag and bridge audit polling and may restore the 
 
 After merging integration base `552cd0a7daa20aebd84c8226d024d3a40649b62e`, full API: **4039 passed / 158 skipped**, 394 files passed / 13 skipped, with no file exclusions (`work/caption-api-after-merge.log`). Full web: **555 passed / 2 skipped** (`work/caption-web-after-merge.log`). API and web `tsc --noEmit` pass; release baseline guards **8/8** pass; runtime syntax and our diff against the integration base pass `git diff --check`. Runtime test mocks are explicitly separate from the skipped PostgreSQL integrations. No production scan was manufactured.
 
-The unchanged optional `kiz-duplicate.integration.spec.ts` constructs Prisma even inside its skipped suite. With an undefined URL, collection fails before skip. Run it with `process.env.KIZ_DUPLICATE_TEST_DATABASE_URL=''` via Node so its existing skip works; no test was changed or excluded, and no database connection occurs. Other optional dedicated test DSNs remain unset; DATABASE_URL/ANALYTICS_DATABASE_URL are safe dummy `postgresql://codex_tests@127.0.0.1:1/unavailable` values. No production changes have been made.
+The unchanged optional `kiz-duplicate.integration.spec.ts` constructs Prisma even inside its skipped suite. With an undefined URL, collection fails before skip. Run it with `process.env.KIZ_DUPLICATE_TEST_DATABASE_URL=''` via Node so its existing skip works; no test was changed or excluded, and no database connection occurs. Other optional dedicated test DSNs remain unset; DATABASE_URL/ANALYTICS_DATABASE_URL are safe dummy `postgresql://codex_tests@127.0.0.1:1/unavailable` values.
+
+
+After deployment, all 688 hashes, health, zero restarts, unchanged other containers and all prior 188 environment values were verified. The only new environment entry is the enabled caption flag. No new real FBO packing had occurred during the recorded post-release window; no live event was claimed as observed or manufactured.
