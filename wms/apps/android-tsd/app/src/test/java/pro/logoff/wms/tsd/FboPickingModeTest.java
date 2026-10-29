@@ -22,6 +22,32 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28)
 public class FboPickingModeTest {
+    // TEST: local route reprioritization must not eject the physically selected partial box.
+    @Test public void partialSourceBecomingWholeKeepsUnitScanWithoutManualRefresh() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan();p.localRouteEnabled=true;
+            List<Map<String,String>> writes=new ArrayList<>();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,v)->{
+                if(!method.getName().equals("execute"))return null;
+                if(m.getName().equals("getFboPlanAtLocation")&&"PARTIAL".equals(args[3])){p.route.get(1).wholeBox=true;p.route.get(1).wholeBoxQuantity=1;}
+                if(m.getName().equals("actFbo"))writes.add(new LinkedHashMap<>((Map<String,String>)args[2]));
+                return Response.success(p);
+            }));
+            FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("token","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{});
+            try {
+                idle(s);choose(a,false);scan(s,"PALLET-P");idle(s);scan(s,"PARTIAL");idle(s);
+                assertNotNull(find(a,"Отобрать товар по ШК + КИЗ"));
+                assertNull(find(a,"Короб забран целиком"));assertTrue(writes.isEmpty());
+                scan(s,"123");assertNotNull(find(a,"Нужный товар"));assertTrue(writes.isEmpty());
+                scan(s,"PHYSICAL-KIZ");idle(s);assertEquals(1,writes.size());
+                assertEquals("PICK_UNIT",writes.get(0).get("action"));assertEquals("PARTIAL",writes.get(0).get("sourceBoxCode"));
+                assertEquals("PHYSICAL-KIZ",writes.get(0).get("kiz"));
+                p.route.remove(1);click(a,"Обновить");idle(s);
+                assertNull(find(a,"Отобрать товар по ШК + КИЗ"));assertEquals(1,writes.size());
+            }finally{s.close();}
+        }
+    }
     // TEST: two routes partition the same plan; navigation and rejected location scans never write stock.
     @Test public void separateRoutesRejectOtherModeAndPreserveGlobalCompletion() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
