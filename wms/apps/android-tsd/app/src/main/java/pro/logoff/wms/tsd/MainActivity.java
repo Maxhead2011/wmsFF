@@ -4653,6 +4653,15 @@ public class MainActivity extends Activity {
             renderSettingsScreen();
             return;
         }
+        // FIX: a lost selection must never turn continuation into the global WB/Ozon queue.
+        if ("logoff".equals(BuildConfig.FLAVOR) && nonEmpty(selectedFbsRequestId, "").trim().isEmpty()) {
+            fbsSequentialPick.clear();
+            fbsAssembly = null;
+            fbsBusy = false;
+            statusMessage = tr("Выберите заявку для продолжения сборки.", "Yig‘ishni davom ettirish uchun arizani tanlang.");
+            loadFbsRequestChoices();
+            return;
+        }
         screen = Screen.FBS_ASSEMBLY;
         fbsBusy = true;
         renderFbsAssemblyScreen();
@@ -4725,7 +4734,7 @@ public class MainActivity extends Activity {
         // FIX: do not advance the queue or accept another scan until this request is resolved.
         FbsPendingAction pending = pendingFbsAction();
         if (pending != null) {
-            if (pending.snapshot != null) fbsAssembly = pending.snapshot;
+            if (pending.snapshot != null) restorePendingFbsAssembly(pending);
             screen = Screen.FBS_ASSEMBLY; dismissFbsGuidedScanDialog(); fbsScanInput = null;
             LinearLayout waiting = baseRoot(); waiting.addView(header()); waiting.addView(title("Сборка FBS"));
             waiting.addView(messageView(pending.snapshot == null ? "Сохранённый запрос повреждён. Обратитесь к менеджеру; повторно товар не сканируйте."
@@ -6304,8 +6313,18 @@ public class MainActivity extends Activity {
     private void retryFbsAction() {
         if(fbsBusy)return;FbsPendingAction pending=pendingFbsAction();
         if(pending==null||pending.snapshot==null)return;
-        fbsAssembly=pending.snapshot;retryingFbsAction=true;
+        restorePendingFbsAssembly(pending);retryingFbsAction=true;
         try{executeFbsAction(pending.action,pending.field,pending.value);}finally{retryingFbsAction=false;}
+    }
+
+    private void restorePendingFbsAssembly(FbsPendingAction pending) {
+        fbsAssembly = pending.snapshot;
+        // FIX: the persisted command belongs to this authenticated worker; restore its request too.
+        // Completion/retry must continue that request even after the activity was recreated.
+        if ("logoff".equals(BuildConfig.FLAVOR) && fbsAssembly.task != null) {
+            selectedFbsRequestId = nonEmpty(fbsAssembly.task.requestId, "");
+            fbsMarketplaceFilter = nonEmpty(fbsAssembly.task.marketplace, "");
+        }
     }
 
     private void executeFbsAction(String action, String field, String value) {
