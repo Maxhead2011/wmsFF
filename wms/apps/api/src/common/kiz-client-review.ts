@@ -62,7 +62,16 @@ async function currentContext(db:any,i:ClientKizUse){
  return request;
 }
 export class ClientKizReviewRequired extends ConflictException {
- constructor(public readonly reviewInput:ClientKizUse){super({code:'KIZ_REVIEW_REQUIRED',message:'ОТЛОЖИТЕ ТОВАР. КИЗ ранее отгружался. Повторное использование — только после решения администратора в «КИЗ → Проверки КИЗ».'});}
+ constructor(public readonly reviewInput:ClientKizUse,evidence?:any){
+  // FIX: an altered claim is not evidence of shipment; show actual provenance only.
+  const events=(evidence?.history??[]).filter((h:any)=>h.id?.startsWith('SHIP:')||h.id?.startsWith('FBO:')||h.id?.startsWith('WB:'));
+  const details=events.slice(0,3).map((h:any)=>{
+   if(h.request?.warehouseId&&h.request.warehouseId!==reviewInput.warehouseId)return 'Отгрузка в другом филиале; подробности доступны администратору.';
+   const date=h.at?new Date(h.at).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}):'дата не установлена';
+   return `${date} (МСК) · ${h.orderId?`заказ ${h.orderId}`:`заявка №${h.request?.number??'не установлена'}`}.`;
+  }).join(' ');
+  super({code:'KIZ_REVIEW_REQUIRED',message:`ОТЛОЖИТЕ ТОВАР. ${events.length?'КИЗ ранее отгружался. '+details:'КИЗ требует проверки привязки или истории; предыдущая отгрузка не подтверждена.'} Продолжение — только после решения администратора в «КИЗ → Проверки КИЗ».`});
+ }
 }
 async function assertNoCompetingClaim(tx:any,i:ClientKizUse,key:string,currentId?:string){
  const claims=await tx.kizReviewCase.findMany({where:{clientId:i.clientId,kizIdentity:key,...(currentId?{id:{not:currentId}}:{}),status:'CLAIMED',taskId:{startsWith:'GUARD:'}}});
@@ -91,6 +100,14 @@ async function ownExpectedMovement(tx:any,i:ClientKizUse,mark:any,proof:any){
   if(clientKizIdentity(task?.kiz??'')!==clientKizIdentity(i.kiz))return false;
   if(!proof.markId&&mark.status==='AVAILABLE'&&mark.boxId===(i.boxId??null)&&
     mark.sourceDocument?.startsWith(`FBS TSD, заказ ${task.orderId}:`))return true;
+  // FIX: permanent boxes keep the source on the task, while the picked mark has no box.
+  if(mark.status==='PACKING'&&task.wbMetaStatus==='ACCEPTED'&&task.stockWarehouseId===i.warehouseId&&
+    (mark.boxId===null||mark.boxId===i.boxId)){
+   const movements=await tx.stockMovement.findMany({where:{clientId:i.clientId,warehouseId:i.warehouseId,
+    sourceDocument:i.requestId,skuId:i.skuId,boxId:mark.boxId,status:'PACKING',
+    idempotencyKey:{startsWith:`fbs-sticker-pick:${i.taskId}:`}},select:{quantity:true}});
+   if(movements.reduce((sum:number,m:any)=>sum+m.quantity,0)>=Math.max(1,task.itemCount))return true;
+  }
   const movement=mark.stockMovementId?await tx.stockMovement.findUnique({where:{id:mark.stockMovementId}}):null;
   return movement?.clientId===i.clientId&&movement?.sourceDocument===i.requestId&&movement?.skuId===i.skuId&&movement?.boxId===mark.boxId&&
    ['PACKING','SHIPPING'].includes(mark.status)&&movement.status===mark.status;
@@ -122,7 +139,7 @@ export async function assertClientKizUse(tx:any,i:ClientKizUse,user:any):Promise
  await assertNoActiveBinding(tx,i,key);
  if(e.decision==='ALLOW'){
   if(row?.status==='CLAIMED'&&row.resolution==='FIRST_USE'&&row.context===clientUseContext(i)&&await ownExpectedMovement(tx,i,mark,proof))return 'ALLOW';
-  if(row?.status==='CLAIMED'||row?.status==='USED'||row?.status==='REJECTED')throw new ClientKizReviewRequired(i);
+  if(['OPEN','CLAIMED','USED','REJECTED'].includes(row?.status))throw new ClientKizReviewRequired(i,row?.evidence??e);
   // FIX: receipt and picking serialize on the same identity, including an as-yet unregistered physical mark.
   // Unknown origin stays unknown; an existing genuine receipt is immutable and is never overwritten.
   await tx.$executeRaw(Prisma.sql`INSERT INTO "KizClientRegistry"
@@ -139,7 +156,7 @@ export async function assertClientKizUse(tx:any,i:ClientKizUse,user:any):Promise
  const valid=row&&row.clientId===i.clientId&&row.context===clientUseContext(i)&&row.decidedById&&row.reason&&
   proof?.version===1&&proof.history===e.fingerprint&&!e.truncated&&proof.markId===mark?.id&&
   (!i.skuId||mark?.skuId===i.skuId)&&['APPROVED','CLAIMED'].includes(row.status);
- if(!valid)throw new ClientKizReviewRequired(i);
+ if(!valid)throw new ClientKizReviewRequired(i,e);
  if(row.resolution==='RELABEL'&&i.allowRelabel)return 'RELABEL';
  if(row.resolution!=='REUSE'||i.scope==='RECEIPT')throw new ClientKizReviewRequired(i);
  if(row.status==='APPROVED'&&proof.markVersion!==markVersion(mark))throw new ClientKizReviewRequired(i);
@@ -157,6 +174,10 @@ export async function queueClientKizReview(db:any,i:ClientKizUse,user:any){
   const request=await currentContext(tx,i),e=await history(tx,i);
   let mark:any=null;try{mark=await clientPhysicalMark(tx,i.clientId,i.kiz);}catch(error){if(!(error instanceof ConflictException))throw error;}
   const old=await tx.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:clientUseTaskKey(i),kizIdentity:key}}});
+  // FIX: a retry cannot erase already recorded shipment evidence from an open review.
+  if(old?.status==='OPEN'&&e.history.length===0&&old.evidence?.history?.length){
+   e.history=old.evidence.history;e.decision='REVIEW';e.fingerprint=old.evidence.fingerprint;
+  }
   const context=clientUseContext(i),unchanged=old?.context===context&&old?.snapshot?.clientGuard?.history===e.fingerprint;
   const task=i.scope==='FBS'?await tx.fbsTsdAssembly.findUnique({where:{id:i.taskId}}):null;
   const snapshot={scope:i.scope,requestNumber:request?.number??null,orderId:task?.orderId??null,productName:mark?.sku?.name??i.receiptInfo?.productName??'КИЗ',
