@@ -1,7 +1,7 @@
 // FIX: compile the exact source delta; never replace complete runtime services.
 const fs=require('fs'),path=require('path'),cp=require('child_process'),ts=require('../../../node_modules/typescript');
 const root=path.resolve(process.argv[2]),repo=path.resolve(__dirname,'../../../..');
-const base='058b474a';
+const base='8b187d93';
 const changed=cp.execFileSync('git',['diff','--name-status',base,'--','wms/apps/api/src'],{cwd:repo,encoding:'utf8'}).trim().split('\n').map(l=>l.trim().split('\t')).filter(x=>x[1]?.endsWith('.ts'));
 const config=ts.readConfigFile(repo+'/wms/apps/api/tsconfig.json',ts.sys.readFile),parsed=ts.parseJsonConfigFileContent(config.config,ts.sys,repo+'/wms/apps/api');
 for(const label of ['before','after']){
