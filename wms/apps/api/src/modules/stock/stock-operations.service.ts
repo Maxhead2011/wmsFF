@@ -1,3 +1,4 @@
+import { assertStoreReceipt } from '../clients/client-store-receipt';
 import { assertClientRequestKizShipment, finishClientRequestKizShipment, withClientKizReview } from '../../common/kiz-client-review';
 import { receiptFboPlan, saveReceiptFboCharges } from '../billing/receipt-processing-fbo';
 import { assertReceiptTransfer, assertReceiptStockAvailable, pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
@@ -126,6 +127,7 @@ type TsdTransferScannedItem = {
 
 export type ReceiveIntoBoxInput = {
   clientId: string;
+  storeId?: string;
   warehouseId?: string;
   skuId?: string;
   barcode?: string;
@@ -2413,6 +2415,9 @@ export class StockOperationsService {
       }
 
       const { createdDraft, sku } = await this.resolveOrCreateSkuForReceipt(tx, dto);
+      // FIX: validate store eligibility before changing physical stock.
+      const storeContext = movementType === 'RECEIPT'
+        ? await assertStoreReceipt(tx, { ...dto, skuId: sku.id }) : null;
       const box = dto.boxCode
         ? await this.ensureTargetBox(tx, dto.clientId, dto.boxCode, operationWarehouseId)
         : null;
@@ -2480,6 +2485,10 @@ export class StockOperationsService {
           comment: dto.comment ?? (box ? `Приемка ТСД в короб ${box.code}` : 'Поштучная приемка ТСД без коробов'),
         },
       });
+
+      if (storeContext) await tx.auditLog.create({data: {userId: user.id, action: 'RECEIPT_STORE_RECORDED',
+        entity: 'StockMovement', entityId: movement.id, payload: {...storeContext, clientId: dto.clientId,
+          skuId: sku.id, sourceDocument: dto.sourceDocument!, quantity: dto.quantity}}});
 
       if (kiz) {
         try {

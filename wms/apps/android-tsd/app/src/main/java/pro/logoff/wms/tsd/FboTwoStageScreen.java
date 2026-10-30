@@ -284,7 +284,7 @@ final class FboTwoStageScreen {
             !(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)){compactRoot=null;return false;}
         if(compactRoot==null){
             compactRoot=new LinearLayout(activity);compactRoot.setOrientation(LinearLayout.VERTICAL);compactRoot.setPadding(24,20,24,24);
-            compactLabel().setText("Упаковка FBO · "+plan.title);
+            compactLabel().setText("Упаковка FBO · "+plan.title+("logoff".equals(BuildConfig.FLAVOR)&&!FboStoreContext.label(plan).isEmpty()?"\n"+FboStoreContext.label(plan):""));
             compactProgress=compactLabel();compactTarget=compactLabel();compactMessage=compactLabel();compactHint=compactLabel();
             input=new EditText(activity);input.setSingleLine(true);input.setTextSize(24);compactRoot.addView(input);
             input.setOnEditorActionListener((v,a,e)->{submit();return true;});
@@ -373,7 +373,8 @@ final class FboTwoStageScreen {
         if("logoff".equals(BuildConfig.FLAVOR)&&retrySending&&busy&&state.pending()!=null)text(root,"Повторная отправка запроса");
         input=null;
         if(packingChoices()&&packingMode==PackingMode.MENU&&!state.target.isEmpty())packingMode=PackingMode.NEW_BOXES;
-        if(plan!=null){text(root,plan.title);text(root,"Этап: "+FboFeedback.phase(screenPhase()));
+        if(plan!=null){text(root,plan.title);
+            if ("logoff".equals(BuildConfig.FLAVOR) && !FboStoreContext.label(plan).isEmpty()) text(root,FboStoreContext.label(plan));text(root,"Этап: "+FboFeedback.phase(screenPhase()));
             renderLamodaRelabel(root);
             text(root,"Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" из "+plan.needed);
             text(root,"Проверено коробов "+FboFeedback.confirmed(plan)+" из "+plan.boxes.size());

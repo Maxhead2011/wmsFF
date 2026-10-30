@@ -1,4 +1,6 @@
 import { ConfirmProductLinkDto } from './dto/confirm-product-link.dto';
+import { ClientStoresService } from '../clients/client-stores.service';
+import { Optional } from '@nestjs/common';
 import { FbsReshipmentService } from './fbs-reshipment.service';
 import { Body, Controller, Delete, Get, Param, Patch, Post, Put, Query, Res, StreamableFile } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
@@ -64,6 +66,7 @@ export class MarketplaceConnectionsController {
     private readonly penaltiesReport: FbsPenaltiesReportService,
     private readonly stockMonitoring: FbsStockMonitoringService,
     private readonly reshipment: FbsReshipmentService,
+    @Optional() private readonly stores?: ClientStoresService,
   ) {}
 
   @Get()
@@ -109,7 +112,8 @@ export class MarketplaceConnectionsController {
     @Query('clientId') clientId: string,
     @Query('refresh') refresh?: string,
   ) {
-    const result = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    const scoped = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    const result = this.stores ? await this.stores.decorateOrders(clientId, scoped, user) : scoped;
     return { ...result, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };
   }
 

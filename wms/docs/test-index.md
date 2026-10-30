@@ -424,3 +424,16 @@ Prepared 2026-10-24: request-removal-policy.spec.ts (11), client-request-removal
 Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced before fix; API3810/155 skipped, web512/2, isolated-schema TypeScript, all3 Android flavors and APK235 build pass. Exact13-file API overlay; isolated runtime PostgreSQL17 scenarios + full Nest health; browser13. Prepared, not yet published. See lamoda-contour.md.
 
 Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB suite excluded), web512/2; TypeScript using separately generated Prisma client to avoid shared workspace artifacts; Android logoff/ffullhab/platform passed; PostgreSQL runtime migration parity and17 tests/full Nest health; candidate/public browser13; baseline guards. Public fixtures intercepted every API call. Physical end-to-end cycle awaits client shipment.
+# В разработке: магазины одного плательщика
+
+- API `test/client-stores.policy.spec.ts`: 7 тестов общего физического товара и принадлежности кабинетов.
+- API `test/client-stores.service.spec.ts`: 9 тестов доступа, изоляции филиала, аудита, выключенного флага и разрешений SKU.
+- Web `src/components/fbs/store-filter.spec.ts`: 4 теста фильтра по connectionId.
+- API `request-store-context.spec.ts`: 4 теста источников ФБО/ФБС, смешанных магазинов, неизвестных подключений и области доступа.
+- Web `ClientStoresSettings.spec.tsx`: 3 теста загрузки, отключения и разрешений общего SKU.
+- Android `FboStoreContextTest`: 2 теста старого сервера и смешанных магазинов.
+- Повторная проверка 30.10: API 4126 passed / 156 skipped (отдельный PostgreSQL-набор `kiz-duplicate.integration.spec.ts` исключён), Web 570 passed / 2 skipped; полные Android-наборы LOGOFF/FFULLHAB/PLATFORM прошли. TypeScript API/Web и diff check прошли.
+- Полная проверка приёмки/ТСД/резервов и публикация ещё не выполнены.
+  [Состояние реализации](client-store-separation.md).
+
+Продолжение разделения магазинов: `client-store-receipt.spec.ts` — общий SKU, чужой магазин, старый скан, закрепление документа, выключенный флаг и отказ реального `receiveIntoBox` до изменения остатка. `client-stores.service.spec.ts` — дополнительно конкурентное редактирование разрешений SKU, аудит и чужой клиент. Android `ReceiptCloseBatchTest` проверяет неизменность магазина в очереди, `ReceiptProgressActivityTest` — восстановление с документом после перезапуска.

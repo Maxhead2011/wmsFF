@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react';
+import { filterOrdersByStore } from './store-filter';
 const LamodaFbs = lazy(() => import('../lamoda/LamodaPanel').then(m=>({default:m.LamodaPanel})));
 import { fetchWorkspaceClients, workspaceClients, visibleMarket, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { startVisiblePolling } from '../../lib/visiblePolling';
@@ -5729,6 +5730,10 @@ function FbsOrdersView({
   const [hiddenWaitingStockKeys, setHiddenWaitingStockKeys] = useState<Set<string>>(() => new Set());
   const [quickSelectCount, setQuickSelectCount] = useState('28');
   const [orderSort, setOrderSort] = useState<FbsOrderSort>('date-oldest');
+  // FIX: keep selection scoped to this client and marketplace response.
+  const [storeSelection, setStoreSelection] = useState({ clientId: '', id: 'all' });
+  const stores = data?.stores ?? [];
+  const selectedStoreId = storeSelection.clientId === data?.client.id ? storeSelection.id : 'all';
   const [shippedDateFrom, setShippedDateFrom] = useState('');
   const [shippedDateTo, setShippedDateTo] = useState('');
   const [cancelledExportBusy, setCancelledExportBusy] = useState(false);
@@ -5743,7 +5748,7 @@ function FbsOrdersView({
     setCancelledExportError('');
   }, [view]);
   const category = view;
-  const orders = (data?.orders ?? [])
+  const orders = filterOrdersByStore(data?.orders ?? [], stores, selectedStoreId)
     .filter((order) => order.category === category)
     .sort((left, right) => compareFbsOrders(left, right, orderSort));
   const warehouseGroups = groupFbsOrdersByWarehouse(orders, clockNow);
@@ -5786,6 +5791,7 @@ function FbsOrdersView({
           order.warehouseName,
           order.officeId,
           order.accountName,
+          order.storeName,
           ...order.barcodes,
           ...order.storageBoxes.map((box) => box.code),
         ]
@@ -6005,6 +6011,13 @@ function FbsOrdersView({
   return (
     <>
       <section className="fbs-warehouse-board" aria-label="Представление заказов FBS">
+        {stores.length > 0 ? <div className="fbs-warehouse-board__switch" role="group" aria-label="Магазин">
+          {[{id:'all',name:'Все магазины'}, ...stores, ...(data?.orders.some(o=>!stores.some(s=>s.connectionIds.includes(o.connectionId)))?[{id:'unassigned',name:'Без магазина'}]:[])].map(store=><button
+            key={store.id} type="button" aria-pressed={selectedStoreId===store.id}
+            className={selectedStoreId===store.id?'is-active':undefined}
+            onClick={()=>{setStoreSelection({clientId:data?.client.id??'',id:store.id});onSelectionChange(new Set());setSelectedWarehouseKey('all');}}
+          >{store.name}</button>)}
+        </div> : null}
         <header className="fbs-warehouse-board__header">
           <div>
             <p className="eyebrow">Маршрутизация FBS</p>
@@ -6766,6 +6779,7 @@ function FbsOrderRow({
       ) : null}
       <td>
         <strong>№ {order.id}</strong>
+        {order.storeName ? <small>Магазин: {order.storeName}</small> : null}
         <small>{marketplaceLabel(order.marketplace)}</small>
         <span className={`fbs-order-warehouse-badge${order.warehouseId ? '' : ' is-warning'}`}>
           <Warehouse size={12} aria-hidden="true" />

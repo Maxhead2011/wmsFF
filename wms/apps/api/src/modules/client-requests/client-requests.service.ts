@@ -1,3 +1,4 @@
+import { requestStoreContexts } from '../clients/request-store-context';
 import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -139,6 +140,8 @@ export class ClientRequestsService {
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
     });
+    const stores = await requestStoreContexts(this.prisma, requests);
+    for (const request of requests) if (stores.has(request.id)) Object.assign(request, stores.get(request.id));
     // FIX: separate warehouse progress from the status that permits shipment.
     const progressLabels = await fboProgressLabels(this.prisma, requests.filter(r => r.type === 'OUTBOUND' && !r._count.fbsOrderLinks).map(r => r.id));
     for (const request of requests) if (progressLabels[request.id]) Object.assign(request, { fboProgressLabel: progressLabels[request.id] });
@@ -323,7 +326,8 @@ export class ClientRequestsService {
     ) {
       throw new NotFoundException('Заявка не найдена в выбранном филиале.');
     }
-    return request;
+    const stores = await requestStoreContexts(this.prisma, [request]);
+    return {...request, ...stores.get(request.id)};
   }
 
   async previewAvailability(dto: PreviewClientRequestAvailabilityDto, user: AuthUser): Promise<ClientRequestAvailabilityPreview> {

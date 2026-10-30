@@ -2,6 +2,8 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdFboPlan {
+    public String storeState;
+    public List<String> storeNames;
     public boolean relabelRequired;
     public List<RelabelUnit> relabelUnits;
     public static class RelabelUnit {

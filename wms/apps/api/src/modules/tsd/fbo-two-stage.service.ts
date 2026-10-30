@@ -1,3 +1,4 @@
+import { requestStoreContexts } from '../clients/request-store-context';
 import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
 import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
 import { reconcileFboProgress, fboProgressStatusEnabled, fboRetryableTransactionError } from './fbo-progress-status';
@@ -262,7 +263,8 @@ export class FboTwoStageService {
             }
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
-        return { alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
+        const storeContexts = await requestStoreContexts(tx, [r]);
+        return { ...storeContexts.get(r.id), alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: yandex ? 'YANDEX_MARKET' : lamoda ? 'LAMODA' : shipment ? 'OZON' : 'WILDBERRIES',
             relabelRequired,
             relabelUnits:relabelUnits.map(u=>({id:u.id,skuId:u.skuId,sourceBarcode:u.barcode,kiz:u.kiz,pickedByUserId:u.pickedByUserId,
