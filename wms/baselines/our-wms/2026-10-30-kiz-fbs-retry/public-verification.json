@@ -1,0 +1,16 @@
+{
+  "api/v1/health": {
+    "status": "ok",
+    "service": "logoff-wms-api",
+    "time": "2026-10-30T08:44:25.742Z"
+  },
+  "downloads/logoff-tsd.json": {
+    "versionCode": 245,
+    "versionName": "0.1.245-fbs-request-scope",
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-fbs-request-scope-245.apk",
+    "sha256": "3c5c599a8891588600fcb69450d52d1c16d6438f8ec0334254b53c179aee04f1",
+    "size": 5960815,
+    "releasedAt": "2026-10-29T17:48:39.570302+00:00",
+    "releaseNotes": "FBS: сохранение выбранной заявки после повтора операции. Следующая заявка открывается только вручную."
+  }
+}
