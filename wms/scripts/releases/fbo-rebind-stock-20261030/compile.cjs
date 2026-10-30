@@ -1,0 +1,1 @@
+const fs=require('fs'),ts=require('../../../node_modules/typescript');const p=process.argv[2];fs.writeFileSync(p,ts.transpileModule(fs.readFileSync('apps/api/src/modules/tsd/fbo-rebind-stock.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText);
