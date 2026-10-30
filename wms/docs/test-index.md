@@ -1,6 +1,6 @@
-Подготовлено: [магазины ФБО Ozon и производительность ФБО](fbo-stores-productivity.md). Ozon labels after scope; отдельные picked/packed по исполнителю и дню. API4159/web582/PostgreSQL11/browser6/bootstrap5; own-WMS flag, общий склад сохранён.
+Подготовлено: [магазины ФБО Ozon и производительность ФБО](fbo-stores-productivity.md). Ozon labels after scope; отдельные picked/packed по исполнителю и дню. API4179/web582/PostgreSQL11/browser6/bootstrap5; own-WMS flag, общий склад сохранён.
 
-Prepared (not deployed): [WB packed auto-completion](wb-packed-auto-done.md). Own-WMS opt-in, PACKED -> DONE only after all live WB orders are accepted; status/history only, no stock writes. Exact two-module runtime candidate verified against PR798.
+Published PR799: [WB packed auto-completion](wb-packed-auto-done.md). PACKED -> DONE after all linked WB orders are accepted, status/history only. Own-WMS flag enabled; stock/web/APK249/schema/sold unchanged. API4175/web579/TypeScript, PostgreSQL8/full health, candidate/public runtime and exact two-module verification passed. Baseline `2026-10-30-wb-packed-auto-done`, sourceParityVerified=false.
 
 Published PR797: [FBO counted stock rebind](fbo-rebind-counted-stock.md). Existing counted quantity consumed without extra +1; duplicate/history guards retained. API4155/web579/TypeScript, runtime4/repair4/PostgreSQL9/full health. Exact2 API modules, other700/web/LOGOFF249/schema/flags/sold unchanged. Baseline `2026-10-30-fbo-rebind-stock`, sourceParityVerified=false. Box519 AVAILABLE0,9 units in2565 unchanged.
 

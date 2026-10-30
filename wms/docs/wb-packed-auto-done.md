@@ -1,6 +1,6 @@
 # Автоматическое завершение упакованных заявок ФБС WB
 
-Подготовлено, не опубликовано. Ветка `fix/wb-packed-auto-done`, база PR798.
+Опубликовано PR799. База PR798; baseline `2026-10-30-wb-packed-auto-done`.
 
 При штатной синхронизации заявка OUTBOUND в статусе PACKED переходит в DONE,
 если все действующие связанные заказы WB имеют supplierStatus `complete` и
@@ -27,11 +27,21 @@ wbStatus `sorted`, `ready_for_pickup` либо `sold`. Это сдача WB, а 
 только новый модуль и две вставки в текущий runtime синхронизации. Полная замена
 сервиса исходной сборкой запрещена: source/runtime parity остаётся false.
 `runtime.test.cjs` воспроизводит отсутствие перехода на прежнем runtime и проверяет
-переход/идемпотентность на кандидате. Перед активацией требуется PR и публикация
-с отдельным флагом только нашей WMS; флаг сейчас не включён.
+переход/идемпотентность на кандидате. PR799 объединён и опубликован;
+отдельный флаг включён только в нашей WMS.
 
 Проверка ФБО Ozon 30.10.2026, 21:33 МСК: заявки 2528–2533 имеют
 `ACCEPTED_AT_SUPPLY_WAREHOUSE`. По правилу Катерины приём на точке отгрузки
 означает сдачу; проверка выполнена без изменения данных Ozon и складских остатков.
+
+После прямого поручения Катерины ФБО Ozon 2528–2533 переведены в DONE.
+Повторный запрос подтвердил ACCEPTED_AT_SUPPLY_WAREHOUSE. Все 502 складских
+движения совпали до/после; добавлены только шесть событий и изменены статусы.
+ФБС Ozon 2546, 2556, 2559, 2570, 2576, 2579 проверены: десять отправлений
+delivering; в этой операции их статусы WMS не изменялись.
+
+Публикация: PostgreSQL8 (конкуренция, откат, неизменность остатков, изоляция флага),
+полный запуск API и health; тест опубликованного runtime прошёл. Проверены хеши
+ровно двух модулей, сохранность прежних переменных и остальных контейнеров.
 
 Validation: API 4175 passed / 156 skipped; web 579 passed / 2 skipped. Dedicated `kiz-duplicate.integration.spec.ts` excluded because its isolated database URL is not configured (initial full run failed at suite construction). TypeScript passed; candidate runtime RED/GREEN and idempotency passed; baseline verification/check-candidate passed with exactly two API modules changed.
