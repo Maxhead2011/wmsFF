@@ -8848,11 +8848,11 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 
 export type OzonCustomerPreview = {totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
 export type OzonEditDeadline={orderId:string;orderNumber:string;editDeadlineAt?:string|null;checkedAt?:string};
-export type OzonCustomerRequest={editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export type OzonCustomerRequest={clientId?:string;clientName?:string;clientCode?:string;warehouseName?:string|null;createdAt?:string;itemCount?:number;itemsPreview?:{name:string|null;barcode:string|null;quantity:number}[];editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
 export type OzonCustomerWarehouse = {id:string;name:string};
 // FIX: use the same explicit branch for the list and both multipart import steps.
 export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}
-export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string,view:'active'|'completed'='active'){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):'')+'&view='+view,{accessToken});}
+export function fetchOzonCustomerRequests(accessToken:string,clientId:string,warehouseId?:string,view:'active'|'completed'='active',options:{allClients?:boolean;beforeNumber?:number}={}){return request<OzonCustomerRequest[]>('/ozon-fbo-import/requests?clientId='+encodeURIComponent(clientId)+(warehouseId?'&warehouseId='+encodeURIComponent(warehouseId):'')+'&view='+view+(options.allClients?'&allClients=true':'')+(options.beforeNumber?'&beforeNumber='+options.beforeNumber:''),{accessToken});}
 function ozonCustomerForm(payload:OutboundRequestXlsxPayload & {warehouseId?:string}){const form=outboundRequestXlsxForm(payload);appendOptional(form,'warehouseId',payload.warehouseId);return form;}
 export function ozonCustomerImportEnabled(accessToken:string) {return request<{enabled:boolean}>('/ozon-fbo-import/capability',{accessToken});}
 export function previewOzonCustomerFile(accessToken:string,payload:OutboundRequestXlsxPayload & {warehouseId?:string}) {return requestMultipart<OzonCustomerPreview>('/ozon-fbo-import/preview',ozonCustomerForm(payload),accessToken);}
@@ -11070,6 +11070,15 @@ export async function addOnlineReceiptItem(accessToken: string, payload: OnlineR
   });
 }
 
+// FIX: explicitly create a receipt review; checking a KIZ never queues a decision by itself.
+export function queueReceiptKizReview(accessToken: string, payload: {
+  clientId: string; kiz: string; operationKey?: string; boxCode?: string; sourceDocument?: string;
+}) {
+  return request<{ id: string; status: string; message?: string }>('/tsd/receipts/kiz-review', {
+    method: 'POST', accessToken, body: payload,
+  });
+}
+
 export async function updateOnlineReceiptItem(
   accessToken: string,
   movementId: string,
@@ -12485,7 +12494,13 @@ async function request<T>(
   });
 
   if (!response.ok) {
-    throw new Error(await responseError(response));
+    // FIX: keep the receipt evidence without changing ordinary API error messages.
+    const detail = await response.json().catch(() => null);
+    const error = new Error(await responseError(response, detail));
+    if (detail?.code === 'KIZ_DUPLICATE' && detail.duplicateInfo && typeof detail.duplicateInfo === 'object') {
+      Object.assign(error, { code: detail.code, duplicate: true, duplicateInfo: detail.duplicateInfo });
+    }
+    throw error;
   }
 
   return (await response.json()) as T;
@@ -12582,14 +12597,14 @@ async function requestBlob(path: string, accessToken: string, init: { method?: s
   return response.blob();
 }
 
-async function responseError(response: Response) {
+async function responseError(response: Response, parsed?: { message?: string | string[] } | null) {
   try {
-    const payload = (await response.json()) as { message?: string | string[] };
-    if (Array.isArray(payload.message)) {
+    const payload = parsed === undefined ? (await response.json()) as { message?: string | string[] } : parsed;
+    if (Array.isArray(payload?.message)) {
       return payload.message.join('\n');
     }
 
-    return payload.message || `HTTP ${response.status}`;
+    return payload?.message || `HTTP ${response.status}`;
   } catch {
     return `HTTP ${response.status}`;
   }
@@ -12598,12 +12613,12 @@ async function responseError(response: Response) {
 // FIX: read-only KIZ history uses the same scoped endpoint as the administrator TSD.
 export type KizReviewCase = {id:string;kizIdentity:string;taskId:string;status:string;decision:string;active:boolean;physicalReuseAllowed?:boolean;
   createdAt:string;updatedAt:string;attempts:number;resolution:string|null;reason:string|null;decidedByName:string|null;
-  snapshot:{requestNumber:number;orderId:string;productName:string;article:string|null;barcode:string|null;boxCode:string|null;workerName:string|null};
+  snapshot:{scope?:'FBS'|'FBO'|'RECEIPT'|'UNIT';requestNumber:number;orderId:string;productName:string;article:string|null;barcode:string|null;boxCode:string|null;workerName:string|null;firstReceivedAt?:string|null;firstBoxCode?:string|null};
   evidence:{circulation:string|null;history:Array<{orderId:string|null;event:string;at:string|null;request?:{number:number}|null}>}};
 export function fetchKizReviewQueue(accessToken:string,cursor?:string) {
   return request<{items:KizReviewCase[];nextCursor:string|null}>('/inventory/kiz-location/reviews'+(cursor?'?cursor='+encodeURIComponent(cursor):''),{accessToken});
 }
-export function decideKizReview(accessToken:string,id:string,resolution:'REUSE'|'RELABEL',reason:string,confirmed:boolean) {
+export function decideKizReview(accessToken:string,id:string,resolution:'REUSE'|'RELABEL'|'REJECT',reason:string,confirmed:boolean) {
   return request<{id:string;status:string;resolution:string}>('/inventory/kiz-location/reviews/'+encodeURIComponent(id)+'/decision',
     {accessToken,method:'POST',body:{resolution,reason,confirmed}});
 }

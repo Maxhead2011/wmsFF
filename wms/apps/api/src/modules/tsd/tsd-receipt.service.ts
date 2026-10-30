@@ -7,6 +7,7 @@ import { TsdDeviceService } from './tsd-device.service';
 import { ScanOperationDto } from './dto/scan-operation.dto';
 import { TsdOperationResult } from './tsd-operation.types';
 import { isBarcodeReview, receiptBarcodeReviewEnabled } from './receipt-barcode-policy';
+import { clientKizGuardEnabled, lookupClientKiz, receiptKizDuplicateMessage } from '../../common/kiz-client-registry';
 
 @Injectable()
 export class TsdReceiptService {
@@ -25,6 +26,16 @@ export class TsdReceiptService {
     const kiz = stringValue(kizValue, 'kiz');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
     const warehouseId = this.resolveWritableWarehouseId(user);
+
+    // FIX: the preflight is read-only; the receipt transaction repeats this guard.
+    if (clientKizGuardEnabled()) {
+      const duplicateInfo = await lookupClientKiz(this.prisma, clientId, kiz, warehouseId);
+      return { clientKizGuardEnabled: true, duplicate: !!duplicateInfo, kiz,
+        code: duplicateInfo ? 'KIZ_DUPLICATE' : undefined, duplicateInfo,
+        boxCode: duplicateInfo?.firstBoxCode ?? duplicateInfo?.currentBoxCode ?? null,
+        skuName: duplicateInfo?.productName ?? null,
+        message: duplicateInfo ? receiptKizDuplicateMessage(duplicateInfo) : 'КИЗ свободен.' };
+    }
 
     const duplicate = await this.prisma.productMark.findFirst({
       where: {
@@ -53,6 +64,11 @@ export class TsdReceiptService {
           : 'КИЗ уже зарегистрирован в другом филиале. Передайте товар менеджеру.'
         : 'КИЗ свободен.',
     };
+  }
+
+  async queueKizReview(body: Record<string, unknown>, user: AuthUser) {
+    // FIX: creating a review is an explicit command, never a GET preflight side effect.
+    return require('../../common/kiz-client-review').queueReceiptKizReview(this.prisma, this.clientScopes, body, user);
   }
 
   // FIX: finalize only this box after every scan in its durable close packet

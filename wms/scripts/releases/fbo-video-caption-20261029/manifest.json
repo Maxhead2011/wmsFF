@@ -1,0 +1,23 @@
+{
+  "status": "published",
+  "pullRequest": 769,
+  "mergeCommit": "93211822278cb13883665fd67b34ce9f291e2446",
+  "publishedImage": "sha256:e96334e56c8416fb770b6eee459a46c15ace932d672c29a12e03410404664db4",
+  "currentBaseline": "baselines/our-wms/2026-10-29-fbo-video-caption",
+  "publishedFlagValue": true,
+  "branch": "feature/fbo-video-caption-snapshot",
+  "sourceRef": "ab4c8550a567d0fe02ef9b33f1b07a5e4c745743",
+  "sourceParityVerified": false,
+  "baselineImage": "sha256:5c9b375d8ccbad42664bfe34dbfd909bbb5f35c6a367ce9b797265c0f664ce70",
+  "baselineFileCount": 687,
+  "allowlist": {
+    "modules/tsd/fbo-two-stage.service.js": "619439abded8c265324fc5a3412dbb27699797754b507684e648b0fe89f298fb",
+    "modules/tsd/fbo-video-caption.js": null
+  },
+  "flag": "WMS_CONTOUR_FBO_CAPTIONS_ENABLED",
+  "default": false,
+  "schemaMigration": null,
+  "operationalIndex": "AuditLog_contour_createdAt_id_idx",
+  "indexScript": "audit-index.sql",
+  "soldVmChanges": false
+}

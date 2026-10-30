@@ -1,0 +1,57 @@
+{
+  "browser": {
+    "passed": 32,
+    "syntheticApi": true,
+    "webHashes": {
+      "index.html": "37873a1a32becbe37d8b14b51a3daa833d9ef5f03d2d099d2155ca85a36d9592",
+      "assets/fbo-modal-rows-core-20261029.js": "667e606dcf4d4dd53f54057c7926be1384bb40ba6d5096ec9109d734bbab1b34",
+      "assets/fbo-modal-rows-ozon-20261029.js": "5a7d7bb49ffa78eb491962e99b51414c029dc09c4828cb76fcdad7daf46a4af9",
+      "assets/fbo-modal-rows-lamoda-20261029.js": "72ed53caf2d03181162032be49020030be3e757c1a0aa59ab8e723f6a6d94cd7",
+      "assets/fbo-modal-rows-20261029.css": "2a2410f97b37967e75f65a754e451a770fe0c886e4ea9ad7e0a5580ea9946662"
+    },
+    "checks": [
+      "Ozon centered viewport modal outside CSS container",
+      "Ozon opening preserves document scroll and no lower-page detail remains",
+      "Ozon pending response cannot reopen a closed modal",
+      "Ozon cargo modal keeps selected owner and confirmation guard",
+      "Ozon cargo modal 1440",
+      "Ozon cargo modal 390",
+      "Ozon cargo modal 320",
+      "Ozon Panthera minimize and restore preserve cargo window",
+      "Ozon loading-to-loaded transition preserves minimized window and rehomes header button",
+      "Ozon loaded assembly header supports Panthera minimize and restore",
+      "Lamoda WB-style rows show client and explicitly source-plan quantities",
+      "Lamoda centered viewport modal outside CSS container",
+      "Lamoda submission and factual assembly stay together in popup without scroll jump",
+      "Lamoda modal classic 1440",
+      "Lamoda modal classic 1024",
+      "Lamoda modal classic 390",
+      "Lamoda modal classic 320",
+      "Lamoda modal light 1440",
+      "Lamoda modal light 1024",
+      "Lamoda modal light 390",
+      "Lamoda modal light 320",
+      "Lamoda modal dark 1440",
+      "Lamoda modal dark 1024",
+      "Lamoda modal dark 390",
+      "Lamoda modal dark 320",
+      "Lamoda request removal still uses request ID and server blockers",
+      "Lamoda draft shortage correction and creation open actual assembly in popup",
+      "Lamoda completed rows remain separate and non-removable",
+      "Lamoda branch scope change rejects late detail response",
+      "Lamoda Panthera minimizes actual FBO header and restores submission draft",
+      "Lamoda read-only customer sees assembly but cannot create, remove or submit",
+      "no runtime errors or real business mutation"
+    ],
+    "writes": [
+      "synthetic-create-adjusted-draft"
+    ],
+    "errors": [],
+    "unexpected": [],
+    "staticErrors": [],
+    "publicMode": true
+  },
+  "apiUnchangedFiles": 684,
+  "schemaUnchanged": true,
+  "otherContainersUnchanged": true
+}

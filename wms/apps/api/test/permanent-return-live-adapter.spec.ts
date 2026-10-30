@@ -10,13 +10,20 @@ function checkedAdaptation(name: string) {
   // TEST: live code is already transformed. Require the exact output of the approved Git adapter.
   const expected: Record<string, string> = {
     // TEST: exact-source KIZ protection plus the unchanged live storage adaptations.
-    reserveCompletedWildberriesStock: '6d850a2f4560fd65eab3ab4eefe0c3fa60c14407f7fbab443a162a9c6a53f43e',
-    returnCompletedWildberriesStockReservation: 'db8201918cb16c086f861109ac4b7203724ec227ffd7edc688dfd1e22a541591',
+    reserveCompletedWildberriesStock: 'e36f67e89758b49d95d086e543d7cedcdf94d76d4b922d0ad5e11e090c4d1a35',
+    returnCompletedWildberriesStockReservation: 'b3ec587f38ca972be843af29caf2e57ffd41d97ab840940dc64e5b9cb5cb8880',
   };
   expect(createHash('sha256').update(text).digest('hex')).toBe(expected[name]);
   return text;
 }
 describe('our-VM release adaptation', () => {
+  // TEST: adapting storage rules must preserve client-scoped identity and the flag-off lookup.
+  it.each([reserveName, returnName])('preserves the client KIZ guard in %s', name => {
+    const guarded="...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(tx,task.clientId,task.kiz!))?.id??'__no_client_mark__'}:await physicalKizLookup(tx,task.kiz,false))";
+    const adapted=checkedAdaptation(name);
+    expect(adapted).toContain(guarded);
+    expect(() => adaptDesired(functionText(source,name).replaceAll(guarded,'...await physicalKizLookup(tx, task.kiz, false)'),name)).toThrow('Approved Git function changed');
+  });
   // TEST: disabling the new lifecycle must not remove pre-existing production safeguards.
   it('preserves unconditional deferred-source, detached KIZ and boxless outbound stock', () => {
     const adapted = checkedAdaptation(reserveName);

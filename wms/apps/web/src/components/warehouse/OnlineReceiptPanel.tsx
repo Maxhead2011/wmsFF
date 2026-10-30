@@ -1,6 +1,6 @@
 import { ReceiptDirectionsPanel } from './ReceiptDirectionsPanel';
 import { CheckCircle2, Edit3, PackageOpen, RefreshCw, RotateCcw, Search, Trash2, Unlock } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   addOnlineReceiptItem,
   closeAllOnlineReceiptBoxes,
@@ -14,6 +14,7 @@ import {
   openOnlineReceiptBox,
   restoreOnlineReceiptBox,
   updateOnlineReceiptItem,
+  queueReceiptKizReview,
   type AuthSession,
   type ClientSummary,
   type OnlineReceiptBoxSummary,
@@ -23,6 +24,7 @@ import {
 } from '../../lib/api';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
+import { ReceiptDuplicateNotice, receiptDuplicateFromError, type ReceiptDuplicate } from './ReceiptDuplicateNotice';
 
 type OnlineReceiptPanelProps = {
   session: AuthSession;
@@ -45,6 +47,13 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
   const [overview, setOverview] = useState<OnlineReceiptOverview | null>(null);
   const [selectedBoxKey, setSelectedBoxKey] = useState('');
   const [message, setMessage] = useState('');
+  const [duplicate, setDuplicate] = useState<ReceiptDuplicate | null>(null);
+  const duplicateRef = useRef<ReceiptDuplicate | null>(null); duplicateRef.current = duplicate;
+  const [duplicateContext, setDuplicateContext] = useState<{ clientId: string; kiz: string; operationKey: string; boxCode?: string; sourceDocument?: string } | null>(null);
+  const [duplicateReviewBusy, setDuplicateReviewBusy] = useState(false);
+  const [duplicateReviewMessage, setDuplicateReviewMessage] = useState('');
+  const receiptScope = `${session.accessToken}\u0000${clientId}`;
+  const receiptScopeRef = useRef(receiptScope); receiptScopeRef.current = receiptScope;
   const [isLoading, setLoading] = useState(false);
   const [isConfirming, setConfirming] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<PendingConfirm | null>(null);
@@ -87,6 +96,8 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
   }, [fixedClientId, session.accessToken]);
 
   useEffect(() => {
+    setDuplicate(null);
+    setDuplicateContext(null); setDuplicateReviewMessage('');
     if (!clientId) {
       setOverview(null);
       return;
@@ -160,14 +171,39 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
   }
 
   async function runAction(action: () => Promise<unknown>, success: string) {
+    if (duplicate) return false;
+    const scope = receiptScope;
     setMessage('');
     try {
       await action();
+      if (receiptScopeRef.current !== scope) return false;
+      setDuplicate(null);
       setMessage(success);
       await loadOverview(false);
+      return true;
     } catch (caught) {
+      if (receiptScopeRef.current !== scope) return false;
+      const conflict = receiptDuplicateFromError(caught);
+      setDuplicate(conflict); setDuplicateReviewMessage('');
+      if (conflict) setDuplicateContext({ clientId, kiz: (editingId ? editKiz : kiz).trim() || conflict.identity || '',
+        operationKey: crypto.randomUUID(), boxCode: selectedBox?.boxCode || boxCode.trim() || undefined, sourceDocument: selectedBox?.sourceDocument || undefined });
       setMessage(caught instanceof Error ? caught.message : 'Операция не выполнена.');
+      return false;
     }
+  }
+
+  async function sendDuplicateReview() {
+    if (!duplicate || !duplicateContext || duplicateReviewBusy) return;
+    const current = duplicate;
+    setDuplicateReviewBusy(true); setDuplicateReviewMessage('');
+    try {
+      const result = await queueReceiptKizReview(session.accessToken, duplicateContext);
+      if (duplicateRef.current !== current) return;
+      setDuplicate({ ...current, reviewId: result.id });
+      setDuplicateReviewMessage(result.message || 'Передано в «КИЗ → Проверки КИЗ».');
+    } catch (error) {
+      if (duplicateRef.current === current) setDuplicateReviewMessage(error instanceof Error ? error.message : 'Передача не подтверждена. Повторите действие.');
+    } finally { setDuplicateReviewBusy(false); }
   }
 
   async function runConfirmed() {
@@ -189,7 +225,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
       setMessage('Выберите клиента, короб и укажите ШК товара.');
       return;
     }
-    await runAction(
+    const accepted = await runAction(
       () =>
         addOnlineReceiptItem(session.accessToken, {
           clientId,
@@ -201,6 +237,8 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
         }),
       'Товар добавлен в короб.',
     );
+    // FIX: an unsuccessful receipt keeps its exact barcode/KIZ for review.
+    if (!accepted) return;
     setBarcode('');
     setQuantity('1');
     setKiz('');
@@ -213,7 +251,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
   }
 
   async function saveEdit(item: OnlineReceiptItemSummary) {
-    await runAction(
+    const accepted = await runAction(
       () =>
         updateOnlineReceiptItem(session.accessToken, item.movementId, {
           quantity: Number(editQuantity) || item.quantity,
@@ -221,7 +259,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
         }),
       'Строка приемки изменена.',
     );
-    setEditingId('');
+    if (accepted) setEditingId('');
   }
 
   const totals =
@@ -332,7 +370,12 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
       ) : null}
 
       {message ? <p className="warehouse-inline">{message}</p> : null}
+      {duplicate ? <ReceiptDuplicateNotice info={duplicate} busy={duplicateReviewBusy} message={duplicateReviewMessage}
+        onReview={canManage && duplicateContext ? () => void sendDuplicateReview() : undefined} onContinue={() => {
+        setDuplicate(null); setBarcode(''); setKiz(''); setEditingId(''); setMessage('Товар отложен. Сканируйте другой товар.');
+      }} /> : null}
 
+      <fieldset disabled={Boolean(duplicate)} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
       <div className="online-receipts__grid">
         <div className="online-receipts__boxes">
           <div className="warehouse-subheading">
@@ -477,6 +520,7 @@ export function OnlineReceiptPanel({ fixedClientId, readOnly = false, session }:
         </div>
       </div>
 
+      </fieldset>
       {pendingConfirm ? (
         <ConfirmDialog
           title={pendingConfirm.title}

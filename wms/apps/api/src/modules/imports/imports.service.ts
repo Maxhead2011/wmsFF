@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { assertNewReceiptKiz, clientKizGuardEnabled, clientKizIdentity, lookupClientKiz, receiptKizDuplicateMessage, recordClientKizReceipt } from '../../common/kiz-client-registry';
 import { Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -71,7 +72,7 @@ export class ImportsService {
 
     const rows = this.readReceiptSheet(buffer);
     const parsed = parseReceiptSheet(rows, { clientId });
-    const issues = [...parsed.issues, ...(await this.duplicateKizIssues(parsed.items))];
+    const issues = [...parsed.issues, ...(await this.duplicateKizIssues(parsed.items, user.activeWarehouseId))];
 
     return {
       clientId,
@@ -188,7 +189,7 @@ export class ImportsService {
 
     const rows = this.readReceiptSheet(buffer);
     const parsed = parseReceiptSheet(rows, { clientId: options.clientId });
-    const issues = [...parsed.issues, ...(await this.duplicateKizIssues(parsed.items))];
+    const issues = [...parsed.issues, ...(await this.duplicateKizIssues(parsed.items, warehouseId))];
     const errors = issues.filter((issue) => issue.severity === 'error');
 
     if (errors.length > 0) {
@@ -210,6 +211,9 @@ export class ImportsService {
         };
 
         for (const item of parsed.items) {
+          // FIX: repeat the preflight under an identity lock; a competing TSD may have won.
+          if (clientKizGuardEnabled()) await assertNewReceiptKiz(tx, { clientId: item.clientId, kiz: item.kiz,
+            operationKey: ['receipt-import', options.sourceDocument, item.sourceRow, item.boxCode, item.kiz].join(':'), warehouseId });
           const box = await this.ensureBox(tx, item, warehouseId);
           const sku = await this.ensureSku(tx, item);
 
@@ -235,6 +239,10 @@ export class ImportsService {
               status: 'AVAILABLE',
             },
           });
+          await recordClientKizReceipt(tx, { clientId: item.clientId, kiz: item.kiz,
+            operationKey: movement.idempotencyKey!, warehouseId, skuId: sku.id, boxCode: box.code,
+            productName: sku.name, barcode: item.barcode, receivedAt: movement.createdAt,
+            sourceDocument: options.sourceDocument, userId: options.user.id });
 
           counters.boxesTouched += 1;
           counters.skusTouched += 1;
@@ -504,7 +512,24 @@ export class ImportsService {
     );
   }
 
-  private async duplicateKizIssues(items: ReceiptImportItem[]) {
+  private async duplicateKizIssues(items: ReceiptImportItem[], warehouseId?: string | null) {
+    if (clientKizGuardEnabled()) {
+      // FIX: different encodings within the same workbook are one physical KIZ.
+      const seen = new Set<string>();
+      const issues: Array<{ row: number; message: string; severity: 'error' }> = [];
+      for (const item of items) {
+        const identity = clientKizIdentity(item.kiz);
+        const key = JSON.stringify([item.clientId, identity]);
+        if (!identity) issues.push({ row: item.sourceRow, message: 'Не распознан GTIN и серийный номер КИЗ.', severity: 'error' });
+        else if (seen.has(key)) issues.push({ row: item.sourceRow, message: 'ДУБЛЬ КИЗ внутри файла. Один КИЗ может быть принят только один раз.', severity: 'error' });
+        else {
+          const prior = await lookupClientKiz(this.prisma, item.clientId, item.kiz, warehouseId);
+          if (prior) issues.push({ row: item.sourceRow, message: receiptKizDuplicateMessage(prior), severity: 'error' });
+        }
+        seen.add(key);
+      }
+      return issues;
+    }
     const uniqueKiz = [...new Set(items.map((item) => item.kiz))];
     if (uniqueKiz.length === 0) {
       return [];

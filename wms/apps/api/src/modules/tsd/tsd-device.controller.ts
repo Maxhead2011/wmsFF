@@ -794,6 +794,14 @@ export class TsdDeviceController {
     return this.receipts.openBox(body, user);
   }
 
+  // FIX: explicit action creates an idempotent review; the precheck remains read-only.
+  @Post('receipts/kiz-review')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  queueReceiptKizReview(@Body() body: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.receipts.queueKizReview(body, user);
+  }
+
   @Get('devices')
   @ApiBearerAuth()
   @RequirePermissions('users:read')

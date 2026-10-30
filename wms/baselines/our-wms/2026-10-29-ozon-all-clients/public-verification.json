@@ -1,0 +1,60 @@
+{
+  "browser": {
+    "passed": 23,
+    "syntheticApi": true,
+    "webHashes": {
+      "index.html": "685ddcdc461dcee2e2fd57c645450312a5c763f6731a295e5ad83e712de3b8bf",
+      "assets/ozon-all-clients-20261029.js": "155972f89b97249d7a352fc2ad891f52918ce8b0c2be33ab386c2fc44cb39a91",
+      "assets/ozon-all-clients-20261029.css": "b5aa1f3e8078b6afb3b8efec6b9cb4f4fbc2068995b98c866eb6497860238f87"
+    },
+    "checks": [
+      "default all permitted clients ignores remembered creation selection",
+      "WB-style composition client, existing Ozon deadlines and concrete-client creation guard",
+      "layout default 1920",
+      "layout default 1440",
+      "layout default 1024",
+      "layout default 736",
+      "layout default 390",
+      "layout default 320",
+      "layout la_panthera 1920",
+      "layout la_panthera 1440",
+      "layout la_panthera 1024",
+      "layout la_panthera 736",
+      "layout la_panthera 390",
+      "layout la_panthera 320",
+      "existing assembly opens selected request and rejects stale earlier detail",
+      "cargo uses selected request owner and retains confirmation guard",
+      "request removal still previews selected request and honors server blockers",
+      "specific client filter and existing composer remain available",
+      "branch switch never sends retained previous warehouse",
+      "completed list keeps owners and omits active countdown",
+      "pagination beyond one hundred requests preserves all rows",
+      "refresh invalidates outstanding previous page",
+      "no browser errors, no business mutation or unintercepted API"
+    ],
+    "errors": [],
+    "unexpected": [],
+    "staticErrors": [],
+    "apiRequests": 30,
+    "publicMode": true
+  },
+  "readOnly": {
+    "readOnly": true,
+    "active": {
+      "returned": 10,
+      "total": 10,
+      "clients": 3,
+      "durationMs": 35,
+      "metadata": true
+    },
+    "completed": {
+      "returned": 35,
+      "total": 35,
+      "clients": 3,
+      "durationMs": 67,
+      "metadata": true
+    },
+    "emptyCustomerScope": true,
+    "anonymousStatus": 401
+  }
+}

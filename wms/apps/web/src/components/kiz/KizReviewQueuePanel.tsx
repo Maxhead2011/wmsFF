@@ -8,12 +8,12 @@ import {decideKizReview,fetchKizReviewQueue,type AuthSession,type KizReviewCase}
 export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onInspect:(kiz:string)=>void}) {
   const [items,setItems]=useState<KizReviewCase[]>([]),[cursor,setCursor]=useState<string|null>(null);
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true);
-  const [selected,setSelected]=useState<{row:KizReviewCase;resolution:'REUSE'|'RELABEL'}|null>(null);
+  const [selected,setSelected]=useState<{row:KizReviewCase;resolution:'REUSE'|'RELABEL'|'REJECT'}|null>(null);
   const [reason,setReason]=useState(''),[confirmed,setConfirmed]=useState(false),[saving,setSaving]=useState(false);
   const live=useRef(true),lock=useRef(false),generation=useRef(0);
   const load=useCallback(async(next?:string)=>{
     const current=++generation.current;
-    try {const response=reviewWeek(await fetchKizReviewQueue(session.accessToken,next));
+    try {const response=reviewWeek(await fetchKizReviewQueue(session.accessToken,next),Date.now(),import.meta.env.VITE_KIZ_CLIENT_GUARD_ENABLED==='true');
       if(!live.current||current!==generation.current)return;
       setItems(previous=>next?[...previous,...response.items.filter(r=>!previous.some(p=>p.id===r.id))]:response.items);
       setCursor(response.nextCursor);setError('');
@@ -24,8 +24,8 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
   useEffect(()=>{if(selected)return;const timer=window.setInterval(()=>{if(!document.hidden&&!lock.current)void load();},30000);return()=>window.clearInterval(timer);},[load,selected]);
   return <section className="kiz-queue">
     {import.meta.env.VITE_KIZ_FOUND_REVIEW_ENABLED==='true'&&<KizFoundPanel session={session}/>}
-    <h3>Обращения сборщиков</h3>
-    <p>Обращения за последние 7 дней. Проблемные КИЗы поступают сюда автоматически. Решение действует только для указанного задания.</p>
+    <h3>{import.meta.env.VITE_KIZ_CLIENT_GUARD_ENABLED==='true'?'Проверки КИЗ':'Обращения сборщиков'}</h3>
+    <p>{import.meta.env.VITE_KIZ_CLIENT_GUARD_ENABLED==='true'?'Нерешённые обращения приёмки и сборки остаются здесь до разбора.':'Обращения за последние 7 дней.'} Решение действует только для указанной единицы и задания.</p>
     <button type="button" disabled={saving} onClick={()=>void load()}>Обновить обращения</button>
     {loading&&<p>Загружаю обращения…</p>}{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
     {!loading&&!error&&!items.length&&<p>Обращений на проверку нет.</p>}
@@ -35,16 +35,16 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
     {selected&&<form className="kiz-queue" onSubmit={async e=>{
       e.preventDefault();if(lock.current)return;lock.current=true;setSaving(true);setError('');
       try{await decideKizReview(session.accessToken,selected.row.id,selected.resolution,reason.trim(),confirmed);
-        if(!live.current)return;setSelected(null);setNotice('Решение сохранено. Сборщик может повторить сканирование старого КИЗа.');await load();
+        if(!live.current)return;setSelected(null);setNotice(selected.resolution==='REJECT'?'Отказ сохранён. Использование КИЗ запрещено.':selected.row.snapshot.scope==='RECEIPT'?'Решение сохранено. Повторный приход не создан.':'Решение сохранено. Сборщик может повторить сканирование КИЗа.');await load();
       }catch(e){if(live.current)setError(e instanceof Error?e.message:'Решение не подтверждено. Повторите отправку.');}
       finally{lock.current=false;if(live.current)setSaving(false);}
     }}>
-      <h4>{selected.resolution==='REUSE'?'Разрешить использовать':'Разрешить переклейку'} · заказ {selected.row.snapshot.orderId}</h4>
+      <h4>{selected.resolution==='REUSE'?'Разрешить использовать':selected.resolution==='RELABEL'?'Разрешить переклейку':'Отказать'} · {selected.row.snapshot.scope==='RECEIPT'?'приёмка':selected.row.snapshot.scope?`заявка №${selected.row.snapshot.requestNumber}`:`заказ ${selected.row.snapshot.orderId}`}</h4>
       <p>КИЗ: {selected.row.kizIdentity}</p>
       {selected.resolution==='REUSE'&&selected.row.physicalReuseAllowed&&<p>Подтвердите именно эту физическую единицу. Прежняя привязка останется в истории как спорная; разрешение действует только для этого задания.</p>}
       <label>Основание решения<textarea required minLength={5} maxLength={1000} value={reason} disabled={saving} onChange={e=>setReason(e.target.value)}/></label>
       <label><input type="checkbox" required checked={confirmed} disabled={saving} onChange={e=>setConfirmed(e.target.checked)}/>
-        {selected.resolution==='REUSE'?'Проверено: единица физически на складе, КИЗ не погашен и допускает повторное использование.':'Подтверждаю наличие этой единицы для замены старого КИЗа на новый без пересчёта всего короба.'}</label>
+        {selected.resolution==='REUSE'?'Проверено: единица физически на складе, КИЗ не погашен и допускает повторное использование.':selected.resolution==='RELABEL'?'Подтверждаю наличие этой единицы для замены старого КИЗа на новый без пересчёта всего короба.':'Подтверждаю проверку и отказ в использовании этого КИЗ.'}</label>
       <button type="submit" disabled={saving||!confirmed||reason.trim().length<5}>{saving?'Сохраняю…':'Подтвердить решение'}</button>
       <button type="button" disabled={saving} onClick={()=>setSelected(null)}>Отмена</button>
     </form>}

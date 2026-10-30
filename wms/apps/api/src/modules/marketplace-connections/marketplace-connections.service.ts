@@ -1,3 +1,5 @@
+import {assertFbsClientKiz, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
+import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
 import { receiptProcessingByBoxes, applyReceiptPrimary } from '../billing/receipt-processing';
 import { selectedOzonLabels } from './ozon-direct-label';
 import { assertNotMultishopOwned } from './multishop-stock-ownership';
@@ -5797,6 +5799,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    // FIX: a lost TSD selection must not allocate another client's/marketplace's request.
+    // An existing assignment above remains resumable, including on older terminals.
+    if (!selectedRequestId && process.env.WMS_FBS_EXPLICIT_REQUEST_ENABLED === 'true') {
+      return this.emptyFbsTsdAssembly(
+        deviceCode,
+        user,
+        'Выберите FBS-заявку. После завершения сборки следующая заявка выбирается вручную.',
+      );
+    }
+
     const previousBatch = await this.prisma.fbsTsdAssembly.findFirst({
       where: {
         status: 'COMPLETED',
@@ -10469,6 +10481,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Сначала подтвердите короб и ШК товара.');
     }
     if (task.kiz && task.wbMetaStatus === 'ACCEPTED') {
+      if(await assertFbsClientKiz(this.prisma,task,task.kiz,user)==='RELABEL')throw new ConflictException('Администратор назначил переклейку. Отложите товар.');
       // FIX: an accepted WB KIZ means the unit is already physically in the
       // worker's hands. Ensure it cannot remain AVAILABLE for another route.
       await this.reserveAcceptedWildberriesStock(task);
@@ -10493,6 +10506,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (kizFormatError) {
       throw new BadRequestException(kizFormatError);
     }
+    // FIX: physical availability cannot authorize a second dispatch before WB writes.
+    const clientKizDecision = await assertFbsClientKiz(this.prisma, task, kiz, user);
+    if (clientKizDecision === 'RELABEL') return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
     // FIX: a task opened before the same-size fix must finish with the existing physical KIZ too.
     let sameSizeRelabel = false;
     if (await this.sameSizeFbsRelabel(task)) {
@@ -10537,7 +10553,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     let mark = await this.prisma.productMark.findFirst({
       where: {
-        ...await physicalKizLookup(this.prisma, kiz),
+        ...(clientKizGuardEnabled() ? {id:(await clientPhysicalMark(this.prisma, task.clientId, kiz))?.id ?? '__no_client_mark__'} : await physicalKizLookup(this.prisma, kiz)),
       },
       select: {
         id: true,
@@ -10609,6 +10625,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     const duplicateCandidates = await this.prisma.fbsTsdAssembly.findMany({
       where: {
+        ...(clientKizGuardEnabled() ? {clientId: task.clientId} : {}),
         id: { not: task.id },
         ...physicalKizHistoryFilter(kiz),
         status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
@@ -11210,6 +11227,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    if(await assertFbsClientKiz(this.prisma,task,kiz,user)==='RELABEL')throw new ConflictException('Администратор назначил переклейку. Отложите товар.');
     const orderId = numericWbOrderId(task.orderId);
     const metadata = await marketplaceJson(
       'https://marketplace-api.wildberries.ru/api/marketplace/v3/orders/meta',
@@ -11246,7 +11264,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // restoreAcceptedFbsKiz repeats the capacity check inside its transaction.
     if (process.env.WMS_FBS_PRESERVE_STOCK_KIZ === 'true') {
       const existingMark = await this.prisma.productMark.findFirst({
-        where: { ...await physicalKizLookup(this.prisma, kiz) },
+        where: { ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(this.prisma,task.clientId,kiz))?.id??'__no_client_mark__'}:await physicalKizLookup(this.prisma,kiz)) },
         select: { id: true },
       });
       if (!existingMark) {
@@ -11417,6 +11435,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
     const kiz = remoteKizValues[0];
+    if(await assertFbsClientKiz(this.prisma,task,kiz,user)==='RELABEL')throw new ConflictException('Администратор назначил переклейку. Отложите товар.');
 
     const duplicateCandidates = await this.prisma.fbsTsdAssembly.findMany({
       where: {
@@ -11455,7 +11474,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const mark = await this.prisma.productMark.findFirst({
-      where: { ...await physicalKizLookup(this.prisma, kiz) },
+      where: { ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(this.prisma,task.clientId,kiz))?.id??'__no_client_mark__'}:await physicalKizLookup(this.prisma,kiz)) },
       select: { clientId: true, skuId: true },
     });
     if (mark && (mark.clientId !== task.clientId || mark.skuId !== task.skuId)) {
@@ -12086,8 +12105,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       throw new BadRequestException('Отсканирован не КИЗ товара. Считайте полный Data Matrix с этикетки костюма.');
     }
 
+    if(await assertFbsClientKiz(this.prisma,task,kiz,user)==='RELABEL')throw new ConflictException('Администратор назначил переклейку. Отложите товар.');
     let mark = await this.prisma.productMark.findFirst({
-      where: { ...await physicalKizLookup(this.prisma, kiz) },
+      where: { ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(this.prisma,task.clientId,kiz))?.id??'__no_client_mark__'}:await physicalKizLookup(this.prisma, kiz)) },
       select: {
         id: true,
         clientId: true,
@@ -12142,6 +12162,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     const duplicate = await this.prisma.fbsTsdAssembly.findFirst({
       where: {
+        ...(clientKizGuardEnabled()?{clientId:task.clientId}:{}),
         id: { not: task.id },
         ...physicalKizHistoryFilter(kiz),
         status: { in: ['IN_PROGRESS', 'COMPLETED', FBS_TSD_RETURN_REQUIRED] },
@@ -12983,7 +13004,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       this.prisma.productMark.findFirst({
         where: {
           clientId: task.clientId,
-          ...await physicalKizLookup(this.prisma, kiz),
+          ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(this.prisma,task.clientId,kiz))?.id??'__no_client_mark__'}:await physicalKizLookup(this.prisma,kiz)),
         },
         select: {
           id: true,
@@ -13143,7 +13164,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     let mark = await this.prisma.productMark.findFirst({
       where: {
-        ...await physicalKizLookup(this.prisma, kiz),
+        ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(this.prisma,task.clientId,kiz))?.id??'__no_client_mark__'}:await physicalKizLookup(this.prisma,kiz)),
       },
       select: {
         id: true,
@@ -14200,6 +14221,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         `Сначала отсканируйте КИЗ и дождитесь подтверждения для ${fbsMarketplaceDisplayName(task.marketplace)}.`,
       );
     }
+    if (task.kiz) await assertFbsClientKiz(this.prisma, task, task.kiz, user);
     if (task.marketplace === MarketplaceType.OZON && !task.marketplaceSubmittedAt) {
       const submitted = await this.submitOzonFbsTask(task);
       return this.formatFbsTsdAssembly(
@@ -14354,7 +14376,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
-          ...await physicalKizLookup(tx, task.kiz, false),
+          ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(tx,task.clientId,task.kiz!))?.id??'__no_client_mark__'}:await physicalKizLookup(tx,task.kiz,false)),
           status: StockStatus.AVAILABLE,
           ...(preserveStockKiz ? { boxId: task.boxId } : {}),
         },
@@ -14383,7 +14405,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const quantityToReserve = quantity - Math.max(0, activeReservedQuantity);
     if (preserveStockKiz && task.kiz) {
       const physicalMark = await tx.productMark.findFirst({
-        where: { clientId: task.clientId, skuId: task.skuId, ...await physicalKizLookup(tx, task.kiz, false),
+        where: { clientId: task.clientId, skuId: task.skuId, ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(tx,task.clientId,task.kiz!))?.id??'__no_client_mark__'}:await physicalKizLookup(tx,task.kiz,false)),
           boxId: task.boxId, status: StockStatus.AVAILABLE },
         select: { id: true },
       });
@@ -14730,7 +14752,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         where: {
           clientId: task.clientId,
           skuId: task.skuId,
-          ...await physicalKizLookup(tx, task.kiz, false),
+          ...(clientKizGuardEnabled()?{id:(await clientPhysicalMark(tx,task.clientId,task.kiz!))?.id??'__no_client_mark__'}:await physicalKizLookup(tx,task.kiz,false)),
           status: StockStatus.PACKING,
           ...(receipt?.mark ? { id: receipt.mark.id, boxId: receipt.mark.boxId, updatedAt: receipt.mark.updatedAt } : {}),
         },
@@ -17711,11 +17733,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         const order = cached ?? await this.localShipmentOrder(task);
         // FIX: acknowledge after durable shipment + billing intent, not whole-client billing.
         const statusChanges: FbsAutoStatusChange[] = [];
-        await this.prisma.$transaction(async tx => {
+        await withClientKizReview(this.prisma, user, () => this.prisma.$transaction(async tx => {
           await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), job.printedAt ?? undefined);
           await enqueueFbsPrintBilling(tx, task.clientId);
           if (job.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: user.id }, statusChanges);
-        }, { timeout: 30_000 });
+        }, { timeout: 30_000 }));
         this.fbsOrdersCache.delete(task.clientId);
         await this.notifyFbsAutoStatusChanges(statusChanges);
       }
@@ -17767,11 +17789,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 try {
                     const order = orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId) ?? await this.localShipmentOrder(task);
                     const statusChanges: FbsAutoStatusChange[] = [];
-                    await this.prisma.$transaction(async (tx) => {
+                    await withClientKizReview(this.prisma, {id:task.workerUserId,name:task.workerName}, () => this.prisma.$transaction(async (tx) => {
                         await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), print.printedAt ?? undefined);
                         if (print.printedAt)
                             await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: print.printedAt, actorId: task.workerUserId }, statusChanges);
-                    }, { timeout: 30_000 });
+                    }, { timeout: 30_000 }));
                     await this.notifyFbsAutoStatusChanges(statusChanges);
                     recorded.add(task.id);
                 }
@@ -17818,7 +17840,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                 if (!order)
                     continue;
                 try {
-                    await this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, manuallyShipped ? 'WMS_REQUEST_SHIPPED' : 'WB_SHIPMENT_CONFIRMED', cleanJson(order)), { timeout: 30_000 });
+                    await withClientKizReview(this.prisma, {id:task.workerUserId,name:task.workerName}, () => this.prisma.$transaction(tx => finalizeWbOrderShipment(tx, task.id, manuallyShipped ? 'WMS_REQUEST_SHIPPED' : 'WB_SHIPMENT_CONFIRMED', cleanJson(order)), { timeout: 30_000 }));
                 }
                 catch (error) {
                     // FIX: missing physical evidence cannot manufacture a stock write-off; next sync retries.

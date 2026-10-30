@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { assertNewReceiptKiz, clientKizGuardEnabled, clientKizIdentity, recordClientKizReceipt } from '../../common/kiz-client-registry';
 import { BillingUnit, MovementType, Prisma, StockStatus, TsdOperationStatus, TsdReviewReason } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
@@ -1276,6 +1277,18 @@ export class WarehouseService {
       this.clientScopes.requireClientAccess(user, movement.clientId, 'write');
       this.assertBoxWarehouse(warehouseId, movement.box);
 
+      // FIX: an edit cannot introduce another unit's KIZ or erase a historical duplicate guard.
+      const previousKiz = movement.productMarks[0]?.value;
+      if (clientKizGuardEnabled()) {
+        if ((kiz || previousKiz) && (quantity ?? movement.quantity) !== 1) {
+          throw new BadRequestException('Один КИЗ соответствует одной единице товара.');
+        }
+        if (kiz && clientKizIdentity(kiz) !== clientKizIdentity(previousKiz ?? '')) {
+          await assertNewReceiptKiz(tx, { clientId: movement.clientId, kiz, operationKey: `receipt-edit:${id}:${clientKizIdentity(kiz)}`,
+            warehouseId: warehouseId ?? movement.box.warehouseId });
+        }
+      }
+
       if (quantity !== undefined && quantity !== movement.quantity) {
         await this.adjustBalanceQuantity(tx, {
           clientId: movement.clientId,
@@ -1308,6 +1321,14 @@ export class WarehouseService {
             },
           });
         }
+      }
+
+      if (clientKizGuardEnabled() && kiz && clientKizIdentity(kiz) !== clientKizIdentity(previousKiz ?? '')) {
+        const receiptSku = await tx.sku.findUnique({ where: { id: movement.skuId }, select: { name: true } });
+        await recordClientKizReceipt(tx, { clientId: movement.clientId, kiz,
+          operationKey: `receipt-edit:${id}:${clientKizIdentity(kiz)}`, warehouseId: warehouseId ?? movement.box.warehouseId,
+          skuId: movement.skuId, productName: receiptSku?.name, userId: user.id, source: 'CORRECTION',
+          sourceDocument: movement.sourceDocument });
       }
 
       await this.recordReceiptAdminOperation(

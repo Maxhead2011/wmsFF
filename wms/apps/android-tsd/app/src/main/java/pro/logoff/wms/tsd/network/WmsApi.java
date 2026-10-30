@@ -352,6 +352,10 @@ public interface WmsApi {
         @Query("kiz") String kiz
     );
 
+    // FIX: checking uniqueness stays read-only; an explicit action creates one review case.
+    @POST("api/v1/tsd/receipts/kiz-review")
+    Call<TsdKizReviewResponse> reviewReceiptKiz(@Header("Authorization") String authorization, @Body Map<String, String> request);
+
     @GET("api/v1/tsd/requests")
     Call<List<TsdAssemblyRequestSummary>> listAssemblyRequests(@Header("Authorization") String authorization);
 
