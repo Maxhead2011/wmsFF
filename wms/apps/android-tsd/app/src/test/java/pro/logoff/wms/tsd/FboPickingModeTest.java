@@ -22,6 +22,36 @@ import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk=28)
 public class FboPickingModeTest {
+    // TEST: a partly picked source confirms only its remainder; stale total and unfinished scans cannot submit.
+    @Test public void partialWholeConfirmationUsesRemainingQuantity() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=plan();List<Map<String,String>> writes=new ArrayList<>();
+            FboTwoStageScreen s=open(a,p,writes,UUID.randomUUID().toString());
+            try {
+                idle(s);choose(a,false);scan(s,"PALLET-P");scan(s,"PARTIAL");
+                scan(s,"123");scan(s,"PHYSICAL-KIZ");idle(s);
+                assertEquals("PICK_UNIT",writes.get(0).get("action"));
+                p.picked=1;p.needed=4;p.route.get(1).wholeBox=true;p.route.get(1).wholeBoxQuantity=2;
+                p.route.get(1).tasks.get(0).quantity=2;click(a,"Обновить");idle(s);
+                click(a,"Забрать остаток короба целиком");
+                var field=FboTwoStageScreen.class.getDeclaredField("quantityInput");field.setAccessible(true);
+                android.widget.EditText input=(android.widget.EditText)field.get(s);
+                assertEquals("",input.getText().toString());
+                var dialogField=FboTwoStageScreen.class.getDeclaredField("quantityDialog");dialogField.setAccessible(true);
+                android.app.AlertDialog dialog=(android.app.AlertDialog)dialogField.get(s);
+                input.setText("3");dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+                assertNotNull(input.getError());assertEquals(1,writes.size());
+                input.setText("2");dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();idle(s);
+                assertEquals(2,writes.size());assertEquals("PICK_BOX",writes.get(1).get("action"));
+                assertEquals("2",writes.get(1).get("confirmedQuantity"));
+                assertEquals("PARTIAL",writes.get(1).get("sourceBoxCode"));
+                assertEquals("PALLET-P",writes.get(1).get("palletCode"));
+                assertNotEquals(writes.get(0).get("operationId"),writes.get(1).get("operationId"));
+                assertEquals(1,p.picked); // authoritative server progress is never incremented by the UI.
+            }finally{s.close();}
+        }
+    }
     // TEST: local route reprioritization must not eject the physically selected partial box.
     @Test public void partialSourceBecomingWholeKeepsUnitScanWithoutManualRefresh() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
@@ -38,8 +68,10 @@ public class FboPickingModeTest {
             try {
                 idle(s);choose(a,false);scan(s,"PALLET-P");idle(s);scan(s,"PARTIAL");idle(s);
                 assertNotNull(find(a,"Отобрать товар по ШК + КИЗ"));
-                assertNull(find(a,"Короб забран целиком"));assertTrue(writes.isEmpty());
+                // TEST: server-approved remainder is available in partial mode, but not during an unfinished unit scan.
+                assertNotNull(find(a,"Забрать остаток короба целиком"));assertTrue(writes.isEmpty());
                 scan(s,"123");assertNotNull(find(a,"Нужный товар"));assertTrue(writes.isEmpty());
+                assertFalse(find(a,"Забрать остаток короба целиком").isEnabled());
                 scan(s,"PHYSICAL-KIZ");idle(s);assertEquals(1,writes.size());
                 assertEquals("PICK_UNIT",writes.get(0).get("action"));assertEquals("PARTIAL",writes.get(0).get("sourceBoxCode"));
                 assertEquals("PHYSICAL-KIZ",writes.get(0).get("kiz"));
@@ -98,8 +130,10 @@ public class FboPickingModeTest {
             pending.put("palletCode",action.equals("PICK_BOX")?"PALLET-W":"PALLET-P");
             if(action.equals("PICK_UNIT")){pending.put("barcode","123");pending.put("kiz","KIZ");}
             a.getSharedPreferences("fbo-pending",0).edit().putString(user+":request",new org.json.JSONObject(pending).toString()).commit();
+            // TEST: retrying a remainder pick must preserve the operator's partial mode.
+            if(action.equals("PICK_BOX"))a.getSharedPreferences("fbo-pending",0).edit().putString(user+":request:picking-mode","PARTIAL").commit();
             List<Map<String,String>> writes=new ArrayList<>();FboTwoStageScreen s=open(a,p,writes,user);
-            try{idle(s);assertFalse(find(a,"К выбору отбора").isEnabled());click(a,"Повторить отправку");idle(s);assertEquals(Collections.singletonList(pending),writes);}
+            try{idle(s);assertFalse(find(a,"К выбору отбора").isEnabled());click(a,"Повторить отправку");idle(s);assertEquals(Collections.singletonList(pending),writes);assertNotNull(find(a,"Частичный отбор"));}
             finally{s.close();}
         }
     }
