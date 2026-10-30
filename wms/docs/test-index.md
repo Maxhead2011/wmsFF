@@ -1,4 +1,7 @@
-Prepared, not deployed: [FBO batch KIZ shipment verification](fbo-kiz-shipment-batch.md). Same client-scoped decisions, transaction-local bounded reads under identity locks. API4108/web563, TypeScript, PostgreSQL9/full health, baseline8; request2494 read-only check15.7s, synthetic578/57 completion7.45s with both WB exports. Exact2 API modules; web/APK247/schema/sold unchanged.
+Prepared: [FBO KIZ review index](fbo-kiz-shipment-batch.md), additive client/identity index and real concurrent PostgreSQL RED/GREEN; no guard bypass.
+
+Published PR783 / 2026-10-30: final FBO KIZ reads batched under the existing client identity locks; all per-KIZ duplicate/history/admin/context/binding checks retained. API4108/web563/TypeScript, PostgreSQL9/full health and baseline8 passed; API156/web2 skipped, unconfigured dedicated KIZ suite excluded. Exact2 API modules; other690 files, web/APK247/schema/environment/sold unchanged. Baseline `2026-10-30-fbo-kiz-shipment`, sourceParityVerified=false. [Details](fbo-kiz-shipment-batch.md).
+
 
 Published PR781 / 2026-10-30: LOGOFF247 permits whole remainder in partial FBO picking, preserving previously picked loose units and pending-operation mode. Android915/API4096/web563, PostgreSQL9/full health, baseline8, signed APK/audio/public hashes passed; API156/web2 skipped, dedicated unconfigured KIZ suite excluded. Exact3 download files; other3199 web files, API/schema/stock/sold unchanged. Baseline `2026-10-30-fbo-partial-whole`, sourceParityVerified=false. Terminal update required. [Details](fbo-partial-whole-remainder.md).
 
