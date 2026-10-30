@@ -1,6 +1,6 @@
 # Магазины ФБО Ozon и производительность ФБО
 
-Подготовлено к публикации, 30.10.2026. База: PR799, `2026-10-30-wb-packed-auto-done`.
+Подготовлено к публикации, 30.10.2026. База: PR802, `2026-10-30-ozon-packed-auto-done`.
 
 ## Магазины
 
@@ -30,7 +30,7 @@ FboAssemblyUnit по заявке и исполнителю отдельно д�
 
 ## Проверки и выпуск
 
-API4179, web582, TypeScript; API156/web2 пропущены, отдельный KIZ DB suite без URL
+API4198, web582, TypeScript; API156/web2 пропущены, отдельный KIZ DB suite без URL
 исключён. PostgreSQL11 на disposable DB и полный Nest health; браузер6 на фактических
 компонентах; bootstrap5 (вход, reload, Заявки, FBS, FBO), один React root.
 RED/GREEN для подписи магазина зафиксирован до исправления. Тесты нового отчёта:

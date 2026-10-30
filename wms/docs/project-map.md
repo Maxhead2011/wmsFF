@@ -1,4 +1,6 @@
-Подготовлено: [магазины ФБО Ozon и производительность ФБО](fbo-stores-productivity.md). Ozon labels after scope; отдельные picked/packed по исполнителю и дню. API4179/web582/PostgreSQL11/browser6/bootstrap5; own-WMS flag, общий склад сохранён.
+Подготовлено: [магазины ФБО Ozon и производительность ФБО](fbo-stores-productivity.md). Ozon labels after scope; отдельные picked/packed по исполнителю и дню. API4198/web582/PostgreSQL11/browser6/bootstrap5; own-WMS flag, общий склад сохранён.
+
+Published PR802: [Ozon packed auto-completion](ozon-packed-auto-done.md). PACKED -> DONE after all postings are delivering/delivered, status/history only. Independent own-WMS flag enabled; WB rule preserved. API4194/web579/TypeScript, PostgreSQL8/full health, candidate/public runtime passed. Exact two API modules; web/APK249/schema/stock/sold unchanged. Baseline `2026-10-30-ozon-packed-auto-done`, sourceParityVerified=false.
 
 Published PR799: [WB packed auto-completion](wb-packed-auto-done.md). PACKED -> DONE after all linked WB orders are accepted, status/history only. Own-WMS flag enabled; stock/web/APK249/schema/sold unchanged. API4175/web579/TypeScript, PostgreSQL8/full health, candidate/public runtime and exact two-module verification passed. Baseline `2026-10-30-wb-packed-auto-done`, sourceParityVerified=false.
 
