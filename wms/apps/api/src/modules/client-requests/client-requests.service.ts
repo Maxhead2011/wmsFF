@@ -1,3 +1,4 @@
+import {wbDispatchContexts,assertFboProcessChange} from './wb-fbo-dispatch';
 import { requestStoreContexts } from '../clients/request-store-context';
 import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
@@ -163,6 +164,8 @@ export class ClientRequestsService {
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
     });
+    const dispatches=await wbDispatchContexts(this.prisma,requests.map(r=>r.id));
+    for(const request of requests)if(dispatches[request.id])Object.assign(request,{fboDispatchAt:dispatches[request.id]});
     const stores = await requestStoreContexts(this.prisma, requests);
     for (const request of requests) if (stores.has(request.id)) Object.assign(request, stores.get(request.id));
     // FIX: separate warehouse progress from the status that permits shipment.
@@ -350,7 +353,8 @@ export class ClientRequestsService {
       throw new NotFoundException('Заявка не найдена в выбранном филиале.');
     }
     const stores = await requestStoreContexts(this.prisma, [request]);
-    return {...request, ...stores.get(request.id)};
+    const dispatch=await wbDispatchContexts(this.prisma,[request.id]);
+    return {...request, ...stores.get(request.id),fboDispatchAt:dispatch[request.id]};
   }
 
   async previewAvailability(dto: PreviewClientRequestAvailabilityDto, user: AuthUser): Promise<ClientRequestAvailabilityPreview> {
@@ -1496,6 +1500,7 @@ export class ClientRequestsService {
       throw new BadRequestException('Статус заявки «Сборка по SKU» изменяется только сканированием на ТСД.');
     }
 
+    await assertFboProcessChange(this.prisma,id,dto.status);
     const shouldFinalizeStockRequest =
       dto.status === ClientRequestStatus.DONE &&
       (request.type === ClientRequestType.OUTBOUND ||

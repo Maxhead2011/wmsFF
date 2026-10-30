@@ -1,4 +1,6 @@
 import { OzonLinkImportService } from './ozon-link-import.service';
+import {WbFboSupplyController} from './wb-fbo-supply.controller';
+import {WbFboSupplyService} from './wb-fbo-supply.service';
 import { ClientRequestRemovalService } from './client-request-removal.service';
 import { ClientRequestRemovalController } from './client-request-removal.controller';
 import { OzonAssemblySupplyController } from './ozon-assembly-supply.controller';
@@ -24,10 +26,11 @@ import { ClientRequestsService } from './client-requests.service';
 
 @Module({
   imports: [AuthModule, CommonModule, ClientNotificationsModule, StockModule, LogisticsModule, MarketplaceConnectionsModule],
-  controllers: [ClientRequestRemovalController, OzonAssemblySupplyController, ClientRequestsController, OzonFboImportController],
+  controllers: [WbFboSupplyController, ClientRequestRemovalController, OzonAssemblySupplyController, ClientRequestsController, OzonFboImportController],
   // FIX: Lamoda preview reuses scoped availability; no duplicate stock calculator.
   exports: [ClientRequestsService],
   providers: [
+    WbFboSupplyService,
     ClientRequestRemovalService,
     OzonLinkImportService,
     OzonFboImportService,

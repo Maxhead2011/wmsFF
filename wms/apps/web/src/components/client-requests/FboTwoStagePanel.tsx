@@ -1,4 +1,5 @@
 import {OzonStockAdjustment} from './OzonStockAdjustment';
+import {WbFboSupply} from './WbFboSupply';
 import {LamodaFboRelabel} from './LamodaFboRelabel';
 import { startVisiblePolling } from '../../lib/visiblePolling';
 import { FormEvent, useEffect, useRef, useState } from 'react';
@@ -68,6 +69,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     </header>
     {plan.marketplace==='OZON'&&canWrite&&<OzonStockAdjustment requestId={plan.requestId} accessToken={accessToken} disabled={busy||!!pending} onLockChange={setAdjusting} onChanged={()=>void refresh()}/>}
     <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>
+    {import.meta.env.VITE_MARKETPLACE_WORKSPACES_ENABLED==='true'&&(!plan.marketplace||plan.marketplace==='WILDBERRIES')&&<WbFboSupply key={plan.requestId} requestId={plan.requestId} accessToken={accessToken} disabled={busy||!!pending||scanMode}/>}
     {plan.marketplace==='LAMODA'&&<LamodaFboRelabel plan={plan} accessToken={accessToken} disabled={!canWrite||busy||!!pending||adjusting} command={command} refresh={refresh}/>}
     {!!plan.directions?.length&&<section aria-label="Направления сборки"><h3>Единая сборка · направления</h3>{plan.directions.map(d=><details key={d.name}><summary>{d.name}: упаковано {d.packed} из {d.needed}</summary><ul>{d.items.map(i=><li key={i.skuId}>{plan.lines.find(l=>l.skuId===i.skuId)?.name} · {i.barcode}: {i.packed} из {i.quantity}</li>)}</ul></details>)}
     {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||adjusting||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
