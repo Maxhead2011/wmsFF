@@ -3,6 +3,8 @@ import {createHash} from 'node:crypto';
 import {Prisma} from '@prisma/client';
 import {clientKizIdentity, clientKizGuardEnabled, clientKizFilter, lookupClientKiz, lockClientKiz} from './kiz-client-registry';
 
+import {loadShipmentKizReads, ShipmentKizRead} from './kiz-shipment-reads';
+
 // FIX: one client-scoped, contextual permission for a second dispatch; AVAILABLE is not permission.
 export type ClientKizUse = {scope:'FBS'|'FBO'|'RECEIPT';clientId:string;warehouseId:string;requestId:string;
   taskId?:string;kiz:string;skuId?:string|null;boxId?:string|null;operationKey?:string;sourceDocument?:string;
@@ -17,16 +19,16 @@ const filter=(key:string,field='kiz')=>clientKizFilter(key,field);
 async function identityLock(tx:any,clientId:string,key:string){
   await lockClientKiz(tx,clientId,key);
 }
-export async function clientPhysicalMark(db:any,clientId:string,kiz:string){
+export async function clientPhysicalMark(db:any,clientId:string,kiz:string,read?:ShipmentKizRead){
  const key=clientKizIdentity(kiz);if(!key)throw new BadRequestException('Не удалось определить GTIN и серийный номер КИЗ.');
- const matches=(await db.productMark.findMany({where:{clientId,...filter(key,'value')},include:{box:true,sku:true}}))
+ const matches=(read?.marks??await db.productMark.findMany({where:{clientId,...filter(key,'value')},include:{box:true,sku:true}}))
   .filter((m:any)=>clientKizIdentity(m.value)===key);
  if(matches.length>1){const error:any=new ConflictException('ДУБЛЬ КИЗ. Найдено несколько записей у клиента. ОТЛОЖИТЕ ТОВАР и передайте администратору.');error.clientKizAmbiguity={clientId,kiz};throw error;}
  return matches[0]??null;
 }
-async function history(db:any,i:ClientKizUse){
+async function history(db:any,i:ClientKizUse,read?:ShipmentKizRead){
  const key=clientKizIdentity(i.kiz);
- const [shipments,units,consumed]=await Promise.all([
+ const [shipments,units,consumed]=read?[read.shipments,read.historyUnits,read.consumed]:await Promise.all([
   db.shippedKizHistory.findMany({where:{clientId:i.clientId,...filter(key)},orderBy:{shippedAt:'desc'},take:501}),
   db.fboAssemblyUnit.findMany({where:{state:{not:'RETURNED'},...filter(key),
    assembly:{request:{clientId:i.clientId,status:'DONE'}}},include:{assembly:{include:{request:true}}},take:501}),
@@ -73,15 +75,15 @@ export class ClientKizReviewRequired extends ConflictException {
   super({code:'KIZ_REVIEW_REQUIRED',message:`ОТЛОЖИТЕ ТОВАР. ${events.length?'КИЗ ранее отгружался. '+details:'КИЗ требует проверки привязки или истории; предыдущая отгрузка не подтверждена.'} Продолжение — только после решения администратора в «КИЗ → Проверки КИЗ».`});
  }
 }
-async function assertNoCompetingClaim(tx:any,i:ClientKizUse,key:string,currentId?:string){
- const claims=await tx.kizReviewCase.findMany({where:{clientId:i.clientId,kizIdentity:key,...(currentId?{id:{not:currentId}}:{}),status:'CLAIMED',taskId:{startsWith:'GUARD:'}}});
+async function assertNoCompetingClaim(tx:any,i:ClientKizUse,key:string,currentId?:string,read?:ShipmentKizRead){
+ const claims=read?read.claims.filter(c=>c.id!==currentId):await tx.kizReviewCase.findMany({where:{clientId:i.clientId,kizIdentity:key,...(currentId?{id:{not:currentId}}:{}),status:'CLAIMED',taskId:{startsWith:'GUARD:'}}});
  for(const claim of claims){
   const request=await tx.clientRequest.findUnique({where:{id:claim.requestId}});
   // A cancelled never-shipped attempt may release its claim; completed shipment never does.
   if(request&&['CANCELLED','REJECTED'].includes(request.status)&&claim.resolution==='FIRST_USE'){
    const prior=claim.snapshot?.clientGuard?.input;
    const oldHistory=prior?await history(tx,{...prior,requestId:''}):null;
-   const mark=await clientPhysicalMark(tx,i.clientId,i.kiz);
+   const mark=await clientPhysicalMark(tx,i.clientId,i.kiz,read);
    const tasks=await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,requestId:claim.requestId,kiz:{not:null},status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}});
    const units=await tx.fboAssemblyUnit.findMany({where:{requestId:claim.requestId,activeMarkId:{not:null},state:{not:'RETURNED'}}});
    if(oldHistory?.decision==='ALLOW'&&mark?.status==='AVAILABLE'&&!tasks.length&&!units.length){
@@ -91,7 +93,7 @@ async function assertNoCompetingClaim(tx:any,i:ClientKizUse,key:string,currentId
   throw new ConflictException('Этот КИЗ уже закреплён за другой сборкой. ОТЛОЖИТЕ ТОВАР.');
  }
 }
-async function ownExpectedMovement(tx:any,i:ClientKizUse,mark:any,proof:any){
+async function ownExpectedMovement(tx:any,i:ClientKizUse,mark:any,proof:any,read?:ShipmentKizRead){
  if(!mark)return !proof.markId;
  if(proof.markId&&proof.markId!==mark.id||mark.clientId!==i.clientId||i.skuId&&mark.skuId!==i.skuId)return false;
  if(proof.markVersion===markVersion(mark))return true;
@@ -113,32 +115,33 @@ async function ownExpectedMovement(tx:any,i:ClientKizUse,mark:any,proof:any){
    ['PACKING','SHIPPING'].includes(mark.status)&&movement.status===mark.status;
  }
  if(i.scope==='FBO'){
-  const units=await tx.fboAssemblyUnit.findMany({where:{requestId:i.requestId,markId:mark.id,state:{in:['PICKED','PACKED']}}});
+  const units=read?read.units.filter(u=>u.markId===mark.id&&['PICKED','PACKED'].includes(u.state)):await tx.fboAssemblyUnit.findMany({where:{requestId:i.requestId,markId:mark.id,state:{in:['PICKED','PACKED']}}});
   return units.some((u:any)=>u.skuId===mark.skuId&&clientKizIdentity(u.kiz??'')===clientKizIdentity(i.kiz)&&
    (u.sourceBoxId||null)===(i.boxId||null)&&((u.state==='PACKED'&&u.targetBoxId===mark.boxId)||
     (u.state==='PICKED'&&(u.wholeBox?u.sourceBoxId===mark.boxId:mark.box?.code===`FBO-PICK-${i.requestId}`))));
  }
  return false;
 }
-async function assertNoActiveBinding(tx:any,i:ClientKizUse,key:string){
- const tasks=(await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,id:{not:i.taskId||''},...filter(key),status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}})).filter((t:any)=>clientKizIdentity(t.kiz??'')===key);
+async function assertNoActiveBinding(tx:any,i:ClientKizUse,key:string,read?:ShipmentKizRead){
+ const tasks=(read?.tasks??await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,id:{not:i.taskId||''},...filter(key),status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}})).filter((t:any)=>clientKizIdentity(t.kiz??'')===key);
  for(const task of tasks){const request=await tx.clientRequest.findUnique({where:{id:task.requestId}});if(!request||!terminal.includes(request.status))throw new ConflictException('КИЗ занят другой сборкой FBS. ОТЛОЖИТЕ ТОВАР.');}
- const units=(await tx.fboAssemblyUnit.findMany({where:{requestId:{not:i.requestId},activeMarkId:{not:null},...filter(key),assembly:{request:{clientId:i.clientId}}},include:{assembly:{include:{request:true}}}})).filter((u:any)=>clientKizIdentity(u.kiz??'')===key);
+ const units=(read?.bindings??await tx.fboAssemblyUnit.findMany({where:{requestId:{not:i.requestId},activeMarkId:{not:null},...filter(key),assembly:{request:{clientId:i.clientId}}},include:{assembly:{include:{request:true}}}})).filter((u:any)=>clientKizIdentity(u.kiz??'')===key);
  if(units.some((u:any)=>!terminal.includes(u.assembly?.request?.status)))throw new ConflictException('КИЗ занят другой сборкой FBO. ОТЛОЖИТЕ ТОВАР.');
 }
 // Caller owns the transaction. A refused transaction is persisted by withClientKizReview afterwards.
-export async function assertClientKizUse(tx:any,i:ClientKizUse,user:any):Promise<'ALLOW'|'RELABEL'> {
+export async function assertClientKizUse(tx:any,i:ClientKizUse,user:any,read?:ShipmentKizRead):Promise<'ALLOW'|'RELABEL'> {
  if(!clientKizGuardEnabled())return 'ALLOW';required(i);
- const key=clientKizIdentity(i.kiz);await identityLock(tx,i.clientId,key);
- await currentContext(tx,i);
- const row=await tx.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:clientUseTaskKey(i),kizIdentity:key}}});
- const e=await history(tx,{...i,externalEvidence:i.externalEvidence??row?.snapshot?.clientGuard?.input?.externalEvidence});
- let mark:any;try{mark=await clientPhysicalMark(tx,i.clientId,i.kiz);}catch(error){if(error instanceof ConflictException)throw new ClientKizReviewRequired(i);throw error;}
+ const key=clientKizIdentity(i.kiz);
+ if(read&&(i.scope!=='FBO'||read.identity!==key||read.request.id!==i.requestId||read.request.clientId!==i.clientId||read.request.warehouseId!==i.warehouseId))throw new ConflictException('Контекст пакетной проверки КИЗ изменился.');
+ if(!read){await identityLock(tx,i.clientId,key);await currentContext(tx,i);}
+ const row=read?read.rows.find(r=>r.taskId===clientUseTaskKey(i)):await tx.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:clientUseTaskKey(i),kizIdentity:key}}});
+ const e=await history(tx,{...i,externalEvidence:i.externalEvidence??row?.snapshot?.clientGuard?.input?.externalEvidence},read);
+ let mark:any;try{mark=await clientPhysicalMark(tx,i.clientId,i.kiz,read);}catch(error){if(error instanceof ConflictException)throw new ClientKizReviewRequired(i);throw error;}
  const proof=row?.snapshot?.clientGuard;
- await assertNoCompetingClaim(tx,i,key,row?.id);
- await assertNoActiveBinding(tx,i,key);
+ await assertNoCompetingClaim(tx,i,key,row?.id,read);
+ await assertNoActiveBinding(tx,i,key,read);
  if(e.decision==='ALLOW'){
-  if(row?.status==='CLAIMED'&&row.resolution==='FIRST_USE'&&row.context===clientUseContext(i)&&await ownExpectedMovement(tx,i,mark,proof))return 'ALLOW';
+  if(row?.status==='CLAIMED'&&row.resolution==='FIRST_USE'&&row.context===clientUseContext(i)&&await ownExpectedMovement(tx,i,mark,proof,read))return 'ALLOW';
   if(['OPEN','CLAIMED','USED','REJECTED'].includes(row?.status))throw new ClientKizReviewRequired(i,row?.evidence??e);
   // FIX: receipt and picking serialize on the same identity, including an as-yet unregistered physical mark.
   // Unknown origin stays unknown; an existing genuine receipt is immutable and is never overwritten.
@@ -160,7 +163,7 @@ export async function assertClientKizUse(tx:any,i:ClientKizUse,user:any):Promise
  if(row.resolution==='RELABEL'&&i.allowRelabel)return 'RELABEL';
  if(row.resolution!=='REUSE'||i.scope==='RECEIPT')throw new ClientKizReviewRequired(i);
  if(row.status==='APPROVED'&&proof.markVersion!==markVersion(mark))throw new ClientKizReviewRequired(i);
- if(row.status==='CLAIMED'&&!await ownExpectedMovement(tx,i,mark,proof))throw new ClientKizReviewRequired(i);
+ if(row.status==='CLAIMED'&&!await ownExpectedMovement(tx,i,mark,proof,read))throw new ClientKizReviewRequired(i);
  if(row.status==='APPROVED'){
   await tx.kizReviewCase.update({where:{id:row.id},data:{status:'CLAIMED'}});
   await tx.auditLog.create({data:{userId:user.id,entity:'KizReviewCase',entityId:row.id,action:'KIZ_CLIENT_PERMISSION_CLAIMED',payload:json({context:row.context,identity:key,requestId:i.requestId})}});
@@ -289,7 +292,11 @@ export async function finishClientKizUse(tx:any,i:ClientKizUse){
 export async function assertClientRequestKizShipment(tx:any,request:any,user:any){
  if(!clientKizGuardEnabled())return;
  const units=await tx.fboAssemblyUnit.findMany({where:{requestId:request.id,state:{not:'RETURNED'},kiz:{not:null}}});
- for(const unit of units)await assertClientKizUse(tx,{scope:'FBO',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,kiz:unit.kiz,skuId:unit.skuId,boxId:unit.sourceBoxId||null},user);
+ // FIX: one transaction-scoped preload; retain the existing per-KIZ decision and durable claims.
+ const identities=new Set<string>();
+ for(const unit of units){const key=clientKizIdentity(unit.kiz);if(identities.has(key))throw new ClientKizReviewRequired({scope:'FBO',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,kiz:unit.kiz,skuId:unit.skuId,boxId:unit.sourceBoxId||null});identities.add(key);}
+ const reads=await loadShipmentKizReads(tx,request,units);
+ for(const unit of units)await assertClientKizUse(tx,{scope:'FBO',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,kiz:unit.kiz,skuId:unit.skuId,boxId:unit.sourceBoxId||null},user,reads.get(clientKizIdentity(unit.kiz)));
  const tasks=await tx.fbsTsdAssembly.findMany({where:{requestId:request.id,clientId:request.clientId,kiz:{not:null},status:{notIn:['RELEASED','CANCELLED']}}});
  const shipped=tasks.length?await tx.shippedKizHistory.findMany({where:{clientId:request.clientId,assemblyId:{in:tasks.map((t:any)=>t.id)}}}):[];
  for(const task of tasks){
