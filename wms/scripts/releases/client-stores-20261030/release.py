@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess,json,hashlib,sys,fcntl,time,urllib.request
 ROOT=Path('/opt/logoff-wms/wms/work/client-stores249-20261030');APP=Path('/opt/logoff-wms/wms')
-BASE={'api': 'sha256:ecfbc18a8f712c8cc5466806c83340b22f5d5a51f323b7505da924a664159029', 'web': 'sha256:be22bb630793be6293bd9f1de01f57030df4d39ac88b71dc58dea68912ec5f9a'}
+BASE={'api': 'sha256:ecfbc18a8f712c8cc5466806c83340b22f5d5a51f323b7505da924a664159029', 'web': 'sha256:94390af337d380dd9e5d0f05f3acf071a619e5c539647ee18007d1109c74a6e3'}
 ROOTS={'api':'/app/apps/api/dist/','web':'/usr/share/nginx/html/'}
 ALLOWED={'api': {'modules/client-requests/client-requests.service.js', 'modules/marketplace-connections/marketplace-connections.controller.js', 'modules/stock/stock-operations.service.js', 'modules/clients/client-stores.controller.js', 'modules/tsd/tsd-sync.service.js', 'modules/administration/administration-internal-api.service.js', 'modules/tsd/fbo-two-stage.service.js', 'modules/clients/client-stores.policy.js', 'modules/clients/request-store-context.js', 'modules/tsd/tsd-payload.parser.js', 'modules/clients/client-stores.service.js', 'modules/tsd/tsd-review.service.js', 'modules/billing/billing.service.js', 'modules/marketplace-connections/marketplace-connections.module.js', 'modules/clients/client-store-receipt.js', 'modules/clients/clients.module.js', 'modules/tsd/tsd-device.service.js'}, 'web': {'downloads/logoff-tsd.apk', 'assets/client-stores-ozon-label-history-core-20261030.js', 'assets/client-stores-invoice-download-names-20261021-23.js', 'index.html', 'downloads/logoff-tsd.json', 'assets/client-stores-fbo-progress-wb-20261030.js', 'assets/client-stores-workspace-fbs-20261028.js', 'downloads/logoff-tsd-client-stores-249.apk'}}
 
@@ -48,9 +48,13 @@ def publish():
  check();v=json.loads((ROOT/'verification.json').read_text());pr=json.loads((ROOT/'pr.json').read_text());tests=json.loads((ROOT/'tests.json').read_text())
  assert pr['state']=='MERGED' and pr['headRefName']=='fix/client-store-separation' and pr['baseRefName']=='feature/wb-print-check'
  assert tests['api']==4146 and tests['web']==576 and tests['android']==933 and tests['typecheck']
- assert json.loads((ROOT/'isolated-proof.json').read_text())['fullApiHealth']
- assert json.loads((ROOT/'isolated-proof.json').read_text())['postgres']==15
+ assert v['base']==BASE
+ isolated=json.loads((ROOT/'isolated-proof.json').read_text())
+ assert isolated['image']==v['images']['api'] and isolated['fullApiHealth'] and isolated['postgres']==15
  assert json.loads((ROOT/'browser-proof.json').read_text())['passed']>=3
+ bootstrap=json.loads((ROOT/'bootstrap-proof.json').read_text())
+ assert bootstrap['passed']>=5 and not bootstrap['errors'] and not bootstrap['warnings']
+ assert all(len(c['boots'])==1 for c in bootstrap['checks'])
  assert not (ROOT/'published.json').exists()
  for k in BASE:assert all(hashes(v['images'][k],k)[n]==h for n,h in v['hashes'][k].items())
  before=json.loads(d('inspect','infra-api-1'))[0];oldenv=set(before['Config']['Env']);envhash=hashlib.sha256((APP/'.env').read_bytes()).hexdigest()

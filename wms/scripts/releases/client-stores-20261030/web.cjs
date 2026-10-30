@@ -17,7 +17,12 @@ const root=path.resolve(process.argv[2]),src=path.resolve(__dirname,'../../../ap
  });
  patch('fbo-progress-wb-20261030.js',s=>once(s,'e.jsxs("span",{className:"client-request-list-meta",children:[_a(c.type)','c.storeState&&e.jsxs("span",{children:["Магазин: ",c.storeState==="UNASSIGNED"?"не определён":c.storeNames?.join(", "),c.storeState==="MIXED"?" · требуется разделение заявки":""]}),e.jsxs("span",{className:"client-request-list-meta",children:[_a(c.type)'));
  patch('invoice-download-names-20261021-23.js',s=>once(s,'children:h.description}),e.jsx("span",{children:((P=h.request)','children:h.description}),h.storeState&&e.jsxs("span",{children:["Магазин: ",h.storeState==="UNASSIGNED"?"не определён":h.storeNames?.join(", ")]}),e.jsx("span",{children:((P=h.request)'));
- html=html.replace(im[1],JSON.stringify(map));outputs['/index.html']=html;
+ html=html.replace(im[1],JSON.stringify(map));
+ // FIX: import maps do not rewrite the HTML module entry; loading the old entry
+ // beside the mapped core starts two React applications on the same root.
+ const entry=html.match(/<script type="module" crossorigin src="([^"]+)"/);assert(entry);
+ html=html.replace(`src="${entry[1]}"`,'src="/assets/client-stores-ozon-label-history-core-20261030.js"');
+ outputs['/index.html']=html;
  for(const [name,s] of Object.entries(outputs)){const p=root+'/web-payload'+name;fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s);}
  fs.writeFileSync(root+'/web-proof.json',JSON.stringify({files:Object.keys(outputs),preservesRuntime:true}));console.log('Prepared',Object.keys(outputs).length,'web files');
 })().catch(e=>{console.error(e);process.exit(1)});
