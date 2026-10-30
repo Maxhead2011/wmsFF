@@ -36,6 +36,8 @@ for(const k of Object.keys(map.imports))if(map.imports[k]==='/'+old)map.imports[
 const core='assets/receipt-progress-20261030.js',coreNext='assets/ozon-label-history-core-20261030.js';s=read(root+'/web-base/'+core);let a=ast(s),found=[];function walk(n){if(ts.isFunctionDeclaration(n)&&n.getText(a).includes('client-request-timeline-modal__header'))found.push(n);ts.forEachChild(n,walk);}walk(a);assert.equal(found.length,1);let f=found[0],part=f.getText(a),count=0;
 part=part.replace(/\b[\w$]+\(([\w$]+\.createdAt)\)/g,(all,arg)=>{if(all.startsWith("Date("))return all;count++;return `(new Date(${arg}).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' МСК')`;});assert.equal(count,2);
 s=s.slice(0,f.getStart(a))+part+s.slice(f.end);save('web/payload/'+coreNext,s);for(const k of Object.keys(map.imports))if(map.imports[k]==='/'+core)map.imports[k]='/'+coreNext;map.imports['/'+core]='/'+coreNext;
+// FIX: script src is not resolved by import maps. Both paths must start the same module.
+html=once(html,`src="/${core}"`,`src="/${coreNext}"`);
 html=html.replace(m[1],JSON.stringify(map));save('web/payload/index.html',html);
 for(const dir of ['api/payload','web/payload'])for(const file of fs.readdirSync(root+'/'+dir,{recursive:true}))if(file.endsWith('.js'))assert.equal(ast(read(root+'/'+dir+'/'+file)).parseDiagnostics.length,0,file);
 console.log('Exact API and web overlays prepared');
