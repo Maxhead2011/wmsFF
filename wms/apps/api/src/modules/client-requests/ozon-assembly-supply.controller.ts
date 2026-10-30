@@ -22,5 +22,7 @@ export class OzonAssemblySupplyController {
  @Post('refresh') refresh(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.refresh(id,user);}
  @Post('upload') upload(@Param('id') id:string,@Body() body:{confirm:boolean},@CurrentUser() user:AuthUser){return this.service.upload(id,body.confirm,user);}
  @Post('status') status(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.status(id,user);}
+ // FIX: scoped click history, independent of label generation.
+ @Post('label-download') labelDownload(@Param('id') id:string,@Body() body:{supplyId:string},@CurrentUser() user:AuthUser){return this.service.labelDownload(id,body.supplyId,user);}
  @Post('labels') labels(@Param('id') id:string,@Body() body:{supplyId:string},@CurrentUser() user:AuthUser){return this.service.labels(id,body.supplyId,user);}
 }

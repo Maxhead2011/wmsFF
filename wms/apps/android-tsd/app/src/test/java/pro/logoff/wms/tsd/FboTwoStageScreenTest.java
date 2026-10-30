@@ -26,6 +26,22 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: the real screen never confirms Ozon on the first box scan.
+    @Test public void ozonLabelControlRequiresTwoPhysicalScans() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("CONTROL");p.marketplace="OZON";p.ozonLabelControlRequired=true;
+            TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="FFL_TEST";b.closed=true;p.boxes.add(b);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try{
+                screen.scannerField().setText("WRONG");screen.submit();assertEquals(0,writes.get());
+                screen.scannerField().setText("FFL_TEST");screen.submit();assertEquals(0,writes.get());
+                assertNotNull(find(a.findViewById(android.R.id.content),"Проверяем короб FFL_TEST"));
+                screen.scannerField().setText("1000000000064215123");screen.submit();waitIdle(screen);assertEquals(1,writes.get());
+            }finally{screen.close();}
+        }
+    }
+
     // TEST: Yandex completed packing must not offer downloads for a different marketplace.
     @Test public void yandexCompletedPackingDoesNotOfferWbFiles() throws Exception {
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {

@@ -1,7 +1,10 @@
 import { Clock3, MessageSquare, Send, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { ClientRequestCommentSummary, ClientRequestTimeline } from '../../lib/api';
-import { formatCabinetDate, requestStatusLabel, requestTypeLabel } from './clientCabinetFormat';
+import { requestStatusLabel, requestTypeLabel } from './clientCabinetFormat';
+
+// FIX: event history needs an exact, timezone-independent operator timestamp.
+export const formatTimelineTime=(value:string)=>new Date(value).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'})+' МСК';
 
 type TimelineItem =
   | {
@@ -112,7 +115,7 @@ export function ClientRequestTimelineModal({ timeline, onClose, onAddComment }: 
                       ) : null}
                       {item.body ? <span>{item.body}</span> : null}
                       <small>
-                        {formatCabinetDate(item.createdAt)} · {item.actor}
+                        {formatTimelineTime(item.createdAt)} · {item.actor}
                       </small>
                     </div>
                   </article>
@@ -127,7 +130,7 @@ export function ClientRequestTimelineModal({ timeline, onClose, onAddComment }: 
                     <div>
                       <strong>{item.isInternal ? 'Внутренний комментарий' : item.actor}</strong>
                       <span>{item.body}</span>
-                      <small>{formatCabinetDate(item.createdAt)}</small>
+                      <small>{formatTimelineTime(item.createdAt)}</small>
                     </div>
                   </article>
                 ),

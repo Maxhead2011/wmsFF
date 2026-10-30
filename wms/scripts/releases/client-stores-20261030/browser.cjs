@@ -1,7 +1,7 @@
 // TEST: render exact candidate components in Chromium with synthetic API responses.
 const fs=require('fs'),path=require('path'),http=require('http'),assert=require('node:assert/strict'),ts=require('../../../node_modules/typescript');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.resolve(process.argv[2]);
-const entry='assets/client-stores-receipt-progress-20261030.js';
+const entry='assets/client-stores-ozon-label-history-core-20261030.js';
 const server=http.createServer((req,res)=>{const rel=new URL(req.url,'http://local').pathname.slice(1)||'index.html';if(rel.includes('..'))return res.end();let p=path.join(root,'web-payload',rel);if(!fs.existsSync(p))p=path.join(root,'web-base',rel);if(!fs.existsSync(p)){res.writeHead(404);return res.end()}let s=fs.readFileSync(p);if(rel===entry)s=Buffer.from(s.toString()+'\nwindow.__StoresTest={React:x,DOM:j5,jsx:e,Settings:__ClientStores.ClientStoresSettings};');res.writeHead(200,{'Content-Type':rel.endsWith('.js')?'text/javascript':rel.endsWith('.css')?'text/css':rel.endsWith('.html')?'text/html':'application/octet-stream'});res.end(s)});
 (async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({headless:true,channel:'msedge'});try{
  const page=await browser.newPage(),errors=[],writes=[];page.on('pageerror',e=>errors.push(e.message));const stores=[{id:'monlarti',name:'Монларти',connectionIds:['m']},{id:'braibo',name:'Брайбо',connectionIds:['b']}];

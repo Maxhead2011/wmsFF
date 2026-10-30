@@ -449,7 +449,7 @@ final class FboTwoStageScreen {
             else {
                 unboxedPickingContents(root);
                 String hint="ШК товара";
-                if("CONTROL".equals(screenPhase()))hint="ШК короба поставки";
+                if("CONTROL".equals(screenPhase()))hint=ozonLabelControl()&&!state.target.isEmpty()?"ШК наклеенного стикера Ozon":"ШК короба поставки";
                 else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
                 else if("PACKING".equals(screenPhase())&&state.target.isEmpty())hint=packingChoices()
                     ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":packingMode==PackingMode.MANUAL&&plan.reusablePackingEnabled?"ШК нового или закрытого короба для дополнения":"ШК короба для упаковки")
@@ -504,6 +504,7 @@ final class FboTwoStageScreen {
                     }else packingCompleteButton(root);
                 }else if("CONTROL".equals(screenPhase())){
                     int count=0;for(TsdFboPlan.Box b:plan.boxes)if(b.confirmed)count++;
+                    if(ozonLabelControl()){text(root,"После упаковки передайте грузоместа в Ozon и распечатайте стикеры. Проверка: наш короб → наклеенный стикер Ozon.");if(!state.target.isEmpty()){text(root,"Проверяем короб "+state.target);button(root,"Сканировать другой короб",ready(),()->{state.target="";state.barcode="";render();});}}
                     text(root,"Подтверждено коробов "+count+" из "+plan.boxes.size());
                     if(packingChoices())text(root,"Осталось отсканировать: "+String.join(", ",unconfirmedBoxes()));
                     button(root,yandex()?"Завершить проверку FBY":directed()?"Завершить проверку направлений":packingChoices()?"Завершить проверку и сформировать файлы WB":"Завершить проверку и сформировать файл WB",ready()&&count==plan.boxes.size(),()->send("FINISH",null));
@@ -528,8 +529,18 @@ final class FboTwoStageScreen {
             handler.post(()->{if(!closed&&input==kizInput&&ready()&&!state.barcode.isEmpty()&&quantityDialog==null)kizInput.requestFocus();});
         }
     }
+    private boolean ozonLabelControl(){return "logoff".equals(BuildConfig.FLAVOR)&&plan!=null&&plan.ozonLabelControlRequired;}
     void submit(){if(quantityDialog!=null){confirmWholeBoxQuantity();return;}handler.removeCallbacks(automatic);if(!ready()||input==null||plan==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;input.setText("");message="";
-        if("CONTROL".equals(screenPhase())){state.target=value;send("CONFIRM_BOX",null);return;}
+        if("CONTROL".equals(screenPhase())){
+            if(ozonLabelControl()){
+                if(state.target.isEmpty()){
+                    for(TsdFboPlan.Box b:plan.boxes)if(value.equals(b.code)&&b.closed&&!b.confirmed){state.target=value;state.barcode="";message="Наклейте стикер Ozon на короб и сканируйте его штрихкод.";render();return;}
+                    message="Сканируйте наш неподтверждённый короб этой заявки.";render();return;
+                }
+                state.barcode=value;send("CONFIRM_BOX",null);return;
+            }
+            state.target=value;send("CONFIRM_BOX",null);return;
+        }
         feedbackColor=Color.rgb(254,202,202);
         if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
         if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking()){

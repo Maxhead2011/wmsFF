@@ -7,6 +7,20 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: pair survives retries, but successful confirmation clears the selected carton.
+    @Test public void ozonPairRetryKeepsBothScans(){
+        FboScanState s=new FboScanState();s.target="FFL_TEST";s.barcode="1000000000064215123";
+        Map<String,String> p=s.prepare("CONFIRM_BOX",null);FboScanState restored=new FboScanState();restored.restore(p);
+        assertEquals(p,restored.prepare("CONFIRM_BOX",null));assertEquals("",restored.confirmedPosition(p).get("targetBoxCode"));
+    }
+    @Test public void ozonControlRefreshKeepsOnlyUncheckedBox(){
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        TsdFboPlan p=new TsdFboPlan();p.phase="CONTROL";p.ozonLabelControlRequired=true;p.route=Collections.emptyList();p.lines=Collections.emptyList();
+        TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="FFL_TEST";b.closed=true;p.boxes=Arrays.asList(b);
+        FboScanState s=new FboScanState();s.target=b.code;s.reconcile(p,true);assertEquals(b.code,s.target);
+        b.confirmed=true;s.reconcile(p,true);assertEquals("",s.target);
+    }
+
     // TEST: retry after restart retains the exact relabeled unit and scanned barcode/KIZ.
     @Test public void relabelEvidenceSurvivesRestart(){
         FboScanState state=new FboScanState();state.barcode="4640684266611";

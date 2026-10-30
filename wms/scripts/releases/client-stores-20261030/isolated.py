@@ -1,7 +1,7 @@
 """TEST: full candidate boot against disposable PostgreSQL, never production data."""
 from pathlib import Path
 import subprocess,json,time,base64
-r=Path('/opt/logoff-wms/wms/work/client-stores-20261030');image=json.loads((r/'verification.json').read_text())['images']['api']
+r=Path('/opt/logoff-wms/wms/work/client-stores249-20261030');image=json.loads((r/'verification.json').read_text())['images']['api']
 network='client-stores-test';pg=network+'-pg';app=network+'-api'
 def run(*args,**kw):return subprocess.run(['docker',*args],check=True,**kw)
 assert network not in subprocess.check_output(['docker','network','ls','--format','{{.Name}}'],text=True).splitlines()

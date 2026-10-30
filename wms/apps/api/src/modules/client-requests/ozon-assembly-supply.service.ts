@@ -15,6 +15,19 @@ export class OzonAssemblySupplyService {
   const s=await this.load(id,user);
   return {fileName:`ozon-boxes-${s.request.number}.xlsx`,buffer:await cargoMappingWorkbook(s.request.fboAssembly?.boxes??[],s.integration as SupplyIntegration|null)};
  }
+ // FIX: persist the authenticated click before returning an existing label URL; no marketplace write.
+ async labelDownload(id:string,supplyId:string,user:AuthUser){
+  const s=await this.load(id,user),link=s.integration as SupplyIntegration|null;
+  const supply=link?.supplies.find(v=>v.id===supplyId),op=link?.operations[supplyId];
+  if(!supply||op?.state!=='SUCCESS'||!op.labelUrl)throw new BadRequestException('Стикеры этой поставки ещё не готовы.');
+  let url:URL;try{url=new URL(op.labelUrl);}catch{throw new BadRequestException('Некорректная ссылка на стикеры.');}
+  if(url.protocol!=='https:'||url.username||url.password)throw new BadRequestException('Некорректная ссылка на стикеры.');
+  await this.db.$transaction(async tx=>{
+   await tx.clientRequestEvent.create({data:{requestId:id,clientId:s.request.clientId,eventType:'COMMENT',title:'Нажата кнопка «Скачать стикеры Ozon»',body:`Поставка Ozon ${supplyId} · ${supply.name}. Записано нажатие кнопки; сохранение файла и печать не подтверждаются.`,createdByUserId:user.id}});
+   await tx.auditLog.create({data:{userId:user.id,action:'OZON_LABEL_DOWNLOAD_CLICK',entity:'ClientRequest',entityId:id,payload:{supplyId,direction:supply.name}}});
+  });
+  return {url:url.href};
+ }
  private async load(id:string,user:AuthUser,mode:'read'|'write'='read',db:any=this.db){
   if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true')throw new NotFoundException('Связь Ozon выключена.');
   const s=await db.ozonFboShipment.findUnique({where:{requestId:id},include:{request:{include:{fboAssembly:{include:{boxes:true,units:true}}}}}});

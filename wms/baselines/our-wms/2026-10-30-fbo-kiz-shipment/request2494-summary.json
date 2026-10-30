@@ -1,0 +1,28 @@
+{
+  "request": 2494,
+  "phase": "COMPLETED",
+  "status": "PACKED",
+  "units": 578,
+  "boxes": 57,
+  "elapsedMs": 126432,
+  "result": {
+    "applied": true,
+    "repeated": false,
+    "result": {
+      "phase": "COMPLETED"
+    }
+  },
+  "products": {
+    "kind": "products",
+    "total": 578.0,
+    "rows": 43,
+    "bytes": 19998
+  },
+  "packages": {
+    "kind": "packages",
+    "total": 578.0,
+    "rows": 242,
+    "bytes": 69606,
+    "uniqueBoxes": 57
+  }
+}

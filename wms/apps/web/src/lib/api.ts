@@ -12697,3 +12697,7 @@ export function fetchClientStores(accessToken:string,clientId:string){return req
 export function saveClientStores(accessToken:string,clientId:string,stores:ClientStoreSummary[]){return request(`/clients/${encodeURIComponent(clientId)}/stores`,{accessToken,method:'PUT',body:{stores}});}
 export function fetchSkuStores(accessToken:string,clientId:string,skuId:string){return request<{storeIds:string[]}>(`/clients/${encodeURIComponent(clientId)}/stores/skus/${encodeURIComponent(skuId)}`,{accessToken});}
 export function saveSkuStores(accessToken:string,clientId:string,skuId:string,storeIds:string[],expectedStoreIds:string[]){return request<{storeIds:string[]}>(`/clients/${encodeURIComponent(clientId)}/stores/skus/${encodeURIComponent(skuId)}`,{accessToken,method:'PUT',body:{storeIds,expectedStoreIds}});}
+// FIX: save a click event before opening the server-stored Ozon label URL.
+export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
+ return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
+}
