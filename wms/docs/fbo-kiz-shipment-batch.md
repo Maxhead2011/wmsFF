@@ -1,6 +1,6 @@
 # Пакетная итоговая проверка КИЗ FBO
 
-Подготовлено 30.10.2026; не опубликовано. Целевая ветка feature/wb-print-check.
+Опубликовано 30.10.2026 через PR783 в feature/wb-print-check.
 
 №2494 «Никольское»: 578 упакованных единиц, 57 закрытых и подтверждённых коробов, этап CONTROL. FINISH прерывался после 60 секунд на последовательной проверке КИЗ. Ошибка одинаково затрагивала ТСД и административное завершение через «Проблемы FBO».
 
@@ -13,3 +13,12 @@ kiz-client-review.ts использует эти данные в прежней 
 Проверки: RED578 отдельных поисков марок → GREEN29. API4108/web563, TypeScript; API156/web2 skipped, отдельный ненастроенный kiz-duplicate.integration исключён. PostgreSQL9: 578 единиц/57 коробов, дубль марки, OPEN, отгрузка WB с датой/заказом, активная FBS-привязка, общий advisory-lock, сохранение578 разрешений, FINISH и идемпотентный повтор, оба Excel-файла, SHIPPING578. Полный запуск Nest health. Дополнительные unit-тесты: REJECTED/USED, дубли внутри заявки, активная FBO-привязка/CLAIMED, лимит и смена клиента. Проверка живых данных2494 в READ ONLY, записи разрешений имитированы: ALLOW15.67s, без изменений БД. Полное синтетическое завершение7.451s. Это замеры конкретных запусков, не гарантия времени при любой нагрузке.
 
 Выпуск: точные изменения двух API-модулей на опубликованном PR779 API; web/APK247 от PR781 сохраняются. Остальные690 API-файлов, окружение, схема и другие контейнеры неизменны. Все новые проверки помечены // TEST, исправления // FIX.
+
+Published API image: `sha256:add4e84416d33f85f96d8a398681c6c08148534b38cf7349085791a17040acfe`. Public health and exact module hashes verified; other containers/environment unchanged.
+
+
+Follow-up: real FINISH2494 still rolled back on P2034 at KizReviewCase upsert while staff worked on other requests. EXPLAIN confirmed Seq Scan for clientId + kizIdentity: the required composite index was absent. Additive own-WMS SQL in scripts/releases/fbo-kiz-review-index-20261030/review-index.sql creates it CONCURRENTLY and refuses an existing invalid/different definition. No policy, transaction isolation or business rows are changed. The original single-table schema source does not contain this runtime model, so no unverified schema replacement is deployed.
+PostgreSQL regression reproduces the original serialization conflict, then five concurrent runs succeed with the index; all30000 OPEN review rows remain OPEN. Source API4108/web563/TypeScript and nine runtime negative/FINISH tests from PR783 remain applicable: API code is unchanged. Real completion verified below.
+
+
+PR784 index published30.10.2026, valid/ready, live query uses it. Containers unchanged. Real2494 FINISH completed at19:23:52 Moscow through authorized administrative API, including automatic serialization retry (126.432s total). Final phaseCOMPLETED/statusPACKED,578 marksSHIPPING,578 guard claims,57 packages, guard flag true. Both normal WB downloads parsed successfully: products43 rows/578 units; box distribution242 rows/578 units/57 distinct boxes. Recovery receipt fbo-recovery:c46691fe-8c6f-408a-8f7a-5fb2bbe18a5c. No duplicate override, review suppression, direct stock update or shipment/DONE status bypass. Download bytes19998/69606. Regressions: API4108/web563 (156/2 skipped), real PostgreSQL concurrency RED/GREEN5 and SQL replay2; original negative guard tests retained. Concurrent SERIALIZABLE work can still require a normal bounded retry; this release does not promise zero contention.
