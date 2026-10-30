@@ -1,4 +1,5 @@
 import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { fboPickerStatistics } from './fbo-picker-statistics';
 import { TsdMonitorMessages } from '../tsd/tsd-monitor-messages';
 import {
   BadRequestException,
@@ -731,6 +732,8 @@ export class AdministrationService {
         errors24h: devices.reduce((sum, device) => sum + device.errors.length, 0),
       },
       devices,
+      // FIX: keep FBO stage counts separate from completed FBS order durations.
+      fboPickerStatistics: await fboPickerStatistics(this.prisma, user, statisticsPeriod),
       pickerStatistics: {
         period: {
           date: statisticsPeriod.date,

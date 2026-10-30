@@ -1,0 +1,19 @@
+// TEST: render the actual candidate chunks; API fixtures cannot change real records.
+const fs=require('fs'),path=require('path'),http=require('http'),assert=require('node:assert/strict');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.resolve(process.argv[2]);
+const server=http.createServer((req,res)=>{const rel=new URL(req.url,'http://local').pathname.slice(1)||'index.html';if(rel.includes('..'))return res.end();let p=path.join(root,'web-payload',rel);if(!fs.existsSync(p))p=path.join(root,'web-base',rel);if(!fs.existsSync(p)){res.writeHead(404);return res.end()}let s=fs.readFileSync(p);if(rel==='assets/wb-dispatch-core-20261030.js')s=Buffer.from(s.toString()+'\nwindow.__Test={React:x,DOM:j5};');if(rel==='assets/fbo-productivity-20261030.js')s=Buffer.from(s.toString()+'\nwindow.__Test.Statistics=__FboStatistics.FboPickerStatistics;');if(rel==='assets/fbo-stores-ozon-20261030.js')s=Buffer.from(s.toString()+'\nwindow.__Test.Store=__FboStore.OzonStoreLabel;');res.writeHead(200,{'Content-Type':rel.endsWith('.js')?'text/javascript':rel.endsWith('.css')?'text/css':rel.endsWith('.html')?'text/html':'application/octet-stream'});res.end(s)});
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({headless:true,channel:'msedge'});try{
+ const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.route('**/api/v1/**',r=>r.fulfill({json:[]}));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>window.__Test);
+ await page.evaluate(async()=>{await import('/assets/fbo-productivity-20261030.js');await import('/assets/fbo-stores-ozon-20261030.js');document.getElementById('root').style.display='none';const n=document.createElement('section');n.id='test';document.body.append(n);window.testRoot=window.__Test.DOM.createRoot(n)});
+ let passed=0;const panel=page.locator('#test');
+ for(const [state,names,text] of [['ASSIGNED',['Брайбо'],'Магазин: Брайбо'],['ASSIGNED',['Монларти'],'Магазин: Монларти'],['UNASSIGNED',[],'Магазин не определён']]){
+  await page.evaluate(({state,names})=>{const a=window.__Test;window.testRoot.render(a.React.createElement(a.Store,{request:{storeState:state,storeNames:names}}))},{state,names});await panel.getByText(text,{exact:true}).waitFor();passed++;
+ }
+ const stats={summary:{workers:1,requests:1,pickedUnits:12,packedUnits:9},workers:[{workerId:'w',workerName:'Соня',requests:1,pickedUnits:12,packedUnits:9,requestDetails:[{requestId:'r',requestNumber:2531,title:'ФБО Ozon',clientName:'Елецкая',pickedUnits:12,packedUnits:9,firstActionAt:'2026-10-30T07:00:00Z',lastActionAt:'2026-10-30T08:00:00Z'}]}]};
+ await page.evaluate(statistics=>{const a=window.__Test;window.testRoot.render(a.React.createElement(a.Statistics,{statistics,period:'30 октября'}))},stats);
+ await panel.getByText('Соня',{exact:true}).waitFor();assert((await panel.innerText()).includes('Отобрано: 12'));assert((await panel.innerText()).includes('Упаковано: 9'));passed++;
+ await panel.getByText('Действия по заявкам',{exact:true}).click();await panel.getByText('Заявка №002531',{exact:true}).waitFor();assert((await panel.innerText()).includes('10:00:00'));passed++;
+ await page.evaluate(()=>{const a=window.__Test;window.testRoot.render(a.React.createElement(a.Statistics,{statistics:{summary:{workers:0,requests:0,pickedUnits:0,packedUnits:0},workers:[]},period:'30 октября'}))});await panel.getByText('За выбранный период действий ФБО нет.',{exact:true}).waitFor();passed++;
+ assert.deepEqual(errors,[]);fs.writeFileSync(root+'/browser-proof.json',JSON.stringify({passed,actualArtifact:true,errors}));console.log(JSON.stringify({passed}));
+}finally{await browser.close();await new Promise(r=>server.close(r))}})().catch(e=>{console.error(e);server.close();process.exitCode=1});

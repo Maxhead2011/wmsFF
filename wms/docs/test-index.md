@@ -1,3 +1,5 @@
+Подготовлено: [магазины ФБО Ozon и производительность ФБО](fbo-stores-productivity.md). Ozon labels after scope; отдельные picked/packed по исполнителю и дню. API4159/web582/PostgreSQL11/browser6/bootstrap5; own-WMS flag, общий склад сохранён.
+
 Published PR797: [FBO counted stock rebind](fbo-rebind-counted-stock.md). Existing counted quantity consumed without extra +1; duplicate/history guards retained. API4155/web579/TypeScript, runtime4/repair4/PostgreSQL9/full health. Exact2 API modules, other700/web/LOGOFF249/schema/flags/sold unchanged. Baseline `2026-10-30-fbo-rebind-stock`, sourceParityVerified=false. Box519 AVAILABLE0,9 units in2565 unchanged.
 
 Published PR795 / 2026-10-30: [WB FBO supply tracking and dispatch](wb-fbo-supply-tracking.md). Scoped binding, six process options, manual vehicle loading, confirmed WB delivery through guarded stock shipment. API4155/web579/TypeScript, PostgreSQL12/full health, browser9/navigation9; own WMS only.

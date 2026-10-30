@@ -14,6 +14,13 @@ describe('Ozon all-client list',()=>{
   const db={clientRequest:{findMany},warehouseClient:{findMany:vi.fn().mockResolvedValue([{warehouseId:'msk',warehouse:{name:'Москва'}}])}};
   return {findMany,db,service:new OzonFboImportService(db as any,new ClientScopeService())};
  }
+ // TEST: the dedicated Ozon list must carry the store, not only the common payer.
+ it('adds the store from the saved connection within the permitted request scope',async()=>{
+  const s=setup();vi.stubEnv('WMS_CLIENT_STORES_ENABLED','true');
+  Object.assign(s.db,{systemSetting:{findMany:vi.fn().mockResolvedValue([{key:'client.stores.v1:a',value:[{id:'monlarti',name:'Монларти',connectionIds:['ozon-m']}]}])},clientMarketplaceConnection:{findMany:vi.fn().mockResolvedValue([{id:'ozon-m',clientId:'a'}])},fbsOrderRequestLink:{findMany:vi.fn().mockResolvedValue([])},ozonFboShipment:{findMany:vi.fn().mockResolvedValue([{requestId:'r',integration:{connectionId:'ozon-m'}}])}});
+  s.findMany.mockResolvedValue([{id:'r',clientId:'a',number:2530,title:'Ozon',items:[],ozonShipment:{directions:[]}}]);
+  expect((await s.service.list('a',staff))[0]).toMatchObject({storeState:'ASSIGNED',storeNames:['Монларти']});
+ });
  it('defaults the opt-in read to all authorized clients in the active staff branch',async()=>{
   const s=setup();await (s.service.list as any)('',staff,undefined,'active','true');
   expect(s.findMany.mock.calls[0][0]).toMatchObject({where:{warehouseId:'msk',ozonShipment:{isNot:null},status:{notIn:['DONE','CANCELLED','REJECTED']}},orderBy:{number:'desc'},take:100});

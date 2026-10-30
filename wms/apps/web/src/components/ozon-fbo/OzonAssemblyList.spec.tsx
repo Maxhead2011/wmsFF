@@ -5,6 +5,13 @@ import {OzonAssemblyList} from './OzonAssemblyList';
 import {fetchOzonCustomerRequests,type OzonCustomerRequest} from '../../lib/api';
 afterEach(()=>vi.unstubAllGlobals());
 const row:OzonCustomerRequest={id:'r',number:2477,title:'Поставка Ozon',clientName:'ИП Лукин',clientCode:'CL-000001',warehouseName:'Москва',status:'IN_WORK',phase:'COMPLETED',quantity:291,itemCount:4,itemsPreview:[{name:'Костюм',barcode:'123',quantity:10}],directions:9,desiredDate:'2026-10-30',destinationCity:'Строгино'};
+// TEST: retain the payer and show the actual shop as a separate label.
+it('shows shop separately from payer and explicitly marks unknown shops',()=>{
+ const render=(extra:object)=>renderToStaticMarkup(<OzonAssemblyList rows={[{...row,...extra}]} active onOpen={()=>{}} onCargo={()=>{}}/>);
+ expect(render({storeState:'ASSIGNED',storeNames:['Брайбо']})).toContain('Брайбо');
+ expect(render({storeState:'ASSIGNED',storeNames:['Брайбо']})).toContain('ИП Лукин');
+ expect(render({storeState:'UNASSIGNED',storeNames:[]})).toContain('Магазин не определён');
+});
 // TEST: display packing completion without claiming physical control/handover.
 it('shows the operational label before physical control',()=>{
  const html=renderToStaticMarkup(<OzonAssemblyList rows={[{...row,phase:'PACKING',fboProgressLabel:'Упаковано, ожидает проверки'}]} active onOpen={()=>{}} onCargo={()=>{}}/>);
