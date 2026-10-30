@@ -1,6 +1,6 @@
 // TEST: actual candidate service exits before touching any task/stock API.
 const {test}=require('node:test'),assert=require('node:assert/strict'),path=require('path');
-process.env.NODE_PATH=[path.resolve('apps/api/node_modules'),path.resolve('node_modules')].join(path.delimiter);require('module').Module._initPaths();require('reflect-metadata');
+process.env.NODE_PATH=[process.env.NODE_PATH,path.resolve('apps/api/node_modules'),path.resolve('node_modules')].filter(Boolean).join(path.delimiter);require('module').Module._initPaths();require('reflect-metadata');
 const root=process.env.CANDIDATE_API_DIR;assert(root);
 const {MarketplaceConnectionsService}=require(path.join(root,'modules/marketplace-connections/marketplace-connections.service'));
 test('candidate transaction locks and closes exactly once, with no stock access',async()=>{
