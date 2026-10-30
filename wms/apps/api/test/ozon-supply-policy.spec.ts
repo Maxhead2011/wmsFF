@@ -1,4 +1,4 @@
-import {describe,it,expect} from 'vitest';
+import {describe,it,expect,vi,afterEach} from 'vitest';
 import {supplyDifferences,packedCargoes,cargoHash,assertSupplyMutable,SupplyIntegration} from '../src/modules/client-requests/ozon-supply-policy';
 // TEST: customer demand, destination quotas and post-upload immutability.
 const directions=[{name:'Москва',items:[{skuId:'sku',barcode:'123',quantity:2}]}];
@@ -9,4 +9,14 @@ describe('Ozon physical cargo policy',()=>{
  it('blocks unmatched directions and quantity discrepancies',()=>{expect(supplyDifferences(directions,{...link,mapping:{}})).toHaveLength(2);expect(()=>packedCargoes([{...directions[0],items:[{...directions[0].items[0],quantity:3}]}],link,assembly)).toThrow('расхождения');});
  it('rejects unverified, missing and wrong-destination units',()=>{expect(()=>packedCargoes(directions,link,{...assembly,boxes:[{...assembly.boxes[0],confirmedAt:null}]})).toThrow('проверьте');expect(()=>packedCargoes(directions,link,{...assembly,units:assembly.units.slice(0,1)})).toThrow('Количество');});
  it('freezes edits but permits final completion and leaves WB untouched',()=>{expect(()=>assertSupplyMutable({...link,frozenHash:'hash'},'PACK_UNIT')).toThrow('зафиксирован');expect(()=>assertSupplyMutable({...link,frozenHash:'hash'},'FINISH')).not.toThrow();expect(()=>assertSupplyMutable(null,'PACK_UNIT')).not.toThrow();});
+});
+
+// TEST: Ozon sends closed factual packing before label control; stock edits stay frozen.
+it('allows packed closed boxes before label scan only with the new capability',()=>{
+ vi.stubEnv('WMS_OZON_LABEL_CONTROL_ENABLED','true');try{
+ const a={...assembly,boxes:[{...assembly.boxes[0],confirmedAt:null}]};expect(packedCargoes(directions,link,a).s).toHaveLength(1);
+ expect(()=>packedCargoes(directions,link,{...a,boxes:[{...a.boxes[0],closedAt:null}]})).toThrow();
+ expect(()=>assertSupplyMutable({...link,frozenHash:'hash'},'CONFIRM_BOX')).not.toThrow();
+ expect(()=>assertSupplyMutable({...link,frozenHash:'hash'},'REOPEN_BOX')).toThrow();
+ }finally{vi.unstubAllEnvs();}
 });

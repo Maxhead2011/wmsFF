@@ -1,3 +1,5 @@
+Подготовлено: [контроль пары короб/стикер Ozon после упаковки](ozon-label-box-control.md), LOGOFF248. API4116/web569/Android924, PostgreSQL12, browser6+10; только наша WMS.
+
 Подготовлено, не опубликовано: [история нажатий скачивания стикеров Ozon](ozon-label-click-history.md). Серверное событие с пользователем, временем, поставкой и направлением; схема и остатки без изменений.
 
 Prepared, not deployed: [FBO batch KIZ shipment verification](fbo-kiz-shipment-batch.md). Same client-scoped decisions, transaction-local bounded reads under identity locks. API4108/web563, TypeScript, PostgreSQL9/full health, baseline8; request2494 read-only check15.7s, synthetic578/57 completion7.45s with both WB exports. Exact2 API modules; web/APK247/schema/sold unchanged.

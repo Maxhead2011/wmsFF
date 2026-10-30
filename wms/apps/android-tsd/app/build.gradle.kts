@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 247 // FIX: take the server-approved remainder whole in partial FBO picking.
-            versionName = "0.1.247-fbo-partial-whole"
+            versionCode = 248 // FIX: take the server-approved remainder whole in partial FBO picking.
+            versionName = "0.1.248-ozon-label-control"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
