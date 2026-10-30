@@ -1,2 +1,3 @@
 *.gz -text -diff
 *.prisma -text -diff
+*.json text eol=lf
