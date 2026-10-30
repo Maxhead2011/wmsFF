@@ -1,3 +1,5 @@
+Prepared: [single application entry repair](ozon-single-web-entry.md). Cold login/reload regression RED/GREEN6. Exact index.html overlay preserves Ozon pair control and click history, API/APK248 and sold WMS.
+
 Published PR786 / 2026-10-30: packing -> Ozon cargo export -> attach labels -> scan WMS carton/Ozon sticker pair -> finish. Download-click history retained. LOGOFF248; API4116/web569/Android924, PostgreSQL12, candidate/public browser6+10; API156/web2 skipped, dedicated unconfigured KIZ DB suite excluded. Own WMS only, WMS_OZON_LABEL_CONTROL_ENABLED=true; prior flags, PR784 index, schema and sold WMS retained. Baseline `2026-10-30-ozon-label-control`, sourceParityVerified=false. [Control](ozon-label-box-control.md), [download history](ozon-label-click-history.md).
 
 Prepared, not deployed: [FBO batch KIZ shipment verification](fbo-kiz-shipment-batch.md). Same client-scoped decisions, transaction-local bounded reads under identity locks. API4108/web563, TypeScript, PostgreSQL9/full health, baseline8; request2494 read-only check15.7s, synthetic578/57 completion7.45s with both WB exports. Exact2 API modules; web/APK247/schema/sold unchanged.
