@@ -12,6 +12,7 @@ export function KizReviewCard({row,disabled,onDecision,onInspect}:{row:KizReview
     <div className="kiz-review-case__body">
     <p>{scope?'Сотрудник':'Сборщик'}: {row.snapshot.workerName??'не указан'}{(!scope||scope==='FBS')&&<> · заказ WB {row.snapshot.orderId}</>} · короб {row.snapshot.boxCode??'не указан'}</p>
     <p>КИЗ: {row.kizIdentity} · ШК: {row.snapshot.barcode??'—'}</p>
+    {row.snapshot.receiptDuplicateUnconfirmed&&<p role="status">Повторный скан на ТСД. При передаче обращения первая единица ещё не была зарегистрирована в WMS. Наличие двух физических товаров с одинаковым КИЗом не подтверждено.</p>}
     <p>{row.decision==='RELABEL'?(row.physicalReuseAllowed?'WB сообщает о прежней продаже. После физической проверки можно разрешить этот КИЗ либо переклейку.':'Подтверждено использование: нужна переклейка.'):'История использования требует проверки администратора.'}</p>
     <p>Первое обращение: {new Date(row.createdAt).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})} · сканирований: {row.attempts}</p>
     {scope==='RECEIPT'&&<p>Товар отложен. Решение не добавляет повторный приход. Возврат оформляется отдельно.</p>}

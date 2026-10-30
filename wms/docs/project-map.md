@@ -1,3 +1,5 @@
+Подготовлено, не опубликовано: локальный повтор КИЗ передаётся в разбор до первой загрузки; LOGOFF восстанавливает счётчик приёмки по подтверждённым операциям и сохраняет незавершённый документ. [Описание и проверки](receipt-local-kiz-progress.md).
+
 Published PR773 / 2026-10-30: explicit ADMIN/OWNER found-unit confirmation, unknown FBO KIZ guard and BOX_CHECK review preservation. API4070/web557 passed (155/2 skipped; unconfigured dedicated KIZ DB suite excluded), TypeScript, runtime10, browser7, targeted26 and isolated full Nest/PostgreSQL health passed. Exact9 API/2 web files; schema, APK245, stock quantities, shipment history and sold WMS unchanged. WMS_INVENTORY_FOUND_UNIT_ENABLED=true only on our WMS; all prior environment values retained. Baseline `2026-10-30-found-unit`, sourceParityVerified=false. Public health/hashes verified. [Details](inventory-found-unit-review.md).
 
 КИЗ FBS: повтор текущего отбора, сохранение OPEN-разбора и дата/заказ предыдущей отгрузки. [Описание и проверки](kiz-fbs-review-retry.md).

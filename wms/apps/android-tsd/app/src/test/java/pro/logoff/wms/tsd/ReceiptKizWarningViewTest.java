@@ -41,8 +41,8 @@ public class ReceiptKizWarningViewTest {
         if (!"logoff".equals(BuildConfig.FLAVOR)) return;
         try(var controller=Robolectric.buildActivity(MainActivity.class).create()) {
             MainActivity activity=controller.get();
-            java.lang.reflect.Method show=MainActivity.class.getDeclaredMethod("showReceiptKizConflict",String.class,TsdKizDuplicateInfo.class,String.class,String.class);
-            show.setAccessible(true);show.invoke(activity,"010464068426237821AbCdEf1234567",new TsdKizDuplicateInfo(),"duplicate","op");
+            java.lang.reflect.Method show=MainActivity.class.getDeclaredMethod("showReceiptKizConflict",String.class,TsdKizDuplicateInfo.class,String.class,String.class,boolean.class);
+            show.setAccessible(true);show.invoke(activity,"010464068426237821AbCdEf1234567",new TsdKizDuplicateInfo(),"duplicate","op",true);
             for(String method:new String[]{"handleReceiptBarcodeScan","handleReceiptKizScan","submitReceiptInput"}) {
                 java.lang.reflect.Method action=MainActivity.class.getDeclaredMethod(method);action.setAccessible(true);action.invoke(activity);
             }

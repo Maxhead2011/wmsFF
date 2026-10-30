@@ -181,7 +181,8 @@ export async function queueClientKizReview(db:any,i:ClientKizUse,user:any){
   const context=clientUseContext(i),unchanged=old?.context===context&&old?.snapshot?.clientGuard?.history===e.fingerprint;
   const task=i.scope==='FBS'?await tx.fbsTsdAssembly.findUnique({where:{id:i.taskId}}):null;
   const snapshot={scope:i.scope,requestNumber:request?.number??null,orderId:task?.orderId??null,productName:mark?.sku?.name??i.receiptInfo?.productName??'КИЗ',
-   barcode:i.receiptInfo?.barcode??null,boxCode:mark?.box?.code??i.receiptInfo?.firstBoxCode??null,workerName:user.name,receiptInfo:i.receiptInfo,
+   barcode:i.receiptInfo?.barcode??null,boxCode:mark?.box?.code??i.receiptInfo?.firstBoxCode??i.receiptInfo?.currentBoxCode??null,workerName:user.name,receiptInfo:i.receiptInfo,
+   receiptDuplicateUnconfirmed:i.scope==='RECEIPT'&&i.receiptInfo?.serverConfirmed===false,
    clientGuard:{version:1,input:json(i),markId:mark?.id??null,markVersion:markVersion(mark),history:e.fingerprint}};
   const reset=!unchanged||old?.resolution==='FIRST_USE'||old?.status==='APPROVED'&&old?.snapshot?.clientGuard?.markVersion!==markVersion(mark);
   const row=await tx.kizReviewCase.upsert({where:{taskId_kizIdentity:{taskId:clientUseTaskKey(i),kizIdentity:key}},
@@ -207,10 +208,17 @@ export async function queueReceiptKizReview(db:any,clients:any,body:any,user:any
  if(!clientKizGuardEnabled())throw new ForbiddenException('Проверка КИЗ выключена.');
  clients.requireClientAccess(user,body.clientId,'write');
  if(!user.activeWarehouseId)throw new BadRequestException('Выберите филиал.');
- const duplicate=await lookupClientKiz(db,body.clientId,body.kiz,user.activeWarehouseId);
- if(!duplicate)throw new ConflictException('КИЗ не найден среди ранее зарегистрированных.');
+ let duplicate:any=await lookupClientKiz(db,body.clientId,body.kiz,user.activeWarehouseId);
  const box=body.boxCode?await db.box.findUnique({where:{code:body.boxCode}}):null;
  if(box&&(box.clientId!==body.clientId||box.warehouseId!==user.activeWarehouseId))throw new ForbiddenException('Нет доступа к коробу.');
+ // FIX: a local repeated scan can precede the first receipt upload. Persist a report, never stock.
+ if(!duplicate){
+  if(body.localDuplicate!=='true'||!box||typeof body.sourceDocument!=='string'||!body.sourceDocument.trim()||
+    typeof body.operationKey!=='string'||!body.operationKey.trim()||!clientKizIdentity(body.kiz))
+   throw new ConflictException('КИЗ не найден среди ранее зарегистрированных.');
+  duplicate={identity:clientKizIdentity(body.kiz),localDuplicate:true,serverConfirmed:false,currentBoxCode:box.code??body.boxCode,
+   productName:'Повторный скан КИЗ на ТСД',currentStatus:'PENDING_RECEIPT'};
+ }
  return queueClientKizReview(db,{scope:'RECEIPT',clientId:body.clientId,warehouseId:user.activeWarehouseId,requestId:'',kiz:body.kiz,
   boxId:box?.id??null,operationKey:body.operationKey,sourceDocument:body.sourceDocument,receiptInfo:duplicate},user);
 }

@@ -19,6 +19,10 @@ public interface OperationDao {
     @Query("SELECT * FROM tsd_operations WHERE operationKey = :operationKey LIMIT 1")
     OperationEntity findByKey(String operationKey);
 
+    // FIX: coarse bound in SQLite; exact client/document scope is checked after decoding JSON.
+    @Query("SELECT * FROM tsd_operations WHERE operationType IN ('receipt_scan','receipt_close') AND instr(payloadJson, :document) > 0 ORDER BY createdAt ASC")
+    List<OperationEntity> receiptProgressRows(String document);
+
     @Query("SELECT * FROM tsd_operations WHERE operationKey IN (:keys) AND status = 'PENDING' ORDER BY createdAt ASC, operationKey ASC LIMIT 50")
     List<OperationEntity> findPendingReceiptBatch(List<String> keys);
 
