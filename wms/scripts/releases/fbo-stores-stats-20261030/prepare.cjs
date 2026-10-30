@@ -7,8 +7,8 @@ function once(s,a,b){assert.equal(s.split(a).length,2,a);return s.replace(a,b);}
 let n='modules/administration/fbo-picker-statistics.js';
 save('api-payload/'+n,ts.transpileModule(read(w+'/apps/api/src/'+n.replace('.js','.ts')),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText);
 n='modules/administration/administration.service.js';
-save('api-payload/'+n,once(read(root+'/api-current/'+n),'            pickerStatistics: {','            fboPickerStatistics: await require("./fbo-picker-statistics").fboPickerStatistics(this.prisma,user,statisticsPeriod),\n            pickerStatistics: {'));
-n='modules/client-requests/ozon-fbo-import.service.js';let s=read(root+'/api-current/'+n);
+save('api-payload/'+n,once(read(root+'/api-799/'+n),'            pickerStatistics: {','            fboPickerStatistics: await require("./fbo-picker-statistics").fboPickerStatistics(this.prisma,user,statisticsPeriod),\n            pickerStatistics: {'));
+n='modules/client-requests/ozon-fbo-import.service.js';let s=read(root+'/api-799/'+n);
 s=once(s,'take: 100, select: { id: true, number: true','take: 100, select: { id: true, clientId: true, number: true');
 s=once(s,'        return rows.map(r => ({ id: r.id,','        const stores = await require("../clients/request-store-context").requestStoreContexts(this.db,rows);\n        return rows.map(r => ({ ...stores.get(r.id), id: r.id,');save('api-payload/'+n,s);
 function bundle(file,name,react){const source=read(w+'/apps/web/src/'+file),ast=ts.createSourceFile(file,source,99,true,ts.ScriptKind.TSX);const body=ast.statements.filter(n=>!ts.isImportDeclaration(n)).map(n=>n.getText(ast)).join('\n');return esbuild.buildSync({stdin:{contents:body,loader:'tsx'},bundle:true,write:false,format:'iife',globalName:name,minify:true,jsx:'transform',jsxFactory:react+'.createElement'}).outputFiles[0].text;}
