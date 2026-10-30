@@ -143,8 +143,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'client-requests',
     name: 'Заявки клиентов',
-    prefixes: ['/client-request-removal', '/client-requests', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
-    routeCount: 60, // FIX: include scoped sidebar request counts and Ozon click history.
+    prefixes: ['/client-request-removal', '/client-requests', '/client-requests/:id/wb-fbo-supply', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
+    routeCount: 64, // FIX: include the four scoped WB FBO tracking endpoints.
     description: 'Онлайн-заявки, документы, маршруты сборки и управление заказами FBS.',
     logic: ['Создаёт и изменяет заявки.', 'Считает активные заявки FBO WB/Ozon с учётом доступа и филиала.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
     dependencies: ['Основная БД', 'Склад', 'Подключения маркетплейсов'],

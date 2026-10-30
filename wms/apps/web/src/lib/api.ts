@@ -1546,6 +1546,7 @@ export type ClientRequestSummary = {
   storeNames?: string[];
   storeState?: 'ASSIGNED'|'MIXED'|'UNASSIGNED';
   fboProgressLabel?: string;
+  fboDispatchAt?: string;
   yandexFbyShipment?: { requestId: string } | null;
   // FIX: marketplace identity for WB/Ozon list separation, including custom request titles.
   ozonShipment?: { requestId: string } | null;
@@ -8894,6 +8895,12 @@ export async function updateClientRequestStatus(
     }>;
   },
 ) {
+  // FIX: loading is persisted independently; the normal DONE path retains all stock checks.
+  if ((payload.status as string) === 'SHIPPED') {
+    if(!window.confirm('Товар фактически загружен в автомобиль?')) throw new Error('Отметка отгрузки отменена.');
+    await request(`/client-requests/${requestId}/wb-fbo-supply/gate`, {method:'POST',accessToken});
+    return request<ClientRequestSummary>(`/client-requests/${requestId}`,{accessToken});
+  }
   return request<ClientRequestSummary>(`/client-requests/${requestId}/status`, {
     method: 'PATCH',
     body: payload,

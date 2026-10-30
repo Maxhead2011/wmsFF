@@ -1,3 +1,4 @@
+import {fboProcessOptions,fboProcessValue} from './fboProcess';
 import {RequestRemovalButton} from './RequestRemoval';
 import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, MapPinned, PackageCheck, RefreshCw, Search, Send, ShieldCheck, Truck, Undo2, XCircle } from 'lucide-react';
 import {useContext, useState} from 'react';
@@ -363,7 +364,7 @@ export function ClientRequestsTable({
 </> : null}
               </td>
               <td className="client-request-table__due-cell" data-label="Срок">{formatDate(request.desiredDate)}<div className="client-request-due-status">                <span className={`status status--${requestStatusTone(request.status)}`}>
-                  {emergencyClosed ? 'Аварийно упакована' : request.fboProgressLabel ?? requestStatusLabel(request.status)}
+                  {emergencyClosed ? 'Аварийно упакована' : (modernActions&&fboProcessValue(request)==='SHIPPED'?'Отгружено':request.fboProgressLabel ?? requestStatusLabel(request.status))}
                 </span>
                 {request.managerComment ? (
                   <span className="client-request-status-comment" title={request.managerComment}>
@@ -373,7 +374,7 @@ export function ClientRequestsTable({
 </div></td>
               <td className="client-request-table__status-cell" data-label="Статус">
                 <span className={`status status--${requestStatusTone(request.status)}`}>
-                  {emergencyClosed ? 'Аварийно упакована' : request.fboProgressLabel ?? requestStatusLabel(request.status)}
+                  {emergencyClosed ? 'Аварийно упакована' : (modernActions&&fboProcessValue(request)==='SHIPPED'?'Отгружено':request.fboProgressLabel ?? requestStatusLabel(request.status))}
                 </span>
                 {request.managerComment ? (
                   <span className="client-request-status-comment" title={request.managerComment}>
@@ -737,10 +738,10 @@ export function ClientRequestsTable({
                     <select
                       aria-label={`Статус заявки ${request.title}`}
                       title="Изменить статус заявки"
-                      value={request.status}
+                      value={modernActions?fboProcessValue(request):request.status}
                       onChange={(event) => onStatusChange(request.id, event.target.value as ClientRequestStatus)}
                     >
-                      {requestStatusOptions.map((option) => (
+                      {(modernActions?fboProcessOptions(request):requestStatusOptions).map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
@@ -760,10 +761,10 @@ export function ClientRequestsTable({
                     <select
                       aria-label={`Статус заявки ${request.title}`}
                       title="Изменить статус заявки"
-                      value={request.status}
+                      value={modernActions?fboProcessValue(request):request.status}
                       onChange={(event) => onStatusChange(request.id, event.target.value as ClientRequestStatus)}
                     >
-                      {requestStatusOptions.map((option) => (
+                      {(modernActions?fboProcessOptions(request):requestStatusOptions).map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>

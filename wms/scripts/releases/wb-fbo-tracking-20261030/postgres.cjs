@@ -1,0 +1,31 @@
+// TEST: actual candidate + disposable PostgreSQL; marketplace responses synthetic.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'wb-fbo-tracking-test-pg');
+process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED='true';
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const {WbFboSupplyService}=require(dir+'modules/client-requests/wb-fbo-supply.service'),{ClientScopeService}=require(dir+'modules/auth/client-scope.service');
+(async()=>{let passed=0;
+const c=await p.client.create({data:{code:'TEST',name:'Test'}}),other=await p.client.create({data:{code:'OTHER',name:'Other'}}),w=await p.warehouse.create({data:{code:'TEST',name:'Test'}}),w2=await p.warehouse.create({data:{code:'OTHER',name:'Other'}}),u=await p.user.create({data:{email:'test@example.invalid',name:'Test',passwordHash:'unused'}});
+const connection=await p.clientMarketplaceConnection.create({data:{clientId:c.id,marketplace:'WILDBERRIES',apiKey:'synthetic'}});
+const make=(extra={})=>p.clientRequest.create({data:{clientId:c.id,warehouseId:w.id,type:'OUTBOUND',status:'PACKED',title:'FBO test',items:{create:{quantity:578}},fboAssembly:{create:{phase:'COMPLETED',compositionHash:'test'}},...extra}});
+const r=await make(),second=await make(),foreign=await make({clientId:other.id}),wrongBranch=await make({warehouseId:w2.id}),incomplete=await make({status:'IN_WORK',fboAssembly:{create:{phase:'PACKING',compositionHash:'test'}}});
+const user={id:u.id,roleCodes:['BRANCH_MANAGER'],permissionCodes:['client-requests:read','client-requests:write'],clientScopeMode:'LIMITED',clientIds:[c.id],writableClientIds:[c.id],activeWarehouseId:w.id,warehouseIds:[w.id],writableWarehouseIds:[w.id]},svc=new WbFboSupplyService(p,new ClientScopeService());
+let status=3,quantity=578,fail=false,calls=0;
+global.fetch=async(url,options)=>{assert(url.startsWith('https://supplies-api.wildberries.ru/api/v1/supplies/'));assert.equal(options.method,undefined);calls++;return {ok:!fail,status:503,json:async()=>({statusID:status,quantity,acceptedQuantity:status===5?578:0,warehouseName:'Test',phone:'NEVER STORE'})};};
+const before=await p.clientRequest.findMany({orderBy:{id:'asc'},select:{id:true,status:true,updatedAt:true}});
+for(const id of [foreign.id,wrongBranch.id])await assert.rejects(()=>svc.bind(id,connection.id,'41834673',user));assert.equal(calls,0);passed++;
+await assert.rejects(()=>svc.bind(r.id,connection.id,'41834673',{...user,permissionCodes:['client-requests:read']}));await assert.rejects(()=>svc.bind(r.id,connection.id,'41834673',{...user,isDemo:true}));passed++;
+quantity=577;await assert.rejects(()=>svc.bind(r.id,connection.id,'41834673',user));assert.equal(await p.systemSetting.count(),0);quantity=578;passed++;
+const results=await Promise.allSettled([svc.bind(r.id,connection.id,'41834673',user),svc.bind(second.id,connection.id,'41834673',user)]);if(!results.some(v=>v.status==='fulfilled'))console.error(results);assert.equal(results.filter(v=>v.status==='fulfilled').length,1);passed++;
+const linked=results[0].status==='fulfilled'?r:second;
+await svc.bind(linked.id,connection.id,'41834673',user);assert.equal(await p.clientRequestEvent.count(),1);assert.equal(await p.systemSetting.count(),2);passed++;
+await svc.bind(incomplete.id,connection.id,'41834674',user);await assert.rejects(()=>svc.gate(incomplete.id,user));passed++;
+await Promise.all([svc.gate(linked.id,user),svc.gate(linked.id,user)]);assert.equal(await p.clientRequestEvent.count({where:{requestId:linked.id}}),2);let view=await svc.view(linked.id,user);assert(view.dispatch);assert.equal(view.binding.statusId,3);assert(!JSON.stringify(view).includes('NEVER STORE'));assert(!JSON.stringify(view).includes('synthetic'));passed++;
+async function age(){const key='wb-fbo-tracking:v1:'+linked.id,value=(await p.systemSetting.findUnique({where:{key}})).value;await p.systemSetting.update({where:{key},data:{value:{...value,checkedAt:'2020-01-01T00:00:00Z',attemptedAt:'2020-01-01T00:00:00Z'}}});}
+await age();status=5;view=await svc.refresh(linked.id,user);assert.equal(view.binding.statusId,5);assert.equal(view.binding.acceptedQuantity,578);assert(view.dispatch);passed++;
+await age();fail=true;view=await svc.refresh(linked.id,user);assert.equal(view.binding.statusId,5);assert(view.binding.lastError.includes('503'));passed++;
+const callCount=calls;await svc.refresh(linked.id,user);assert.equal(calls,callCount);passed++;
+process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED='false';await assert.rejects(()=>svc.view(linked.id,user));passed++;
+assert.deepEqual(await p.clientRequest.findMany({orderBy:{id:'asc'},select:{id:true,status:true,updatedAt:true}}),before);passed++;
+console.log(JSON.stringify({postgres:passed,syntheticOnly:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());
