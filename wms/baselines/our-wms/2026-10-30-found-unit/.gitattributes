@@ -1,0 +1,2 @@
+api-schema.prisma -text whitespace=cr-at-eol
+*.tar.gz -text
