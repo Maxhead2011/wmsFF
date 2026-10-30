@@ -1,3 +1,6 @@
+Published PR781 / 2026-10-30: LOGOFF247 permits whole remainder in partial FBO picking, preserving previously picked loose units and pending-operation mode. Android915/API4096/web563, PostgreSQL9/full health, baseline8, signed APK/audio/public hashes passed; API156/web2 skipped, dedicated unconfigured KIZ suite excluded. Exact3 download files; other3199 web files, API/schema/stock/sold unchanged. Baseline `2026-10-30-fbo-partial-whole`, sourceParityVerified=false. Terminal update required. [Details](fbo-partial-whole-remainder.md).
+
+
 Published PR779 / 2026-10-30: local receipt KIZ reports before first upload, explicit unconfirmed-duplicate notice, durable LOGOFF246 receipt progress/document and scanner focus. API4095/web563/Android912, TypeScript, runtime9, isolated PostgreSQL9/full API health, browser5, APK signature/audio and public hashes passed; API156/web2 skipped, dedicated unconfigured KIZ suite excluded. Exact1 API/2web/3 APK download files; schema/configuration/stock/sold unchanged. Baseline `2026-10-30-receipt-progress`, sourceParityVerified=false. Terminal update required. [Details](receipt-local-kiz-progress.md).
 
 Prepared PR775, not yet deployed: [FBO automatic progress](fbo-progress-status.md). PR776 baseline; API4090/web562, runtime12, PostgreSQL9/full health, browser11, baseline8 passed. Own-WMS flag only.

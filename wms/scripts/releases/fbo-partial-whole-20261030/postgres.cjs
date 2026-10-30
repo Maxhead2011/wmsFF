@@ -1,0 +1,33 @@
+// TEST: actual published service on disposable PostgreSQL; partial units never become whole-box units.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+assert.equal(process.env.NODE_ENV,'test');assert.equal(new URL(process.env.DATABASE_URL).hostname,'fbo-partial-whole-test-pg');
+Object.assign(process.env,{WMS_FBO_TWO_STAGE_ENABLED:'true',WMS_FBO_MIXED_WHOLE_BOX_ENABLED:'true',WMS_KIZ_CLIENT_GUARD_ENABLED:'true',WMS_FBO_PROGRESS_STATUS_ENABLED:'true'});
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const {FboTwoStageService}=require(dir+'modules/tsd/fbo-two-stage.service'),{ClientScopeService}=require(dir+'modules/auth/client-scope.service');
+const {StockBalancesService}=require(dir+'modules/stock/stock-balances.service'),{StockOperationsService}=require(dir+'modules/stock/stock-operations.service');
+const {ClientRequestMarketplaceFilesService}=require(dir+'modules/client-requests/client-request-marketplace-files.service');
+(async()=>{let passed=0;
+const wh=await p.warehouse.create({data:{code:'TEST',name:'Test'}}),c=await p.client.create({data:{code:'TEST',name:'Test'}}),u=await p.user.create({data:{name:'Worker',email:'worker@test.invalid',passwordHash:'disabled'}});
+await p.warehouseClient.create({data:{warehouseId:wh.id,clientId:c.id,status:'ACTIVE'}});
+const skus=[];for(let i=0;i<2;i++)skus.push(await p.sku.create({data:{clientId:c.id,internalSku:'sku'+i,name:'Test',needsChestnyZnak:true,barcodes:{create:{value:'205000000000'+i}}}}));
+const source=await p.box.create({data:{code:'FFL_TEST_SOURCE',clientId:c.id,warehouseId:wh.id}});
+await p.storagePallet.create({data:{warehouseId:wh.id,clientId:c.id,code:'TEST_PALLET',boxes:{create:{boxId:source.id,boxCode:source.code}}}});
+const marks=[];for(let i=0;i<2;i++){await p.stockBalance.create({data:{balanceKey:randomUUID(),clientId:c.id,warehouseId:wh.id,skuId:skus[i].id,boxId:source.id,status:'AVAILABLE',quantity:i===0?3:2}});for(let j=0;j<(i===0?3:2);j++)marks.push(await p.productMark.create({data:{clientId:c.id,skuId:skus[i].id,boxId:source.id,status:'AVAILABLE',value:'010460000000000121TESTMARK'+i+'000'+j}}));}
+const r=await p.clientRequest.create({data:{clientId:c.id,warehouseId:wh.id,type:'OUTBOUND',status:'SUBMITTED',title:'Test',items:{create:skus.map((s,i)=>({skuId:s.id,barcode:'205000000000'+i,quantity:i===0?3:2}))}}});
+const user={id:u.id,name:u.name,roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:wh.id};
+const scopes=new ClientScopeService(),balances=new StockBalancesService(p,scopes),stock=new StockOperationsService(p,scopes,balances,undefined,undefined,undefined,new (require(dir+'common/boxes/box-code-policy.service').BoxCodePolicyService)(new (require(dir+'common/settings/system-settings.service').SystemSettingsService)(p)));
+const svc=new FboTwoStageService(p,scopes,balances,stock,{assertStockMovementsAllowed:async()=>{}},new ClientRequestMarketplaceFilesService(p,scopes));
+const act=(action,extra={})=>svc.act(r.id,{action,operationId:randomUUID(),...extra},user);
+await act('START');await act('PICK_UNIT',{palletCode:'TEST_PALLET',sourceBoxCode:source.code,barcode:'2050000000000',kiz:marks[0].value});passed++;
+const loose=await p.fboAssemblyUnit.findFirstOrThrow({where:{requestId:r.id}});assert.equal(loose.wholeBox,false);assert.notEqual((await p.productMark.findUniqueOrThrow({where:{id:marks[0].id}})).boxId,source.id);passed++;
+const before=await p.stockMovement.count();await assert.rejects(()=>act('PICK_BOX',{palletCode:'TEST_PALLET',sourceBoxCode:source.code,confirmedQuantity:5}),/Количество не совпадает/);assert.equal(await p.stockMovement.count(),before);passed++;
+const reservation=await p.fbsTsdAssembly.create({data:{clientId:c.id,connectionId:randomUUID(),orderId:'RESERVED',requestId:r.id,requestItemId:randomUUID(),skuId:skus[0].id,productName:'Reserved',barcodes:[],storageBoxes:[],deviceCode:'AUTO:FBS:PALLET_SORT',status:'RESERVED',reservedBoxId:source.id}});
+await assert.rejects(()=>act('PICK_BOX',{palletCode:'TEST_PALLET',sourceBoxCode:source.code,confirmedQuantity:4}));assert.equal(await p.stockMovement.count(),before);await p.fbsTsdAssembly.delete({where:{id:reservation.id}});passed++;
+const dto={action:'PICK_BOX',operationId:randomUUID(),palletCode:'TEST_PALLET',sourceBoxCode:source.code,confirmedQuantity:4};
+await svc.act(r.id,dto,user);await svc.act(r.id,dto,user);assert.equal(await p.fboAssemblyUnit.count({where:{requestId:r.id}}),5);assert.equal(await p.fboAssemblyUnit.count({where:{requestId:r.id,wholeBox:true}}),4);passed++;
+assert.equal((await p.fboAssemblyUnit.findUniqueOrThrow({where:{id:loose.id}})).wholeBox,false);assert.equal(await p.productMark.count({where:{boxId:source.id,status:'PACKING'}}),4);passed++;
+await act('FINISH_PICK');await act('PACK_BOX',{sourceBoxCode:source.code});assert.equal(await p.fboAssemblyUnit.count({where:{requestId:r.id,state:'PACKED'}}),4);assert.equal((await p.fboAssemblyUnit.findUniqueOrThrow({where:{id:loose.id}})).state,'PICKED');passed++;
+await act('OPEN_BOX',{targetBoxCode:'FFL_TEST_TARGET'});await act('PACK_UNIT',{targetBoxCode:'FFL_TEST_TARGET',barcode:'2050000000000',kiz:marks[0].value});assert.equal(await p.fboAssemblyUnit.count({where:{requestId:r.id,state:'PACKED'}}),5);passed++;
+assert.equal((await p.stockBalance.aggregate({where:{clientId:c.id,status:'AVAILABLE'},_sum:{quantity:true}}))._sum.quantity,0);assert.equal((await p.stockBalance.aggregate({where:{clientId:c.id,status:'PACKING'},_sum:{quantity:true}}))._sum.quantity,5);passed++;
+console.log(JSON.stringify({passed,partial:1,whole:4,packed:5,retryNoDuplicates:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());

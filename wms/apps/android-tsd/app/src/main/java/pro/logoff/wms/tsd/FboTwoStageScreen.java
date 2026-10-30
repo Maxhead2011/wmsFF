@@ -62,8 +62,10 @@ final class FboTwoStageScreen {
     private boolean unboxedPicking(){return plan!=null&&plan.unboxedPickingSupported&&"logoff".equals(BuildConfig.FLAVOR);}
     private boolean pickingChoices(){return !packing&&!unboxedPicking()&&"logoff".equals(BuildConfig.FLAVOR);}
     private List<TsdFboPlan.Route> pickingRoute(){return pickingChoices()?FboPickingRoute.select(plan,pickingMode,state.source,state.pallet):plan.route;}
-    // FIX: keeping a reclassified source never changes the operator's unit-picking mode.
-    private boolean showWholePicking(TsdFboPlan.Route row){return !pickingChoices()||pickingMode==FboPickingRoute.Mode.WHOLE_BOXES||FboScanState.reusableBin(plan,row.boxCode);}
+    // FIX: a server-approved remainder can be taken whole without leaving partial picking.
+    private boolean showWholePicking(TsdFboPlan.Route row){return !pickingChoices()||pickingMode==FboPickingRoute.Mode.WHOLE_BOXES||pickingMode==FboPickingRoute.Mode.PARTIAL||FboScanState.reusableBin(plan,row.boxCode);}
+    private boolean partialWholePicking(){return pickingChoices()&&pickingMode==FboPickingRoute.Mode.PARTIAL;}
+    private String wholePickingTitle(){return partialWholePicking()&&!FboScanState.reusableBin(plan,state.source)?"Забрать остаток короба целиком":FboScanState.wholePickTitle(plan,state.source);}
     private void choosePickingMode(FboPickingRoute.Mode mode){
         if(!ready()||!state.barcode.isEmpty())return;
         boolean hadLocation=!state.pallet.isEmpty()||!state.source.isEmpty();
@@ -195,7 +197,8 @@ final class FboTwoStageScreen {
         try{state.restoreCheckpoint(readSaved(pendingKey+":position"));}catch(Exception ignored){}
         try {String saved=prefs.getString(pendingKey,"");if(!saved.isEmpty()){JSONObject json=new JSONObject(saved);Map<String,String> p=new LinkedHashMap<>();Iterator<String> keys=json.keys();while(keys.hasNext()){String k=keys.next();p.put(k,json.getString(k));}state.restore(p);if(packingChoices())packingMode=p.getOrDefault("action","").startsWith("MANUAL_")?PackingMode.MANUAL:"PACK_BOX".equals(p.get("action"))?PackingMode.WHOLE_BOXES:PackingMode.NEW_BOXES;}}catch(Exception e){message="Не удалось прочитать сохранённую операцию.";}
         if(pickingChoices()&&state.pending()!=null){String action=state.pending().get("action");
-            if("PICK_BOX".equals(action))pickingMode=FboPickingRoute.Mode.WHOLE_BOXES;
+            // FIX: a pending whole-remainder operation retains its saved partial-picking mode.
+            if("PICK_BOX".equals(action)&&pickingMode!=FboPickingRoute.Mode.PARTIAL)pickingMode=FboPickingRoute.Mode.WHOLE_BOXES;
             else if("PICK_UNIT".equals(action))pickingMode=FboPickingRoute.Mode.PARTIAL;
         }
         if(fastConfirmation()&&state.pending()!=null)checkPending(0);else refresh();
@@ -479,7 +482,7 @@ final class FboTwoStageScreen {
                         // FIX: picking and transferring the surplus are explicit choices, never automatic writes.
                         if(!pickingChoices()||pickingMode==FboPickingRoute.Mode.PARTIAL)button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
                         if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
-                        if(r.wholeBox&&showWholePicking(r)&&(!pickingChoices()||!r.recount))button(root,FboScanState.wholePickTitle(plan,r.boxCode),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
+                        if(r.wholeBox&&showWholePicking(r)&&(!pickingChoices()||!r.recount))button(root,wholePickingTitle(),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
                         if(state.pallet.isEmpty()){
@@ -783,11 +786,13 @@ final class FboTwoStageScreen {
     // FIX: do not prefill a physical count or submit stock movements before confirmation.
     private void confirmWholeBoxDialog(){
         if(!ready()||source()==null)return;
+        // FIX: never turn an unfinished unit scan or a reclassified source into a whole-box write.
+        if(pickingChoices()&&(!state.barcode.isEmpty()||!source().wholeBox||source().recount))return;
         handler.removeCallbacks(automatic);
         quantityInput=new EditText(activity);quantityInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         quantityInput.setSingleLine(true);quantityInput.setHint("Фактическое количество единиц");
-        quantityDialog=new AlertDialog.Builder(activity).setTitle(FboScanState.wholePickTitle(plan,state.source))
-            .setMessage("Введите количество единиц товара в коробе. По учёту: "+source().wholeBoxQuantity)
+        quantityDialog=new AlertDialog.Builder(activity).setTitle(wholePickingTitle())
+            .setMessage(partialWholePicking()?"Введите количество, оставшееся физически в коробе. По учёту: "+source().wholeBoxQuantity+". Уже отобранные поштучно единицы сюда не включайте — они упаковываются отдельно.":"Введите количество единиц товара в коробе. По учёту: "+source().wholeBoxQuantity)
             .setView(quantityInput).setPositiveButton("Подтвердить",null).setNegativeButton("Отмена",null).create();
         quantityDialog.setOnDismissListener(d->{quantityDialog=null;quantityInput=null;if(!closed)render();});
         quantityDialog.show();quantityDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->confirmWholeBoxQuantity());
@@ -798,6 +803,7 @@ final class FboTwoStageScreen {
         if(quantityInput==null||!ready())return;
         int count;try{count=Integer.parseInt(quantityInput.getText().toString().trim());}catch(Exception e){quantityInput.setError("Введите целое положительное количество");return;}
         TsdFboPlan.Route route=source();
+        if(pickingChoices()&&(route==null||!route.wholeBox||route.recount||!state.barcode.isEmpty())){quantityInput.setError("Обновите задание и завершите сканирование товара.");return;}
         if(count<1||route==null||count!=route.wholeBoxQuantity){quantityInput.setError("Количество не совпадает с учётом. Проверьте короб и обновите задание.");return;}
         quantityDialog.dismiss();send("PICK_BOX",null,count);
     }
