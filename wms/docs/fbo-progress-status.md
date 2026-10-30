@@ -1,6 +1,6 @@
 # Automatic FBO progress
 
-PR775: fix/fbo-progress-release into feature/wb-print-check. Verified on published PR776, pending production deployment.
+PR775: fix/fbo-progress-release into feature/wb-print-check. Published on 2026-10-30 over PR776; public health, exact hashes and browser11 verified.
 
 Physical picking restores IN_WORK. Exact per-item completion moves PICKING to PACKING. Packed units count as picked, RETURNED units do not. Excess for one SKU cannot cover another shortage. Older terminals may repeat FINISH_PICK after the automatic transition.
 
@@ -15,3 +15,9 @@ Validation: API4090 passed/151 skipped, web562 passed/2 skipped, API/web TypeScr
 Release script checks current images, exact file hashes, merged PR, test proofs, health, retained environment and other containers; saves rollback images and rolls back on failure. No real stock writes during tests.
 
 Request2494 repair: scripts/fbo_progress_reconcile_2494.cjs defaults to dry-run. --apply changes only stale progress when exact full picking is proven, never stock movements. System audit userId=null does not impersonate an employee.
+
+Published API: sha256:abff31f801057213960650e89fd44c3c8642e3df1c961aa3e2b5f4ebff49e169. Web: sha256:66e4f1ef6bfc21fe6ae7ba83e9e96dd5f84c2f886562f8cecc0a486a4c9f7c5d. Rollback tags: logoff-api:before-fbo-progress-20261030 and logoff-web:before-fbo-progress-20261030. APK245 unchanged.
+
+Request2494 had already advanced to PACKING but retained SUBMITTED. Addressed only that stale status: IN_WORK,578 picked/518 packed, no stock movement. Follow-up regression covers submitted/packing in addition to submitted/picking (helper19).
+
+Follow-up full regression: API4091 passed/151 skipped after adding the submitted/packing case.
