@@ -11,3 +11,5 @@
 Проверки: 3 новых RED/GREEN теста; API4042, web555, TypeScript; 30 проверок фактического runtime (4 новых + 26 сохранённых). Пропуски API155/web2; отдельная старая kiz-duplicate.integration.spec.ts требует собственной БД и исключена, как в предыдущем выпуске. Изменён 1 из 688 API-модулей; web, APK245, схема, складские записи и проданная WMS не меняются. Действует существующий WMS_KIZ_CLIENT_GUARD_ENABLED.
 
 Артефакты выпуска: scripts/releases/kiz-fbs-retry/runtime.cjs и release.py. Ветка fix/kiz-fbs-review-retry, PR в feature/wb-print-check.
+
+Опубликовано PR771. API health и хеш модуля проверены, baseline `2026-10-30-kiz-fbs-retry`. Обновление APK не требуется.
