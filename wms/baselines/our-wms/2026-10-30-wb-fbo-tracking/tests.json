@@ -1,0 +1,1 @@
+{"api": 4155, "web": 579, "typecheck": true, "apiSkipped": 156, "webSkipped": 2, "excluded": "dedicated unconfigured kiz-duplicate.integration.spec.ts; candidate PostgreSQL12/full API health separately checked"}
