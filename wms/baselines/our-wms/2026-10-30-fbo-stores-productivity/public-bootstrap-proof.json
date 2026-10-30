@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "/assets/wb-dispatch-core-20261030.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "/assets/wb-dispatch-core-20261030.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "/assets/wb-dispatch-core-20261030.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "/assets/wb-dispatch-core-20261030.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "/assets/wb-dispatch-core-20261030.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

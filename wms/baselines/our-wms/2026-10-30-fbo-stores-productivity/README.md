@@ -1,0 +1,3 @@
+# Verified client stores release
+
+Published PR800: Ozon FBO shop labels after client/branch scope; separate FBO picking/packing productivity by actor and Moscow day. API4198/web582/TypeScript, PostgreSQL11/full health, artifact browser6/bootstrap5/public5 and baseline8 passed. Exact API3/web3; own-image WMS_FBO_PICKER_STATISTICS_ENABLED=true, sold/schema/APK249 unchanged. Audited Ozon-only directory configured for CL-000016; shared stock and KIZ untouched, strict receipt flag off. Live2529/2530 Monlarti,2531 Braibo verified; WB shop bindings pending separate verification. Baseline sourceParityVerified=false.
