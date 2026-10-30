@@ -475,3 +475,5 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 Состояние и оставшиеся работы: [client-store-separation.md](client-store-separation.md).
 
 Продолжение разделения магазинов: `client-store-receipt.ts` проверяет разрешения SKU и закрепляет документ за магазином в транзакции прихода; `ClientStoresService.getSkuStores/saveSkuStores` хранит разрешения общего SKU. `TsdPayloadParser`, `TsdSyncService`, `TsdReviewService` сохраняют контекст; `TsdDeviceService.listClientsForDevice` и LOGOFF `MainActivity` дают выбор магазина и сохраняют его в очереди. Флаг выключен, production не изменён; полный статус — `client-store-separation.md`.
+
+Подготовлен выпуск магазинов: scripts/releases/client-stores-20261030 сохраняет опубликованную серверную логику и добавляет настройки/метаданные. LOGOFF248; строгая приёмка выключена. Состояние: client-store-separation.md.

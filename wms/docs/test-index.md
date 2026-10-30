@@ -442,3 +442,5 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
   [Состояние реализации](client-store-separation.md).
 
 Продолжение разделения магазинов: `client-store-receipt.spec.ts` — общий SKU, чужой магазин, старый скан, закрепление документа, выключенный флаг и отказ реального `receiveIntoBox` до изменения остатка. `client-stores.service.spec.ts` — дополнительно конкурентное редактирование разрешений SKU, аудит и чужой клиент. Android `ReceiptCloseBatchTest` проверяет неизменность магазина в очереди, `ReceiptProgressActivityTest` — восстановление с документом после перезапуска.
+
+Выпуск магазинов: API4138/Web570/Android924; runtime.cjs — 12, postgres.cjs — 15 и полный Nest health, browser.cjs — 8 проверок кандидата; TypeScript и точный состав 17 API файлов подтверждены. Скрипты: scripts/releases/client-stores-20261030.
