@@ -1,11 +1,19 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { debitConfirmedKizSource, inventoryKizTransferWarnings } from '../src/modules/inventory/confirmed-kiz-transfer';
 afterEach(() => vi.unstubAllEnvs());
+// TEST: a box-wide failure identifies the actual blocking SKU, not the last clicked row.
+it('identifies the KIZ and source in a zero-stock failure', async () => {
+  vi.stubEnv('WMS_KIZ_IDENTITY_TRANSFER_ENABLED','true');
+  const tx:any={sku:{findUnique:async()=>({name:'Яна',article:'бордо',size:'54'})},box:{findUnique:async()=>({id:'source',code:'FFL_028',clientId:'client',warehouseId:'wh',status:'active'})},
+    fbsTsdAssembly:{findFirst:async()=>null},inventoryAuditBox:{findFirst:async()=>null},stockMovement:{findFirst:async()=>null},stockBalance:{findMany:async()=>[]}};
+  await expect(debitConfirmedKizSource(tx,{mark:{id:'mark',clientId:'client',skuId:'sku-bordo54',boxId:'source',status:'AVAILABLE',value:'0104630584393470215BIoZiCfNz>Qd'} as any,
+    destination:{id:'target',clientId:'client',warehouseId:'wh'},auditId:'audit',startedAt:new Date(),userId:'admin'})).rejects.toThrow('FFL_028');
+});
 it.each(['reservation','count','movement','zero','blocked','foreign-branch','foreign-client','parallel-update'])('stops an unsafe source transfer: %s', async kind => {
   // TEST: confirmation cannot steal a reservation or invent a negative stock balance.
   vi.stubEnv('WMS_KIZ_IDENTITY_TRANSFER_ENABLED','true');
   const balance = {id:'balance',quantity:kind==='zero'?0:1,status:kind==='blocked'?'RESERVED':'AVAILABLE',clientId:'client',warehouseId:'wh'};
-  const tx:any = {box:{findUnique:vi.fn(async()=>({id:'source',code:'177',clientId:kind==='foreign-client'?'other':'client',warehouseId:kind==='foreign-branch'?'other':'wh',status:'active'}))},
+  const tx:any = {sku:{findUnique:async()=>null},box:{findUnique:vi.fn(async()=>({id:'source',code:'177',clientId:kind==='foreign-client'?'other':'client',warehouseId:kind==='foreign-branch'?'other':'wh',status:'active'}))},
     fbsTsdAssembly:{findFirst:vi.fn(async()=>kind==='reservation'?{id:'task'}:null)},
     inventoryAuditBox:{findFirst:vi.fn(async()=>kind==='count'?{id:'count'}:null)},
     stockMovement:{findFirst:vi.fn(async()=>kind==='movement'?{id:'move'}:null),create:vi.fn()},

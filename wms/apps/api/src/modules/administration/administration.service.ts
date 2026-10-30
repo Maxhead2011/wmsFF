@@ -919,6 +919,8 @@ export class AdministrationService {
     }
 
     const preserveFullInventory = session.type === InventorySessionType.FULL;
+    // FIX: a released TSD is not a cancelled physical count. Keep unfinished boxes for review.
+    const preserveBoxReview = process.env.WMS_INVENTORY_FOUND_UNIT_ENABLED === 'true' && session.type === InventorySessionType.BOX_CHECK;
     let released = false;
     if (!preserveFullInventory) {
       const currentComment = session.comment?.trim();
@@ -926,10 +928,10 @@ export class AdministrationService {
       const update = await this.prisma.inventorySession.updateMany({
         where: { id: session.id, status: InventorySessionStatus.ACTIVE },
         data: {
-          status: InventorySessionStatus.CANCELLED,
-          completedAt: new Date(),
-          completedByUserId: user.id,
-          completedByName: user.name,
+          status: preserveBoxReview ? InventorySessionStatus.REVIEW : InventorySessionStatus.CANCELLED,
+          completedAt: preserveBoxReview ? null : new Date(),
+          completedByUserId: preserveBoxReview ? null : user.id,
+          completedByName: preserveBoxReview ? null : user.name,
           comment: currentComment ? `${currentComment}\n${unlockComment}` : unlockComment,
         },
       });
@@ -940,14 +942,14 @@ export class AdministrationService {
     const message = preserveFullInventory
       ? `ТСД ${device.code} отсоединён от полной инвентаризации. Общая инвентаризация «${session.title}» сохранена.`
       : released
-        ? `Зависшая инвентаризация «${session.title}» освобождена${boxCodes.length ? `; короб: ${boxCodes.join(', ')}` : ''}. ТСД вернётся в главное меню.`
+        ? `ТСД освобождён${boxCodes.length ? `; короб: ${boxCodes.join(', ')}` : ''}. ${preserveBoxReview ? 'Сканы и расхождения сохранены на разбор.' : `Проверка «${session.title}» отменена.`} ТСД вернётся в главное меню.`
         : 'Сессия уже изменилась. Экран ТСД всё равно будет безопасно сброшен.';
     const result = {
       released,
       sessionId: session.id,
       sessionType: session.type,
       sessionTitle: session.title,
-      preserved: preserveFullInventory,
+      preserved: preserveFullInventory || preserveBoxReview,
       boxCodes,
       message,
     };

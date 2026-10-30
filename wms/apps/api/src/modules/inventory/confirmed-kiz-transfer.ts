@@ -44,7 +44,7 @@ export async function inventoryKizTransferWarnings(tx: Prisma.TransactionClient,
 // FIX: the destination has already been counted. Debit only the previous physical
 // box, in the SAME serializable transaction as mark ownership and audit proof.
 export async function debitConfirmedKizSource(tx: Prisma.TransactionClient, input: {
-  mark: { id: string; clientId: string; skuId: string; boxId: string | null; status: string };
+  mark: { id: string; clientId: string; skuId: string; boxId: string | null; status: string; value?: string };
   destination: { id: string; clientId: string; warehouseId: string | null };
   auditId: string; startedAt: Date; userId: string;
 }) {
@@ -68,13 +68,17 @@ export async function debitConfirmedKizSource(tx: Prisma.TransactionClient, inpu
   if (count || movement) stop('исходный короб пересчитывается или его остаток изменился после начала проверки.');
   if (balances.some(row => row.clientId !== destination.clientId || row.warehouseId !== destination.warehouseId ||
       row.quantity < 0 || row.quantity > 0 && row.status !== 'AVAILABLE')) stop('в исходном коробе есть резерв или недоступный остаток.');
-  const balance = balances.find(row => row.status === 'AVAILABLE' && row.quantity > 0)
-    ?? stop('в исходном коробе нет доступной единицы; нужна проверка истории списания.');
-  const changed = await tx.stockBalance.updateMany({ where: { id: balance.id, updatedAt: balance.updatedAt, quantity: balance.quantity },
+  const balance = balances.find(row => row.status === 'AVAILABLE' && row.quantity > 0);
+  if (!balance) {
+    // FIX: this is a box-wide check; identify the real offender, not the clicked line.
+    const sku = await tx.sku.findUnique({where:{id:mark.skuId},select:{name:true,article:true,size:true}});
+    stop(`в исходном коробе ${source!.code} нет доступной единицы. КИЗ: ${mark.value ? physicalKizIdentity(mark.value) : mark.id}; товар: ${sku ? [sku.name,sku.article,sku.size].filter(Boolean).join(' · ') : mark.skuId}. Нужна проверка истории списания и подтверждение найденной единицы администратором.`);
+  }
+  const changed = await tx.stockBalance.updateMany({ where: { id: balance!.id, updatedAt: balance!.updatedAt, quantity: balance!.quantity },
     data: { quantity: { decrement: 1 } } });
   if (changed.count !== 1) stop('остаток исходного короба изменился параллельно.');
   const out = await tx.stockMovement.create({ data: { clientId: mark.clientId, warehouseId: source!.warehouseId,
-    skuId: mark.skuId, boxId: source!.id, palletId: balance.palletId, status: 'AVAILABLE', type: 'MOVE', quantity: -1,
+    skuId: mark.skuId, boxId: source!.id, palletId: balance!.palletId, status: 'AVAILABLE', type: 'MOVE', quantity: -1,
     sourceDocument: `inventory-kiz-transfer:${auditId}`, idempotencyKey: `inventory-kiz-transfer:${auditId}:${mark.id}:out`,
     comment: `Подтверждённый перенос КИЗ из ${source!.code} в короб ${destination.id}. Целевая единица уже учтена пересчётом; повторного прихода нет. Администратор: ${input.userId}.` } });
   return { markId: mark.id, sourceBoxId: source!.id, sourceBoxCode: source!.code, destinationBoxId: destination.id,

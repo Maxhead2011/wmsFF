@@ -5,6 +5,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import {
   CompleteInventoryDto,
+  ConfirmFoundUnitDto,
   CountInventoryItemDto,
   InventoryDecisionDto,
   OpenInventoryBoxDto,
@@ -107,6 +108,13 @@ export class InventoryController {
   @RequirePermissions('stock:write')
   resolveBox(@Param('id') id: string, @Body() dto: ResolveInventoryBoxDto, @CurrentUser() user: AuthUser) {
     return this.inventory.resolveBox(id, dto, user);
+  }
+
+  // FIX: helper also enforces ADMIN/OWNER, client and warehouse scope.
+  @Post('boxes/:id/found-unit')
+  @RequirePermissions('stock:write')
+  confirmFoundUnit(@Param('id') id: string, @Body() dto: ConfirmFoundUnitDto, @CurrentUser() user: AuthUser) {
+    return this.inventory.confirmFoundUnit(id,dto,user);
   }
 
   @Post('sessions/:id/complete')

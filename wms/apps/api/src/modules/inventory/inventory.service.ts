@@ -1,4 +1,5 @@
 import { physicalKizIdentity, kizIdentityTransferEnabled } from '../../common/kiz-physical-identity';
+import { confirmFoundUnit, foundUnitEnabled } from './found-unit-review';
 import { inventoryKizTransferWarnings, lockInventoryKizTransferSources } from './confirmed-kiz-transfer';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -137,9 +138,15 @@ export class InventoryService {
       ),
       canApproveRescan: canApproveInventoryRescan(user),
       canManage: canManageInventory(user),
+      canConfirmFoundUnit: foundUnitEnabled() && !user.isDemo && user.roleCodes.some(r=>['ADMIN','OWNER'].includes(r)),
       canConfirmKiz: fbsKizAuditEnabled() && !user.isDemo && canManageInventory(user) &&
         user.roleCodes.some(code => ['ADMIN', 'OWNER'].includes(code)),
     };
+  }
+
+  // FIX: all proof, ownership and scope checks share a serializable transaction.
+  async confirmFoundUnit(auditId: string, dto: {kiz:string;reason:string;confirmed:boolean}, user: AuthUser) {
+    return this.runSerializableInventoryDecision(tx=>confirmFoundUnit(tx,auditId,dto,user));
   }
 
   async listSessions(type: string | undefined, user: AuthUser) {

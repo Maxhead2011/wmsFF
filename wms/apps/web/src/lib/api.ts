@@ -509,6 +509,7 @@ export type InventoryBoxRescanRequest = {
 };
 
 export type InventoryDashboard = {
+  canConfirmFoundUnit?: boolean;
   canConfirmKiz?: boolean;
   movementLock: {
     active: boolean;
@@ -10542,6 +10543,12 @@ export function resolveInventoryBox(
     method: 'POST',
     body: { action, comment },
     accessToken,
+  });
+}
+
+export function confirmInventoryFoundUnit(accessToken:string, auditBoxId:string, kiz:string, reason:string, confirmed:boolean) {
+  return request<{confirmed:boolean;alreadyApplied:boolean}>(`/inventory/boxes/${auditBoxId}/found-unit`,{
+    method:'POST',accessToken,body:{kiz,reason,confirmed},
   });
 }
 
