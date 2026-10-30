@@ -29,6 +29,7 @@ export type MoveScanPayload = {
 
 export type ReceiptScanPayload = {
   clientId: string;
+  storeId?: string;
   barcode?: string;
   skuId?: string;
   kiz?: string;

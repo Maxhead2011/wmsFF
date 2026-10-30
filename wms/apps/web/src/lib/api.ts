@@ -635,6 +635,8 @@ export type ClientBillingServiceSummary = {
 };
 
 export type BillingChargeSummary = {
+  storeNames?: string[];
+  storeState?: 'ASSIGNED'|'MIXED'|'UNASSIGNED';
   id: string;
   clientId: string;
   serviceId: string | null;
@@ -1541,6 +1543,8 @@ export type ClientRequestTimeline = {
 };
 
 export type ClientRequestSummary = {
+  storeNames?: string[];
+  storeState?: 'ASSIGNED'|'MIXED'|'UNASSIGNED';
   fboProgressLabel?: string;
   yandexFbyShipment?: { requestId: string } | null;
   // FIX: marketplace identity for WB/Ozon list separation, including custom request titles.
@@ -3230,6 +3234,8 @@ export type FbsPenaltiesReport = {
 export type FbsDeliveryDestination = 'PICKUP_POINT' | 'VNUKOVO_SORTING_CENTER';
 
 export type FbsOrderSummary = {
+  storeId?: string | null;
+  storeName?: string | null;
   id: string;
   orderUid: string | null;
   connectionId: string;
@@ -3332,6 +3338,7 @@ export type FbsOrderSummary = {
 };
 
 export type ClientFbsOrders = {
+  stores?: Array<{ id: string; name: string; connectionIds: string[] }>;
   stockTransferEnabled?: boolean;
   client: Pick<ClientSummary, 'id' | 'code' | 'name'>;
   connected: boolean;
@@ -12683,6 +12690,13 @@ export const createLamodaAssembly=(accessToken:string,id:string,planId:string,qu
 // FIX: physical warehouse scan resolves the confirmed Lamoda correspondence.
 export function resolveLamodaRelabel(accessToken:string,id:string,body:{barcode:string;kiz?:string}) {return request<NonNullable<FboPlan["relabelUnits"]>[number]>(`/tsd/requests/${id}/fbo/lamoda-relabel/resolve`,{accessToken,method:"POST",body});}
 
+// FIX: shop metadata and eligibility belong to the existing payer client.
+export type ClientStoreSummary={id:string;name:string;connectionIds:string[]};
+export type ClientStoreDirectory={clientId:string;stores:ClientStoreSummary[];connections:Array<{id:string;marketplace:string;accountName:string|null;isActive:boolean}>};
+export function fetchClientStores(accessToken:string,clientId:string){return request<ClientStoreDirectory>(`/clients/${encodeURIComponent(clientId)}/stores`,{accessToken});}
+export function saveClientStores(accessToken:string,clientId:string,stores:ClientStoreSummary[]){return request(`/clients/${encodeURIComponent(clientId)}/stores`,{accessToken,method:'PUT',body:{stores}});}
+export function fetchSkuStores(accessToken:string,clientId:string,skuId:string){return request<{storeIds:string[]}>(`/clients/${encodeURIComponent(clientId)}/stores/skus/${encodeURIComponent(skuId)}`,{accessToken});}
+export function saveSkuStores(accessToken:string,clientId:string,skuId:string,storeIds:string[],expectedStoreIds:string[]){return request<{storeIds:string[]}>(`/clients/${encodeURIComponent(clientId)}/stores/skus/${encodeURIComponent(skuId)}`,{accessToken,method:'PUT',body:{storeIds,expectedStoreIds}});}
 // FIX: save a click event before opening the server-stored Ozon label URL.
 export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
  return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});

@@ -83,6 +83,7 @@ export function BillingChargesTable({
               <tr key={charge.id}>
                 <td>
                   <strong>{charge.description}</strong>
+                  {charge.storeState && <span>Магазин: {charge.storeState === 'UNASSIGNED' ? 'не определён' : charge.storeNames?.join(', ')}</span>}
                   <span>{charge.request?.title ?? charge.service?.code ?? 'ручное начисление'}</span>
                   <span>{chargeSourceLabel(charge)}</span>
                   <span>{formatDate(charge.serviceDate)}</span>

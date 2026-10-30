@@ -264,6 +264,7 @@ public class MainActivity extends Activity {
     private final Map<String, String> receiptKizBoxes = new LinkedHashMap<>();
     private String receiptMode = "";
     private String receiptClientId = "";
+    private String receiptStoreId = "";
     private String receiptSourceDocument = "";
     private String receiptBoxCode = "";
     private boolean receiptBarcodeLookupBusy;
@@ -3869,6 +3870,28 @@ public class MainActivity extends Activity {
         }
 
         root.addView(messageView("Клиент: " + receiptClientName()));
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            List<TsdClientSummary.Store> stores = receiptStores();
+            TsdClientSummary.Store selectedStore = null;
+            for (TsdClientSummary.Store store : stores) if (store.id.equals(receiptStoreId)) selectedStore = store;
+            if (!stores.isEmpty() && selectedStore == null) {
+                scanInput = null;
+                boxCodeInput = null;
+                root.addView(messageView("Выберите магазин приёмки"));
+                for (TsdClientSummary.Store store : stores) {
+                    root.addView(primaryMenuButton(store.name, view -> {
+                        receiptStoreId = store.id;
+                        uiStore.edit().putString("receipt-store:" + receiptClientId + ":" + receiptSourceDocument, store.id).apply();
+                        renderReceiptScreen();
+                    }));
+                }
+                root.addView(secondaryButton("Назад", view -> renderMainScreen()));
+                setScrollableContent(root);
+                return;
+            }
+            if (selectedStore != null) root.addView(messageView("Магазин: " + selectedStore.name));
+        }
+
         receiptProgressText = messageView(receiptProgressLabel());
         root.addView(receiptProgressText);
 
@@ -8457,6 +8480,10 @@ public class MainActivity extends Activity {
             startReceiptForSelectedClient();
             return;
         }
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptStores().isEmpty() && receiptStoreId.isEmpty()) {
+            renderReceiptScreen();
+            return;
+        }
         if (!pendingReceiptBarcode.isEmpty() && pendingReceiptRequiresKiz) {
             handleReceiptKizScan();
             return;
@@ -8495,6 +8522,8 @@ public class MainActivity extends Activity {
             receiptSourceDocument = uiStore.getString(receiptDocumentPreferenceKey, receiptSourceDocument);
             uiStore.edit().putString(receiptDocumentPreferenceKey, receiptSourceDocument).apply();
         }
+        receiptStoreId = "logoff".equals(BuildConfig.FLAVOR)
+            ? uiStore.getString("receipt-store:" + receiptClientId + ":" + receiptSourceDocument, "") : "";
         receiptClosedBoxes = 0;
         receiptAcceptedItems = 0;
         receiptAwaitingBoxes = 0;
@@ -8911,6 +8940,9 @@ public class MainActivity extends Activity {
         clearPendingReceiptProductFields();
         String clientId = receiptClientId;
         String sourceDocument = receiptSourceDocument;
+        Map<String, String> receiptExtras = new LinkedHashMap<>();
+        receiptExtras.put("secondBarcodeScan", secondBarcodeScan);
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptStoreId.isEmpty()) receiptExtras.put("storeId", receiptStoreId);
         statusMessage = message == null
             ? "Сохраняю товар в WMS: " + barcode
             : message + "\nСохраняю товар в WMS.";
@@ -8927,7 +8959,7 @@ public class MainActivity extends Activity {
                 sourceDocument,
                 RECEIPT_MODE_STANDARD,
                 "Поштучная приемка ТСД без коробов",
-                java.util.Collections.singletonMap("secondBarcodeScan", secondBarcodeScan)
+                receiptExtras
             );
             WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
@@ -9062,6 +9094,7 @@ public class MainActivity extends Activity {
                 payload.put("secondBarcodeScan", item.secondBarcodeScan);
                 payload.put("kiz", item.kiz);
                 payload.put("comment", "Приемка ТСД: короб " + closedBoxCode);
+                if (!receiptStoreId.isEmpty()) payload.put("storeId", receiptStoreId);
                 payloads.add(payload);
             }
             try {
@@ -9164,6 +9197,7 @@ public class MainActivity extends Activity {
         receiptMode = "";
         receiptClientId = "";
         receiptSourceDocument = "";
+        receiptStoreId = "";
         receiptDocumentPreferenceKey = "";
         receiptAwaitingBoxes = 0;
         receiptBoxCode = "";
@@ -10787,6 +10821,14 @@ public class MainActivity extends Activity {
             return null;
         }
         return clients.get(selectedIndex).id;
+    }
+
+    // FIX: old/sold clients without store metadata keep the previous receipt flow.
+    private List<TsdClientSummary.Store> receiptStores() {
+        for (TsdClientSummary client : clients) {
+            if (receiptClientId.equals(client.id) && client.stores != null) return client.stores;
+        }
+        return java.util.Collections.emptyList();
     }
 
     private String receiptClientName() {

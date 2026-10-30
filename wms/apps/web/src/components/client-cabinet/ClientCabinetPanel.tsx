@@ -1,3 +1,4 @@
+import { ClientStoresSettings } from './ClientStoresSettings';
 import { Ban, CheckCircle2, Pencil, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -734,6 +735,8 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
           ) : null}
 
           {canManageClients && <ClientProductDisplaySettings key={view.client.id} accessToken={session.accessToken} clientId={view.client.id} />}
+          {import.meta.env.VITE_CLIENT_STORES_ENABLED === 'true' && session.user.roleCodes.some(role=>role==='ADMIN'||role==='OWNER') &&
+            <ClientStoresSettings key={`stores:${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id}/>}
           <ClientBranchStockTiles accessToken={session.accessToken} clientId={view.client.id} />
 
           {showClientOverview ? (

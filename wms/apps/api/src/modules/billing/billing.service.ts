@@ -1,3 +1,4 @@
+import { requestStoreContexts } from '../clients/request-store-context';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   BillingChargeSource,
@@ -189,18 +190,20 @@ export class BillingService {
     });
   }
 
-  listCharges(query: ListBillingChargesDto, user: AuthUser) {
+  async listCharges(query: ListBillingChargesDto, user: AuthUser) {
     const where: Prisma.BillingChargeWhereInput = {
       clientId: this.clientScopes.resolveClientFilter(user, query.clientId),
       status: query.status,
     };
 
-    return this.prisma.billingCharge.findMany({
+    const charges = await this.prisma.billingCharge.findMany({
       where,
       include: billingChargeInclude,
       orderBy: [{ serviceDate: 'desc' }, { createdAt: 'desc' }],
       take: 300,
     });
+    const contexts=await requestStoreContexts(this.prisma,charges.filter(c=>c.requestId).map(c=>({id:c.requestId!,clientId:c.clientId})));
+    return charges.map(charge=>({...charge,...(charge.requestId?contexts.get(charge.requestId):{})}));
   }
 
   async listServiceHistory(query: ListBillingServiceHistoryDto, user: AuthUser) {

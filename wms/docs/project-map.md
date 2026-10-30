@@ -474,3 +474,17 @@ Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced bef
 
 
 Prepared / 2026-10-28: shared guarded removal in Lamoda FBO cards; scope reset and refreshed archive. Preserves PR725 stock review. Web-only on PR725; API3872/web529, runtime browser50 plus stock regression8 passed. [Details](lamoda-request-removal.md).
+# В разработке: магазины одного плательщика
+
+`ClientStoresSettings` → `clients/:clientId/stores` и `stores/skus/:skuId`: настройки магазинов и разрешений общего SKU. `requestStoreContexts` → ClientRequestsService.list/get, FboTwoStageService.snapshot, BillingService.listCharges; ClientRequestsTable/BillingChargesTable/FboStoreContext отображают магазин по подключению. Строгая приёмка отдельно включается WMS_CLIENT_STORE_RECEIPTS_ENABLED.
+
+`fix/client-store-separation`: `clients/client-stores.{policy,service,controller}.ts`,
+FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
+Справочник магазинов и фильтр заказов; общий физический SKU не дублируется.
+**Не опубликовано, не включать до завершения приёмки/ТСД/резервов.**
+Состояние и оставшиеся работы: [client-store-separation.md](client-store-separation.md).
+
+Продолжение разделения магазинов: `client-store-receipt.ts` проверяет разрешения SKU и закрепляет документ за магазином в транзакции прихода; `ClientStoresService.getSkuStores/saveSkuStores` хранит разрешения общего SKU. `TsdPayloadParser`, `TsdSyncService`, `TsdReviewService` сохраняют контекст; `TsdDeviceService.listClientsForDevice` и LOGOFF `MainActivity` дают выбор магазина и сохраняют его в очереди. Флаг выключен, production не изменён; полный статус — `client-store-separation.md`.
+
+Подготовлен выпуск магазинов: scripts/releases/client-stores-20261030 сохраняет опубликованную серверную логику и добавляет настройки/метаданные. LOGOFF248; строгая приёмка выключена. Состояние: client-store-separation.md.
+`web.cjs` сохраняет единый основной JS-модуль из PR789 при добавлении магазинов; LOGOFF249 сохраняет контроль этикеток Ozon. Проверка страницы: `scripts/releases/client-stores-20261030/bootstrap.cjs`.

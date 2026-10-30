@@ -8,6 +8,7 @@ import { Module } from '@nestjs/common';
 // FIX: restore client Telegram routing for committed FBS status transitions.
 import { ClientNotificationsModule } from '../client-notifications/client-notifications.module';
 import { AuthModule } from '../auth/auth.module';
+import { ClientsModule } from '../clients/clients.module';
 import { LogisticsModule } from '../logistics/logistics.module';
 import { WmsStockAvailabilityService } from '../stock/wms-stock-availability.service';
 import { FbsPenaltiesReportService } from './fbs-penalties-report.service';
@@ -24,7 +25,7 @@ import { FbsReshipmentController } from './fbs-reshipment.controller';
 import { FbsReshipmentService } from './fbs-reshipment.service';
 
 @Module({
-  imports: [AuthModule, LogisticsModule, ClientNotificationsModule],
+  imports: [AuthModule, ClientsModule, LogisticsModule, ClientNotificationsModule],
   controllers: [MultishopStockGroupsController, FbsManualAssemblyController, MarketplaceConnectionsController, FbsStockAllocationExternalController, FbsRepeatAssemblyController, FbsReshipmentController],
   providers: [
     // FIX: publication worker remains disabled unless explicitly enabled in our image.

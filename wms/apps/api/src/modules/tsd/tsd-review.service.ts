@@ -543,6 +543,7 @@ export class TsdReviewService {
     const receipt = await this.stockOperations.receiveIntoBox(
       {
         clientId: payload.clientId,
+        storeId: payload.storeId,
         barcode: payload.barcode,
         skuId: payload.skuId,
         boxCode: payload.boxCode,

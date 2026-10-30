@@ -245,6 +245,7 @@ export function ClientRequestsTable({
                 ) : (
                   <strong className="client-request-title" title={request.title}>{request.title}</strong>
                 )}
+                {request.storeState && <span>Магазин: {request.storeState === 'UNASSIGNED' ? 'не определён' : request.storeNames?.join(', ')}{request.storeState === 'MIXED' ? ' · требуется разделение заявки' : ''}</span>}
                 <span className="client-request-list-meta">
                   {requestTypeLabel(request.type)} · {requestPriorityLabel(request.priority)}
                 </span>

@@ -152,10 +152,10 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'clients',
     name: 'Клиенты',
-    prefixes: ['/clients', '/clients/:clientId/product-display'],
-    routeCount: 10, // FIX: read/save per-client assembly presentation settings.
+    prefixes: ['/clients', '/clients/:clientId/product-display', '/clients/:clientId/stores'],
+    routeCount: 14, // FIX: store directory and shared-SKU eligibility read/save routes.
     description: 'Карточки клиентов, реквизиты и правила складского обслуживания.',
-    logic: ['Хранит юридические и контактные данные.', 'Настраивает режимы остатков и хранения.', 'Связывает клиента с менеджером и собственной компанией.'],
+    logic: ['Хранит юридические и контактные данные.', 'Настраивает режимы остатков и хранения.', 'Связывает клиента с менеджером и собственной компанией.', 'Разделяет магазины одного плательщика и разрешения общего SKU без дублирования остатков; функция включается отдельно.'],
     dependencies: ['Основная БД'],
   },
   {

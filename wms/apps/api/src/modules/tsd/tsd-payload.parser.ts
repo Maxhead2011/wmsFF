@@ -42,6 +42,7 @@ export class TsdPayloadParser {
 
     return {
       clientId,
+      storeId: this.optionalStringValue(payload.storeId),
       barcode,
       skuId,
       kiz,

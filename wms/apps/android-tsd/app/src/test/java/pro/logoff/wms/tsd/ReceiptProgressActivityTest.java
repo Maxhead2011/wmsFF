@@ -44,8 +44,13 @@ public class ReceiptProgressActivityTest {
                 var start=MainActivity.class.getDeclaredMethod("startReceiptForSelectedClient");start.setAccessible(true);start.invoke(a);
                 String current=(String)get(a,"receiptSourceDocument");assertFalse(current.isEmpty());
                 if(document==null)document=current;else assertEquals(document,current);
+                // TEST: the document restores its shop, not the most recent shop of another receipt.
+                android.content.SharedPreferences prefs=(android.content.SharedPreferences)get(a,"uiStore");
+                if(attempt==0) prefs.edit().putString("receipt-store:resume-client:"+current,"monlarti").commit();
+                else assertEquals("monlarti",get(a,"receiptStoreId"));
+
                 if(attempt==1) {
-                    ((android.content.SharedPreferences)get(a,"uiStore")).edit().remove((String)get(a,"receiptDocumentPreferenceKey")).commit();
+                    ((android.content.SharedPreferences)get(a,"uiStore")).edit().remove((String)get(a,"receiptDocumentPreferenceKey")).remove("receipt-store:resume-client:"+current).commit();
                     a.getSharedPreferences("logoff_wms_tsd_session",0).edit().clear().commit();
                 }
             }

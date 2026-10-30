@@ -1,0 +1,23 @@
+// TEST: real transactions and permissions in a disposable database; no production credentials.
+require('reflect-metadata');const assert=require('node:assert/strict'),{PrismaClient}=require('@prisma/client');assert(process.env.DATABASE_URL.includes('client_stores_test'));const db=new PrismaClient();
+const {ClientStoresService}=require('/app/apps/api/dist/modules/clients/client-stores.service');
+const {assertStoreReceipt}=require('/app/apps/api/dist/modules/clients/client-store-receipt');
+(async()=>{let passed=0;const check=(a,b)=>{assert.deepEqual(a,b);passed++},reject=async f=>{await assert.rejects(f);passed++};
+ const c=await db.client.create({data:{code:'STORE-TEST',name:'Synthetic'}}),u=await db.user.create({data:{email:'stores@example.test',passwordHash:'synthetic',name:'Synthetic'}});
+ const connections=[];for(const [id,marketplace] of [['m-wb','WILDBERRIES'],['m-ozon','OZON'],['b-wb','WILDBERRIES'],['b-ozon','OZON']])connections.push(await db.clientMarketplaceConnection.create({data:{clientId:c.id,marketplace,accountName:id,apiKey:'synthetic'}}));
+ const directory=[{id:'monlarti',name:'Монларти',connectionIds:connections.slice(0,2).map(c=>c.id)},{id:'braibo',name:'Брайбо',connectionIds:connections.slice(2).map(c=>c.id)}];
+ const sku=await db.sku.create({data:{clientId:c.id,internalSku:'SHARED',name:'Shared suit'}}),user={...u,roleCodes:['OWNER'],isDemo:false};
+ const service=new ClientStoresService(db,{requireClientAccess:(_,id)=>{assert.equal(id,c.id)}});process.env.WMS_CLIENT_STORES_ENABLED='true';
+ await service.save(c.id,directory,user);check((await service.get(c.id,user)).stores,directory);
+ await service.saveSkuStores(c.id,sku.id,['monlarti','braibo'],[],user);check((await service.getSkuStores(c.id,sku.id,user)).storeIds,['braibo','monlarti']);
+ await reject(()=>service.saveSkuStores(c.id,sku.id,['monlarti'],['braibo','monlarti'],user));await reject(()=>service.save(c.id,directory,{...user,roleCodes:['CLIENT']}));
+ await reject(()=>service.save(c.id,[{...directory[0],connectionIds:[]}, {...directory[1],connectionIds:connections.map(c=>c.id)}],user));
+ process.env.WMS_CLIENT_STORE_RECEIPTS_ENABLED='false';check(await db.$transaction(tx=>assertStoreReceipt(tx,{clientId:c.id,skuId:sku.id})),null);
+ process.env.WMS_CLIENT_STORE_RECEIPTS_ENABLED='true';await reject(()=>db.$transaction(tx=>assertStoreReceipt(tx,{clientId:c.id,skuId:sku.id})));
+ check((await db.$transaction(tx=>assertStoreReceipt(tx,{clientId:c.id,skuId:sku.id,storeId:'monlarti',sourceDocument:'one'}))).storeId,'monlarti');
+ await reject(()=>db.$transaction(tx=>assertStoreReceipt(tx,{clientId:c.id,skuId:sku.id,storeId:'braibo',sourceDocument:'one'})));
+ check((await db.$transaction(tx=>assertStoreReceipt(tx,{clientId:c.id,skuId:sku.id,storeId:'braibo',sourceDocument:'two'}))).storeId,'braibo');
+ check(await db.sku.count(),1);check(await db.stockBalance.count(),0);check(await db.stockMovement.count(),0);check(await db.productMark.count(),0);
+ check(await db.auditLog.count({where:{action:{in:['CLIENT_STORES_SAVED','SKU_STORES_SAVED']}}}),2);
+ console.log(JSON.stringify({passed,disposableDatabase:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>db.$disconnect());

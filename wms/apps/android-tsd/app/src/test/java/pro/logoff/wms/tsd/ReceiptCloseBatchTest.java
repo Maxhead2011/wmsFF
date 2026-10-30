@@ -43,6 +43,16 @@ public class ReceiptCloseBatchTest {
         assertEquals(3, new HashSet<>(batch.operationKeys()).size());
     }
 
+    // TEST: a queued receipt keeps its original shop even after switching the UI selection.
+    @Test public void storeContextIsAnImmutablePartOfEachScan() {
+        List<Map<String, String>> source = items(2);
+        for (Map<String, String> item : source) item.put("storeId", "monlarti");
+        ReceiptCloseBatch batch = ReceiptCloseBatch.create("client", "BOX", "receipt", source);
+        source.get(0).put("storeId", "braibo");
+        assertEquals("monlarti", batch.operations.get(0).payload.get("storeId"));
+        assertEquals("monlarti", batch.operations.get(1).payload.get("storeId"));
+    }
+
     @Test public void moreThanFiftyScansRemainOneBatch() {
         ReceiptCloseBatch batch = ReceiptCloseBatch.create("client", "BOX", "receipt", items(70));
         assertEquals(71, batch.operations.size());

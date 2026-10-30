@@ -1,3 +1,5 @@
+import { validateStoreDirectory } from '../clients/client-stores.policy';
+import { storeDirectoryKey } from '../clients/client-store-receipt';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ClientRequestStatus, ClientStatus, Prisma, TsdDeviceStatus, TsdOperationStatus, UserStatus } from '@prisma/client';
 import { randomBytes, randomUUID } from 'crypto';
@@ -230,7 +232,7 @@ export class TsdDeviceService {
     await this.touchActiveDevice(user.deviceId);
     const clientFilter = this.clientScopes.resolveClientFilter(user);
 
-    return this.prisma.client.findMany({
+    const clients = await this.prisma.client.findMany({
       where: {
         ...(clientFilter === undefined ? {} : { id: clientFilter }),
         status: { not: ClientStatus.ARCHIVED },
@@ -243,6 +245,15 @@ export class TsdDeviceService {
         storesWithoutBoxes: true,
       },
     });
+    // FIX: add only public store identity to clients already visible to this device.
+    if (process.env.WMS_CLIENT_STORES_ENABLED !== 'true' || process.env.WMS_CLIENT_STORE_RECEIPTS_ENABLED !== 'true') return clients;
+    return Promise.all(clients.map(async client => {
+      const setting = await this.prisma.systemSetting.findUnique({where: {key: storeDirectoryKey(client.id)}});
+      if (!setting) return client;
+      const connections = await this.prisma.clientMarketplaceConnection.findMany({where: {clientId: client.id}, select: {id: true}});
+      const stores = validateStoreDirectory(setting.value, connections.map(c => c.id));
+      return {...client, stores: stores.map(({id, name}) => ({id, name}))};
+    }));
   }
 
   async login(dto: LoginTsdDeviceDto) {
