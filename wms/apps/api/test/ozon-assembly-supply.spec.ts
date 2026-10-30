@@ -117,3 +117,17 @@ describe('Ozon label throttling',()=>{
   await expect(new OzonAssemblySupplyService({} as any,{} as any).call({},'/v1/cargoes-label/create',{},false)).rejects.toThrow();expect(fetcher).toHaveBeenCalledTimes(1);
  });
 });
+
+// TEST: download clicks must be durable and scoped before exposing the file URL.
+describe('Ozon label click history',()=>{
+ afterEach(()=>vi.unstubAllEnvs());
+ function ready(){const x=setup();x.shipment.integration.operations['42']={state:'SUCCESS',labelUrl:'https://cdn.ozon.ru/labels.pdf'};x.db.clientRequestEvent={create:vi.fn()};return x;}
+ it('records the actor and supply in visible history and audit without Ozon writes',async()=>{
+  const x=ready();expect(await x.svc.labelDownload('r','42',x.user)).toEqual({url:'https://cdn.ozon.ru/labels.pdf'});
+  expect(x.db.clientRequestEvent.create).toHaveBeenCalledWith({data:expect.objectContaining({requestId:'r',clientId:'client',createdByUserId:'u',title:'Нажата кнопка «Скачать стикеры Ozon»',body:expect.stringContaining('42')})});
+  expect(x.db.auditLog.create).toHaveBeenCalledWith({data:expect.objectContaining({action:'OZON_LABEL_DOWNLOAD_CLICK',userId:'u',entityId:'r',payload:{supplyId:'42',direction:'Москва'}})});expect(x.call).not.toHaveBeenCalled();
+ });
+ it('rejects foreign branch and absent supply without events',async()=>{const x=ready();await expect(x.svc.labelDownload('r','42',{...x.user,activeWarehouseId:'other'})).rejects.toThrow();await expect(x.svc.labelDownload('r','wrong',x.user)).rejects.toThrow();expect(x.db.clientRequestEvent.create).not.toHaveBeenCalled();});
+ it('rejects unsafe or unfinished labels',async()=>{const x=ready();for(const op of [{state:'ACCEPTED',labelUrl:'https://cdn.ozon.ru/a'},{state:'SUCCESS',labelUrl:'javascript:alert(1)'},{state:'SUCCESS'}]){x.shipment.integration.operations['42']=op;await expect(x.svc.labelDownload('r','42',x.user)).rejects.toThrow();}expect(x.db.clientRequestEvent.create).not.toHaveBeenCalled();});
+ it('does not return the link when history persistence fails',async()=>{const x=ready();x.db.clientRequestEvent.create.mockRejectedValue(Error('database unavailable'));await expect(x.svc.labelDownload('r','42',x.user)).rejects.toThrow('database unavailable');});
+});
