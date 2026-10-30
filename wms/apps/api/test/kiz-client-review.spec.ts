@@ -91,3 +91,25 @@ it('queues ambiguous client marks without merging them and allows administrator 
  await decideClientKizReview(f.db,{requireClientAccess:vi.fn()},f.getRow(),'REJECT','duplicate requires reconciliation',true,user);
  expect(f.getRow().status).toBe('REJECTED');
 });
+// TEST: WB moves the accepted mark to PACKING without changing stockMovementId.
+it('allows retry after the exact current order pick into packing without a source box',async()=>{
+ const f=fixture(),i={...input,scope:'FBS',taskId:'task'};
+ f.db.fbsTsdAssembly.findUnique.mockResolvedValue({id:'task',clientId:i.clientId,requestId:i.requestId,skuId:i.skuId,boxId:i.boxId,kiz,wbMetaStatus:'ACCEPTED',stockWarehouseId:'wh',itemCount:1});
+ f.db.shippedKizHistory.findMany.mockResolvedValue([]);await assertClientKizUse(f.db,i,user);
+ f.mark.status='PACKING';f.mark.boxId=null as any;f.mark.updatedAt=new Date('2026-10-30');
+ f.db.stockMovement={findMany:vi.fn(async()=>[{quantity:1}])};
+ await expect(assertClientKizUse(f.db,i,user)).resolves.toBe('ALLOW');
+ expect(f.db.stockMovement.findMany.mock.calls[0][0].where).toMatchObject({clientId:'client',warehouseId:'wh',sourceDocument:'request',skuId:'sku',boxId:null,status:'PACKING',idempotencyKey:{startsWith:'fbs-sticker-pick:task:'}});
+ f.db.stockMovement.findMany.mockResolvedValue([{quantity:1},{quantity:-1}]);
+ await expect(assertClientKizUse(f.db,i,user)).rejects.toThrow();
+});
+it('never silently promotes an open review when a later history lookup is empty',async()=>{
+ const f=fixture();await expect(withClientKizReview(f.db,user,()=>assertClientKizUse(f.db,input,user))).rejects.toThrow();
+ f.db.shippedKizHistory.findMany.mockResolvedValue([]);
+ await expect(assertClientKizUse(f.db,input,user)).rejects.toThrow();
+ expect(f.getRow().status).toBe('OPEN');
+});
+it('includes confirmed shipment date and previous order in the refusal',async()=>{
+ const f=fixture();f.db.shippedKizHistory.findMany.mockResolvedValue([{id:'old',kiz,orderId:'123456',requestNumber:99,shippedAt:new Date('2026-10-01T10:00:00Z')}]);
+ await expect(assertClientKizUse(f.db,input,user)).rejects.toThrow(/01\.10\.2026.*123456/);
+});
