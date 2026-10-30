@@ -26,6 +26,11 @@ public class OperationOutbox {
         return entity == null ? null : entity.toPendingOperation();
     }
 
+    public ReceiptProgress receiptProgress(String clientId, String document) {
+        return ReceiptProgress.from(document == null || document.isEmpty() ? new ArrayList<>() :
+            toPendingOperations(dao.receiptProgressRows(document)), clientId, document);
+    }
+
     public List<PendingOperation> pendingReceiptBatch(String closeKey) {
         PendingOperation close = findOperation(closeKey);
         if (close == null || !"receipt_close".equals(close.operationType)) return new ArrayList<>();

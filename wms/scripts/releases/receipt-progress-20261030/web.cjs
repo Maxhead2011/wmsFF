@@ -1,0 +1,9 @@
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),ts=require('../../../node_modules/typescript');
+const r=path.resolve(process.argv[2]);let html=fs.readFileSync(r+'/web-base/index.html','utf8');const match=html.match(/<script type="importmap">(.*?)<\/script>/s),map=JSON.parse(match[1]),entry=html.match(/<script type="module" crossorigin src="([^"]+)"/)[1];assert.equal(entry,'/assets/inventory-found-unit-20261030.js');
+const before=fs.readFileSync(r+'/web-base'+entry,'utf8');const anchor='className:"kiz-review-case__body",children:[';assert.equal(before.split(anchor).length,2);
+const message='Повторный скан на ТСД. При передаче обращения первая единица ещё не была зарегистрирована в WMS. Наличие двух физических товаров с одинаковым КИЗом не подтверждено.';
+const added='t.snapshot.receiptDuplicateUnconfirmed&&i("p",{role:"status",children:'+JSON.stringify(message)+'}),';const after=before.replace(anchor,anchor+added);assert.equal(after.replace(anchor+added,anchor),before);assert.equal(ts.createSourceFile('candidate.js',after,99,true).parseDiagnostics.length,0);
+const next='/assets/receipt-progress-20261030.js';for(const k of Object.keys(map.imports))if(map.imports[k]===entry)map.imports[k]=next;map.imports[entry]=next;html=html.replace(match[1],JSON.stringify(map)).replace(`src="${entry}"`,`src="${next}"`);
+fs.mkdirSync(r+'/web-payload/assets',{recursive:true});fs.writeFileSync(r+'/web-payload'+next,after);fs.writeFileSync(r+'/web-payload/index.html',html);
+// TEST: record enclosing function for an actual-artifact browser test.
+const ast=ts.createSourceFile('before.js',before,99,true);let owner;function visit(n){if(ts.isFunctionDeclaration(n)&&n.getText(ast).includes(anchor)&&n.getText(ast).length<10000)owner=n.name.text;ts.forEachChild(n,visit)}visit(ast);assert(owner);fs.writeFileSync(r+'/web-proof.json',JSON.stringify({owner,entry,next,exactInsertion:true}));console.log({owner,next});

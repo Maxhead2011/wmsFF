@@ -11,6 +11,7 @@ public class TsdOperationResponse {
     // FIX: retain per-operation conflicts beyond the two-message sync summary.
     public String code;
     public boolean duplicate;
+    public boolean localDuplicate; // FIX: distinguish a repeat before first upload from a server-confirmed duplicate.
     public TsdKizDuplicateInfo duplicateInfo;
     public String clientId;
     public String kiz;
