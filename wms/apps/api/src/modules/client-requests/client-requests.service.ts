@@ -57,6 +57,29 @@ export class ClientRequestsService {
     private readonly telegram?: TelegramNotificationService,
   ) {}
 
+  // FIX: sidebar totals share request-list scope; counts are requests, not goods/orders.
+  async navigationCounts(user: AuthUser) {
+    if (process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED !== 'true') throw new NotFoundException();
+    const rows = await this.prisma.clientRequest.findMany({
+      where: { clientId: this.clientScopes.resolveClientFilter(user),
+        warehouseId: user.activeWarehouseId && !user.roleCodes.includes('CLIENT') ? user.activeWarehouseId : undefined,
+        ...warehouseScopeWhere(user), status: {notIn:['DONE','CANCELLED','REJECTED']} },
+      select: {id:true,type:true,status:true,title:true,comment:true,ozonShipment:{select:{requestId:true}},
+        lamodaAssembly:{select:{requestId:true}},yandexFbyShipment:{select:{id:true}},_count:{select:{fbsOrderLinks:true}}},
+    });
+    const history = rows.length ? await readFbsAttemptHistory(this.prisma,{requestId:{in:rows.map(r=>r.id)}}) : [];
+    const historicalFbs = new Set(history.map(r=>r.task.requestId));
+    const counts = {requests:{total:0,inWork:0},fbs:{total:0,inWork:0},fbo:{total:0,inWork:0}};
+    for (const row of rows) {
+      counts.requests.total++; if(row.status==='IN_WORK') counts.requests.inWork++;
+      if(row.type!=='OUTBOUND') continue;
+      const explicitFbo=!!(row.ozonShipment||row.lamodaAssembly||row.yandexFbyShipment);
+      const fbs=!explicitFbo && (row._count.fbsOrderLinks>0 || historicalFbs.has(row.id) || /^(FBS|DBS)/i.test(row.title.trim()) || row.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:'));
+      const count=counts[fbs?'fbs':'fbo']; count.total++; if(row.status==='IN_WORK') count.inWork++;
+    }
+    return counts;
+  }
+
   // FIX: count the complete scoped queue, without the 200-row detail-list limit.
   async activeFboCounts(user: AuthUser) {
     if (process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED !== 'true') throw new NotFoundException();

@@ -70,6 +70,12 @@ export class ClientRequestsController {
     return this.clientRequests.activeFboCounts(user);
   }
 
+  // FIX: static scoped read route before request IDs; inherited read permission.
+  @Get('navigation-counts')
+  navigationCounts(@CurrentUser() user: AuthUser) {
+    return this.clientRequests.navigationCounts(user);
+  }
+
   @Get('box-overlaps')
   @RequirePermissions('system:admin')
   boxOverlaps(@CurrentUser() user: AuthUser) {

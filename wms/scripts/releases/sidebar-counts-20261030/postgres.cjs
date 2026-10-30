@@ -1,0 +1,21 @@
+// TEST: actual candidate services and Prisma query, disposable database only.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'sidebar-counts-test-pg');
+process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED='true';
+const{PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const{ClientRequestsService}=require(dir+'modules/client-requests/client-requests.service'),{ClientScopeService}=require(dir+'modules/auth/client-scope.service');
+(async()=>{let passed=0;const c=await p.client.create({data:{code:'TEST',name:'Test'}}),other=await p.client.create({data:{code:'OTHER',name:'Other'}}),w=await p.warehouse.create({data:{code:'TEST',name:'Test'}}),w2=await p.warehouse.create({data:{code:'OTHER',name:'Other'}});
+const make=(extra={})=>({id:randomUUID(),clientId:c.id,warehouseId:w.id,type:'OUTBOUND',status:'SUBMITTED',title:'Excel',...extra});
+const ozon=make({status:'IN_WORK'});
+await p.clientRequest.createMany({data:[...Array.from({length:205},()=>make()),make({title:'FBS test',status:'IN_WORK'}),make({type:'INBOUND',status:'IN_WORK'}),make({status:'PACKED'}),ozon,...['DONE','CANCELLED','REJECTED'].map(status=>make({status})),make({clientId:other.id}),make({warehouseId:w2.id})]});
+await p.ozonFboShipment.create({data:{requestId:ozon.id,importKey:randomUUID(),directions:[],integration:{}}});
+const svc=new ClientRequestsService(p,new ClientScopeService(),{}),user={id:'test',roleCodes:['BRANCH_MANAGER'],permissionCodes:['client-requests:read'],clientScopeMode:'LIMITED',clientIds:[c.id],activeWarehouseId:w.id,warehouseIds:[w.id]};
+const before=await p.clientRequest.findMany({orderBy:{id:'asc'},select:{id:true,status:true,updatedAt:true}});
+assert.deepEqual(await svc.navigationCounts(user),{requests:{total:209,inWork:3},fbs:{total:1,inWork:1},fbo:{total:207,inWork:1}});passed++;
+assert.equal((await svc.navigationCounts({...user,roleCodes:['CLIENT']})).requests.total,210);passed++;
+await assert.rejects(()=>svc.navigationCounts({...user,activeWarehouseId:w2.id}));passed++;
+assert.equal((await svc.navigationCounts({...user,permissionCodes:['system:admin'],clientScopeMode:'ALL'})).requests.total,210);passed++;
+process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED='false';await assert.rejects(()=>svc.navigationCounts(user));passed++;
+assert.deepEqual(await p.clientRequest.findMany({orderBy:{id:'asc'},select:{id:true,status:true,updatedAt:true}}),before);passed++;
+console.log(JSON.stringify({postgres:passed,syntheticOnly:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());

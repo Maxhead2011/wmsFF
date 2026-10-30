@@ -3,6 +3,7 @@ import {MagicWelcome} from './components/layout/MagicWelcome'; // FIX: personali
 import {ThemeStyleSwitcher} from './components/layout/ThemeStyleSwitcher'; // FIX: independent user appearance.
 import { MarkAllNotificationsButton } from './components/layout/MarkAllNotificationsButton';
 import { PantheraNavigation } from './components/layout/PantheraNavigation';
+import {SidebarRequestBadge,useSidebarRequestCounts} from './components/layout/SidebarRequestCounts';
 import {
   AlertTriangle,
   Bell,
@@ -181,6 +182,7 @@ export function App() {
   const [branches, setBranches] = useState<BranchSummary[]>([]);
   const [branchBusy, setBranchBusy] = useState(false);
   const [kizUnread, setKizUnread] = useState(0);
+  const sidebarCounts=useSidebarRequestCounts(isRestoring?null:session,import.meta.env.VITE_MARKETPLACE_WORKSPACES_ENABLED==='true');
   const [clientNotifications, setClientNotifications] = useState<ClientNotificationSummary[]>([]);
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
   const [modernSidebarCollapsed, setModernSidebarCollapsed] = useState(false);
@@ -605,7 +607,7 @@ export function App() {
         </div>
 
         <nav className="workspace-nav">
-          {uiTheme === 'la_panthera' ? <PantheraNavigation accessToken={session.accessToken} key={session.user.id} groups={groupedWorkspaces} userId={session.user.id} activeId={activeWorkspace.id} onOpen={id=>setActiveWorkspaceId(id as WorkspaceId)} kizUnread={kizUnread}/> : groupedWorkspaces.map((group) => (
+          {uiTheme === 'la_panthera' ? <PantheraNavigation counts={sidebarCounts} accessToken={session.accessToken} key={session.user.id} groups={groupedWorkspaces} userId={session.user.id} activeId={activeWorkspace.id} onOpen={id=>setActiveWorkspaceId(id as WorkspaceId)} kizUnread={kizUnread}/> : groupedWorkspaces.map((group) => (
             <section className="workspace-nav__group" key={group.id}>
               <p>{group.title}</p>
               {group.items.map((item) => {
@@ -621,6 +623,7 @@ export function App() {
                   >
                     <Icon size={18} aria-hidden="true" />
                     <span>{item.title}</span>
+                    <SidebarRequestBadge id={item.id} state={sidebarCounts}/>
                     {item.id === 'kiz' && kizUnread > 0 ? (
                       <strong
                         className="workspace-nav__badge"
