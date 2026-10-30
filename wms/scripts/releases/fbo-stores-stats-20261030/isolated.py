@@ -25,4 +25,3 @@ try:
  proof={'image':image,'fullApiHealth':True,'syntheticOnly':True,'postgres':11};(r/'isolated-proof.json').write_text(json.dumps(proof));print(json.dumps(proof))
 finally:
  subprocess.run(['docker','rm','-f',app,pg],check=False);subprocess.run(['docker','network','rm',network],check=False)
-
