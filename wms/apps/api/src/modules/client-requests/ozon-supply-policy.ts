@@ -1,3 +1,4 @@
+import {ozonLabelControlEnabled} from '../tsd/ozon-label-control';
 import { ConflictException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { OzonDirection } from '../tsd/ozon-fbo-directions';
@@ -54,8 +55,8 @@ export function supplyDifferences(directions: OzonDirection[], link: SupplyInteg
 export function packedCargoes(directions: OzonDirection[], link: SupplyIntegration, assembly: any) {
   const errors=supplyDifferences(directions,link);
   if(errors.length) throw new ConflictException('Устраните расхождения с Ozon перед передачей коробов.');
-  if(!assembly || !['CONTROL','COMPLETED'].includes(assembly.phase) || !assembly.boxes.length || assembly.boxes.some((b:any)=>!b.closedAt||!b.confirmedAt))
-    throw new ConflictException('Сначала упакуйте, закройте и проверьте все короба.');
+  if(!assembly || !['CONTROL','COMPLETED'].includes(assembly.phase) || !assembly.boxes.length || assembly.boxes.some((b:any)=>!b.closedAt||(!ozonLabelControlEnabled()&&!b.confirmedAt)))
+    throw new ConflictException(ozonLabelControlEnabled()?'Сначала упакуйте весь товар и закройте все короба.':'Сначала упакуйте, закройте и проверьте все короба.');
   const units=assembly.units.filter((u:any)=>u.state!=='RETURNED');
   if(units.some((u:any)=>u.state!=='PACKED'||!assembly.boxes.some((b:any)=>b.boxId===u.targetBoxId))) throw new ConflictException('Есть неупакованные единицы.');
   const result:Record<string,any[]>={};
@@ -83,7 +84,7 @@ export function cargoHash(cargoes:Record<string,any[]>) {return createHash('sha2
 export function assertSupplyMutable(integration: unknown, action: string) {
   assertNoOzonAdjustment(integration);
 
-  if((integration as SupplyIntegration|null)?.frozenHash && action!=='FINISH') throw new ConflictException('Состав зафиксирован для Ozon. Изменение требует отдельной сверки грузомест.');
+  if((integration as SupplyIntegration|null)?.frozenHash && action!=='FINISH'&&!(ozonLabelControlEnabled()&&action==='CONFIRM_BOX')) throw new ConflictException('Состав зафиксирован для Ozon. Изменение требует отдельной сверки грузомест.');
 }
 
 // FIX: an uncertain external quantity update freezes scans and cargo changes until reconciled.

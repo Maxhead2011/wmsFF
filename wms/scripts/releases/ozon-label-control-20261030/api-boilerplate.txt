@@ -1,0 +1,12 @@
+const React=e;const {useState,useEffect,useRef,useCallback}=React;const OzonEditCountdown=__Deadline.OzonEditCountdown;
+ async function call(path,token,body){const response=await fetch('/api/v1'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+token,...body instanceof FormData?{}:{'Content-Type':'application/json'}},...(body?{body:body instanceof FormData?body:JSON.stringify(body)}:{})});const data=await response.json();if(!response.ok)throw Error(Array.isArray(data.message)?data.message.join('; '):data.message??('HTTP '+response.status));return data;}
+ function form(p){const f=new FormData();for(const[k,v]of Object.entries(p))if(v!=null&&v!=='')f.append(k,v);return f;}
+ const ozonCustomerImportEnabled=t=>call('/ozon-fbo-import/capability',t),fetchOzonCustomerWarehouses=(t,c)=>call('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(c),t);
+ const previewOzonCustomerFile=(t,p)=>call('/ozon-fbo-import/preview',t,form(p)),createOzonCustomerFile=(t,p)=>call('/ozon-fbo-import/commit',t,form(p));
+ const fetchOzonLinkConnections=(t,c)=>call('/ozon-fbo-import/link-connections?clientId='+encodeURIComponent(c),t),previewOzonLinks=(t,p)=>call('/ozon-fbo-import/links/preview',t,p),createOzonLinks=(t,p)=>call('/ozon-fbo-import/links/commit',t,p);
+ const previewClientRequestAvailability=(t,p)=>call('/client-requests/availability-preview',t,p);
+ const ozonAdjustment=(t,id,a,b={})=>call('/tsd/requests/'+encodeURIComponent(id)+'/fbo/ozon-adjustment'+(a?'/'+a:''),t,a?b:undefined),ozonSync=ozonAdjustment;
+ const ozonAssemblySupply=(t,id,a,b={})=>call('/ozon-fbo-import/requests/'+encodeURIComponent(id)+'/supply'+(a?'/'+a:''),t,a?b:undefined);
+ async function downloadOzonCargoMapping(t,id){const r=await fetch('/api/v1/ozon-fbo-import/requests/'+encodeURIComponent(id)+'/supply/cargo-mapping.xlsx',{headers:{Authorization:'Bearer '+t}});if(!r.ok)throw Error('Не удалось скачать соответствия');return r.blob();}
+ 
+const recordOzonLabelDownload=(t,id,supplyId)=>call('/ozon-fbo-import/requests/'+encodeURIComponent(id)+'/supply/label-download',t,{supplyId});

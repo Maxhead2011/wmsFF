@@ -12682,3 +12682,8 @@ export const createLamodaAssembly=(accessToken:string,id:string,planId:string,qu
 
 // FIX: physical warehouse scan resolves the confirmed Lamoda correspondence.
 export function resolveLamodaRelabel(accessToken:string,id:string,body:{barcode:string;kiz?:string}) {return request<NonNullable<FboPlan["relabelUnits"]>[number]>(`/tsd/requests/${id}/fbo/lamoda-relabel/resolve`,{accessToken,method:"POST",body});}
+
+// FIX: save a click event before opening the server-stored Ozon label URL.
+export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
+ return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
+}

@@ -1,3 +1,4 @@
+import {ozonLabelControlEnabled,ozonBoxLabelConfirmed,confirmOzonBoxLabel} from './ozon-label-control';
 import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
 import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
 import { reconcileFboProgress, fboProgressStatusEnabled, fboRetryableTransactionError } from './fbo-progress-status';
@@ -276,6 +277,7 @@ export class FboTwoStageService {
             packingSuggestions: ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
                 ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
+            ozonLabelControlRequired: !!ozonShipment&&ozonLabelControlEnabled()&&assembly?.phase!=='COMPLETED',
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
             directions: shipment ? directionProgress(shipment.directions as OzonDirection[], assembly?.boxes ?? [], units) : [],
             lines: lines.map(l => { const pending = Math.min(l.remaining, waitingBySku.get(l.skuId) ?? 0); waitingBySku.set(l.skuId, (waitingBySku.get(l.skuId) ?? 0) - pending); return { ...l, pendingPlacementQuantity: pending }; }),
@@ -288,7 +290,7 @@ export class FboTwoStageService {
             needed: lines.reduce((s, l) => s + l.needed, 0), picked: lines.reduce((s, l) => s + l.picked, 0), packed: lines.reduce((s, l) => s + l.packed, 0),
             looseRemaining: units.filter(u => !u.wholeBox && u.state === 'PICKED').length,
             wholeBoxes: [...new Set(units.filter(u => u.wholeBox && u.state === 'PICKED').map(u => u.sourceBoxCode))],
-            boxes: (assembly?.boxes ?? []).map(b => ({ code: b.boxCode, direction: b.direction, wholeBox: b.wholeBox, closed: !!b.closedAt, confirmed: !!b.confirmedAt,
+            boxes: (assembly?.boxes ?? []).map(b => ({ code: b.boxCode, direction: b.direction, wholeBox: b.wholeBox, closed: !!b.closedAt, confirmed: ozonShipment&&ozonLabelControlEnabled()&&assembly?.phase!=='COMPLETED'?ozonBoxLabelConfirmed(ozonShipment.integration,b):!!b.confirmedAt,
                 quantity: units.filter(u => u.targetBoxId === b.boxId && u.state === 'PACKED').length })),
             shortage: Object.values(demand).reduce((s, n) => s + n, 0), compositionChanged: !!assembly && assembly.compositionHash !== composition(r) };
     }
@@ -554,15 +556,18 @@ export class FboTwoStageService {
                 const b = await tx.fboAssemblyBox.findUnique({ where: { requestId_boxCode: { requestId: id, boxCode: dto.targetBoxCode ?? '' } } });
                 if (!b || !b.closedAt)
                     throw new ConflictException('Короб не входит в поставку.');
-                if (b.confirmedAt)
+                if (ozonShipment&&ozonLabelControlEnabled()?ozonBoxLabelConfirmed(ozonShipment.integration,b):b.confirmedAt)
                     throw new ConflictException('Этот короб уже подтверждён.');
                 await this.validatePackedBox(tx, r, b.boxId, units);
+                // FIX: the second scan must match the persisted Ozon cargo for this exact box.
+                if(ozonShipment&&ozonLabelControlEnabled())await confirmOzonBoxLabel(tx,{...ozonShipment,clientId:r.clientId},b,dto.barcode,user.id);
                 await tx.fboAssemblyBox.update({ where: { id: b.id }, data: { confirmedAt: new Date(), confirmedByUserId: user.id } });
             }
             else if (dto.action === 'FINISH') {
                 await assertClientRequestKizShipment(tx,r,user); // FIX: whole cartons and partial picks share the final gate.
                 requirePhase('CONTROL');
                 const boxes = await tx.fboAssemblyBox.findMany({ where: { requestId: id } });
+                if(ozonShipment&&ozonLabelControlEnabled()&&boxes.some(b=>!ozonBoxLabelConfirmed(ozonShipment.integration,b)))throw new ConflictException('Проверьте каждый короб: отсканируйте наш короб и наклеенный стикер Ozon.');
                 if (!boxes.length || boxes.some(b => !b.confirmedAt) || lines.some(l => l.packed !== l.needed))
                     throw new ConflictException('Отсканируйте все короба поставки.');
                 for (const b of boxes)

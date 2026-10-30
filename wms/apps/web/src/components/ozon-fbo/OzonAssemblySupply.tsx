@@ -2,7 +2,15 @@ import {OzonEditCountdown} from './OzonEditCountdown';
 import './ozon-workspace.css';
 import {ozonCabinetLabel} from '../client-requests/OzonLinkImport';
 import {useEffect,useState} from 'react';
-import {ozonAssemblySupply,downloadOzonCargoMapping,type OzonSupplyView} from '../../lib/api';
+import {ozonAssemblySupply,downloadOzonCargoMapping,recordOzonLabelDownload,type OzonSupplyView} from '../../lib/api';
+
+// FIX: preserve the user gesture and never open a file if recording the click fails.
+export async function openRecordedOzonLabels(record:()=>Promise<{url:string}>){
+ const tab=window.open('about:blank','_blank');
+ if(!tab)throw new Error('Разрешите открытие новой вкладки для скачивания стикеров.');
+ tab.opener=null;
+ try{const result=await record();tab.location.replace(result.url);}catch(e){tab.close();throw e;}
+}
 
 // FIX: readiness follows every mapped direction, not merely one successful response.
 export function cargoMappingReady(data:OzonSupplyView|null){return !!data?.directions.length&&data.directions.every(d=>data.link?.operations[data.link.mapping[d.name]]?.state==='SUCCESS');}
@@ -13,12 +21,18 @@ export function OzonAssemblySupply({requestId,accessToken,clientName,onBindingRe
  function accept(v:OzonSupplyView){setData(v);setMapping(v.link?.mapping??{});setConnection(v.link?.connectionId??v.connections[0]?.id??'');setOrder('');onBindingReady?.(!!v.link&&!v.differences.length&&v.directions.every(d=>!!v.link?.mapping[d.name]));}
  useEffect(()=>{let live=true;void ozonAssemblySupply(accessToken,requestId).then(v=>{if(live)accept(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[accessToken,requestId]);
  async function action(name:string,body:unknown={}){setBusy(true);setError('');setNotice('');try{accept(await ozonAssemblySupply(accessToken,requestId,name,body));setNotice('Данные обновлены.');setConfirm(false);}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
+ // FIX: open synchronously to avoid popup blocking, navigate only after the click is recorded.
+ async function downloadLabels(supplyId:string){
+  setBusy(true);setError('');setNotice('');
+  try{await openRecordedOzonLabels(()=>recordOzonLabelDownload(accessToken,requestId,supplyId));setNotice('Нажатие «Скачать стикеры Ozon» записано в историю заявки.');}
+  catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}
+ }
  const frozen=!!data?.link?.frozenHash;
  // FIX: a partial transfer must not look like a complete carton-to-label report.
  const mappingReady=cargoMappingReady(data);
  async function downloadMapping(){setBusy(true);setError('');try{const blob=await downloadOzonCargoMapping(accessToken,requestId),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`ozon-boxes-${requestId}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
  const orders=data?.link?(data.link.orders??[data.link]):[];
- return <section className="ozfbo-card ozfbo-supply-panel" aria-label="Связь сборки с Ozon"><h2>Поставка и грузоместа Ozon</h2><p>Привяжите существующую поставку до сборки. Состав коробов передаётся после упаковки и проверки.</p>
+ return <section className="ozfbo-card ozfbo-supply-panel" aria-label="Связь сборки с Ozon"><h2>Поставка и грузоместа Ozon</h2><p>Привяжите существующую поставку до сборки. После упаковки и закрытия коробов передайте грузоместа в Ozon. Затем распечатайте и наклейте стикеры. На ТСД проверьте каждый короб: наш ШК → ШК стикера Ozon.</p>
  {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
  {!data?<p>Загрузка…</p>:<><fieldset className="ozfbo-supply-bind" disabled={busy||frozen}><label>Кабинет<select disabled={!!data.link} value={connection} onChange={e=>setConnection(e.target.value)}>{data.connections.map(c=><option key={c.id} value={c.id}>{ozonCabinetLabel({...c,sellerId:c.sellerId??''},clientName)}</option>)}</select></label><label>Ссылка или ID заявки Ozon из адреса кабинета<input value={order} onChange={e=>setOrder(e.target.value)}/></label><button type="button" disabled={!connection||!order} onClick={()=>void action('bind',{connectionId:connection,orderId:order})}>Добавить заявку Ozon</button></fieldset>
  {data.link&&<><OzonEditCountdown orders={orders}/><h3>Заявки Ozon общей сборки ({orders.length})</h3>{orders.map(o=><p className="ozfbo-linked-order" key={o.orderId}><a href={'https://seller.ozon.ru/app/supply/orders/'+o.orderId} target="_blank" rel="noreferrer">Ozon №{o.orderNumber}</a> · {o.place} · {o.date?new Date(o.date).toLocaleString('ru-RU'):''} · {o.state} · {o.supplies.reduce((n,s)=>n+s.items.reduce((n,i)=>n+i.quantity,0),0)} шт.</p>)}<p>Всего по файлу: {data.directions.reduce((n,d)=>n+d.items.reduce((n,i)=>n+i.quantity,0),0)} шт. · В Ozon: {data.link.supplies.reduce((n,s)=>n+s.items.reduce((n,i)=>n+i.quantity,0),0)} шт.</p>
@@ -28,9 +42,9 @@ export function OzonAssemblySupply({requestId,accessToken,clientName,onBindingRe
  {!bindingOnly&&<>{data.packingError&&<p>{data.packingError}</p>}
  <button type="button" disabled={busy||!mappingReady} onClick={()=>void downloadMapping()}>Скачать соответствия коробов (Excel)</button>
  <p>Короб WMS → направление → номер грузоместа Ozon. Файл доступен после подтверждения всех направлений. Порядок этикеток может отличаться от порядка коробов.</p>
- <label className="ozfbo-upload-confirm"><input type="checkbox" checked={confirm} disabled={busy} onChange={e=>setConfirm(e.target.checked)}/>Подтверждаю передачу состава проверенных коробов</label>
+ <label className="ozfbo-upload-confirm"><input type="checkbox" checked={confirm} disabled={busy} onChange={e=>setConfirm(e.target.checked)}/>Подтверждаю передачу состава упакованных и закрытых коробов</label>
  <button type="button" disabled={busy||!confirm||!!data.packingError||data.differences.length>0} onClick={()=>void action('upload',{confirm:true})}>Передать короба в Ozon</button></>}
- {Object.keys(data.link.operations).length>0&&<><button type="button" disabled={busy} onClick={()=>void action('status')}>Проверить результат отправки</button><p>Состав зафиксирован. Повторная отправка уже начатых направлений не выполняется.</p>{Object.entries(data.link.operations).map(([id,op])=><div key={id}><strong>{data.link!.supplies.find(s=>s.id===id)?.name??id}</strong><p>{({SENDING:'Запрос отправляется; повтор заблокирован',UNKNOWN:'Ответ не подтверждён — требуется сверка грузомест в кабинете',ACCEPTED:'Ozon обрабатывает',SUCCESS:'Грузоместа подтверждены',FAILED:'Ozon отклонил грузоместа'})[op.state]??op.state}</p>{op.error&&<p role="alert">{op.error}</p>}{op.state==='SUCCESS'&&<button disabled={busy} type="button" onClick={()=>void action('labels',{supplyId:id})}>Получить этикетки Ozon</button>}{op.labelOperationId&&!op.labelUrl&&<p>Этикетки готовятся. Нажмите «Получить этикетки Ozon» повторно.</p>}{op.labelUrl&&<a href={op.labelUrl} target="_blank" rel="noreferrer">Открыть этикетки для печати</a>}</div>)}</>}
+ {Object.keys(data.link.operations).length>0&&<><button type="button" disabled={busy} onClick={()=>void action('status')}>Проверить результат отправки</button><p>Состав зафиксирован. Повторная отправка уже начатых направлений не выполняется.</p>{Object.entries(data.link.operations).map(([id,op])=><div key={id}><strong>{data.link!.supplies.find(s=>s.id===id)?.name??id}</strong><p>{({SENDING:'Запрос отправляется; повтор заблокирован',UNKNOWN:'Ответ не подтверждён — требуется сверка грузомест в кабинете',ACCEPTED:'Ozon обрабатывает',SUCCESS:'Грузоместа подтверждены',FAILED:'Ozon отклонил грузоместа'})[op.state]??op.state}</p>{op.error&&<p role="alert">{op.error}</p>}{op.state==='SUCCESS'&&<button disabled={busy} type="button" onClick={()=>void action('labels',{supplyId:id})}>Получить этикетки Ozon</button>}{op.labelOperationId&&!op.labelUrl&&<p>Этикетки готовятся. Нажмите «Получить этикетки Ozon» повторно.</p>}{op.labelUrl&&<button type="button" disabled={busy} onClick={()=>void downloadLabels(id)}>Скачать стикеры Ozon</button>}</div>)}</>}
  </>}
  </>}
  </section>;

@@ -99,6 +99,7 @@ final class FboScanState {
         } else {
             p.put("lastPackingOperation","");p.put("lastPackingBox","");p.put("lastPackingBarcode","");
         }
+        if("CONFIRM_BOX".equals(action))p.put("targetBoxCode","");
         return p;
     }
     void restore(Map<String,String> value) {
@@ -128,6 +129,11 @@ final class FboScanState {
     void reconcile(TsdFboPlan plan) { reconcile(plan, false); }
     void reconcile(TsdFboPlan plan, boolean packing) {
         String phase = screenPhase(plan, packing);
+        // FIX: retain only an unconfirmed control box across read-only refreshes.
+        if("logoff".equals(BuildConfig.FLAVOR)&&plan.ozonLabelControlRequired&&"CONTROL".equals(phase)){
+            boolean valid=false;for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(target)&&b.closed&&!b.confirmed)valid=true;
+            if(!valid)target="";barcode="";return;
+        }
         boolean hasPallet=false,hasSource=false,hasTarget=false;
         for(TsdFboPlan.Route r:plan.route){if(r.pallet.equals(pallet))hasPallet=true;if(r.pallet.equals(pallet)&&r.boxCode.equals(source))hasSource=true;}
         for(TsdFboPlan.Box b:plan.boxes)if(b.code.equals(target)&&!b.closed)hasTarget=true;

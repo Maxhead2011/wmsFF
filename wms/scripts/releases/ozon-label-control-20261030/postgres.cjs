@@ -1,0 +1,44 @@
+// TEST: published runtime plus exact two-module candidate, disposable PostgreSQL only.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID,createHash}=require('node:crypto');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'ozon-label-control-test-pg');
+Object.assign(process.env,{WMS_FBO_TWO_STAGE_ENABLED:'true',WMS_KIZ_CLIENT_GUARD_ENABLED:'true',WMS_OZON_FBO_IMPORT_ENABLED:'true',WMS_OZON_LABEL_CONTROL_ENABLED:'true'});
+const{PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const{FboTwoStageService}=require(dir+'modules/tsd/fbo-two-stage.service'),{ClientScopeService}=require(dir+'modules/auth/client-scope.service'),{StockBalancesService}=require(dir+'modules/stock/stock-balances.service'),{StockOperationsService}=require(dir+'modules/stock/stock-operations.service'),{ClientRequestMarketplaceFilesService}=require(dir+'modules/client-requests/client-request-marketplace-files.service');
+const guard=require(dir+'common/kiz-client-review'),registry=require(dir+'common/kiz-client-registry');
+(async()=>{let passed=0;const wh=await p.warehouse.create({data:{code:'TEST',name:'Test'}}),c=await p.client.create({data:{code:'TEST',name:'Test'}}),actor=await p.user.create({data:{name:'Worker',email:'worker@test.invalid',passwordHash:'disabled'}});await p.warehouseClient.create({data:{warehouseId:wh.id,clientId:c.id,status:'ACTIVE'}});
+const sku=await p.sku.create({data:{clientId:c.id,internalSku:'TEST',name:'Test',needsChestnyZnak:false,barcodes:{create:{value:'2050000000000'}}}});
+const user={id:actor.id,name:actor.name,roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:wh.id};
+const scopes=new ClientScopeService(),balances=new StockBalancesService(p,scopes),stock=new StockOperationsService(p,scopes,balances,undefined,undefined,undefined,new(require(dir+'common/boxes/box-code-policy.service').BoxCodePolicyService)(new(require(dir+'common/settings/system-settings.service').SystemSettingsService)(p))),files=new ClientRequestMarketplaceFilesService(p,scopes),svc=new FboTwoStageService(p,scopes,balances,stock,{assertStockMovementsAllowed:async()=>{}},files);
+
+const id=randomUUID(),line=randomUUID(),boxes=[0,1].map(n=>({id:randomUUID(),code:'FFL_TEST_'+n,clientId:c.id,warehouseId:wh.id}));
+await p.box.createMany({data:boxes});
+await p.clientRequest.create({data:{id,clientId:c.id,warehouseId:wh.id,type:'OUTBOUND',status:'IN_WORK',title:'Ozon test',items:{create:{id:line,skuId:sku.id,barcode:'2050000000000',quantity:2}}}});
+await p.fboAssembly.create({data:{requestId:id,phase:'CONTROL',compositionHash:createHash('sha256').update(JSON.stringify([[line,sku.id,'2050000000000',2]])).digest('hex')}});
+for(const b of boxes){await p.fboAssemblyBox.create({data:{requestId:id,boxId:b.id,activeBoxId:b.id,boxCode:b.code,direction:'Москва',closedAt:new Date(),confirmedAt:new Date(),confirmedByUserId:actor.id}});
+ await p.fboAssemblyUnit.create({data:{requestId:id,requestItemId:line,skuId:sku.id,barcode:'2050000000000',sourceBoxId:b.id,sourceBoxCode:b.code,targetBoxId:b.id,targetBoxCode:b.code,state:'PACKED',wholeBox:false,pickedByUserId:actor.id,packedByUserId:actor.id,packedAt:new Date()}});
+ await p.stockBalance.create({data:{balanceKey:randomUUID(),clientId:c.id,warehouseId:wh.id,skuId:sku.id,boxId:b.id,status:'PACKING',quantity:1}});
+}
+const parcels=await p.fboAssemblyBox.findMany({where:{requestId:id},orderBy:{boxCode:'asc'}}),directions=[{name:'Москва',items:[{skuId:sku.id,barcode:'2050000000000',quantity:2}]}];
+const link={connectionId:'test',orderId:'1',orderNumber:'1',place:'x',date:'',state:'DATA_FILLING',checkedAt:'',mapping:{Москва:'42'},supplies:[{id:'42',name:'Москва',items:[{barcode:'2050000000000',offerId:'a',quantity:2,quant:1}]}],operations:{}};
+await p.ozonFboShipment.create({data:{requestId:id,importKey:randomUUID(),directions,integration:link}});
+const policy=require(dir+'modules/client-requests/ozon-supply-policy');
+const assembly=await p.fboAssembly.findUnique({where:{requestId:id},include:{boxes:true,units:true}});
+const cargoes=policy.packedCargoes(directions,link,assembly);assert.equal(cargoes['42'].length,2);passed++;
+const act=(action,extra={},operationId=randomUUID())=>svc.act(id,{action,operationId,...extra},user);
+await assert.rejects(()=>act('CONFIRM_BOX',{targetBoxCode:boxes[0].code,barcode:'1000000000064215123'}),/грузоместа/);passed++;
+link.frozenHash=policy.cargoHash(cargoes);link.operations['42']={state:'SUCCESS',labelUrl:'https://test.invalid/labels',cargoes:parcels.map((b,i)=>({key:b.id,cargoId:'100000000006421512'+(3+i)}))};
+await p.ozonFboShipment.update({where:{requestId:id},data:{integration:link}});
+assert((await svc.plan(id,user)).boxes.every(b=>!b.confirmed));passed++;
+await assert.rejects(()=>act('FINISH'),/Проверьте каждый короб/);passed++;
+await assert.rejects(()=>act('CONFIRM_BOX',{targetBoxCode:boxes[0].code}),/не соответствует/);passed++;
+await assert.rejects(()=>act('CONFIRM_BOX',{targetBoxCode:boxes[0].code,barcode:'1000000000064215124'}),/не соответствует/);passed++;
+const operationId=randomUUID(),pair={targetBoxCode:boxes[0].code,barcode:'1000000000064215123'};
+await act('CONFIRM_BOX',pair,operationId);await act('CONFIRM_BOX',pair,operationId);
+assert.equal(await p.clientRequestEvent.count({where:{requestId:id,title:'Проверена наклейка Ozon на коробе'}}),1);passed++;
+await assert.rejects(()=>act('FINISH'),/Проверьте каждый короб/);passed++;
+await assert.rejects(()=>act('CONFIRM_BOX',{targetBoxCode:boxes[1].code,barcode:'1000000000064215123'}),/не соответствует/);passed++;
+await act('CONFIRM_BOX',{targetBoxCode:boxes[1].code,barcode:'1000000000064215124'});assert((await svc.plan(id,user)).boxes.every(b=>b.confirmed));passed++;
+await act('FINISH');assert.equal((await p.fboAssembly.findUnique({where:{requestId:id}})).phase,'COMPLETED');passed++;
+const {OzonAssemblySupplyService}=require(dir+'modules/client-requests/ozon-assembly-supply.service');await new OzonAssemblySupplyService(p,scopes).labelDownload(id,'42',user);assert.equal(await p.clientRequestEvent.count({where:{requestId:id,title:'Нажата кнопка «Скачать стикеры Ozon»'}}),1);passed++;
+console.log(JSON.stringify({postgres:passed,syntheticOnly:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());
