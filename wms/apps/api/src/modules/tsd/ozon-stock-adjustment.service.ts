@@ -1,4 +1,4 @@
-import {BadRequestException,ConflictException,Injectable,NotFoundException} from '@nestjs/common';
+import {BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException} from '@nestjs/common';
 import {randomUUID} from 'node:crypto';
 import {syncComposition} from './ozon-request-sync-policy';
 import {PrismaService} from '../../common/prisma/prisma.service';
@@ -17,9 +17,12 @@ export class OzonStockAdjustmentService {
  constructor(private readonly db:PrismaService,private readonly scopes:ClientScopeService,private readonly fbo:FboTwoStageService,private readonly ozon:OzonAssemblySupplyService){}
  private async load(tx:any,id:string,user:AuthUser){
   if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true')throw new NotFoundException('ФБО Ozon выключено.');
+  // FIX: opening customer correction must not grant internal operators new stock privileges.
+  if(!(user.roleCodes??[]).includes('CLIENT')&&!(user.permissionCodes??[]).some(p=>['system:admin','stock:write'].includes(p)))throw new ForbiddenException('Нет права изменения складских заявок.');
   const s=await tx.ozonFboShipment.findUnique({where:{requestId:id},include:{request:{include:{items:true,fboAssembly:{include:{units:true,boxes:true}}}}}});
   if(!s)throw new NotFoundException('Сборка Ozon не найдена.');this.scopes.requireClientAccess(user,s.request.clientId,'write');assertWarehouseAccess(user,s.request,'write');
-  if(!user.activeWarehouseId||user.activeWarehouseId!==s.request.warehouseId)throw new ConflictException('Выберите филиал заявки.');return s;
+  // FIX: customer imports carry their branch on the scoped request, not in the internal branch selector.
+  if(!(user.roleCodes??[]).includes('CLIENT')&&(!user.activeWarehouseId||user.activeWarehouseId!==s.request.warehouseId))throw new ConflictException('Выберите филиал заявки.');return s;
  }
  private async connection(s:any){const c=await this.db.clientMarketplaceConnection.findFirst({where:{id:s.integration?.connectionId,clientId:s.request.clientId,marketplace:'OZON',isActive:true}});if(!s.integration?.connectionId||!c?.apiKey)throw new ConflictException('Сначала привяжите кабинет и поставку Ozon.');return c;}
  private async fresh(s:any,c:any){const old=s.integration as SupplyIntegration,orders=[];for(const o of supplyOrders(old))orders.push(...supplyOrders(await this.ozon.snapshot(c,o.orderId)));return mergeSupplyOrders(old,orders);}
