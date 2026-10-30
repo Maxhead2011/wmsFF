@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 246 // FIX: durable receipt progress and local duplicate review.
-            versionName = "0.1.246-receipt-progress"
+            versionCode = 247 // FIX: take the server-approved remainder whole in partial FBO picking.
+            versionName = "0.1.247-fbo-partial-whole"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
