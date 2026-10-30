@@ -71,14 +71,15 @@ describe('FBO progress', () => {
     vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'false');
     await reconcileFboProgress({} as any, 'r', 'u');
   });
-  it('repairs stale submitted/picking state atomically without completing control', async () => {
+  it.each(['PICKING', 'PACKING'])('repairs stale submitted/%s state atomically without completing control', async phase => {
     vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
     const tx = { clientRequest: { findUnique: vi.fn().mockResolvedValue({ status: 'SUBMITTED', items: lines }), update: vi.fn() },
-      fboAssembly: { findUnique: vi.fn().mockResolvedValue({ phase: 'PICKING' }), update: vi.fn() },
+      fboAssembly: { findUnique: vi.fn().mockResolvedValue({ phase }), update: vi.fn() },
       fboAssemblyUnit: { findMany: vi.fn().mockResolvedValue(units) }, auditLog: { create: vi.fn() } };
     await reconcileFboProgress(tx as any, 'r', 'u');
     expect(tx.clientRequest.update).toHaveBeenCalledWith({ where: { id: 'r' }, data: { status: 'IN_WORK' } });
-    expect(tx.fboAssembly.update).toHaveBeenCalledWith({ where: { requestId: 'r' }, data: { phase: 'PACKING' } });
+    if (phase === 'PICKING') expect(tx.fboAssembly.update).toHaveBeenCalledWith({ where: { requestId: 'r' }, data: { phase: 'PACKING' } });
+    else expect(tx.fboAssembly.update).not.toHaveBeenCalled();
     expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
   });
 });
