@@ -6790,6 +6790,16 @@ export type AdministrationTsdWorkloads = {
 };
 
 export type TsdMonitoring = Omit<AdministrationTsdWorkloads, 'summary' | 'devices'> & {
+  fboPickerStatistics?: {
+    summary: { workers: number; requests: number; pickedUnits: number; packedUnits: number };
+    workers: Array<{
+      workerId: string; workerName: string; requests: number; pickedUnits: number; packedUnits: number;
+      requestDetails: Array<{
+        requestId: string; requestNumber: number; title: string; clientName: string;
+        pickedUnits: number; packedUnits: number; firstActionAt: string; lastActionAt: string;
+      }>;
+    }>;
+  };
   summary: AdministrationTsdWorkloads['summary'] & { errors24h: number };
   pickerStatistics: {
     period: { from: string; to: string; label: string };
@@ -8857,7 +8867,7 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 
 export type OzonCustomerPreview = {items?:Array<{skuId:string;name:string}>;totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
 export type OzonEditDeadline={orderId:string;orderNumber:string;editDeadlineAt?:string|null;checkedAt?:string};
-export type OzonCustomerRequest={fboProgressLabel?:string;clientId?:string;clientName?:string;clientCode?:string;warehouseName?:string|null;createdAt?:string;itemCount?:number;itemsPreview?:{name:string|null;barcode:string|null;quantity:number}[];editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export type OzonCustomerRequest={storeState?:'ASSIGNED'|'MIXED'|'UNASSIGNED';storeNames?:string[];storeIds?:string[];fboProgressLabel?:string;clientId?:string;clientName?:string;clientCode?:string;warehouseName?:string|null;createdAt?:string;itemCount?:number;itemsPreview?:{name:string|null;barcode:string|null;quantity:number}[];editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
 export type OzonCustomerWarehouse = {id:string;name:string};
 // FIX: use the same explicit branch for the list and both multipart import steps.
 export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}

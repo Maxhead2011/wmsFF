@@ -1,5 +1,6 @@
 import {supplyOrders,type SupplyIntegration} from './ozon-supply-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
+import { requestStoreContexts } from '../clients/request-store-context';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestStatus } from '@prisma/client';
 import {unboxedFboEnabled} from '../tsd/fbo-unboxed-picking';
@@ -67,11 +68,13 @@ export class OzonFboImportService {
     const rows = await this.db.clientRequest.findMany({where:{clientId:clientFilter,warehouseId,ozonShipment:{isNot:null},
       ...(beforeNumber !== undefined ? {number:{lt:Number(beforeNumber)}} : {}),
       status: view === 'completed' ? {in:closed} : {notIn:closed}},
-      orderBy:all?{number:'desc'}:{createdAt:'desc'},take:100,select:{id:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
+      orderBy:all?{number:'desc'}:{createdAt:'desc'},take:100,select:{id:true,clientId:true,number:true,title:true,status:true,desiredDate:true,destinationCity:true,
         ...(all?{clientId:true,createdAt:true,client:{select:{name:true,code:true}},warehouse:{select:{name:true}}}:{}),
         items:{select:{quantity:true,...(all?{name:true,barcode:true}:{})}},ozonShipment:{select:{directions:true,integration:true}},fboAssembly:{select:{phase:true}}}});
     const progressLabels = await fboProgressLabels(this.db, rows.map(r => r.id));
-    return rows.map(r=>({id:r.id,number:r.number,title:r.title,status:r.status,fboProgressLabel:progressLabels[r.id],desiredDate:r.desiredDate,destinationCity:r.destinationCity,
+    // FIX: resolve shops only after the existing client/warehouse filters.
+    const stores = await requestStoreContexts(this.db, rows);
+    return rows.map(r=>({...stores.get(r.id),id:r.id,number:r.number,title:r.title,status:r.status,fboProgressLabel:progressLabels[r.id],desiredDate:r.desiredDate,destinationCity:r.destinationCity,
       ...(all?{clientId:r.clientId,clientName:r.client?.name??null,clientCode:r.client?.code??null,warehouseName:r.warehouse?.name??null,createdAt:r.createdAt,
         itemCount:r.items.length,itemsPreview:r.items.slice(0,3).map(i=>({name:i.name??null,barcode:i.barcode??null,quantity:i.quantity}))}:{}),
       editDeadlines:r.ozonShipment?.integration?supplyOrders(r.ozonShipment.integration as SupplyIntegration).map(o=>({orderId:o.orderId,orderNumber:o.orderNumber,editDeadlineAt:o.editDeadlineAt??null,checkedAt:o.checkedAt})):[],

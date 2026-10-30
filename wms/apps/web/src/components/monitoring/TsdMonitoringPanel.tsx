@@ -30,6 +30,7 @@ import {
 } from '../../lib/api';
 import './tsd-monitoring.css';
 import { TsdMessagesDialog } from './TsdMessagesDialog';
+import { FboPickerStatistics } from './FboPickerStatistics';
 
 type Props = { session: AuthSession };
 type Device = TsdMonitoring['devices'][number];
@@ -347,6 +348,7 @@ export function TsdMonitoringPanel({ session }: Props) {
       ) : null}
 
       {data ? <PickerStatistics statistics={data.pickerStatistics} /> : null}
+      {data?.fboPickerStatistics ? <FboPickerStatistics statistics={data.fboPickerStatistics} period={data.pickerStatistics.period.label} /> : null}
 
       {historyOpen ? (
         <div className="tsd-history-modal" role="presentation" onMouseDown={() => setHistoryOpen(false)}>
