@@ -1,0 +1,3 @@
+*.json -text
+*.prisma -text
+*.tar.gz -text
