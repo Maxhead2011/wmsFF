@@ -1,4 +1,4 @@
-In progress, not deployed: [FBO automatic progress](fbo-progress-status.md). API4086/web559 and synthetic actual-runtime9 passed; PR776 baseline integration, PostgreSQL and browser verification pending.
+Prepared PR775, not yet deployed: [FBO automatic progress](fbo-progress-status.md). PR776 baseline; API4090/web562, runtime12, PostgreSQL9/full health, browser11, baseline8 passed. Own-WMS flag only.
 
 Published PR776 / 2026-10-30: Ozon file/link imports show aggregated SKU stock and deficits, with full demand or confirmed WMS/Ozon correction. Customer-scoped permissions and file binding retained. API4072/web560 (151/2 skipped), TypeScript, source browser8, candidate/public browser10, runtime11 and baseline8 passed. Exact3 API/2web; schema/APK245/environment/sold unchanged. Baseline `2026-10-30-ozon-import-stock`, sourceParityVerified=false. [Details](ozon-import-stock-review.md).
 

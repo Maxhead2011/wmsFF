@@ -1,18 +1,17 @@
-# Автоматические этапы ФБО — в разработке
+# Automatic FBO progress
 
-Рабочая ветка: fix/fbo-progress-release, база PR773. Изменение не опубликовано и не включено на сервере.
+PR775: fix/fbo-progress-release into feature/wb-print-check. Verified on published PR776, pending production deployment.
 
-Добавлены fbo-progress-status.ts и вызов из транзакции сканирования FboTwoStageService. При фактическом отборе статус восстанавливается в IN_WORK. Когда каждая позиция отобрана в точном количестве, PICKING переходит в PACKING. Упакованные единицы входят в число отобранных. RETURNED исключены. Переполнение одного SKU не компенсирует дефицит другого. Повторная команда FINISH_PICK из старого ТСД допускается после автоматического перехода. Флаг WMS_FBO_PROGRESS_STATUS_ENABLED выключен по умолчанию; проданная ВМС не меняется.
+Physical picking restores IN_WORK. Exact per-item completion moves PICKING to PACKING. Packed units count as picked, RETURNED units do not. Excess for one SKU cannot cover another shortage. Older terminals may repeat FINISH_PICK after the automatic transition.
 
-Первоначальный список проверок до выпуска: отображение «Упаковано, ожидает проверки», проверка всех путей фактического серверного runtime, конкурентные транзакции, сохранение ручного закрытия неполного отбора, совместимость старых терминалов на последней единице, безопасная сверка уже выполненных заявок, точный overlay и проверка опубликованного образа. Изменять ClientRequest.status на PACKED до штатной проверки коробов нельзя: этот статус разрешает другие операции отгрузки.
+WB/Ozon/Lamoda lists display packed-pending-control separately from ClientRequest.status. The frozen pickClosure target is respected. PACKED permissions still require normal carton control; handover is not automatic. Terminal/cancelled requests are not reopened.
 
-Текущий source не равен runtime. Сервер PR773 имеет API sha256:cbee4037ae0f6f3a3aeb28d768bbfe6d58bbe3fe894d1ba00be22f8cb9e8ac10; перед выпуском повторно сверить образ. Не заменять его полной локальной сборкой.
+Reconciliation runs within the scan transaction and request lock, alongside idempotency and audit. Retry only confirmed transaction aborts: P2034 or P2010 SQLSTATE40001/40P01, maximum two retries. Timeouts/unknown outcomes do not retry. Settled packing does not reload all units to reconcile status. Read-only labels use grouped queries scoped to authorized page IDs.
 
-Тесты: fbo-progress-status.spec.ts (7 сценариев). Данные №2494 не изменялись. Незавершённые изменения ткани в эту ветку не перенесены.
+WMS_FBO_PROGRESS_STATUS_ENABLED defaults off; enabled only in our image. Sold WMS, APK245, schema, stock quantities and shipment permissions remain unchanged. Exact overlay:5 API files,3 status renderer modules and index.html. Baseline2026-10-30-ozon-import-stock, sourceParityVerified=false; never publish full local dist.
 
+Validation: API4090 passed/151 skipped, web562 passed/2 skipped, API/web TypeScript, helper18, actual service12, disposable PostgreSQL9 with concurrent transactions/rollback, full isolated Nest health, browser11 against actual module graph with synthetic APIs, baseline8. Dedicated kiz*.integration.spec.ts excluded without a dedicated database. RED failures reproduced unnecessary packing reads and unhandled PostgreSQL P2010/40001.
 
-Обновление подготовки 30.10.2026: добавлены подписи фактического прогресса в списках WB/Ozon/Lamoda без изменения разрешений отгрузки. Групповые чтения ограничены уже авторизованной страницей; ручное закрытие неполного отбора учитывается. После перехода в упаковку повторное чтение всех единиц для смены этапа не выполняется.
+Release script checks current images, exact file hashes, merged PR, test proofs, health, retained environment and other containers; saves rollback images and rolls back on failure. No real stock writes during tests.
 
-Проверено: API 4086 passed / 151 skipped (выделенные KIZ integration исключены), web 559 passed / 2 skipped, TypeScript API/web, helper 17, actual service runtime 9 на синтетическом хранилище. Тест отсутствия повторного чтения воспроизвёл ошибку до исправления. Проверки настоящего PostgreSQL и браузерного пакета ещё не завершены.
-
-Перед staging обнаружен новый опубликованный PR776/777. Защита отклонила старую базу PR773; production не менялся. Требуется перенос delta поверх baseline 2026-10-30-ozon-import-stock и повторная проверка. Скрипты выпуска пока подготовлены для прежней базы и не должны использоваться для публикации до актуализации. №2494 пока не изменялась.
+Request2494 repair: scripts/fbo_progress_reconcile_2494.cjs defaults to dry-run. --apply changes only stale progress when exact full picking is proven, never stock movements. System audit userId=null does not impersonate an employee.

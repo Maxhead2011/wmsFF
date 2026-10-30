@@ -30,7 +30,7 @@ def publish():
   f=open(name,'a');fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(f)
  check();v=json.loads((ROOT/'verification.json').read_text());pr=json.loads((ROOT/'pr.json').read_text());tests=json.loads((ROOT/'tests.json').read_text())
  assert pr['state']=='MERGED' and pr['headRefName']=='fix/fbo-progress-release' and pr['baseRefName']=='feature/wb-print-check'
- assert tests['api']==4089 and tests['web']==562 and tests['typecheck']
+ assert tests['api']==4090 and tests['web']==562 and tests['typecheck']
  assert json.loads((ROOT/'isolated-proof.json').read_text())['fullApiHealth']
  assert json.loads((ROOT/'isolated-proof.json').read_text())['postgres']==9
  assert json.loads((ROOT/'browser-proof.json').read_text())['passed']>=3
