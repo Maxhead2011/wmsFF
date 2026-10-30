@@ -1,0 +1,30 @@
+{
+  "web": {
+    "baseSha": "5a7d7bb49ffa78eb491962e99b51414c029dc09c4828cb76fcdad7daf46a4af9",
+    "sha": "5b0618ebbe33f07d89f4b8a3510019f371f4e8e2acf79dab6916f55cadac26bf",
+    "sourceFiles": [
+      "components/client-requests/OzonImportStockReview.tsx",
+      "components/client-requests/OzonStockAdjustment.tsx",
+      "components/ozon-fbo/OzonAssemblySupply.tsx",
+      "components/client-requests/OzonImportCorrection.tsx",
+      "components/client-requests/OzonLinkImport.tsx",
+      "components/client-requests/OzonCustomerImport.tsx"
+    ],
+    "preservedPrefix": "901dddc71c8ed5c6e52e79bc71fc030d132e8579cd494799eae9fc72c0b0f56a",
+    "preservedSuffix": "e00b3beff70edbcf1601b2370f76091df1c319d83d27262904a9b0358dfa5675"
+  },
+  "api": {
+    "modules/client-requests/ozon-assembly-supply.service.js": {
+      "before": "9e479dd3fc55139ea64ace4624dace13b8e79ef0109f67759aa55b0a1ef04d44",
+      "after": "30738917c7ad6d7af66dfaa71aef9d503f9f27c84b6af948a5e7db925e26fb06"
+    },
+    "modules/tsd/ozon-stock-adjustment.service.js": {
+      "before": "c45d0867bb309ea3ddf86d0d8da1702cc30b4b5829013c36edd8d92dd9b0a903",
+      "after": "a0d2d3ab1d7ca4ae0c0d510c089df7fc3810dd01032e2482cce251c89318c019"
+    },
+    "modules/tsd/ozon-stock-adjustment.controller.js": {
+      "before": "b151b711db70fece3c86c9c97a7068e83475f31b58abc30a2df48c4eacea3f03",
+      "after": "7685d4b8c62dd74453be4829bea214fd5a91902652dd6118a5a16afbfdcaaad9"
+    }
+  }
+}

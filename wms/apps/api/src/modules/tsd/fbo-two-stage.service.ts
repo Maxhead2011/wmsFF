@@ -1,6 +1,6 @@
 import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
 import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
-import { reconcileFboProgress, fboProgressStatusEnabled } from './fbo-progress-status';
+import { reconcileFboProgress, fboProgressStatusEnabled, fboRetryableTransactionError } from './fbo-progress-status';
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { requireKnownFboKiz } from './fbo-known-kiz';
 import { resolveLamodaRelabelUnit, readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
@@ -603,7 +603,7 @@ export class FboTwoStageService {
         for (let attempt = 0; ; attempt++) {
             try { await execute(); break; }
             catch (error) {
-                if (this.recoveryTransaction || !(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034' || attempt >= 2)
+                if (this.recoveryTransaction || !(error instanceof Prisma.PrismaClientKnownRequestError) || !fboRetryableTransactionError(error) || attempt >= 2)
                     throw error;
                 await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
             }

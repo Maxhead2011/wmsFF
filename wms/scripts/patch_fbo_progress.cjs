@@ -14,6 +14,7 @@ replace("else if (dto.action === 'FINISH_PICK') {\n                    requirePh
   "else if (dto.action === 'FINISH_PICK') {\n                    if (!(fboProgressStatus.fboProgressStatusEnabled() && a.phase === 'PACKING')) requirePhase('PICKING');");
 replace('                await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });',
   '                await fboProgressStatus.reconcileFboProgress(tx, id, user.id);\n                await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });');
+replace("error.code !== 'P2034' || attempt >= 2", "!fboProgressStatus.fboRetryableTransactionError(error) || attempt >= 2");
 const source = fs.readFileSync(path.join(__dirname, '../apps/api/src/modules/tsd/fbo-progress-status.ts'), 'utf8');
 const built = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }, reportDiagnostics: true });
 if (built.diagnostics?.length) throw new Error('Compilation diagnostics');

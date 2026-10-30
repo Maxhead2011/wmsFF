@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fboProgressState, reconcileFboProgress, fboProgressLabels } from './fbo-progress-status';
+import { fboProgressState, reconcileFboProgress, fboProgressLabels, fboRetryableTransactionError } from './fbo-progress-status';
 const lines = [{ id: 'a', quantity: 2 }, { id: 'b', quantity: 1 }];
 const units = [{ requestItemId: 'a', state: 'PICKED' }, { requestItemId: 'a', state: 'PACKED' }, { requestItemId: 'b', state: 'PICKED' }];
 afterEach(() => vi.unstubAllEnvs());
@@ -28,6 +28,17 @@ describe('FBO read-only labels', () => {
   });
 });
 describe('FBO progress', () => {
+  // TEST: reproduced with concurrent FOR UPDATE on disposable PostgreSQL.
+  it('retries only explicit aborted SQL transactions', () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    expect(fboRetryableTransactionError({ code: 'P2010', meta: { code: '40001' } })).toBe(true);
+    expect(fboRetryableTransactionError({ code: 'P2010', meta: { code: '40P01' } })).toBe(true);
+    expect(fboRetryableTransactionError({ code: 'P2010', meta: { code: '57014' } })).toBe(false);
+    expect(fboRetryableTransactionError({ code: 'P2028' })).toBe(false);
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'false');
+    expect(fboRetryableTransactionError({ code: 'P2010', meta: { code: '40001' } })).toBe(false);
+    expect(fboRetryableTransactionError({ code: 'P2034' })).toBe(true);
+  });
   // TEST: packing must not rescan all picked units on every subsequent barcode.
   it('does not recount settled packing progress', async () => {
     vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');

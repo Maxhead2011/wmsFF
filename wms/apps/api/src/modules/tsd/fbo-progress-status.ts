@@ -1,6 +1,12 @@
 import type { Prisma } from '@prisma/client';
 
 export const fboProgressStatusEnabled = () => process.env.WMS_FBO_PROGRESS_STATUS_ENABLED === 'true';
+// FIX: PostgreSQL row-lock serialization/deadlock errors are wrapped as P2010.
+// Both SQLSTATEs abort the transaction; timeouts/unknown outcomes must not retry here.
+export function fboRetryableTransactionError(error: { code: string; meta?: Record<string, unknown> }) {
+  return error.code === 'P2034' || (fboProgressStatusEnabled() && error.code === 'P2010' &&
+    ['40001', '40P01'].includes(String(error.meta?.code)));
+}
 // FIX: compare each line, never let excess on one SKU cover a shortage on another.
 export function fboProgressState(lines: Array<{ id: string; quantity: number }>, units: Array<{ requestItemId: string; state: string; quantity?: number }>) {
   const active = units.filter(u => u.state === 'PICKED' || u.state === 'PACKED');

@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess,json,hashlib,sys,fcntl,time,urllib.request
 ROOT=Path('/opt/logoff-wms/wms/work/fbo-progress-20261030');APP=Path('/opt/logoff-wms/wms')
-BASE={'api':'sha256:cbee4037ae0f6f3a3aeb28d768bbfe6d58bbe3fe894d1ba00be22f8cb9e8ac10','web':'sha256:9bc4c3ccc1c2ec8083274bd82f5d05dea56761ba669c019cb44559abf2c082bc'}
+BASE={'api':'sha256:d2a729ec1a99d6d532e7734f3c803000172d167663bd62398a2207d831caa67c','web':'sha256:218c003cdf4db04fcbe42d09f20aa9b72850f8971d4440162971a64e5f6c113e'}
 ROOTS={'api':'/app/apps/api/dist/','web':'/usr/share/nginx/html/'}
 ALLOWED={'api':set('modules/tsd/fbo-progress-status.js modules/tsd/fbo-two-stage.service.js modules/client-requests/client-requests.service.js modules/client-requests/ozon-fbo-import.service.js modules/lamoda/lamoda.service.js'.split()),'web':set('index.html assets/fbo-progress-wb-20261030.js assets/fbo-progress-ozon-20261030.js assets/fbo-progress-lamoda-20261030.js'.split())}
 
@@ -21,7 +21,7 @@ def stage():
   assert set(before)<=set(after) and {n for n in after if before.get(n)!=after[n]}==ALLOWED[k]
   assert all(after[n]==h for n,h in expected.items());v['images'][k]=img;v['hashes'][k]=expected
  result=d('run','--rm','--network','none','-e','NODE_PATH=/app/apps/api/node_modules:/app/node_modules','-v',str(ROOT)+':/release:ro','--entrypoint','node',v['images']['api'],'/release/runtime.cjs')
- v['runtime']=json.loads(result.splitlines()[-1]);assert v['runtime']['passed']==9
+ v['runtime']=json.loads(result.splitlines()[-1]);assert v['runtime']['passed']==12
  (ROOT/'verification.json').write_text(json.dumps(v));print(json.dumps(v))
 def get(p):return urllib.request.urlopen('https://wms.logoff.pro/'+p,timeout=20).read()
 def publish():
@@ -30,7 +30,7 @@ def publish():
   f=open(name,'a');fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(f)
  check();v=json.loads((ROOT/'verification.json').read_text());pr=json.loads((ROOT/'pr.json').read_text());tests=json.loads((ROOT/'tests.json').read_text())
  assert pr['state']=='MERGED' and pr['headRefName']=='fix/fbo-progress-release' and pr['baseRefName']=='feature/wb-print-check'
- assert tests['api']==4086 and tests['web']==559 and tests['typecheck']
+ assert tests['api']==4089 and tests['web']==562 and tests['typecheck']
  assert json.loads((ROOT/'isolated-proof.json').read_text())['fullApiHealth']
  assert json.loads((ROOT/'isolated-proof.json').read_text())['postgres']==9
  assert json.loads((ROOT/'browser-proof.json').read_text())['passed']>=3

@@ -14,7 +14,7 @@ const changes = [
     const from = 'At[i.assembly.request.status]??i.assembly.request.status'; assert.equal(code.split(from).length, 2);
     return code.replace(from, 'i.assembly.request.fboProgressLabel??' + from);
   }],
-  ['fbo-modal-rows-ozon-20261029.js', 'fbo-progress-ozon-20261030.js', code => {
+  ['ozon-import-stock-20261030.js', 'fbo-progress-ozon-20261030.js', code => {
     const tree = ts.createSourceFile('base.js', code, 99, true), replacements = [];
     function visit(n) {
       if (ts.isConditionalExpression(n)) {

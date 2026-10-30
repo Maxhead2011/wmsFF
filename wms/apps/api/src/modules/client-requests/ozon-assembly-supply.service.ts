@@ -20,7 +20,8 @@ export class OzonAssemblySupplyService {
   const s=await db.ozonFboShipment.findUnique({where:{requestId:id},include:{request:{include:{fboAssembly:{include:{boxes:true,units:true}}}}}});
   if(!s)throw new NotFoundException('Сборка Ozon не найдена.');
   this.scopes.requireClientAccess(user,s.request.clientId,mode);assertWarehouseAccess(user,s.request,mode);
-  if(!user.activeWarehouseId||s.request.warehouseId!==user.activeWarehouseId)throw new NotFoundException('Выберите филиал сборки.');
+  // FIX: customer imports carry their branch on the scoped request, not in the internal branch selector.
+  if(!(user.roleCodes??[]).includes('CLIENT')&&(!user.activeWarehouseId||s.request.warehouseId!==user.activeWarehouseId))throw new NotFoundException('Выберите филиал сборки.');
   if(mode==='write')assertNoOzonAdjustment(s.integration);
   return s;
  }

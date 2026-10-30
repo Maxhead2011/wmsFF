@@ -2,7 +2,7 @@
 const assert = require('node:assert/strict');
 assert(process.env.DATABASE_URL.includes('fbo_progress_test'), 'Refuse non-test database');
 const { PrismaClient } = require('@prisma/client');
-const { reconcileFboProgress, fboProgressLabels } = require('/app/apps/api/dist/modules/tsd/fbo-progress-status');
+const { reconcileFboProgress, fboProgressLabels, fboRetryableTransactionError } = require('/app/apps/api/dist/modules/tsd/fbo-progress-status');
 const db = new PrismaClient();
 process.env.WMS_FBO_PROGRESS_STATUS_ENABLED = 'true';
 (async () => {
@@ -18,7 +18,7 @@ process.env.WMS_FBO_PROGRESS_STATUS_ENABLED = 'true';
           await reconcileFboProgress(tx, request.id, null);
         }, { isolationLevel: 'Serializable' });
         break;
-      } catch (e) { if (e.code !== 'P2034' || attempt >= 2) throw e; }
+      } catch (e) { if (!fboRetryableTransactionError(e) || attempt >= 2) throw e; }
     }
   };
   await Promise.all([pick(), pick()]);
