@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 245 // FIX: retain the selected FBS request after retry; no automatic client switching.
-            versionName = "0.1.245-fbs-request-scope"
+            versionCode = 246 // FIX: durable receipt progress and local duplicate review.
+            versionName = "0.1.246-receipt-progress"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

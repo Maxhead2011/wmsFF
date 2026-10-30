@@ -1,0 +1,9 @@
+{
+  "passed": 10,
+  "syntheticApi": true,
+  "creates": 3,
+  "sends": 1,
+  "publicMode": false,
+  "errors": [],
+  "unexpected": []
+}

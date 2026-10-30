@@ -362,7 +362,7 @@ export function ClientRequestsTable({
 </> : null}
               </td>
               <td className="client-request-table__due-cell" data-label="Срок">{formatDate(request.desiredDate)}<div className="client-request-due-status">                <span className={`status status--${requestStatusTone(request.status)}`}>
-                  {emergencyClosed ? 'Аварийно упакована' : requestStatusLabel(request.status)}
+                  {emergencyClosed ? 'Аварийно упакована' : request.fboProgressLabel ?? requestStatusLabel(request.status)}
                 </span>
                 {request.managerComment ? (
                   <span className="client-request-status-comment" title={request.managerComment}>
@@ -372,7 +372,7 @@ export function ClientRequestsTable({
 </div></td>
               <td className="client-request-table__status-cell" data-label="Статус">
                 <span className={`status status--${requestStatusTone(request.status)}`}>
-                  {emergencyClosed ? 'Аварийно упакована' : requestStatusLabel(request.status)}
+                  {emergencyClosed ? 'Аварийно упакована' : request.fboProgressLabel ?? requestStatusLabel(request.status)}
                 </span>
                 {request.managerComment ? (
                   <span className="client-request-status-comment" title={request.managerComment}>

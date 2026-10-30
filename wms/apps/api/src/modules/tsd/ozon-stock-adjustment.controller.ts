@@ -3,9 +3,9 @@ import {CurrentUser} from '../auth/decorators/current-user.decorator';
 import {RequirePermissions} from '../auth/decorators/require-permissions.decorator';
 import type {AuthUser} from '../auth/auth.types';
 import {OzonStockAdjustmentService} from './ozon-stock-adjustment.service';
-// FIX: modifying an Ozon plan needs both request and stock write access.
+// FIX: customers adjust their own requests; the service retains staff stock-write requirements.
 @Controller('tsd/requests/:id/fbo/ozon-adjustment')
-@RequirePermissions('client-requests:write','stock:write')
+@RequirePermissions('client-requests:write')
 export class OzonStockAdjustmentController {
  constructor(private readonly service:OzonStockAdjustmentService){}
  @Post('sync-preview') syncPreview(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.syncPreview(id,user);}

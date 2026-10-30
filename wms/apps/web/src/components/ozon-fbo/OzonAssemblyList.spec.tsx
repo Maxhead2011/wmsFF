@@ -5,6 +5,11 @@ import {OzonAssemblyList} from './OzonAssemblyList';
 import {fetchOzonCustomerRequests,type OzonCustomerRequest} from '../../lib/api';
 afterEach(()=>vi.unstubAllGlobals());
 const row:OzonCustomerRequest={id:'r',number:2477,title:'Поставка Ozon',clientName:'ИП Лукин',clientCode:'CL-000001',warehouseName:'Москва',status:'IN_WORK',phase:'COMPLETED',quantity:291,itemCount:4,itemsPreview:[{name:'Костюм',barcode:'123',quantity:10}],directions:9,desiredDate:'2026-10-30',destinationCity:'Строгино'};
+// TEST: display packing completion without claiming physical control/handover.
+it('shows the operational label before physical control',()=>{
+ const html=renderToStaticMarkup(<OzonAssemblyList rows={[{...row,phase:'PACKING',fboProgressLabel:'Упаковано, ожидает проверки'}]} active onOpen={()=>{}} onCargo={()=>{}}/>);
+ expect(html).toContain('Упаковано, ожидает проверки');expect(html).not.toContain('Упаковано, ожидает сдачи');
+});
 // TEST: Ozon keeps its deadline and actions in the requested WB-style columns.
 it('places client in composition, deadline in status and Ozon actions in warehouse',()=>{
  vi.stubGlobal('window',{location:{hostname:'wms.logoff.pro'}});
