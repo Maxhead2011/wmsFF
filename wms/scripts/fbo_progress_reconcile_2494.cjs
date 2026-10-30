@@ -12,7 +12,9 @@ const db = new PrismaClient();
     const before = await tx.clientRequest.findUnique({ where: { id: request.id }, include: { items: true, fboAssembly: true } });
     const units = await tx.fboAssemblyUnit.findMany({ where: { requestId: request.id, state: { in: ['PICKED', 'PACKED'] } }, select: { requestItemId: true, state: true } });
     const state = fboProgressState(before.items, units);
-    const repairable = ['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(before.status) && before.fboAssembly?.phase === 'PICKING' && state.picked;
+    const repairable = ['SUBMITTED', 'APPROVED', 'IN_WORK'].includes(before.status) &&
+      ['PICKING', 'PACKING', 'CONTROL'].includes(before.fboAssembly?.phase) && state.picked &&
+      (before.fboAssembly.phase === 'PICKING' || before.status !== 'IN_WORK');
     if (apply && repairable) {
       assert.equal(process.env.WMS_FBO_PROGRESS_STATUS_ENABLED, 'true');
       await reconcileFboProgress(tx, request.id, null);
