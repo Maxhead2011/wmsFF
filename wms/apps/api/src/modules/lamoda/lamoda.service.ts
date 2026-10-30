@@ -1,4 +1,5 @@
 import { BadGatewayException, BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { fboProgressLabels } from '../tsd/fbo-progress-status';
 import { adjustLamodaComposition, assertLamodaStockAvailable, lamodaStockAvailability, type LamodaQuantity } from './lamoda-stock-guard';
 import { Prisma, type LamodaAccount } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -114,6 +115,11 @@ export class LamodaService {
       this.db.lamodaPlan.findMany({ where: { accountId: id, ...warehouseScopeWhere(user) }, include: { warehouse: { select: { name: true } }, ...(lamodaAssemblyEnabled() ? { assembly: { select: { requestId: true, ...(process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true' ? { request: { select: { number: true, status: true } } } : {}) } } } : {}) }, orderBy: { createdAt: 'desc' }, take: 100 }),
       this.db.lamodaExchange.findMany({ where: { accountId: id }, orderBy: { createdAt: 'desc' }, take: 25 }),
     ]);
+    const progressLabels = await fboProgressLabels(this.db, plans.flatMap(p => p.assembly ? [p.assembly.requestId] : []));
+    for (const plan of plans) {
+      const assembly = plan.assembly as unknown as { requestId: string; request?: object } | null;
+      if (assembly?.request && progressLabels[assembly.requestId]) Object.assign(assembly.request, { fboProgressLabel: progressLabels[assembly.requestId] });
+    }
     return { products, documents, plans, exchanges, externalWritesEnabled: false, assemblyEnabled: lamodaAssemblyEnabled(), limits: { products: 1000, documents: 500, plans: 100 } };
   }
   async warehouses(id: string, user: AuthUser) {

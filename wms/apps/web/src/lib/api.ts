@@ -19,7 +19,7 @@ export type LamodaCandidate = {id:string;name:string;internalSku:string;size:str
 export type LamodaOverview = {
   products:{id:string;name:string;remoteSku:string;externalSku:string|null;barcode:string|null;size:string|null;skuId:string|null;linkState:string;isPresent:boolean;sku:LamodaCandidate|null}[];
   documents:{id:string;kind:LamodaResource;remoteId:string;number:string;status:string;syncedAt:string}[];
-  plans:{id:string;title:string;createdAt:string;assembly?:{requestId:string;request?:{number:number;status:string}}|null;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
+  plans:{id:string;title:string;createdAt:string;assembly?:{requestId:string;request?:{number:number;status:string;fboProgressLabel?:string}}|null;warehouse:{name:string};items:{barcode:string;quantity:number}[]}[];
   exchanges:{id:string;operation:string;status:string;errorCode:string|null;createdAt:string;itemCount:number}[];
   externalWritesEnabled:false;assemblyEnabled:boolean;limits:{products:number;documents:number;plans:number};
 };
@@ -1541,6 +1541,7 @@ export type ClientRequestTimeline = {
 };
 
 export type ClientRequestSummary = {
+  fboProgressLabel?: string;
   yandexFbyShipment?: { requestId: string } | null;
   // FIX: marketplace identity for WB/Ozon list separation, including custom request titles.
   ozonShipment?: { requestId: string } | null;
@@ -8848,7 +8849,7 @@ export async function previewOutboundRequestXlsx(accessToken: string, payload: O
 
 export type OzonCustomerPreview = {items?:Array<{skuId:string;name:string}>;totalQuantity:number;directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>};
 export type OzonEditDeadline={orderId:string;orderNumber:string;editDeadlineAt?:string|null;checkedAt?:string};
-export type OzonCustomerRequest={clientId?:string;clientName?:string;clientCode?:string;warehouseName?:string|null;createdAt?:string;itemCount?:number;itemsPreview?:{name:string|null;barcode:string|null;quantity:number}[];editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
+export type OzonCustomerRequest={fboProgressLabel?:string;clientId?:string;clientName?:string;clientCode?:string;warehouseName?:string|null;createdAt?:string;itemCount?:number;itemsPreview?:{name:string|null;barcode:string|null;quantity:number}[];editDeadlines?:OzonEditDeadline[];id:string;number:number;title:string;status:string;phase:string;quantity:number;directions:number;destinationCity:string|null;desiredDate:string|null};
 export type OzonCustomerWarehouse = {id:string;name:string};
 // FIX: use the same explicit branch for the list and both multipart import steps.
 export function fetchOzonCustomerWarehouses(accessToken:string,clientId:string){return request<OzonCustomerWarehouse[]>('/ozon-fbo-import/warehouses?clientId='+encodeURIComponent(clientId),{accessToken});}
