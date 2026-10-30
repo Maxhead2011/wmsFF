@@ -1,3 +1,4 @@
+import { closeWbPackedRequest, wbPackedAutoDoneEnabled } from './wb-packed-auto-done';
 import {assertFbsClientKiz, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
 import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
 import { receiptProcessingByBoxes, applyReceiptPrimary } from '../billing/receipt-processing';
@@ -24886,7 +24887,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     additions: FbsOrderSummary[],
   ) {
     return this.prisma.$transaction(async (tx) => {
-      if (ozonPickLinesEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${requestId} FOR UPDATE`;
+      if (ozonPickLinesEnabled() || wbPackedAutoDoneEnabled()) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${requestId} FOR UPDATE`;
       const requestHeader = await tx.clientRequest.findUnique({
         where: { id: requestId },
         select: { id: true, status: true },
@@ -24969,6 +24970,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       });
       if (!request || FBS_REQUEST_CLOSED_STATUSES.has(request.status)) {
         return { changed: false, summary: 'заявка уже закрыта' };
+      }
+
+      // FIX: accepted packed WB requests finish before any physical reconciliation.
+      if (await closeWbPackedRequest(tx, request, [...orderByKey.values()], Boolean(explicitBatch))) {
+        return { changed: true, summary: 'WB принял упакованную заявку; статус Сдано, без повторного списания' };
       }
 
       const liveLinks = request.fbsOrderLinks.filter((link) =>
