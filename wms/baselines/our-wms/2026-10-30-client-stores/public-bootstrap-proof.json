@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "/assets/client-stores-sidebar-counts-core-20261030.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "/assets/client-stores-sidebar-counts-core-20261030.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "/assets/client-stores-sidebar-counts-core-20261030.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "/assets/client-stores-sidebar-counts-core-20261030.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "/assets/client-stores-sidebar-counts-core-20261030.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

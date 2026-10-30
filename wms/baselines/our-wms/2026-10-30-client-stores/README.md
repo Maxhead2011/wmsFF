@@ -1,0 +1,3 @@
+# Verified client stores release
+
+Published PR793 (feature PR787), LOGOFF249: client stores and shared SKU permissions, request/billing/TSD context. Single application entry; Ozon label control and sidebar counts retained. API4149/web578/Android933, TypeScript, runtime12, PostgreSQL15/full Nest health, browser8/sidebar9/bootstrap5 and public bootstrap5 passed. API156/web2 skipped; dedicated KIZ integration suite excluded without URL. WMS_CLIENT_STORES_ENABLED=true only in own API image; strict store receipts disabled. Production store bindings, stock, KIZs, schema and sold WMS unchanged. Source parity false.
