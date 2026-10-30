@@ -1,4 +1,4 @@
-Prepared: [Ozon packed auto-completion](ozon-packed-auto-done.md). Status/history only after all postings are delivering/delivered; independent own-WMS flag, WB rule preserved.
+Published PR802: [Ozon packed auto-completion](ozon-packed-auto-done.md). PACKED -> DONE after all postings are delivering/delivered, status/history only. Independent own-WMS flag enabled; WB rule preserved. API4194/web579/TypeScript, PostgreSQL8/full health, candidate/public runtime passed. Exact two API modules; web/APK249/schema/stock/sold unchanged. Baseline `2026-10-30-ozon-packed-auto-done`, sourceParityVerified=false.
 
 Published PR799: [WB packed auto-completion](wb-packed-auto-done.md). PACKED -> DONE after all linked WB orders are accepted, status/history only. Own-WMS flag enabled; stock/web/APK249/schema/sold unchanged. API4175/web579/TypeScript, PostgreSQL8/full health, candidate/public runtime and exact two-module verification passed. Baseline `2026-10-30-wb-packed-auto-done`, sourceParityVerified=false.
 
