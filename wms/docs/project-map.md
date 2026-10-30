@@ -1,4 +1,4 @@
-Prepared: [sidebar request counts](sidebar-request-counts.md), unfinished total (IN_WORK), scoped WMS requests for FBS/FBO/all requests including favorites. API4119/web571/types, PostgreSQL6/full health, browser9; own WMS only.
+Published PR791 / 2026-10-30: [sidebar request counts](sidebar-request-counts.md), unfinished total (IN_WORK) beside Requests/FBS/FBO and favorites. Scoped WMS requests, full counts, loading/error distinct from zero. API4119/web571/TypeScript, PostgreSQL6/full health, candidate/public browser9 and import10, baseline8. Exact API3/web2; flags/schema/APK248/data/sold unchanged. Baseline `2026-10-30-sidebar-counts`, sourceParityVerified=false.
 
 Published PR789 / 2026-10-30: [single application entry repair](ozon-single-web-entry.md). Exact index.html correction prevents duplicate React roots/blank screen; other3204 web files and API/APK248/schema/data/sold unchanged. Cold entry RED/GREEN6 and public6; API4116/web569/TypeScript, baseline8. Ozon control/history retained. Baseline `2026-10-30-single-web-entry`, sourceParityVerified=false.
 
