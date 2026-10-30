@@ -1,4 +1,4 @@
-In progress, not deployed: [FBO automatic progress](fbo-progress-status.md). Own-WMS flag off; packing display/runtime validation pending.
+In progress, not deployed: [FBO automatic progress](fbo-progress-status.md). API4086/web559 and synthetic actual-runtime9 passed; PR776 baseline integration, PostgreSQL and browser verification pending.
 
 Published PR773 / 2026-10-30: explicit ADMIN/OWNER found-unit confirmation, unknown FBO KIZ guard and BOX_CHECK review preservation. API4070/web557 passed (155/2 skipped; unconfigured dedicated KIZ DB suite excluded), TypeScript, runtime10, browser7, targeted26 and isolated full Nest/PostgreSQL health passed. Exact9 API/2 web files; schema, APK245, stock quantities, shipment history and sold WMS unchanged. WMS_INVENTORY_FOUND_UNIT_ENABLED=true only on our WMS; all prior environment values retained. Baseline `2026-10-30-found-unit`, sourceParityVerified=false. Public health/hashes verified. [Details](inventory-found-unit-review.md).
 

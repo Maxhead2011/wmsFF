@@ -1,4 +1,5 @@
 import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
+import { fboProgressLabels } from '../tsd/fbo-progress-status';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MarketplaceType, MovementType, Prisma, StockStatus } from '@prisma/client';
@@ -138,6 +139,9 @@ export class ClientRequestsService {
       orderBy: [{ updatedAt: 'desc' }],
       take: 200,
     });
+    // FIX: separate warehouse progress from the status that permits shipment.
+    const progressLabels = await fboProgressLabels(this.prisma, requests.filter(r => r.type === 'OUTBOUND' && !r._count.fbsOrderLinks).map(r => r.id));
+    for (const request of requests) if (progressLabels[request.id]) Object.assign(request, { fboProgressLabel: progressLabels[request.id] });
     const previousAttempts = await readFbsAttemptHistory(this.prisma, { requestId: { in: requests.map(request => request.id) } });
     for (const request of requests) {
       request._count.fbsOrderLinks += previousAttempts.filter(row => row.task.requestId === request.id).length;

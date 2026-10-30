@@ -1,9 +1,55 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fboProgressState, reconcileFboProgress } from './fbo-progress-status';
+import { fboProgressState, reconcileFboProgress, fboProgressLabels } from './fbo-progress-status';
 const lines = [{ id: 'a', quantity: 2 }, { id: 'b', quantity: 1 }];
 const units = [{ requestItemId: 'a', state: 'PICKED' }, { requestItemId: 'a', state: 'PACKED' }, { requestItemId: 'b', state: 'PICKED' }];
 afterEach(() => vi.unstubAllEnvs());
+describe('FBO read-only labels', () => {
+  // TEST: a deliberately closed partial pick uses its frozen target, not the original demand.
+  const page = (closure: unknown, counts = [{ requestId: 'r', requestItemId: 'a', state: 'PACKED', _count: { _all: 1 } }]) => ({
+    fboAssembly: { findMany: vi.fn().mockResolvedValue([{ requestId: 'r', phase: 'PACKING', pickClosure: closure, request: { items: lines } }]) },
+    fboAssemblyUnit: { groupBy: vi.fn().mockResolvedValue(counts) },
+  });
+  it('keeps reads disabled in the sold configuration', async () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'false');
+    expect(await fboProgressLabels({} as any, ['r'])).toEqual({});
+  });
+  it('uses exact per-line aggregate counts', async () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    expect(await fboProgressLabels(page(null) as any, ['r'])).toEqual({ r: 'В работе' });
+  });
+  it('labels packed partial closure without reopening excluded lines', async () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    expect(await fboProgressLabels(page({ version: 1, quantities: { a: 1, b: 0 } }) as any, ['r']))
+      .toEqual({ r: 'Упаковано, ожидает проверки' });
+  });
+  it('does not label invalid closures as packed', async () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    expect(await fboProgressLabels(page({ version: 1, quantities: { a: 1 } }) as any, ['r'])).toEqual({});
+  });
+});
 describe('FBO progress', () => {
+  // TEST: packing must not rescan all picked units on every subsequent barcode.
+  it('does not recount settled packing progress', async () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    const readUnits = vi.fn().mockRejectedValue(new Error('Unnecessary full scan'));
+    await reconcileFboProgress({ clientRequest: { findUnique: vi.fn().mockResolvedValue({ status: 'IN_WORK', items: lines }) },
+      fboAssembly: { findUnique: vi.fn().mockResolvedValue({ phase: 'PACKING' }) },
+      fboAssemblyUnit: { findMany: readUnits } } as any, 'r', 'u');
+    expect(readUnits).not.toHaveBeenCalled();
+  });
+  // TEST: terminal lifecycle states must never be reopened by late scans.
+  it.each(['DONE', 'CANCELLED', 'REJECTED', 'PACKED'])('preserves %s', async status => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    await reconcileFboProgress({ clientRequest: { findUnique: vi.fn().mockResolvedValue({ status, items: lines }) } } as any, 'r', 'u');
+  });
+  it('does not advance partially picked requests', async () => {
+    vi.stubEnv('WMS_FBO_PROGRESS_STATUS_ENABLED', 'true');
+    const update = vi.fn();
+    await reconcileFboProgress({ clientRequest: { findUnique: vi.fn().mockResolvedValue({ status: 'IN_WORK', items: lines }) },
+      fboAssembly: { findUnique: vi.fn().mockResolvedValue({ phase: 'PICKING' }), update },
+      fboAssemblyUnit: { findMany: vi.fn().mockResolvedValue(units.slice(0, 1)) } } as any, 'r', 'u');
+    expect(update).not.toHaveBeenCalled();
+  });
   // TEST: request2494 has full picking including units already packed.
   it('counts packing as previously picked material', () => expect(fboProgressState(lines, units)).toEqual({ started: true, picked: true, packed: false }));
   it('does not hide missing SKU behind an excess', () => expect(fboProgressState(lines, units.map(u => ({ ...u, requestItemId: 'a' }))).picked).toBe(false));
