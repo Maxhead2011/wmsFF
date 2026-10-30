@@ -98,3 +98,10 @@ export class CompleteInventoryDto {
   @MaxLength(1000)
   comment?: string;
 }
+
+// FIX: explicit physical proof, never a generic bypass switch.
+export class ConfirmFoundUnitDto {
+  @IsString() @MaxLength(512) kiz!: string;
+  @IsString() @MaxLength(1000) reason!: string;
+  @IsBoolean() confirmed!: boolean;
+}

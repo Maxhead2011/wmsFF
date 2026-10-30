@@ -1,6 +1,7 @@
 import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
 import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
+import { requireKnownFboKiz } from './fbo-known-kiz';
 import { resolveLamodaRelabelUnit, readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
 import { buildTsdRelabelLabel } from './tsd-relabel-label';
 import { alternativeFboPickingEnabled, prioritizeAlternativeFboBox } from './fbo-alternative-picking';
@@ -643,6 +644,8 @@ export class FboTwoStageService {
         const key = identity(kiz);
         const rows = await tx.productMark.findMany({ where: { OR: [key, ']d2' + key, ']D2' + key].map(p => ({ value: { startsWith: p.replace(/[\\%_]/g, '\\$&') } })) } });
         const matches = rows.filter(m => identity(m.value) === key);
+        // FIX: same guard is inserted before bindPickedMark in the published runtime overlay.
+        requireKnownFboKiz(matches[0]);
         if (matches.length !== 1)
             throw new ConflictException('КИЗ отсутствует или имеет несколько записей. Нужна актуализация.');
         return matches[0];

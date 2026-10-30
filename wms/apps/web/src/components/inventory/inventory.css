@@ -15,6 +15,12 @@
 .inventory-mode__number { color: #94a3b8; font-size: 11px; font-weight: 900; letter-spacing: .15em; }
 .inventory-alert { align-items: flex-start; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; color: #1e3a8a; display: flex; gap: 10px; padding: 13px 15px; }
 .inventory-alert--danger { background: #fff1f2; border-color: #fecdd3; color: #9f1239; }
+/* FIX: readable, theme-inherited physical confirmation on narrow screens. */
+.inventory-found-unit { border: 1px solid currentColor; border-radius: 8px; padding: 14px; margin-block: 12px; }
+.inventory-found-unit summary { cursor: pointer; font-weight: 700; }
+.inventory-found-unit form { display: grid; gap: 14px; max-width: 780px; }
+.inventory-found-unit input:not([type="checkbox"]), .inventory-found-unit textarea { min-width: 0; box-sizing: border-box; }
+.inventory-found-unit p { overflow-wrap: anywhere; line-height: 1.5; }
 .inventory-alert div { display: grid; gap: 3px; }.inventory-alert span { font-size: 13px; line-height: 1.45; }
 .inventory-rescan-requests { background: #fff7ed; border: 1px solid #fdba74; border-radius: 10px; display: grid; gap: 12px; padding: 15px; }
 .inventory-rescan-requests__heading { align-items: flex-start; color: #9a3412; display: flex; gap: 10px; }

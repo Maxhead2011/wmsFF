@@ -13,6 +13,7 @@ import {
   UnlockKeyhole,
 } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { FoundUnitConfirmation } from './FoundUnitConfirmation';
 import {
   cancelInventorySession,
   approveInventoryBoxRescan,
@@ -804,6 +805,8 @@ export function Reconciliation({
                 <span className={`inventory-status inventory-status--${box.kizReview?.required ? 'mismatch' : box.status.toLowerCase()}`}>{box.kizReview?.required ? 'Проверить КИЗ' : boxStatusLabel(box.status)}</span>
               </summary>
               <div className="inventory-review-box__details">
+              {dashboard.canConfirmFoundUnit && ['ACTIVE','REVIEW'].includes(review.status) && ['MATCHED','MISMATCH'].includes(box.status) &&
+                <FoundUnitConfirmation accessToken={session.accessToken} boxId={box.id} onChanged={onChanged}/>}
               {/* FIX: show both ends of a KIZ transfer before accepting the physical count. */}
               {box.kizTransferWarnings?.map((message, index) => <p className="inventory-alert" key={`kiz-transfer-${index}`}>{message}</p>)}
               {box.kizReview?.required && (

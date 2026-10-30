@@ -31,6 +31,14 @@ function setup() {
 
 // TEST: ADMIN must execute the same guarded monitoring operations as owner, without promotion.
 describe('ADMIN monitoring controls', () => {
+  // TEST: releasing a terminal must not cancel its completed physical count.
+  it('keeps a box check in REVIEW when releasing the terminal', async () => {
+    vi.stubEnv('ADMIN_MONITORING_ENABLED','true');
+    vi.stubEnv('WMS_INVENTORY_FOUND_UNIT_ENABLED','true');
+    const {service,prisma}=setup();
+    await service.issueTsdMonitorAction('TSD-1','UNLOCK_INVENTORY',admin as never);
+    expect(prisma.inventorySession.updateMany).toHaveBeenCalledWith(expect.objectContaining({data:expect.objectContaining({status:'REVIEW',completedAt:null})}));
+  });
   it('disconnects tasks, releases FBS work and records the administrator', async () => {
     vi.stubEnv('ADMIN_MONITORING_ENABLED', 'true');
     const { service, prisma, audit } = setup();
