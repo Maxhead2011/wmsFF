@@ -2,9 +2,9 @@
 from pathlib import Path
 import subprocess,json,hashlib,sys,fcntl,time,urllib.request
 ROOT=Path('/opt/logoff-wms/wms/work/client-stores249-20261030');APP=Path('/opt/logoff-wms/wms')
-BASE={'api': 'sha256:ecfbc18a8f712c8cc5466806c83340b22f5d5a51f323b7505da924a664159029', 'web': 'sha256:94390af337d380dd9e5d0f05f3acf071a619e5c539647ee18007d1109c74a6e3'}
+BASE={'api': 'sha256:8d439c29200a894e2bcaf2e9fa16c18d4ac1a38c7afe2949338393be1a2c50b1', 'web': 'sha256:75a8c614dd652ff5fbb3c4cdde83e1bf7c53789003dd64f1b3ad1b2a704335af'}
 ROOTS={'api':'/app/apps/api/dist/','web':'/usr/share/nginx/html/'}
-ALLOWED={'api': {'modules/client-requests/client-requests.service.js', 'modules/marketplace-connections/marketplace-connections.controller.js', 'modules/stock/stock-operations.service.js', 'modules/clients/client-stores.controller.js', 'modules/tsd/tsd-sync.service.js', 'modules/administration/administration-internal-api.service.js', 'modules/tsd/fbo-two-stage.service.js', 'modules/clients/client-stores.policy.js', 'modules/clients/request-store-context.js', 'modules/tsd/tsd-payload.parser.js', 'modules/clients/client-stores.service.js', 'modules/tsd/tsd-review.service.js', 'modules/billing/billing.service.js', 'modules/marketplace-connections/marketplace-connections.module.js', 'modules/clients/client-store-receipt.js', 'modules/clients/clients.module.js', 'modules/tsd/tsd-device.service.js'}, 'web': {'downloads/logoff-tsd.apk', 'assets/client-stores-ozon-label-history-core-20261030.js', 'assets/client-stores-invoice-download-names-20261021-23.js', 'index.html', 'downloads/logoff-tsd.json', 'assets/client-stores-fbo-progress-wb-20261030.js', 'assets/client-stores-workspace-fbs-20261028.js', 'downloads/logoff-tsd-client-stores-249.apk'}}
+ALLOWED={'api': {'modules/client-requests/client-requests.service.js', 'modules/marketplace-connections/marketplace-connections.controller.js', 'modules/stock/stock-operations.service.js', 'modules/clients/client-stores.controller.js', 'modules/tsd/tsd-sync.service.js', 'modules/administration/administration-internal-api.service.js', 'modules/tsd/fbo-two-stage.service.js', 'modules/clients/client-stores.policy.js', 'modules/clients/request-store-context.js', 'modules/tsd/tsd-payload.parser.js', 'modules/clients/client-stores.service.js', 'modules/tsd/tsd-review.service.js', 'modules/billing/billing.service.js', 'modules/marketplace-connections/marketplace-connections.module.js', 'modules/clients/client-store-receipt.js', 'modules/clients/clients.module.js', 'modules/tsd/tsd-device.service.js'}, 'web': {'downloads/logoff-tsd.apk', 'assets/client-stores-sidebar-counts-core-20261030.js', 'assets/client-stores-invoice-download-names-20261021-23.js', 'index.html', 'downloads/logoff-tsd.json', 'assets/client-stores-fbo-progress-wb-20261030.js', 'assets/client-stores-workspace-fbs-20261028.js', 'downloads/logoff-tsd-client-stores-249.apk'}}
 
 def d(*args):return subprocess.check_output(['docker',*args],text=True).strip()
 def check():
@@ -46,8 +46,8 @@ def publish():
  for name in ['/run/logoff-wms-release.lock','/opt/logoff-wms/.release.lock','/run/logoff-wms-web-release.lock']:
   f=open(name,'a');fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(f)
  check();v=json.loads((ROOT/'verification.json').read_text());pr=json.loads((ROOT/'pr.json').read_text());tests=json.loads((ROOT/'tests.json').read_text())
- assert pr['state']=='MERGED' and pr['headRefName']=='fix/client-store-separation' and pr['baseRefName']=='feature/wb-print-check'
- assert tests['api']==4146 and tests['web']==576 and tests['android']==933 and tests['typecheck']
+ assert pr['state']=='MERGED' and pr['headRefName']=='fix/client-stores-current-release' and pr['baseRefName']=='feature/wb-print-check'
+ assert tests['api']==4149 and tests['web']==578 and tests['android']==933 and tests['typecheck']
  assert v['base']==BASE
  isolated=json.loads((ROOT/'isolated-proof.json').read_text())
  assert isolated['image']==v['images']['api'] and isolated['fullApiHealth'] and isolated['postgres']==15

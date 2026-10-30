@@ -9,7 +9,7 @@ const root=path.resolve(process.argv[2]),src=path.resolve(__dirname,'../../../ap
  const api=fs.readFileSync(src+'/lib/api.ts','utf8').split('\n').filter(l=>/^export function (fetchClientStores|saveClientStores|fetchSkuStores|saveSkuStores)\(/.test(l)).join('\n')+'\nexport const fetchSkus=(accessToken,filter)=>request("/skus?"+new URLSearchParams(filter),{accessToken});';
  const shims={react:'export const useState=(...a)=>x.useState(...a),useEffect=(...a)=>x.useEffect(...a),useRef=(...a)=>x.useRef(...a);','react/jsx-runtime':'export const jsx=(...a)=>e.jsx(...a),jsxs=(...a)=>e.jsxs(...a),Fragment=e.Fragment;',api:'const request=z;'+api};
  const build=await esbuild.build({stdin:{contents:'export {ClientStoresSettings} from "./components/client-cabinet/ClientStoresSettings";',resolveDir:src,loader:'tsx'},bundle:true,write:false,format:'iife',globalName:'__ClientStores',jsx:'automatic',minify:true,plugins:[{name:'reuse-live',setup(b){b.onResolve({filter:/^react(?:\/jsx-runtime)?$/},a=>({path:a.path,namespace:'live'}));b.onResolve({filter:/\/lib\/api$/},()=>({path:'api',namespace:'live'}));b.onLoad({filter:/.*/,namespace:'live'},a=>({contents:shims[a.path],loader:'ts'}));}}]});
- patch('ozon-label-history-core-20261030.js',s=>once(s,'e.jsx(j$,{accessToken:t.accessToken,clientId:M.client.id})','t.user.roleCodes.some(role=>role==="ADMIN"||role==="OWNER")&&e.jsx(__ClientStores.ClientStoresSettings,{accessToken:t.accessToken,clientId:M.client.id},"stores:"+M.client.id),e.jsx(j$,{accessToken:t.accessToken,clientId:M.client.id})')+'\n'+build.outputFiles[0].text);
+ patch('sidebar-counts-core-20261030.js',s=>once(s,'e.jsx(j$,{accessToken:t.accessToken,clientId:M.client.id})','t.user.roleCodes.some(role=>role==="ADMIN"||role==="OWNER")&&e.jsx(__ClientStores.ClientStoresSettings,{accessToken:t.accessToken,clientId:M.client.id},"stores:"+M.client.id),e.jsx(j$,{accessToken:t.accessToken,clientId:M.client.id})')+'\n'+build.outputFiles[0].text);
  patch('workspace-fbs-20261028.js',s=>{
   s=once(s,'function ki({data:s,','function __ClientStoresOriginalTable({data:s,');
   // Store changes clear selection; all original delivery, branch and action props survive.
@@ -21,7 +21,7 @@ const root=path.resolve(process.argv[2]),src=path.resolve(__dirname,'../../../ap
  // FIX: import maps do not rewrite the HTML module entry; loading the old entry
  // beside the mapped core starts two React applications on the same root.
  const entry=html.match(/<script type="module" crossorigin src="([^"]+)"/);assert(entry);
- html=html.replace(`src="${entry[1]}"`,'src="/assets/client-stores-ozon-label-history-core-20261030.js"');
+ html=html.replace(`src="${entry[1]}"`,'src="/assets/client-stores-sidebar-counts-core-20261030.js"');
  outputs['/index.html']=html;
  for(const [name,s] of Object.entries(outputs)){const p=root+'/web-payload'+name;fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s);}
  fs.writeFileSync(root+'/web-proof.json',JSON.stringify({files:Object.keys(outputs),preservesRuntime:true}));console.log('Prepared',Object.keys(outputs).length,'web files');
