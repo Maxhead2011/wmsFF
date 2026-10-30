@@ -125,3 +125,8 @@ ADMIN/OWNER. Связи кабинетов нельзя незаметно пе�
 Проверено: API 4149 passed / 156 skipped, Web 578 passed / 2 skipped, Android 933 passed; TypeScript API/Web; 12 проверок реального runtime; 15 PostgreSQL-проверок в одноразовой базе и запуск полного Nest API; 8 браузерных проверок фактического кандидата и 9 проверок сохранённых счётчиков меню. Отдельный KIZ DB suite исключён из общего прогона из-за отсутствия выделенного URL. Подпись LOGOFF249 и неизменность APK payload проверены. PR787 объединён; публикация остановилась до изменений из-за нового production и повторяется с актуальной базой.
 
 `bootstrap.cjs` воспроизвёл двойной createRoot на прежнем HTML entry. `web.cjs` теперь обновляет и script src, и import map на один основной модуль. Пять сценариев (открытие, обновление, Заявки/FBS/FBO) проверяют ровно один запуск, непустой экран и отсутствие ошибок React. Проверка обязательна перед публикацией; PUBLIC_URL позволяет повторить её на опубликованных скриптах с синтетическими ответами API, без изменения данных.
+
+
+## Published PR793
+
+Published PR793 (feature PR787), LOGOFF249: client stores and shared SKU permissions, request/billing/TSD context. Single application entry; Ozon label control and sidebar counts retained. API4149/web578/Android933, TypeScript, runtime12, PostgreSQL15/full Nest health, browser8/sidebar9/bootstrap5 and public bootstrap5 passed. API156/web2 skipped; dedicated KIZ integration suite excluded without URL. WMS_CLIENT_STORES_ENABLED=true only in own API image; strict store receipts disabled. Production store bindings, stock, KIZs, schema and sold WMS unchanged. Source parity false.
