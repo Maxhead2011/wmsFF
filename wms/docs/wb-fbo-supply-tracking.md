@@ -19,3 +19,5 @@ WB 6 «Отгружено на воротах», 4 «Идёт приёмка», 
 ## Проверки
 
 API4155/web579, TypeScript; 156/2 пропуска, отдельный KIZ DB suite без выделенного URL исключён. Фактический кандидат: PostgreSQL12, полный Nest health, браузер9 (включая реальный список статусов), сохранённые счётчики/навигация9. Exact API6/web3 поверх PR793/794, LOGOFF249 и магазины сохранены. Публикация требует свежей сверки image ID.
+
+Published PR795, baseline `2026-10-30-wb-fbo-tracking`. WMS2494 linked to WB41834673, 578 units; status3, warehouse loading unset. Request status and stock unchanged by binding. Public browser9/navigation9 passed.
