@@ -1,3 +1,5 @@
+Prepared (not deployed): [WB packed auto-completion](wb-packed-auto-done.md). Own-WMS opt-in, PACKED -> DONE only after all live WB orders are accepted; status/history only, no stock writes. Exact two-module runtime candidate verified against PR798.
+
 Published PR797: [FBO counted stock rebind](fbo-rebind-counted-stock.md). Existing counted quantity consumed without extra +1; duplicate/history guards retained. API4155/web579/TypeScript, runtime4/repair4/PostgreSQL9/full health. Exact2 API modules, other700/web/LOGOFF249/schema/flags/sold unchanged. Baseline `2026-10-30-fbo-rebind-stock`, sourceParityVerified=false. Box519 AVAILABLE0,9 units in2565 unchanged.
 
 Published PR795 / 2026-10-30: [WB FBO supply tracking and dispatch](wb-fbo-supply-tracking.md). Scoped binding, six process options, manual vehicle loading, confirmed WB delivery through guarded stock shipment. API4155/web579/TypeScript, PostgreSQL12/full health, browser9/navigation9; own WMS only.
