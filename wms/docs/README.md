@@ -1,3 +1,5 @@
+In progress, not deployed: [FBO automatic progress](fbo-progress-status.md). Own-WMS flag off; packing display/runtime validation pending.
+
 Prepared / 2026-10-30: found-unit inventory review and unknown FBO KIZ guard. ADMIN/OWNER confirmation preserves quantities/history; TSD unlock retains BOX_CHECK for review. API3993/web541 passed, 155/2 skipped; dedicated unconfigured KIZ DB suite excluded. New flag off; source/runtime divergence documented. Not published. [Details](inventory-found-unit-review.md).
 КИЗ FBS: повтор текущего отбора, сохранение OPEN-разбора и дата/заказ предыдущей отгрузки. [Описание и проверки](kiz-fbs-review-retry.md).
 

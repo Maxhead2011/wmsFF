@@ -1,5 +1,6 @@
 import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
 import {clientKizGuardEnabled} from '../../common/kiz-client-registry';
+import { reconcileFboProgress, fboProgressStatusEnabled } from './fbo-progress-status';
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { requireKnownFboKiz } from './fbo-known-kiz';
 import { resolveLamodaRelabelUnit, readLamodaRelabelLabels, assertLamodaRelabelPacked, assertLamodaRelabelScan } from './lamoda-fbo-relabel';
@@ -434,7 +435,8 @@ export class FboTwoStageService {
                     await this.stock.archiveEmptyFboBoxes(tx, id, user, [source.id]);
             }
             else if (dto.action === 'FINISH_PICK') {
-                requirePhase('PICKING');
+                // FIX: accept an older terminal's confirmation after automatic transition.
+                if (!(fboProgressStatusEnabled() && a.phase === 'PACKING')) requirePhase('PICKING');
                 if (lines.some(l => l.remaining))
                     throw new ConflictException('Сначала отберите все единицы заявки.');
                 await tx.fboAssembly.update({ where: { requestId: id }, data: { phase: 'PACKING' } });
@@ -591,6 +593,7 @@ export class FboTwoStageService {
             }
             else if (dto.action !== 'START')
                 throw new BadRequestException('Неизвестное действие.');
+            await reconcileFboProgress(tx, id, user.id);
             await tx.fboAssemblyAction.create({ data: { id: key, requestId: id, payloadHash, actorId: user.id } });
             const contourScan = await createFboVideoCaption(tx, {requestId: id, operationId: dto.operationId, action: dto.action, user,
                 unit: contourUnit, barcode: dto.barcode, kiz: dto.kiz, boxNumber: dto.sourceBoxCode});
