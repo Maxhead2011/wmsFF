@@ -1,0 +1,1 @@
+PR805: exact two-module shipment-prefix overlay. API708 files; sold/schema/web/APK unchanged. Own image flag enabled. Baseline captured after public health and live read-only1710-KIZ proof. Source parity remains false.
