@@ -8,6 +8,9 @@ type Tx = Prisma.TransactionClient;
 type Task = FbsTsdAssembly;
 type Intent = { stage: string; context: string; oldKiz: string; oldMarkId: string; proposalId?: string; newKiz?: string; newMarkId?: string };
 export const physicalKizRelabelEnabled = () => process.env.WMS_FBS_KIZ_RELABEL_ENABLED === 'true';
+// FIX: a planned size replacement keeps source stock until BOTH KIZ scans prove the physical pair.
+export const pendingSizeKizRelabel = (task: Task) => physicalKizRelabelEnabled() && task.requiresKiz &&
+  task.relabelRequired && Boolean(task.sourceSkuId) && !task.relabelConfirmedAt;
 const sameKiz = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const context = (t: Task) => JSON.stringify([t.id, t.clientId, t.requestId, t.connectionId, t.orderId, t.skuId,
   t.boxId, t.barcode, t.workerUserId, t.deviceCode, t.startedAt?.toISOString() ?? null]);
@@ -42,6 +45,7 @@ async function lockedTask(tx: Tx, task: Task, user: AuthUser, requireLease: (fre
 }
 
 async function source(tx: Tx, task: Task, oldKiz: string) {
+  const skuId = pendingSizeKizRelabel(task) ? task.sourceSkuId! : task.skuId;
   await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Box" WHERE "id" = ${task.boxId!} FOR UPDATE`);
   const [box, request, mark] = await Promise.all([
     tx.box.findUnique({where: {id: task.boxId!}}),
@@ -50,14 +54,14 @@ async function source(tx: Tx, task: Task, oldKiz: string) {
   ]);
   if (!box || !request || !mark || box.clientId !== task.clientId || request.clientId !== task.clientId ||
       !box.warehouseId || box.warehouseId !== request.warehouseId || CLOSED.includes(request.status) ||
-      ['archived', 'deleted'].includes(box.status) || mark.clientId !== task.clientId || mark.skuId !== task.skuId ||
+      ['archived', 'deleted'].includes(box.status) || mark.clientId !== task.clientId || mark.skuId !== skuId ||
       mark.boxId !== task.boxId || mark.status !== 'AVAILABLE') {
     throw new BadRequestException('Старый КИЗ не подтверждён в доступном остатке выбранного короба и товара. Нужна проверка короба.');
   }
   const [balance, count, picked, linked] = await Promise.all([
-    tx.stockBalance.aggregate({where: {clientId: task.clientId, warehouseId: box.warehouseId, skuId: task.skuId,
+    tx.stockBalance.aggregate({where: {clientId: task.clientId, warehouseId: box.warehouseId, skuId,
       boxId: task.boxId, status: 'AVAILABLE'}, _sum: {quantity: true}}),
-    tx.productMark.count({where: {clientId: task.clientId, skuId: task.skuId, boxId: task.boxId, status: 'AVAILABLE'}}),
+    tx.productMark.count({where: {clientId: task.clientId, skuId, boxId: task.boxId, status: 'AVAILABLE'}}),
     tx.stockMovement.findFirst({where: {idempotencyKey: {startsWith: `fbs-sticker-pick:${task.id}:`}, quantity: {lt: 0}}}),
     tx.fbsTsdAssembly.findMany({where: {id: {not: task.id}, clientId: task.clientId,
       kiz: {equals: oldKiz, mode: 'insensitive'}, status: {in: ['IN_PROGRESS', 'COMPLETED', 'RETURN_REQUIRED']}},
@@ -82,10 +86,10 @@ async function source(tx: Tx, task: Task, oldKiz: string) {
     const sessionId = movement?.sourceDocument?.match(/^PALLET_SORTING:(.+)$/)?.[1];
     const sorting = sessionId ? await tx.palletSortingSession.findUnique({where: {id: sessionId}}) : null;
     if (!movement || !sorting?.completedAt || sorting.clientId !== task.clientId || sorting.warehouseId !== box.warehouseId ||
-        movement.clientId !== task.clientId || movement.skuId !== task.skuId || movement.boxId !== task.boxId ||
+        movement.clientId !== task.clientId || movement.skuId !== skuId || movement.boxId !== task.boxId ||
         movement.warehouseId !== box.warehouseId || movement.status !== 'AVAILABLE' || movement.quantity !== 1 ||
         !['TRANSFER', 'INVENTORY_ADJUSTMENT'].includes(movement.type) ||
-        returns.some(t => t.clientId !== task.clientId || t.skuId !== task.skuId ||
+        returns.some(t => t.clientId !== task.clientId || t.skuId !== skuId ||
           !(movement.createdAt > t.updatedAt))) {
       throw new BadRequestException('Возврат старого КИЗ в этот короб не подтверждён завершённой сортировкой. Администратору нужно разобрать старую заявку.');
     }
@@ -130,15 +134,36 @@ export async function applyPhysicalKizRelabel(tx: Tx, task: Task, user: AuthUser
     tx.shippedKizHistory.findFirst({where: {kiz: {equals: newKiz, mode: 'insensitive'}}}),
   ]);
   if (registered || taskUsage || shipped) throw new BadRequestException('Новый КИЗ уже зарегистрирован или использован. Возьмите свободный новый КИЗ.');
+  const sizeRelabel = pendingSizeKizRelabel(fresh);
+  if (sizeRelabel && fresh.sourceSkuId !== fresh.skuId) {
+    // FIX: convert exactly the scanned source in the same transaction as old/new mark ownership.
+    const box = await tx.box.findUniqueOrThrow({where:{id:fresh.boxId!}});
+    const balance = await tx.stockBalance.findFirst({where:{clientId:fresh.clientId,warehouseId:box.warehouseId,
+      skuId:fresh.sourceSkuId!,boxId:fresh.boxId,status:'AVAILABLE',quantity:{gte:1}},orderBy:{id:'asc'}});
+    if (!balance) throw new ConflictException('Исходный остаток изменился. Переклейка не выполнена.');
+    const debit=await tx.stockBalance.updateMany({where:{id:balance.id,quantity:{gte:1}},data:{quantity:{decrement:1}}});
+    if(debit.count!==1) throw new ConflictException('Исходная единица уже отобрана.');
+    const scope={warehouseId:balance.warehouseId,clientId:fresh.clientId,skuId:fresh.skuId,boxId:fresh.boxId,palletId:balance.palletId,status:StockStatus.AVAILABLE};
+    const balanceKey=`${fresh.clientId}:${fresh.skuId}:${fresh.boxId}:${balance.palletId??'no-pallet'}:AVAILABLE`;
+    await tx.stockBalance.upsert({where:{balanceKey},create:{...scope,balanceKey,quantity:1},update:{quantity:{increment:1}}});
+    await tx.stockMovement.createMany({data:[
+      {...scope,skuId:fresh.sourceSkuId!,type:'INVENTORY_ADJUSTMENT',quantity:-1,sourceDocument:fresh.requestId,
+        idempotencyKey:`fbs-relabel:${fresh.id}:source`,comment:'Переклейка: старый ШК и КИЗ подтверждены'},
+      {...scope,type:'INVENTORY_ADJUSTMENT',quantity:1,sourceDocument:fresh.requestId,
+        idempotencyKey:`fbs-relabel:${fresh.id}:target`,comment:'Переклейка: новый ШК и КИЗ подтверждены'},
+    ]});
+  }
   const changed = await tx.productMark.updateMany({where: {id: old.id, value: old.value, boxId: fresh.boxId, status: 'AVAILABLE'},
     data: {boxId: null, status: StockStatus.BLOCKED}});
   if (changed.count !== 1) throw new ConflictException('Исходный КИЗ изменился во время переклейки.');
   const mark = await tx.productMark.create({data: {clientId: fresh.clientId, skuId: fresh.skuId, boxId: fresh.boxId,
     value: newKiz, status: 'AVAILABLE', sourceDocument: `Переклейка КИЗ FBS, заказ ${fresh.orderId}; исходная запись ${old.id}`}});
-  const updated = await tx.fbsTsdAssembly.update({where: {id: fresh.id}, data: {kiz: newKiz, wbMetaStatus: 'PENDING', errorMessage: null}});
+  const updated = await tx.fbsTsdAssembly.update({where: {id: fresh.id}, data: {kiz: newKiz, wbMetaStatus: 'PENDING', errorMessage: null,
+    ...(sizeRelabel?{relabelConfirmedAt:new Date()}: {})}});
   await tx.auditLog.create({data: {userId: user.id, action: ACTION, entity: 'FbsTsdAssembly', entityId: fresh.id,
     payload: {...previous.intent, stage: 'APPLIED', proposalId, newKiz, newMarkId: mark.id,
       oldMark: JSON.parse(JSON.stringify(old)), clientId: fresh.clientId, requestId: fresh.requestId, orderId: fresh.orderId,
-      boxId: fresh.boxId, boxCode: fresh.boxCode, quantity: 1, quantityChanged: false}}});
+      boxId: fresh.boxId, boxCode: fresh.boxCode, quantity: 1, quantityChanged: false,
+      sourceSkuId: old.skuId, targetSkuId: fresh.skuId, sourceBarcode: fresh.sourceBarcode, targetBarcode: fresh.barcode}}});
   return updated;
 }

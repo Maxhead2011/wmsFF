@@ -4,7 +4,8 @@ import { physicalKizLookup, physicalKizHistoryFilter } from '../../common/kiz-ph
 import { stockTransferBlockedReason, ordersWithoutTransferStock } from './fbs-stock-transfer';
 import { fbsStockAuditError, fbsKizAuditEnabled, validateFbsStockAudit } from './fbs-stock-audit';
 import { createHash } from 'node:crypto';
-import { physicalKizRelabelEnabled, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
+import { physicalKizRelabelEnabled, pendingSizeKizRelabel, readPhysicalKizRelabel, proposePhysicalKizRelabel, applyPhysicalKizRelabel, cancelPhysicalKizRelabel } from './fbs-physical-kiz-relabel';
+import { retainDovoz1049Route } from './fbs-dovoz1049-route';
 import { timingSnapshot, type SourceOrderTiming } from '../operations-statistics/order-timing';
 import { isOwnedUnpaidDraft, runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 import { lukinPrimaryLines } from '../billing/lukin-primary-policy';
@@ -5904,7 +5905,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               `Повторная проверка заказа WB №${retryTask.orderId}. Отсканируйте заново только ШК товара${retryTask.requiresKiz ? ' и ЧЗ' : ''}. Остальные заказы заявки повторно собирать не нужно.`,
             );
           }
-          const stockSource = await this.resolveFbsTsdStockSource(
+          // FIX: the one-off approved adjacent size must reach the TSD queue, not only the route preview.
+          const stockSource = await this.resolveDovoz1049TsdStockSource(existing) ?? await this.resolveFbsTsdStockSource(
             clientId,
             product,
             order.storageBoxes,
@@ -10100,6 +10102,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : `Неверный товар. Нужен «${task.productName}», арт. ${task.article ?? 'не указан'}. Верните товар и отсканируйте правильный ШК.`,
       );
     }
+    // FIX: marked size replacement waits for old/new KIZ scans before any stock conversion.
+    if (pendingSizeKizRelabel(task)) {
+      const updated = await this.updateFbsTsdUnderLease(task, user, { barcode, errorMessage: null });
+      return this.formatFbsTsdAssembly(updated, user, 'Новый ШК принят. Отсканируйте СТАРЫЙ КИЗ снимаемой маркировки, затем новый КИЗ.');
+    }
     const updated = task.relabelRequired
       ? await this.completeFbsTsdRelabeling(task, barcode, user)
       : await this.updateFbsTsdUnderLease(task, user, { barcode, errorMessage: null });
@@ -10262,7 +10269,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.inventoryLock?.assertStockMovementsAllowed();
     task = await this.withFbsTsdLeaseTransaction(task, user, tx => proposePhysicalKizRelabel(tx, task, kiz, user,
       fresh => this.requireCurrentFbsTsdLease(fresh, user)));
-    return this.formatFbsTsdAssembly(task, user, 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
+    return this.formatFbsTsdAssembly(task, user, pendingSizeKizRelabel(task)
+      ? 'Старый КИЗ исходного размера подтверждён. Переклейте товар и отсканируйте НОВЫЙ КИЗ.'
+      : 'Старый КИЗ связан с прошлым заказом. Переклейте эту единицу на новый КИЗ.');
   }
 
   async scanFbsTsdKiz(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
@@ -10298,6 +10307,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const kizFormatError = fbsTsdKizFormatError(kiz, allowedBoxPrefixes);
     if (kizFormatError) {
       throw new BadRequestException(kizFormatError);
+    }
+    // FIX: never submit the source-size KIZ to WB as the new ordered size.
+    if (pendingSizeKizRelabel(task) && payload.confirmKizRelabel !== true) {
+      return this.proposeFbsPhysicalKizRelabel(task, kiz, user);
     }
     if (payload.confirmKizRelabel === true) {
       if (!physicalKizRelabelEnabled()) throw new ForbiddenException('Переклейка КИЗ в этом окружении выключена.');
@@ -15339,6 +15352,37 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     this.fbsOrdersCache.delete(task.clientId);
     this.fbsTsdRequestFallbackCache.delete(task.clientId);
     return message;
+  }
+
+  // FIX: request 1049 uses its approved source with fresh stock and competing reservations.
+  private async resolveDovoz1049TsdStockSource(task: FbsTsdAssemblyRecord | null): Promise<FbsTsdStockSource | null> {
+    if (!task || !retainDovoz1049Route(task)) return null;
+    const warehouseId = task.stockWarehouseId ?? (await this.prisma.clientRequest.findUnique({
+      where: { id: task.requestId }, select: { warehouseId: true },
+    }))?.warehouseId;
+    const source = { sourceSkuId: task.sourceSkuId, sourceProductName: task.sourceProductName,
+      sourceArticle: task.sourceArticle, sourceBarcodes: jsonStringArray(task.sourceBarcodes),
+      storageBoxes: [] as FbsOrderSummary['storageBoxes'], withoutBoxQuantity: 0, relabelRequired: true };
+    if (!warehouseId) return source;
+    const [balances, reservations] = await Promise.all([
+      this.prisma.stockBalance.findMany({ where: {
+        clientId: task.clientId, warehouseId, skuId: task.sourceSkuId!,
+        status: StockStatus.AVAILABLE, quantity: { gt: 0 }, boxId: { not: null },
+        box: { status: 'active', warehouseId, storagePlacement: { pallet: { clientId: task.clientId, warehouseId } } },
+      }, select: { boxId: true, quantity: true, box: { select: { code: true } } } }),
+      this.fbsTsdReservationRows({ clientId: task.clientId, skuId: task.sourceSkuId!, excludeTaskId: task.id }),
+    ]);
+    const boxes = new Map<string, { code: string; quantity: number }>();
+    for (const row of balances) {
+      if (!row.boxId || !row.box) continue;
+      const box = boxes.get(row.boxId) ?? { code: row.box.code, quantity: 0 };
+      box.quantity += row.quantity; boxes.set(row.boxId, box);
+    }
+    source.storageBoxes = [...boxes.entries()].map(([id, box]) => ({
+      code: box.code, status: StockStatus.AVAILABLE,
+      quantity: Math.max(0, box.quantity - reservations.filter(r => r.boxId === id).reduce((n, r) => n + r.itemCount, 0)),
+    })).filter(box => box.quantity >= Math.max(1, task.itemCount));
+    return source;
   }
 
   private async resolveFbsTsdStockSource(
@@ -25000,6 +25044,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const reservableOrders = relevantOrders.filter((order) => {
+      if (retainDovoz1049Route(taskByKey.get(selectionKey(order.connectionId, order.id)))) return false;
       if (
         order.category !== 'active' ||
         !order.product ||
@@ -25173,6 +25218,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         continue;
       }
 
+      // FIX: request 1049 has explicit one-off size substitutions. Cancellation above still releases them.
+      // Live route/scan validation and explicit route repair remain enabled; only background rewriting is skipped.
+      if (retainDovoz1049Route(existing)) continue;
       const sourceSkuId = order.relabeling?.sourceSkuId ?? null;
       const stockSkuId = sourceSkuId || order.product.id;
       const requestItem = order.request
