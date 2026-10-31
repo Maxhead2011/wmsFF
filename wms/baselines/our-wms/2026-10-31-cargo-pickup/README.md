@@ -1,0 +1,3 @@
+# Verified cargo pickup invoice release
+
+Published PR813 / 2026-10-31: [Cargo pickup invoices](cargo-pickup-invoices.md). Separate dated cargo invoice alongside independent PRR billing; delivery selection/cost, audited correction, transactional source links, concurrency and cancellation guards. API4280/web587 (156/2 skipped), focused18, TypeScript, isolated PostgreSQL8/full health, browser6/bootstrap5/public5 passed. Exact API5/web2; own-image flag enabled. Live routes/flag verified, no production cargo charges created. Schema/APK/sold unchanged. Baseline2026-10-31-cargo-pickup, sourceParityVerified=false.
