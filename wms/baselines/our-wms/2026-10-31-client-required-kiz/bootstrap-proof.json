@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "assets/client-kiz-20261031.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "assets/client-kiz-20261031.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "assets/client-kiz-20261031.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "assets/client-kiz-20261031.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "assets/client-kiz-20261031.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}
