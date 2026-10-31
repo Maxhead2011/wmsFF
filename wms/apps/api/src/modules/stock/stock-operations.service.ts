@@ -2034,7 +2034,7 @@ export class StockOperationsService {
     return archived;
   }
 
-  async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser) {
+  async shipClientRequest(dto: FulfillClientRequestDto, user: AuthUser, verifyDelivery?: (tx: Prisma.TransactionClient) => Promise<void>) {
     let fboShipment = false;
     if (process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true') {
       const fbo = await this.prisma.fboAssembly.findUnique({where:{requestId:dto.requestId}});
@@ -2047,9 +2047,11 @@ export class StockOperationsService {
 
     const result = await withClientKizReview(this.prisma, user, () => this.prisma.$transaction(async (tx) => {
       // FIX: serialize FBO confirmations before checking stock and billing idempotency.
-      if (fboShipment) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${dto.requestId} FOR UPDATE`;
+      if (fboShipment || verifyDelivery) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${dto.requestId} FOR UPDATE`;
       const doneAt = new Date();
       const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
+      // FIX: background marketplace evidence is revalidated under the same request lock as the stock mutation.
+      if (verifyDelivery) await verifyDelivery(tx);
 
       // Упаковка через ТСД или аварийный workflow могла завершиться без начислений.
       // Перед закрытием восстанавливаем их по фактическим упаковочным местам.

@@ -1,4 +1,5 @@
 import { OzonLinkImportService } from './ozon-link-import.service';
+import { FboDeliverySyncService } from './fbo-delivery-sync.service';
 import {WbFboSupplyController} from './wb-fbo-supply.controller';
 import {WbFboSupplyService} from './wb-fbo-supply.service';
 import { ClientRequestRemovalService } from './client-request-removal.service';
@@ -30,6 +31,7 @@ import { ClientRequestsService } from './client-requests.service';
   // FIX: Lamoda preview reuses scoped availability; no duplicate stock calculator.
   exports: [ClientRequestsService],
   providers: [
+    FboDeliverySyncService,
     WbFboSupplyService,
     ClientRequestRemovalService,
     OzonLinkImportService,
