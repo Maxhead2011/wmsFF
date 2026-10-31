@@ -1,6 +1,6 @@
 # FBO completion reliability
 
-Prepared 2026-10-31 for feature/wb-print-check; not yet published.
+Published 2026-10-31 via PR807 into feature/wb-print-check. Public health and API/web hashes verified; other containers and environment file unchanged. Baseline: 2026-10-31-fbo-completion-reliability.
 
 ## Impact
 
