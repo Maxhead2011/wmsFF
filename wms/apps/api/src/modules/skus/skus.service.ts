@@ -1,3 +1,4 @@
+import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, VolumeSource } from '@prisma/client';
 import * as XLSX from 'xlsx';
@@ -279,6 +280,7 @@ export class SkusService {
             volumeSource: volume ? 'CALCULATED' : 'MANUAL',
             needsChestnyZnak: dto.needsChestnyZnak ?? false,
             isUnmarked: dto.isUnmarked ?? false,
+            ...await clientReceiptMarking(tx, dto.clientId),
             needsLabel: dto.needsLabel ?? false,
             needsRelabel: dto.needsRelabel ?? false,
             marketplacePayload: manualMarketplacePayload(dto.photoUrls),
@@ -331,7 +333,7 @@ export class SkusService {
       throw new BadRequestException('Нельзя перенести SKU к другому клиенту через редактирование карточки.');
     }
 
-    const updateData = this.buildSkuUpdateData(dto, existing);
+    const updateData = {...this.buildSkuUpdateData(dto, existing), ...await clientReceiptMarking(this.prisma, existing.clientId)};
 
     try {
       return await this.prisma.$transaction(async (tx) => {

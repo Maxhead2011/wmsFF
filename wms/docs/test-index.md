@@ -1,3 +1,9 @@
+Release candidate on PR807/808: required KIZ per client plus review REJECT validation/attention badge. Exact API14/web3 overlay; responsive adjacent display/KIZ settings, existing flags and single main entry retained. API4233/web587, both TypeScript checks, browser6/bootstrap5 and baseline8 passed. See client-required-kiz.md; sourceParityVerified=false.
+
+Prepared, not deployed: [Client required KIZ](client-required-kiz.md). Client cabinet switch, server receipt/inventory enforcement, new-card marking and audit. Own-WMS flag plus explicit client setting; stock unchanged. Authorized settings and 97 card flags applied for Lukin/Kubrin/Eletskaya. See document for release boundary and tests.
+
+Prepared, not published: [KIZ review rejection and attention badge](kiz-review-reject-counter.md). Scoped OPEN review count, REJECT DTO, successful-decision refresh; no stock mutations.
+
 Published PR807 / 2026-10-31: [FBO completion reliability](fbo-completion-reliability.md). Batched exact box checks and selections, safe same-token recovery after connection failures, busy/check-result UI and stage diagnostics. API4217/web586 (151/2 skipped), TypeScript, baseline8, PostgreSQL10/full health and browser6. Exact API3/web2; own-image WMS_FBO_COMPLETION_RELIABILITY_ENABLED=true. APK249/schema/business records/sold unchanged. Baseline2026-10-31-fbo-completion-reliability, sourceParityVerified=false.
 
 Published PR805 / 2026-10-31: [FBO shipment prefix lookup](fbo-shipment-prefix.md). Request2565 KIZ read47.940s ->4.513s,1710 identities/evidence unchanged. API4206/web582 (151/2 skipped), TypeScript, baseline8, PostgreSQL10/full health;1710-unit/159-box synthetic finish16s and retry passed. Exact2 API overlay, own-image WMS_KIZ_SHIPMENT_PREFIX_ENABLED=true. Web/APK/schema/stock/sold unchanged. Baseline2026-10-31-fbo-shipment-prefix, sourceParityVerified=false.

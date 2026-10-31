@@ -1,3 +1,4 @@
+import { clientReceiptMarking, assertClientReceiptKiz } from '../../common/client-receipt-kiz-policy';
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { assertNewReceiptKiz, clientKizGuardEnabled, clientKizIdentity, lookupClientKiz, receiptKizDuplicateMessage, recordClientKizReceipt } from '../../common/kiz-client-registry';
 import { Prisma, StockStatus } from '@prisma/client';
@@ -327,7 +328,9 @@ export class ImportsService {
     return box;
   }
 
-  private async ensureSku(tx: Prisma.TransactionClient, item: StockImportItem) {
+  private async ensureSku(tx: Prisma.TransactionClient, item: StockImportItem & { kiz?: string }) {
+    // FIX: a stock-only import cannot silently admit unmarked units for a marked client.
+    await assertClientReceiptKiz(tx, item.clientId, item.kiz);
     const existingBarcode = await tx.barcode.findFirst({
       where: {
         value: item.barcode,
@@ -345,6 +348,7 @@ export class ImportsService {
       data: {
         clientId: item.clientId,
         internalSku: `BAR-${item.barcode}`,
+        ...await clientReceiptMarking(tx, item.clientId),
         name: item.name,
         color: item.color,
         size: item.size,

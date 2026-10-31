@@ -1,3 +1,4 @@
+import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { closeWbPackedRequest, wbPackedAutoDoneEnabled } from './wb-packed-auto-done';
 import { closeOzonPackedRequest, ozonPackedAutoDoneEnabled } from './ozon-packed-auto-done';
 import {assertFbsClientKiz, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
@@ -28826,7 +28827,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     for (const product of products) {
       try {
         const synced = productLinksEnabled(connection.clientId) && connection.marketplace !== MarketplaceType.YANDEX_MARKET
-          ? await syncProductLink(this.prisma, connection, product, marketplaceSkuData(connection.clientId, product, false))
+          ? await syncProductLink(this.prisma, connection, product, { ...marketplaceSkuData(connection.clientId, product, false), ...await clientReceiptMarking(this.prisma, connection.clientId) })
           : await this.upsertMarketplaceSku(connection.clientId, product);
         if ('review' in synced && synced.review) { result.skipped += 1; result.errors.push({offerId: product.offerId, message: 'Карточка требует сверки в каталоге товаров'}); continue; }
         result[synced.created ? 'created' : 'updated'] += 1;
@@ -29247,7 +29248,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     const preserveManualVolume =
       existing?.volumeSource === VolumeSource.MANUAL && Number(existing.volumeLiters) > 0;
-    const data = marketplaceSkuData(clientId, product, preserveManualVolume);
+    const data = {...marketplaceSkuData(clientId, product, preserveManualVolume),
+      ...await clientReceiptMarking(this.prisma, clientId)};
     const sku = existing
       ? await this.prisma.sku.update({
           where: { id: existing.id },

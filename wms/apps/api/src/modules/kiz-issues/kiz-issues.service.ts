@@ -1,3 +1,4 @@
+import { openKizReviewCount } from '../../common/kiz-review-attention';
 import {
   BadRequestException,
   Injectable,
@@ -597,7 +598,13 @@ export class KizIssuesService {
     };
   }
 
-  async list(
+  // FIX: include receipt reviews even when the legacy report has no FBS requests.
+  async list(filter: {status?:string;search?:string;clientId?:string;limit?:string}, user: AuthUser) {
+    const report = await this.listLegacy(filter, user);
+    const reviews = await openKizReviewCount(this.prisma, user, filter.clientId);
+    return {...report, summary: {...report.summary, ...(reviews === undefined ? {} : {openReviews: reviews, attention: report.summary.unread + reviews})}};
+  }
+  private async listLegacy(
     filter: {
       status?: string;
       search?: string;
