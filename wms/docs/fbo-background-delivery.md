@@ -1,6 +1,6 @@
 # Background FBO delivery confirmation
 
-Prepared on PR809 runtime, own WMS only. Flag WMS_FBO_DELIVERY_SYNC_ENABLED defaults off. Target branch feature/wb-print-check.
+Published PR811 on PR809 runtime, own WMS only. Flag WMS_FBO_DELIVERY_SYNC_ENABLED defaults off. Target branch feature/wb-print-check.
 
 ## Problem and behavior
 
@@ -29,3 +29,7 @@ Exact API4 overlay only: two new modules, ClientRequestsModule and the internal 
 Checks: unit/API/web and TypeScript; actual candidate isolated PostgreSQL full Nest health,1710-unit finish/exports and shipping; concurrent delivery has one shipment and one evidence audit; changed binding and forced verification exception leave stock unchanged; WB requires dispatch. Existing baseline guards verify the exact file delta. Publication checks image identity, merged PR, isolated image proof, environment preservation, health and hashes. Rollback tag logoff-api:before-fbo-background-delivery-20261031. Stock transactions already committed must not be reversed by a code rollback.
 
 Validated: API4262 passed/156 skipped; web587 passed/2 skipped; both TypeScript checks; isolated actual-image PostgreSQL9 and full Nest health. Dedicated KIZ database suite excluded without its configured isolated URL. No claimed performance improvement.
+
+## Production proof
+
+Published API sha256:fc415f8d55329bffdc9e443c5ab860749d7289d662e858433d042a4ef70a198e; prior web image retained. First autonomous cycle at 2026-10-31 15:11 UTC completed Ozon2601/2602 and WB2494; one FBO_DELIVERY_CONFIRMED audit each, total SHIP quantities -20/-12/-578. Image hashes, health, prior environment and other containers verified. Baseline captures all715 API modules and schema; web continues from 2026-10-31-client-required-kiz. No direct status repair.
