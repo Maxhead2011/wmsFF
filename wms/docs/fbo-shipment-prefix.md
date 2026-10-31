@@ -34,4 +34,6 @@ Validation: API4206/web582 passed (151/2 skipped); API TypeScript, baseline8,
 24 focused tests, full synthetic1710-unit/159-box completion and retry passed.
 The synthetic full finish took16.1s. No production FINISH was executed.
 
-Prepared, not yet published. PR target: feature/wb-print-check.
+Published via PR805 to feature/wb-print-check. Live read-only proof:4.513s,
+1710 identities and identical evidence digest. Request2565 remains IN_WORK/CONTROL;
+no business completion performed. Baseline2026-10-31-fbo-shipment-prefix.
