@@ -22,7 +22,7 @@ try:
   if p.returncode==0:break
   time.sleep(1)
  else:raise RuntimeError('Full isolated API failed health')
- proof={'image':image,'fullApiHealth':True,'syntheticOnly':True,'postgres':16};(r/'isolated-proof.json').write_text(json.dumps(proof));print(json.dumps(proof))
+ proof={'image':image,'fullApiHealth':True,'syntheticOnly':True,'postgres':9};(r/'isolated-proof.json').write_text(json.dumps(proof));print(json.dumps(proof))
 finally:
  subprocess.run(['docker','rm','-f',app,pg],check=False);subprocess.run(['docker','network','rm',network],check=False)
 

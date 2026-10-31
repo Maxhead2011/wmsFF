@@ -8,11 +8,13 @@ import {OzonAssemblySupplyService} from './ozon-assembly-supply.service';
 import {WbFboSupplyService} from './wb-fbo-supply.service';
 import {assertNoOzonAdjustment,supplyOrders} from './ozon-supply-policy';
 import {deliveryKey,deliveryVersion,deliveryRetryMs,fboDeliveryEnabled,ozonDeliveryProof,wbDeliveryAccepted} from './fbo-delivery-policy';
+import {assertRequestNotRemoved} from './request-removal-policy';
+import {readFbsAttemptHistory} from '../../common/shipment-history/fbs-attempt-history';
 
 // FIX: durable per-request cooldown/lease; no transaction remains open during marketplace HTTP calls.
 export async function claimDelivery(db:any,id:string,now=Date.now()){
  return db.$transaction(async(tx:any)=>{
-  const key=deliveryKey(id);await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${key},0))`);
+  const key=deliveryKey(id);await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${key},0))::text`);
   const old=(await tx.systemSetting.findUnique({where:{key}}))?.value??{};
   if(Number(old.leaseUntil)>now||Number(old.nextAt)>now)return null;
   const state={...old,token:randomUUID(),leaseUntil:now+10*60_000,attempts:(Number(old.attempts)||0)+1,lastAttemptAt:new Date(now).toISOString()};
@@ -21,7 +23,7 @@ export async function claimDelivery(db:any,id:string,now=Date.now()){
 }
 export async function finishDelivery(db:any,id:string,claim:any,outcome:string,now=Date.now()){
  return db.$transaction(async(tx:any)=>{
-  const key=deliveryKey(id);await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${key},0))`);
+  const key=deliveryKey(id);await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${key},0))::text`);
   const old=(await tx.systemSetting.findUnique({where:{key}}))?.value;
   if(old?.token!==claim.token)return;
   const failed=outcome==='RETRY';
@@ -62,6 +64,8 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
  private async context(id:string,db:any=this.db){
   const r=await db.clientRequest.findUnique({where:{id},include:{client:{select:{isDemo:true}},fboAssembly:{select:{phase:true}},ozonShipment:{select:{integration:true}},lamodaAssembly:{select:{requestId:true}},yandexFbyShipment:{select:{id:true}},items:{select:{id:true,skuId:true,quantity:true}},_count:{select:{fbsOrderLinks:true}}}});
   if(!r||r.client.isDemo||r.type!=='OUTBOUND'||!['PACKED','DONE'].includes(r.status)||r.fboAssembly?.phase!=='COMPLETED'||!r.warehouseId||r._count.fbsOrderLinks||r.lamodaAssembly||r.yandexFbyShipment)return null;
+  if(/^(FBS|DBS)/i.test((r.title??'').trim())||r.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:')||(await readFbsAttemptHistory(db,{requestId:id})).length)return null;
+  await assertRequestNotRemoved(db,id);
   const link=r.ozonShipment?.integration??(await db.systemSetting.findUnique({where:{key:'wb-fbo-tracking:v1:'+id}}))?.value;
   if(!link?.connectionId)return null;
   const market=r.ozonShipment?'OZON':'WILDBERRIES';
@@ -84,6 +88,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
    const response=await this.ozon.call(c.connection,'/v3/supply-order/get',{order_ids:ids});
    evidence=ozonDeliveryProof(c.link,response);accepted=Boolean(evidence);
   }else{
+   if(!/^[1-9]\d*$/.test(c.link.supplyId)||!Number.isSafeInteger(Number(c.link.supplyId)))throw new ConflictException('Некорректная привязка WB.');
    evidence=await this.wb.remote(c.connection,c.link.supplyId);
    accepted=wbDeliveryAccepted(evidence,c.r.items.reduce((n:number,i:any)=>n+i.quantity,0),c.dispatch);
   }

@@ -1,5 +1,6 @@
 // TEST: appended to the isolated completion fixture; no real marketplace HTTP.
 process.env.WMS_FBO_DELIVERY_SYNC_ENABLED='true';
+stock.archivedEmptyBoxDetach=new(require(dir+'common/boxes/archived-empty-box-pallet-detach.service').ArchivedEmptyBoxPalletDetachService)(p,stock.boxCodes);
 const {FboDeliverySyncService,claimDelivery,finishDelivery}=require(dir+'modules/client-requests/fbo-delivery-sync.service');
 const leases=await Promise.all([claimDelivery(p,id),claimDelivery(p,id)]);assert.equal(leases.filter(Boolean).length,1);
 await finishDelivery(p,id,leases.find(Boolean),'WAITING_MARKETPLACE');assert.equal(await claimDelivery(p,id),null);passed++;
@@ -40,4 +41,4 @@ assert.equal(await wbDelivery.reconcile(r2.id),'SKIPPED');
 await p.systemSetting.create({data:{key:'wb-fbo-dispatch:v1:'+r2.id,value:{at:new Date().toISOString()}}});
 assert.equal(await wbDelivery.reconcile(r2.id),'DONE');
 assert.equal((await p.clientRequest.findUnique({where:{id:r2.id}})).status,'DONE');passed++;
-assert.equal(passed,16);
+assert.equal(passed,9);

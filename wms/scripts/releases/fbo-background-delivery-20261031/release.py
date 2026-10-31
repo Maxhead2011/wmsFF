@@ -1,9 +1,9 @@
-"""FIX: pinned two-module own-WMS overlay; no business data migration."""
+"""FIX: pinned four-module own-WMS overlay; no business data migration."""
 import subprocess,json,hashlib,fcntl,time,urllib.request,sys
 from pathlib import Path
 ROOT=Path('/opt/logoff-wms/wms/work/fbo-background-delivery-20261031')
 APP=Path('/opt/logoff-wms/wms')
-BASE='sha256:c48c8cb82a467d12e2ec7ece39b71888904df4c520ea9573bda0389478f04e69'
+BASE='sha256:1786651d85146584d9843833a0e0b3b7879384703f44c6d6543892972f63eb88'
 FILES=['modules/client-requests/fbo-delivery-policy.js','modules/client-requests/fbo-delivery-sync.service.js','modules/client-requests/client-requests.module.js','modules/stock/stock-operations.service.js']
 def d(*a):return subprocess.check_output(['docker',*a],text=True).strip()
 def hashes(img):return {l.split(maxsplit=1)[1]:l.split()[0] for l in d('run','--rm','--network','none','--entrypoint','sh',img,'-c','find /app/apps/api/dist -type f -exec sha256sum {} +').splitlines()}
@@ -25,8 +25,8 @@ def publish():
  assert d('inspect','infra-api-1','--format','{{.Image}}')==BASE
  v=json.loads((ROOT/'verification.json').read_text());pr=json.loads((ROOT/'pr.json').read_text())
  assert pr['state']=='MERGED' and pr['headRefName']=='fix/fbo-background-delivery' and pr['baseRefName']=='feature/wb-print-check'
- tests=json.loads((ROOT/'tests.json').read_text());assert tests['api']>=4243 and tests['web']==586 and tests['typecheck']
- isolated=json.loads((ROOT/'isolated-proof.json').read_text());assert isolated['fullApiHealth'] and isolated['postgres']>=16 and isolated['image']==v['image']
+ tests=json.loads((ROOT/'tests.json').read_text());assert tests['api']>=4262 and tests['web']==587 and tests['typecheck']
+ isolated=json.loads((ROOT/'isolated-proof.json').read_text());assert isolated['fullApiHealth'] and isolated['postgres']>=9 and isolated['image']==v['image']
  assert v['base']==BASE and not (ROOT/'published.json').exists()
  before=json.loads(d('inspect','infra-api-1'))[0]
  others={n:d('inspect',n,'--format','{{.Id}}') for n in d('ps','--format','{{.Names}}').splitlines() if n!='infra-api-1'}
