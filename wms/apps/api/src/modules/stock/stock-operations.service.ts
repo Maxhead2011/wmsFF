@@ -1,3 +1,4 @@
+import { clientReceiptMarking, assertClientReceiptKiz } from '../../common/client-receipt-kiz-policy';
 import { assertStoreReceipt } from '../clients/client-store-receipt';
 import { assertClientRequestKizShipment, finishClientRequestKizShipment, withClientKizReview } from '../../common/kiz-client-review';
 import { receiptFboPlan, saveReceiptFboCharges } from '../billing/receipt-processing-fbo';
@@ -2416,6 +2417,8 @@ export class StockOperationsService {
         };
       }
 
+      // FIX: client requirement cannot be bypassed by unknown SKU or allowReceiptError.
+      if (movementType === 'RECEIPT') await assertClientReceiptKiz(tx, dto.clientId, dto.kiz);
       const { createdDraft, sku } = await this.resolveOrCreateSkuForReceipt(tx, dto);
       // FIX: validate store eligibility before changing physical stock.
       const storeContext = movementType === 'RECEIPT'
@@ -4672,6 +4675,7 @@ export class StockOperationsService {
           volumeSource: 'MANUAL',
           isDraft: true,
           draftSource: 'RECEIPT_SCAN',
+          ...await clientReceiptMarking(tx, dto.clientId),
           barcodes: {
             create: {
               value: barcodeValue,

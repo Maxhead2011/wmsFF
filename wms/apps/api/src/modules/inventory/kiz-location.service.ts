@@ -7,6 +7,11 @@ import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service
 @Injectable()
 export class KizLocationService {
   constructor(private readonly prisma: PrismaService, private readonly clients: ClientScopeService) {}
+  // FIX: delegate to the existing published queue; retain its authorization and audit.
+  reviews(user: AuthUser, cursor?: string) { return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).list(user, cursor); }
+  decideReview(id: string, resolution: string, reason: string, confirmed: boolean, user: AuthUser) {
+    return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).decide(id, resolution, reason, confirmed, user);
+  }
   async lookup(kiz: string, user: AuthUser) {
     // FIX: read-only administrator feature, isolated from sold installations and scoped before lookup.
     if (process.env.WMS_KIZ_LOCATION_CHECK_ENABLED !== 'true' || user.isDemo ||

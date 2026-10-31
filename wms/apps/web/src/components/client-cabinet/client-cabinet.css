@@ -2920,3 +2920,15 @@
   gap: 5px;
   font-size: 12px;
 }
+/* FIX: keep the KIZ rule beside display preferences, stack on narrow screens. */
+.client-cabinet-settings-row { display: grid; grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); gap: 16px; align-items: stretch; }
+.client-cabinet-settings-row > section { min-width: 0; }
+.client-cabinet-settings-row fieldset { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+.client-cabinet-settings-row .client-kiz-policy-settings > label { display: flex; align-items: center; gap: 12px; font-weight: 700; }
+.client-kiz-policy-settings input[role="switch"] { appearance: none; width: 44px; height: 24px; border: 1px solid var(--line); border-radius: 24px; background: var(--muted, #64748b); position: relative; flex: 0 0 auto; cursor: pointer; }
+.client-kiz-policy-settings input[role="switch"]::before { content: ''; position: absolute; width: 18px; height: 18px; top: 2px; left: 2px; background: white; border-radius: 50%; transition: transform .15s; }
+.client-kiz-policy-settings input[role="switch"]:checked { background: var(--accent, #7c3aed); }
+.client-kiz-policy-settings input[role="switch"]:checked::before { transform: translateX(20px); }
+.client-kiz-policy-settings input[role="switch"]:focus-visible { outline: 2px solid var(--accent, #7c3aed); outline-offset: 3px; }
+.client-kiz-policy-settings input[role="switch"]:disabled { opacity: .5; cursor: default; }
+@media (max-width: 1000px) { .client-cabinet-settings-row { grid-template-columns: minmax(0, 1fr); gap: 0; } }

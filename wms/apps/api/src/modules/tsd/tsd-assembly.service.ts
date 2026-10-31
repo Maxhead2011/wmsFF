@@ -1,3 +1,4 @@
+import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { lamodaAssemblyEnabled } from '../lamoda/lamoda-fbo-policy';
 import { ordinaryPickStatusLabel } from '../../common/stock/ordinary-unmarked-pick';
 import { fbyQueueScope } from '../yandex-fby/yandex-fby-scope';
@@ -582,6 +583,9 @@ export class TsdAssemblyService {
       matches.find((match) => !match.sku.isDraft) ??
       matches[0];
 
+    const marking = await clientReceiptMarking(this.prisma, clientId);
+    // FIX: a new barcode still needs KIZ; this read does not create a SKU or stock.
+    if (!found && marking.needsChestnyZnak) return {id:null,skuId:null,clientId,barcode,name:barcode,isDraft:true,...marking};
     if (!found) {
       throw new NotFoundException('Товар по штрихкоду не найден.');
     }
@@ -610,6 +614,7 @@ export class TsdAssemblyService {
       shelfLifeUntil: sku.shelfLifeUntil?.toISOString() ?? null,
       needsChestnyZnak: sku.needsChestnyZnak,
       isUnmarked: sku.isUnmarked,
+      ...marking,
       isDraft: sku.isDraft,
       draftSource: sku.draftSource,
       barcode: found.value,

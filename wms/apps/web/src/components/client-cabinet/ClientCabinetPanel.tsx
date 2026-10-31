@@ -76,6 +76,7 @@ import { clientStatusLabel, formatCabinetMoney, formatCabinetNumber } from './cl
 import { ClientRequestTimelineModal } from './ClientRequestTimelineModal';
 import { ClientBranchStockTiles } from './ClientBranchStockTiles';
 import { ClientProductDisplaySettings } from './ClientProductDisplaySettings';
+import { ClientKizPolicySettings } from './ClientKizPolicySettings';
 
 type CabinetData = {
   clients: ClientSummary[];
@@ -734,7 +735,10 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             </div>
           ) : null}
 
-          {canManageClients && <ClientProductDisplaySettings key={view.client.id} accessToken={session.accessToken} clientId={view.client.id} />}
+        {canManageClients && <div className="client-cabinet-settings-row">
+          <ClientProductDisplaySettings key={view.client.id} accessToken={session.accessToken} clientId={view.client.id} />
+          <ClientKizPolicySettings key={`kiz-${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id} />
+        </div>}
           {import.meta.env.VITE_CLIENT_STORES_ENABLED === 'true' && session.user.roleCodes.some(role=>role==='ADMIN'||role==='OWNER') &&
             <ClientStoresSettings key={`stores:${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id}/>}
           <ClientBranchStockTiles accessToken={session.accessToken} clientId={view.client.id} />
