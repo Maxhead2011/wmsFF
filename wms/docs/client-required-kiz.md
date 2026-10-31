@@ -1,6 +1,6 @@
 # Все товары клиента с КИЗ
 
-Подготовлено в `fix/kubrin-required-receipt-kiz`, код ещё не опубликован.
+Опубликовано через PR809.
 
 В кабинете клиента добавлен переключатель «Все товары с КИЗ» с явным сохранением.
 GET/PUT `/clients/:clientId/kiz-policy` используют права clients:read/write,
@@ -39,7 +39,7 @@ accept-with-error. Повтор уже применённой операции �
 сохраняет прежние признаки всех изменённых карточек. После записи у каждого
 клиента оставалось 0 карточек без маркировки. Ни один остаток, резерв или КИЗ
 этой операцией не изменён. Текущий сервер использует исправленные признаки
-карточек; постоянное правило и переключатель требуют публикации нового кода.
+карточек; постоянное правило и переключатель опубликованы в PR809.
 
 ## Проверки и выпуск
 
@@ -55,16 +55,19 @@ PostgreSQL; первый полный запуск подтвердил ошиб
 TypeScript API/web и git diff --check прошли. Повторная проверка рабочей БД:
 у всех трёх клиентов настройка присутствует, немаркированных карточек 0.
 
-Проданная ВМС: не включать правило/флаг и не переносить настройки. До выпуска
-сверить актуальные API/web образы, использовать точечный overlay, поскольку
-sourceParityVerified=false. Полную локальную сборку на сервер не устанавливать.
-Проверить фактический артефакт, старый ТСД (новый ШК → КИЗ), кабинет и единственный
-основной JavaScript entry. База выпуска ещё не подготовлена; PR целится в
-`feature/wb-print-check` только после согласования публикации.
-
+Проданная ВМС не развёртывалась и не перенастраивалась. Выпуск PR809 установлен
+точечным overlay на опубликованную базу PR807/808, поскольку sourceParityVerified=false.
+Проверены фактический артефакт, полный API, кабинет и единственный основной
+JavaScript entry. База выпуска: `2026-10-31-client-required-kiz`, ветка PR —
+`feature/wb-print-check`. После обновления требуется обновить данные на ТСД.
 
 ## Release candidate after approved PR807/808 merge
 
 Release candidate on PR807/808: required KIZ per client plus review REJECT validation/attention badge. Exact API14/web3 overlay; responsive adjacent display/KIZ settings, existing flags and single main entry retained. API4233/web587, both TypeScript checks, browser6/bootstrap5 and baseline8 passed. See client-required-kiz.md; sourceParityVerified=false.
 
 Release scripts: `scripts/releases/client-kiz-20261031/` (exact overlay, disposable PostgreSQL/full API health, browser and bootstrap checks, image identity guard, locks and rollback). Main data flags already applied under user authorization; publication does not move stock.
+
+
+## Published PR809
+
+Published PR809: client required KIZ at receipt/inventory, including new SKU; adjacent responsive switch; REJECT validation and unresolved review badge. API4233/web587, TypeScript, isolated PostgreSQL/runtime15/full health, browser6/bootstrap5/public5 and live3 passed. Exact API14/web3, flags/schema/APK249/sold unchanged. Lukin/Kubrin/Eletskaya enabled; 3 newly unmarked Eletskaya cards aligned after publication, audit retained, no quantity changes. Baseline sourceParityVerified=false.
