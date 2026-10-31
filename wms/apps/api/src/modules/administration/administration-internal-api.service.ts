@@ -347,7 +347,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     name: 'Склад и размещение',
     prefixes: ['/warehouse', '/warehouse/storage-locations'],
     // FIX: 30 warehouse handlers plus 12 storage-location handlers.
-    routeCount: 42,
+    routeCount: 44, // FIX: separate cargo invoice and delivery correction.
     description: 'Короба, паллет-сорты, зоны, ячейки и физическое размещение товара.',
     logic: ['Создаёт и изменяет складские места.', 'Размещает и перемещает короба.', 'Показывает содержимое и актуальную иерархию хранения.'],
     dependencies: ['Основная БД', 'Складские движения'],
