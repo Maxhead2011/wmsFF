@@ -2,6 +2,8 @@ import { FilePlus2, ReceiptText, RefreshCw, Trash2 } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import {
   billGoodsArrivals,
+  billCargoPickups,
+  updateCargoPickup,
   createGoodsArrival,
   deleteGoodsArrival,
   fetchClients,
@@ -23,6 +25,10 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
   const [bagCount, setBagCount] = useState('0');
   const [boxCount, setBoxCount] = useState('0');
   const [comment, setComment] = useState('');
+  const [ourDelivery, setOurDelivery] = useState(false);
+  const [deliveryCost, setDeliveryCost] = useState('');
+  const [cargoBusy, setCargoBusy] = useState(false);
+  const [editingCargo, setEditingCargo] = useState<string | null>(null);
   const [periodFrom, setPeriodFrom] = useState(monthStart());
   const [periodTo, setPeriodTo] = useState(today());
   const [rows, setRows] = useState<GoodsArrivalSummary[]>([]);
@@ -63,16 +69,23 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
     if (readOnly) return;
     setMessage('');
     try {
+      if (editingCargo) {
+        await updateCargoPickup(session.accessToken,editingCargo,{ourDelivery,...(ourDelivery?{deliveryCostRub:Number(deliveryCost)}:{})});
+        setEditingCargo(null);setOurDelivery(false);setDeliveryCost('');await load();return;
+      }
       await createGoodsArrival(session.accessToken, {
         clientId,
         arrivalDate,
         bagCount: Number(bagCount) || 0,
         boxCount: Number(boxCount) || 0,
         comment: comment.trim() || undefined,
+        ...(estimate?.cargoPickupEnabled ? {ourDelivery, ...(ourDelivery ? {deliveryCostRub:Number(deliveryCost)} : {})} : {}),
       });
       setBagCount('0');
       setBoxCount('0');
       setComment('');
+      setOurDelivery(false);
+      setDeliveryCost('');
       setMessage('Приход товара записан.');
       await load();
     } catch (error) {
@@ -88,7 +101,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
       setMessage(`Черновик счета ${invoice.number} создан в биллинге.`);
       await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Не удалось сформировать счет ППР.');
+      setMessage(error instanceof Error ? error.message : 'Не удалось сформировать счет ПРР.');
     }
   }
 
@@ -103,6 +116,17 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
     }
   }
 
+  async function billCargo() {
+    if (readOnly || cargoBusy) return;
+    setCargoBusy(true);
+    try {
+      const invoice = await billCargoPickups(session.accessToken,{clientId,periodFrom,periodTo});
+      await load();
+      setMessage(`Счёт «Забор товара с карго» ${invoice.number} создан в биллинге.`);
+    } catch(error) { setMessage(error instanceof Error ? error.message : 'Не удалось создать счёт.'); }
+    finally { setCargoBusy(false); }
+  }
+
   const totals = rows.reduce((sum, row) => ({ bags: sum.bags + row.bagCount, boxes: sum.boxes + row.boxCount }), { bags: 0, boxes: 0 });
 
   return (
@@ -112,8 +136,14 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
         {!readOnly && <><label><span>Дата прихода</span><input type="date" value={arrivalDate} onChange={(event) => setArrivalDate(event.target.value)} required /></label>
         <label><span>Мешки</span><input type="number" min="0" value={bagCount} onChange={(event) => setBagCount(event.target.value)} /></label>
         <label><span>Короба</span><input type="number" min="0" value={boxCount} onChange={(event) => setBoxCount(event.target.value)} /></label>
+        {estimate?.cargoPickupEnabled && <fieldset><legend>Доставка</legend>
+          <label><input type="radio" name="delivery" checked={ourDelivery} onChange={() => setOurDelivery(true)} />Наша доставка</label>
+          <label><input type="radio" name="delivery" checked={!ourDelivery} onChange={() => setOurDelivery(false)} />Не наша доставка</label>
+          {ourDelivery && <label><span>Стоимость забора с карго, ₽</span><input type="number" min="0.01" max="10000000" step="0.01" value={deliveryCost} onChange={event => setDeliveryCost(event.target.value)} required /></label>}
+        </fieldset>}
         <label className="goods-arrivals__comment"><span>Комментарий</span><input value={comment} onChange={(event) => setComment(event.target.value)} /></label>
-        <button className="primary-button" type="submit" disabled={!clientId}><FilePlus2 size={16} /><span>Записать приход</span></button></>}
+        <button className="primary-button" type="submit" disabled={!clientId}><FilePlus2 size={16} /><span>{editingCargo ? 'Сохранить доставку' : 'Записать приход'}</span></button>
+        {editingCargo && <button type="button" className="secondary-button" onClick={()=>{setEditingCargo(null);setOurDelivery(false);setDeliveryCost('');}}>Отмена</button>}</>}
       </form>
 
       <div className="goods-arrivals__billing">
@@ -122,17 +152,18 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
         <div><span>За период</span><strong>{totals.bags} мешков · {totals.boxes} коробов</strong></div>
         <div><span>Ориентировочно</span><strong>{money(estimate?.estimatedRub ?? 0)} ₽</strong></div>
         {!readOnly && <button className="primary-button" type="button" onClick={() => void bill()} disabled={!clientId || rows.every((row) => Boolean(row.billingInvoiceId))}>
-          <ReceiptText size={16} /><span>Сформировать счет ППР</span>
+          <ReceiptText size={16} /><span>Сформировать счет ПРР</span>
         </button>}
+        {!readOnly && estimate?.cargoPickupEnabled && <button className="primary-button" type="button" disabled={!clientId || cargoBusy || loading} onClick={() => void billCargo()}><ReceiptText size={16}/><span>{cargoBusy ? 'Создаю счёт…' : 'Счёт «Забор товара с карго»'}</span></button>}
         <button className="secondary-button" type="button" onClick={() => void load()} disabled={loading}><RefreshCw size={16} /><span>Обновить</span></button>
       </div>
       {message ? <p className={message.includes('создан') || message.includes('записан') ? 'form-success' : 'form-error'}>{message}</p> : null}
       <div className="online-receipts__table-wrap">
         <table className="warehouse-drafts__table">
-          <thead><tr><th>Дата</th><th>Клиент</th><th>Мешки</th><th>Короба</th><th>Комментарий</th><th>Счет</th><th /></tr></thead>
+          <thead><tr><th>Дата</th><th>Клиент</th><th>Мешки</th><th>Короба</th><th>Комментарий</th>{estimate?.cargoPickupEnabled && <th>Доставка</th>}<th>Счет ПРР</th><th /></tr></thead>
           <tbody>
-            {rows.map((row) => <tr key={row.id}><td>{date(row.arrivalDate)}</td><td>{clients.find((client) => client.id === row.clientId)?.name ?? '-'}</td><td>{row.bagCount}</td><td>{row.boxCount}</td><td>{row.comment || '-'}</td><td>{row.billingInvoiceId ? 'Включен' : 'Не выставлен'}</td><td>{!readOnly && !row.billingInvoiceId ? <button className="icon-button danger-icon" type="button" onClick={() => void remove(row.id)} title="Удалить"><Trash2 size={15} /></button> : null}</td></tr>)}
-            {!rows.length ? <tr><td colSpan={7}>За выбранный период приходов нет.</td></tr> : null}
+            {rows.map((row) => <tr key={row.id}><td>{date(row.arrivalDate)}</td><td>{clients.find((client) => client.id === row.clientId)?.name ?? '-'}</td><td>{row.bagCount}</td><td>{row.boxCount}</td><td>{row.comment || '-'}</td>{estimate?.cargoPickupEnabled && <td>{row.ourDelivery ? `Наша · ${money(row.deliveryCostRub ?? 0)} ₽` : 'Не наша'}{!readOnly && <button type="button" className="secondary-button" onClick={()=>{setEditingCargo(row.id);setOurDelivery(Boolean(row.ourDelivery));setDeliveryCost(String(row.deliveryCostRub ?? ''));}}>Изменить доставку</button>}</td>}<td>{row.billingInvoiceId ? 'Включен' : 'Не выставлен'}</td><td>{!readOnly && !row.billingInvoiceId ? <button className="icon-button danger-icon" type="button" onClick={() => void remove(row.id)} title="Удалить"><Trash2 size={15} /></button> : null}</td></tr>)}
+            {!rows.length ? <tr><td colSpan={estimate?.cargoPickupEnabled ? 8 : 7}>За выбранный период приходов нет.</td></tr> : null}
           </tbody>
         </table>
       </div>

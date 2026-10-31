@@ -3250,6 +3250,11 @@ export class BillingService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // FIX: cancelled cargo invoices release sources without leaving billable orphan charges.
+      if (process.env.WMS_CARGO_PICKUP_ENABLED === 'true' && dto.status === BillingInvoiceStatus.CANCELLED) {
+        await tx.billingCharge.updateMany({where:{service:{code:'CARGO_PICKUP'},
+          invoiceItems:{some:{invoiceId}}},data:{status:BillingChargeStatus.CANCELLED}});
+      }
       const updated = await tx.billingInvoice.update({
         where: { id: invoiceId },
         data: {

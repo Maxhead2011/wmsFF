@@ -5465,6 +5465,9 @@ export type ReceiptBatchSummary = {
 };
 
 export type GoodsArrivalSummary = {
+  ourDelivery?: boolean;
+  deliveryCostRub?: number | null;
+  cargoInvoiceId?: string | null;
   id: string;
   clientId: string;
   arrivalDate: string;
@@ -5478,6 +5481,7 @@ export type GoodsArrivalSummary = {
 };
 
 export type GoodsArrivalEstimate = {
+  cargoPickupEnabled?: boolean;
   clientId: string;
   periodFrom: string;
   periodTo: string;
@@ -11018,7 +11022,7 @@ export async function fetchGoodsArrivalEstimate(accessToken: string, clientId: s
 
 export async function createGoodsArrival(
   accessToken: string,
-  payload: { clientId: string; arrivalDate: string; bagCount: number; boxCount: number; comment?: string },
+  payload: { clientId: string; arrivalDate: string; bagCount: number; boxCount: number; comment?: string; ourDelivery?: boolean; deliveryCostRub?: number },
 ) {
   return request<GoodsArrivalSummary>('/warehouse/goods-arrivals', { method: 'POST', accessToken, body: payload });
 }
@@ -11032,6 +11036,14 @@ export async function billGoodsArrivals(
   payload: { clientId: string; periodFrom: string; periodTo: string },
 ) {
   return request<BillingInvoiceSummary>('/warehouse/goods-arrivals/bill', { method: 'POST', accessToken, body: payload });
+}
+
+export async function billCargoPickups(accessToken: string, payload: {clientId:string;periodFrom:string;periodTo:string}) {
+  return request<BillingInvoiceSummary>('/warehouse/goods-arrivals/bill-cargo', {method:'POST',accessToken,body:payload});
+}
+
+export async function updateCargoPickup(accessToken:string,id:string,payload:{ourDelivery:boolean;deliveryCostRub?:number}) {
+  return request<GoodsArrivalSummary>(`/warehouse/goods-arrivals/${id}/cargo`,{method:'PATCH',accessToken,body:payload});
 }
 
 export async function openOnlineReceiptBox(accessToken: string, payload: Pick<OnlineReceiptItemPayload, 'clientId' | 'boxCode' | 'sourceDocument' | 'comment'>) {

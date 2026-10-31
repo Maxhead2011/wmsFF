@@ -149,6 +149,18 @@ export class WarehouseController {
     return this.warehouse.billGoodsArrivals(dto, user);
   }
 
+  @Post('goods-arrivals/bill-cargo')
+  @RequirePermissions('billing:write')
+  billCargoPickups(@Body() dto: Record<string, unknown>, @CurrentUser() user: AuthUser) {
+    return this.warehouse.billCargoPickups(dto, user);
+  }
+
+  @Patch('goods-arrivals/:id/cargo')
+  @RequirePermissions('warehouse:write')
+  updateCargoPickup(@Param('id') id:string, @Body() dto:Record<string,unknown>, @CurrentUser() user:AuthUser) {
+    return this.warehouse.updateCargoPickup(id,dto,user);
+  }
+
   @Post('online-receipts/boxes/open')
   @RequirePermissions('warehouse:write')
   openOnlineReceiptBox(@Body() dto: Record<string, unknown>, @CurrentUser() user: AuthUser) {

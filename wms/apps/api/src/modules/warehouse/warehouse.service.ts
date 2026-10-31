@@ -15,6 +15,8 @@ import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { CreateZoneDto } from './dto/create-zone.dto';
 import { UpsertBoxDto } from './dto/upsert-box.dto';
 import { UpsertPalletDto } from './dto/upsert-pallet.dto';
+import { cargoPickupEnabled, cargoPickupInput } from './cargo-pickup-policy';
+import { runBillingMutation, withBillingDb } from '../billing/billing-mutation';
 
 @Injectable()
 export class WarehouseService {
@@ -628,6 +630,7 @@ export class WarehouseService {
   }
 
   async createGoodsArrival(dto: Record<string, unknown>, user: AuthUser) {
+    const delivery = cargoPickupInput(dto);
     const clientId = stringField(dto.clientId, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'write');
     const warehouseId = this.resolveWriteWarehouseId(user, optionalString(dto.warehouseId));
@@ -647,6 +650,7 @@ export class WarehouseService {
           clientId,
           warehouseId,
           arrivalDate,
+          ...delivery,
           bagCount,
           boxCount,
           comment: optionalString(dto.comment) ?? null,
@@ -659,6 +663,11 @@ export class WarehouseService {
   }
 
   async deleteGoodsArrival(id: string, user: AuthUser) {
+    if (cargoPickupEnabled()) return runBillingMutation(this.prisma, db => withBillingDb(this, db).deleteGoodsArrivalLocked(id, user));
+    return this.deleteGoodsArrivalLocked(id, user);
+  }
+
+  private async deleteGoodsArrivalLocked(id: string, user: AuthUser) {
     const existing = await this.prisma.auditLog.findUnique({ where: { id } });
     if (!existing || existing.entity !== 'goods-arrival') throw new NotFoundException('Приход товара не найден.');
     const row = goodsArrivalFromAudit(existing);
@@ -668,6 +677,7 @@ export class WarehouseService {
       throw new ForbiddenException('Приход товара относится к другому филиалу или не имеет безопасной привязки.');
     }
     if (row.billingInvoiceId) throw new BadRequestException('Приход уже включен в счет. Сначала отмените счет или исправьте его в биллинге.');
+    if (cargoPickupEnabled() && await this.activeCargoInvoice(existing.payload)) throw new BadRequestException('Забор уже включён в счёт. Сначала отмените счёт в биллинге.');
     const updated = await this.prisma.auditLog.update({
       where: { id },
       data: { payload: { ...recordFromJson(existing.payload), status: 'CANCELLED', cancelledByUserId: user.id } },
@@ -710,6 +720,71 @@ export class WarehouseService {
     return invoice;
   }
 
+  private async activeCargoInvoice(payload: Prisma.JsonValue | null) {
+    const id = text(recordFromJson(payload).cargoInvoiceId);
+    if (!id) return null;
+    const direct=await this.prisma.billingInvoice.findFirst({ where: { id, status: { not: 'CANCELLED' } }, select: { id: true } });
+    if (direct) return direct;
+    // A merged/corrected invoice may retain the original charges in another active invoice.
+    const items=await this.prisma.billingInvoiceItem.findMany({where:{invoiceId:id},select:{chargeId:true}});
+    const chargeIds=items.map(row=>row.chargeId).filter((id):id is string=>Boolean(id));
+    if (!chargeIds.length) return null;
+    return this.prisma.billingInvoice.findFirst({where:{status:{not:'CANCELLED'},items:{some:{chargeId:{in:chargeIds}}}},select:{id:true}});
+  }
+
+  // FIX: share the financial lock/transaction with billing, including linking every source arrival.
+  async billCargoPickups(dto: Record<string, unknown>, user: AuthUser) {
+    if (!cargoPickupEnabled()) throw new BadRequestException('Учёт забора с карго не включён.');
+    return runBillingMutation(this.prisma, db => withBillingDb(this, db).billCargoPickupsLocked(dto, user));
+  }
+
+  private async billCargoPickupsLocked(dto: Record<string, unknown>, user: AuthUser) {
+    const clientId = stringField(dto.clientId, 'clientId');
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const warehouseId = this.resolveWriteWarehouseId(user);
+    if (!warehouseId || user.roleCodes.includes('CLIENT')) throw new ForbiddenException('Выберите филиал для выставления счёта.');
+    const periodFrom = isoDateField(dto.periodFrom, 'periodFrom');
+    const periodTo = isoDateField(dto.periodTo, 'periodTo');
+    if (periodFrom > periodTo) throw new BadRequestException('Начало периода не может быть позже окончания.');
+    const candidates = await this.listGoodsArrivals({clientId, periodFrom, periodTo}, user);
+    const arrivals: Array<{id: string; payload: Prisma.JsonValue | null; date: string; cost: number}> = [];
+    for (const row of candidates.sort((a,b) => a.arrivalDate.localeCompare(b.arrivalDate) || a.id.localeCompare(b.id))) {
+      const audit = await this.prisma.auditLog.findUnique({where:{id:row.id}});
+      if (!audit || row.warehouseId !== warehouseId) continue;
+      const payload = recordFromJson(audit.payload);
+      if (payload.ourDelivery !== true || await this.activeCargoInvoice(audit.payload)) continue;
+      const delivery = cargoPickupInput(payload);
+      arrivals.push({id:row.id,payload:audit.payload,date:row.arrivalDate,cost:delivery.deliveryCostRub!});
+    }
+    if (!arrivals.length) throw new BadRequestException('За выбранный период нет невыставленных заборов с карго.');
+    const service = await this.prisma.billingService.upsert({where:{code:'CARGO_PICKUP'},
+      create:{code:'CARGO_PICKUP',name:'Забор товара с карго',unit:BillingUnit.SERVICE,isActive:true},
+      update:{name:'Забор товара с карго',isActive:true}});
+    const invoice = await withBillingDb(this.billing, this.prisma).createManualInvoice({clientId, periodFrom, periodTo,
+      comment:'Забор товара с карго', rows:arrivals.map(row => ({serviceId:service.id,description:`Забор товара с карго · ${formatReceiptDate(row.date)} · приход ${row.id}`,
+        unit:BillingUnit.SERVICE,quantity:1,unitPriceRub:row.cost,taxMode:'INCLUDED',serviceDate:row.date}))}, user);
+    for (const row of arrivals) await this.prisma.auditLog.update({where:{id:row.id},data:{payload:{...recordFromJson(row.payload),cargoInvoiceId:invoice.id,cargoBilledAt:new Date().toISOString()}}});
+    return invoice;
+  }
+
+  async updateCargoPickup(id: string, dto: Record<string, unknown>, user: AuthUser) {
+    if (!cargoPickupEnabled()) throw new BadRequestException('Учёт забора с карго не включён.');
+    return runBillingMutation(this.prisma, async db => {
+      const service=withBillingDb(this,db);
+      const arrival=await db.auditLog.findUnique({where:{id}});
+      if (!arrival || arrival.entity!=='goods-arrival') throw new NotFoundException('Приход товара не найден.');
+      const row=goodsArrivalFromAudit(arrival);
+      this.clientScopes.requireClientAccess(user,row.clientId,'write');
+      if (user.roleCodes.includes('CLIENT') || row.warehouseId!==this.resolveWriteWarehouseId(user)) throw new ForbiddenException('Приход относится к другому филиалу.');
+      if (row.status==='CANCELLED') throw new BadRequestException('Приход отменён.');
+      if (await service.activeCargoInvoice(arrival.payload)) throw new BadRequestException('Сначала отмените или скорректируйте счёт за доставку.');
+      const delivery=cargoPickupInput(dto);
+      const updated=await db.auditLog.update({where:{id},data:{payload:{...recordFromJson(arrival.payload),...delivery,deliveryUpdatedByUserId:user.id,deliveryUpdatedByName:user.name,deliveryUpdatedAt:new Date().toISOString()}}});
+      await db.auditLog.create({data:{entity:'goods-arrival',entityId:id,action:'warehouse.cargo-pickup-updated',userId:user.id,payload:{before:{ourDelivery:row.ourDelivery,deliveryCostRub:row.deliveryCostRub},after:delivery}}});
+      return goodsArrivalFromAudit(updated);
+    });
+  }
+
   async goodsArrivalSummary(clientIdValue: unknown, user: AuthUser) {
     const clientId = stringField(clientIdValue, 'clientId');
     this.clientScopes.requireClientAccess(user, clientId, 'read');
@@ -747,6 +822,7 @@ export class WarehouseService {
       boxPriceRub: boxPrice,
       estimatedRub: roundMoney(bagCount * bagPrice + boxCount * boxPrice),
       pricesConfigured: bagPrice > 0 || boxPrice > 0,
+      cargoPickupEnabled: cargoPickupEnabled(),
     };
   }
 
@@ -2052,6 +2128,9 @@ function goodsArrivalFromAudit(row: { id: string; payload: Prisma.JsonValue | nu
     comment: text(payload.comment) || null,
     status: text(payload.status) || 'ACTIVE',
     billingInvoiceId: text(payload.billingInvoiceId) || null,
+    ourDelivery: payload.ourDelivery === true,
+    deliveryCostRub: payload.ourDelivery === true ? Number(payload.deliveryCostRub) || 0 : null,
+    cargoInvoiceId: text(payload.cargoInvoiceId) || null,
     createdByName: text(payload.createdByName) || null,
     createdByUserId: row.userId,
     createdAt: row.createdAt.toISOString(),
