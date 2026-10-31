@@ -1,3 +1,4 @@
+import { clientRequiresReceiptKiz } from '../../common/client-receipt-kiz-policy';
 import { physicalKizIdentity, kizIdentityTransferEnabled } from '../../common/kiz-physical-identity';
 import { confirmFoundUnit, foundUnitEnabled } from './found-unit-review';
 import { inventoryKizTransferWarnings, lockInventoryKizTransferSources } from './confirmed-kiz-transfer';
@@ -552,7 +553,9 @@ export class InventoryService {
     // FIX: count physical evidence without trusting stale ProductMark ownership.
     // Stock and mark corrections remain separate from the counting phase.
     const stockKizAudit = fbsKizAuditEnabled() && auditBox.session.comment?.includes(FBS_KIZ_AUDIT_MARKER);
-    if ((dto.captureKiz || stockKizAudit) && sku.needsChestnyZnak && !sku.isUnmarked) {
+    // FIX: the client rule cannot be bypassed by old catalog or scanner flags.
+    const requiredForClient = await clientRequiresReceiptKiz(this.prisma, auditBox.clientId);
+    if (requiredForClient || ((dto.captureKiz || stockKizAudit) && sku.needsChestnyZnak && !sku.isUnmarked)) {
       if (!dto.kiz?.trim()) {
         return { scanState: 'SCAN_KIZ', skuId: sku.id, skuName: sku.name, barcode: value };
       }
@@ -653,6 +656,9 @@ export class InventoryService {
   async setCount(auditBoxId: string, dto: SetInventoryCountDto, user: AuthUser) {
     const auditBox = await this.requireCountingBox(auditBoxId, user);
     this.clientScopes.requireClientAccess(user, auditBox.clientId, 'write');
+    if (await clientRequiresReceiptKiz(this.prisma, auditBox.clientId)) {
+      throw new BadRequestException('Все товары клиента учитываются по КИЗ. Отсканируйте каждую единицу вместо ручного количества.');
+    }
     const line = await this.prisma.inventoryAuditLine.findFirst({ where: { id: dto.lineId, auditBoxId } });
     if (!line) {
       throw new NotFoundException('Позиция инвентаризации не найдена.');
@@ -670,6 +676,23 @@ export class InventoryService {
     const auditBox = await this.requireCountingBox(auditBoxId, user);
     this.clientScopes.requireClientAccess(user, auditBox.clientId, 'write');
     const lines = await this.prisma.inventoryAuditLine.findMany({ where: { auditBoxId } });
+    // FIX: a count started before enabling the rule also needs physical scan evidence.
+    if (await clientRequiresReceiptKiz(this.prisma, auditBox.clientId)) {
+      const evidence = await this.prisma.auditLog.findMany({ where: {
+        entity: 'InventoryAuditBox', entityId: auditBoxId, action: 'INVENTORY_KIZ_SCAN',
+        payload: { path: ['roundStartedAt'], equals: auditBox.startedAt.toISOString() },
+      }, select: { payload: true } });
+      const counts = new Map<string, number>();
+      for (const event of evidence) {
+        const payload = event.payload as { skuId?: string; clientId?: string; quantity?: number; kiz?: string } | null;
+        if (payload?.clientId === auditBox.clientId && payload.skuId && payload.kiz && payload.quantity === 1) {
+          counts.set(payload.skuId, (counts.get(payload.skuId) ?? 0) + 1);
+        }
+      }
+      if (lines.some(line => line.countedQuantity !== (counts.get(line.skuId) ?? 0))) {
+        throw new BadRequestException('Количество не подтверждено КИЗами. Повторите подсчёт короба со сканированием каждой единицы.');
+      }
+    }
     const mismatch = lines.some((line) => line.countedQuantity !== line.expectedQuantity);
     await this.prisma.$transaction([
       ...lines.map((line) =>

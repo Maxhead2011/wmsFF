@@ -7303,6 +7303,13 @@ export type AdministrationPhantomStock = {
   }>;
 };
 
+export type ClientKizPolicy = { clientId: string; required: boolean };
+export function fetchClientKizPolicy(accessToken: string, clientId: string) {
+  return request<ClientKizPolicy>(`/clients/${encodeURIComponent(clientId)}/kiz-policy`, { accessToken });
+}
+export function saveClientKizPolicy(accessToken: string, clientId: string, required: boolean) {
+  return request<ClientKizPolicy>(`/clients/${encodeURIComponent(clientId)}/kiz-policy`, { accessToken, method: 'PUT', body: { required } });
+}
 export type ProductDisplayField = 'name' | 'article' | 'barcode' | 'size' | 'color';
 export type ProductDisplaySettings = { clientId: string; fields: ProductDisplayField[] | null };
 export function fetchProductDisplay(accessToken: string, clientId: string) {
