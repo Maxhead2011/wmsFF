@@ -3006,6 +3006,8 @@ export type KizIssuesReport = {
     critical: number;
     warning: number;
     unread: number;
+    openReviews?: number;
+    attention?: number;
     resolved: number;
   };
   issues: KizIssue[];

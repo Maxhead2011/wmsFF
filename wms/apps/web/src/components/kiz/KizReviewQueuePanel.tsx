@@ -35,6 +35,8 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
     {selected&&<form className="kiz-queue" onSubmit={async e=>{
       e.preventDefault();if(lock.current)return;lock.current=true;setSaving(true);setError('');
       try{await decideKizReview(session.accessToken,selected.row.id,selected.resolution,reason.trim(),confirmed);
+        // FIX: refresh the global badge only after a successful decision.
+        window.dispatchEvent(new Event('kiz-issues-changed'));
         if(!live.current)return;setSelected(null);setNotice(selected.resolution==='REJECT'?'Отказ сохранён. Использование КИЗ запрещено.':selected.row.snapshot.scope==='RECEIPT'?'Решение сохранено. Повторный приход не создан.':'Решение сохранено. Сборщик может повторить сканирование КИЗа.');await load();
       }catch(e){if(live.current)setError(e instanceof Error?e.message:'Решение не подтверждено. Повторите отправку.');}
       finally{lock.current=false;if(live.current)setSaving(false);}

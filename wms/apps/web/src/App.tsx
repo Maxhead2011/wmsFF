@@ -317,7 +317,7 @@ export function App() {
         limit: 25,
       })
         .then((report) => {
-          if (isActive) setKizUnread(report.summary.unread);
+          if (isActive) setKizUnread(report.summary.attention ?? report.summary.unread);
         })
         .catch(() => undefined);
     };
