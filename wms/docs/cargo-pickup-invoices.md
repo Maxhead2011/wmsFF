@@ -1,6 +1,6 @@
 # Cargo pickup invoices
 
-Prepared for our WMS only, `WMS_CARGO_PICKUP_ENABLED=true`. Default off in source. PRR handling and its invoice remain independent.
+Published PR813 for our WMS only, `WMS_CARGO_PICKUP_ENABLED=true`. Default off in source. PRR handling and its invoice remain independent.
 
 ## Workflow
 
@@ -27,3 +27,7 @@ Docker's accumulated layer chain reached its mount-option limit during staging. 
 ## Validation
 
 18 focused tests; full API4280 passed/156 skipped, web587 passed/2 skipped, TypeScript checks. Unconfigured dedicated KIZ integration suite excluded. Candidate browser6 and root-bootstrap5. Isolated PostgreSQL8/full API health passed; exercises invoice/charge/source rollback, concurrent billing, dated totals, immutable billed deliveries, cancellation/rebilling, warehouse scope, disabled flag and separate PRR invoicing. Real billing writer is used; only bank-account snapshot is stubbed in the synthetic test. Full Nest health is required before publication. Production test invoices must not be created.
+
+## Production verification
+
+API e4146e3c79c0 / web2bef7d7d5e36 published with prior flags and other containers preserved. Public bootstrap5, health, exact payload hashes and active cargo routes verified; zero production cargo charges at verification. Runtime PRR-label repair retained. API base compacted only after full config/artifact equality; web base left unchanged. Baseline2026-10-31-cargo-pickup captures full API, schema, web entry and release proofs; sourceParityVerified=false.
