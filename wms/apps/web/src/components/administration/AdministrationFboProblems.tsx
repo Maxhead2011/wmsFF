@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import {applyRecoveryResult,fboRecoveryFailure} from './fboRecoveryResult';
 import './fbo-problems.css';
 import { applyFboRecovery, downloadFboPickReport, downloadFboRecoveryDocument, fetchFboPickReport, fetchFboRecoveryDetails, fetchFboRecoveryRequests, previewFboRecovery, type AuthSession, type FboPickReportFilter, type FboPickReportRow, type FboRecoveryDetails, type FboRecoveryInput, type FboRecoveryPreview, type FboRecoveryRequest } from '../../lib/api';
 const actions: Record<FboRecoveryInput['action'], string> = {
@@ -23,7 +24,7 @@ export function AdministrationFboProblems({ session }: {
         await fn();
     }
     catch (e) {
-        setError(e instanceof Error ? e.message : 'Не удалось выполнить действие');
+        setError(fboRecoveryFailure(e));
     }
     finally {
         pending.current = false;
@@ -42,6 +43,8 @@ export function AdministrationFboProblems({ session }: {
   <h2>Проблемы FBO</h2>
   <p>Выберите поставку. Исправления выполняются по физическому факту с записью причины и результата в историю.</p>
   {error && <p role="alert" className="admin-message admin-message--error">{error}</p>}{message && <p role="status">{message}</p>}
+  {busy && <p role="status" aria-live="polite">Выполняется проверка и обработка. Для большой поставки это может занять время. Дождитесь результата.</p>}
+  {error && id && <button type="button" disabled={busy} onClick={() => void run(async()=>{const fresh=await fetchFboRecoveryDetails(token,id);setDetails(fresh);if(fresh.phase==='COMPLETED'){setPreview(null);setMessage('Упаковка уже завершена. Документы доступны ниже.');}else setMessage('Заявка обновлена. Если исправление ещё необходимо, можно повторить применение сохранённой операции.');})}>Проверить результат</button>}
   <fieldset disabled={busy} style={{ border: 0, padding: 0 }}>
    <form onSubmit={e => { e.preventDefault(); void run(async () => setRequests(await fetchFboRecoveryRequests(token, search))); }}>
     <label>Номер или название заявки <input value={search} onChange={e => setSearch(e.target.value)}/></label> <button>Найти</button>
@@ -75,7 +78,7 @@ export function AdministrationFboProblems({ session }: {
       <label style={{ display: 'block' }}>Причина <textarea value={input.reason} onChange={e => edit({ reason: e.target.value })}/></label>
       <label style={{ display: 'block' }}><input type="checkbox" checked={input.physicalConfirmed} onChange={e => edit({ physicalConfirmed: e.target.checked })}/>Подтверждаю физический состав и выбранное действие</label>
       <button type="button" disabled={!input.physicalConfirmed || input.reason.trim().length < 5 || (['ADD_BOXES', 'SPLIT_BOXES', 'CONFIRM_BOXES'].includes(input.action) && !input.boxCodes?.length)} onClick={() => void run(async () => setPreview(await previewFboRecovery(token, id, input)))}>Предпросмотр изменений</button>
-      {preview && <section aria-label="Предпросмотр"><h3>{actions[input.action]}</h3><p>Изменение доступного остатка: {preview.summary.availableStockChange}. Изменение остатка «В сборке»: {preview.summary.packingStockChange}.</p><p>Короба: {preview.summary.affectedBoxes.join(', ') || '—'}</p><p>Выбрано товаров: {preview.summary.units.length}</p>{preview.summary.warning && <p>{preview.summary.warning}</p>}{preview.summary.units.map(u => <p key={u.id}>{u.barcode} · {u.source} → {u.target ?? '—'} · {u.kiz ?? 'Без КИЗ'}</p>)}<button type="button" onClick={() => void run(async () => { const current = preview.token; setPreview(null); await applyFboRecovery(token, id, current); setDetails(await fetchFboRecoveryDetails(token, id)); setRows(null); setInput({ ...input, physicalConfirmed: false, boxCodes: [], unitIds: [] }); setMessage('Изменения применены и записаны в историю.'); })}>Применить изменения</button></section>}
+      {preview && <section aria-label="Предпросмотр"><h3>{actions[input.action]}</h3><p>Изменение доступного остатка: {preview.summary.availableStockChange}. Изменение остатка «В сборке»: {preview.summary.packingStockChange}.</p><p>Короба: {preview.summary.affectedBoxes.join(', ') || '—'}</p><p>Выбрано товаров: {preview.summary.units.length}</p>{preview.summary.warning && <p>{preview.summary.warning}</p>}{preview.summary.units.map(u => <p key={u.id}>{u.barcode} · {u.source} → {u.target ?? '—'} · {u.kiz ?? 'Без КИЗ'}</p>)}<button type="button" onClick={() => void run(async () => { const current = preview.token; const result=await applyRecoveryResult(()=>applyFboRecovery(token,id,current),()=>setPreview(null),()=>fetchFboRecoveryDetails(token,id)); if(result.details)setDetails(result.details); setRows(null); setInput({ ...input, physicalConfirmed: false, boxCodes: [], unitIds: [] }); setMessage(result.refreshFailed?'Изменения применены и записаны в историю. Не удалось обновить экран — нажмите «Обновить».':'Изменения применены и записаны в историю.'); })}>Применить изменения</button></section>}
      </>}
     </>}
    </>}

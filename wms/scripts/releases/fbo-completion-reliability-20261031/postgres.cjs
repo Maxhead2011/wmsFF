@@ -1,0 +1,52 @@
+// TEST: published runtime plus exact two-module candidate, disposable PostgreSQL only.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID,createHash}=require('node:crypto');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'fbo-completion-reliability-test-pg');
+Object.assign(process.env,{WMS_FBO_TWO_STAGE_ENABLED:'true',WMS_KIZ_CLIENT_GUARD_ENABLED:'true',WMS_KIZ_SHIPMENT_PREFIX_ENABLED:'true',WMS_FBO_COMPLETION_RELIABILITY_ENABLED:process.env.TEST_LEGACY==='true'?'false':'true'});
+const{PrismaClient}=require('@prisma/client'),p=new PrismaClient(),dir='/app/apps/api/dist/';
+const{FboTwoStageService}=require(dir+'modules/tsd/fbo-two-stage.service'),{ClientScopeService}=require(dir+'modules/auth/client-scope.service'),{StockBalancesService}=require(dir+'modules/stock/stock-balances.service'),{StockOperationsService}=require(dir+'modules/stock/stock-operations.service'),{ClientRequestMarketplaceFilesService}=require(dir+'modules/client-requests/client-request-marketplace-files.service');
+const guard=require(dir+'common/kiz-client-review'),registry=require(dir+'common/kiz-client-registry');
+(async()=>{let passed=0;const wh=await p.warehouse.create({data:{code:'TEST',name:'Test'}}),c=await p.client.create({data:{code:'TEST',name:'Test'}}),actor=await p.user.create({data:{name:'Worker',email:'worker@test.invalid',passwordHash:'disabled'}});await p.warehouseClient.create({data:{warehouseId:wh.id,clientId:c.id,status:'ACTIVE'}});
+const sku=await p.sku.create({data:{clientId:c.id,internalSku:'TEST',name:'Test',needsChestnyZnak:true,barcodes:{create:{value:'2050000000000'}}}});
+// TEST: all scanner forms and literal SQL wildcard characters match the legacy policy exactly.
+const identity='010460000000000121'+String.raw`A%_\'"abc`.padEnd(13,'Z');
+const variants=registry.clientKizPrefixes(identity).map(value=>({id:randomUUID(),clientId:c.id,skuId:sku.id,value:value+'\u001d91abcd\u001d92tail',status:'PACKING'}));
+await p.productMark.createMany({data:variants});
+const prefix=require(dir+'common/kiz-shipment-prefix');
+const selected=await prefix.shipmentPrefixIds(p,{id:'not-a-request',clientId:c.id},[identity],'marks',10021);
+const legacy=await p.productMark.findMany({where:{clientId:c.id,...registry.clientKizFilter(identity)},select:{id:true}});
+assert.deepEqual(selected.sort(),legacy.map(x=>x.id).sort());assert.equal(selected.length,21);
+await p.productMark.deleteMany({where:{id:{in:variants.map(x=>x.id)}}});passed++;
+const user={id:actor.id,name:actor.name,roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:wh.id};
+const scopes=new ClientScopeService(),balances=new StockBalancesService(p,scopes),stock=new StockOperationsService(p,scopes,balances,undefined,undefined,undefined,new(require(dir+'common/boxes/box-code-policy.service').BoxCodePolicyService)(new(require(dir+'common/settings/system-settings.service').SystemSettingsService)(p))),files=new ClientRequestMarketplaceFilesService(p,scopes),svc=new FboTwoStageService(p,scopes,balances,stock,{assertStockMovementsAllowed:async()=>{}},files);
+const id=randomUUID(),line=randomUUID(),units=[],boxes=[],marks=[];
+for(let b=0;b<159;b++)boxes.push({id:randomUUID(),code:'FFL_TEST_'+b,clientId:c.id,warehouseId:wh.id});
+await p.box.createMany({data:boxes});
+await p.clientRequest.create({data:{id,clientId:c.id,warehouseId:wh.id,type:'OUTBOUND',status:'IN_WORK',title:'Test1710',items:{create:{id:line,skuId:sku.id,barcode:'2050000000000',quantity:1710}}}});
+await p.fboAssembly.create({data:{requestId:id,phase:'CONTROL',compositionHash:createHash('sha256').update(JSON.stringify([[line,sku.id,'2050000000000',1710]])).digest('hex')}});
+for(let n=0;n<1710;n++){const box=boxes[n%159],mark={id:randomUUID(),clientId:c.id,skuId:sku.id,boxId:box.id,status:'PACKING',value:'010460000000000121'+String(n).padStart(13,'A')};marks.push(mark);units.push({id:randomUUID(),requestId:id,requestItemId:line,skuId:sku.id,barcode:'2050000000000',markId:mark.id,activeMarkId:mark.id,kiz:mark.value,sourceBoxId:box.id,sourceBoxCode:box.code,targetBoxId:box.id,targetBoxCode:box.code,wholeBox:false,state:'PACKED',pickedByUserId:actor.id,packedByUserId:actor.id,packedAt:new Date()});}
+await p.productMark.createMany({data:marks});await p.fboAssemblyUnit.createMany({data:units});
+await p.stockBalance.createMany({data:boxes.map(b=>({balanceKey:randomUUID(),clientId:c.id,warehouseId:wh.id,skuId:sku.id,boxId:b.id,status:'PACKING',quantity:units.filter(u=>u.targetBoxId===b.id).length}))});
+await p.fboAssemblyBox.createMany({data:boxes.map(b=>({requestId:id,boxId:b.id,activeBoxId:b.id,boxCode:b.code,closedAt:new Date(),confirmedAt:new Date(),confirmedByUserId:actor.id}))});
+const r=await p.clientRequest.findUniqueOrThrow({where:{id}}),check=()=>p.$transaction(tx=>guard.assertClientRequestKizShipment(tx,r,user),{timeout:60000,isolationLevel:'Serializable'});
+// Duplicate mark in the same client must abort all claims.
+const dup=await p.productMark.create({data:{...marks[0],id:randomUUID(),value:']d2'+marks[0].value}});await assert.rejects(check,/ОТЛОЖИТЕ/);assert.equal(await p.kizReviewCase.count(),0);await p.productMark.delete({where:{id:dup.id}});passed++;
+const input={scope:'FBO',clientId:c.id,warehouseId:wh.id,requestId:id,kiz:marks[0].value,skuId:sku.id,boxId:boxes[0].id};
+const review=await p.kizReviewCase.create({data:{clientId:c.id,warehouseId:wh.id,requestId:id,taskId:guard.clientUseTaskKey(input),kiz:input.kiz,kizIdentity:registry.clientKizIdentity(input.kiz),context:guard.clientUseContext(input),status:'OPEN',decision:'REVIEW',snapshot:{},evidence:{}}});await assert.rejects(check,/ОТЛОЖИТЕ/);await p.kizReviewCase.delete({where:{id:review.id}});passed++;
+const h=await p.shippedKizHistory.create({data:{assemblyId:randomUUID(),clientId:c.id,clientName:'Test',requestId:'previous',requestNumber:1,requestTitle:'Previous',orderId:'WB-OLD',warehouseId:wh.id,skuId:sku.id,internalSku:'TEST',productName:'Test',kiz:marks[0].value,shippedAt:new Date('2026-10-01')}});await assert.rejects(check,/WB-OLD/);await p.shippedKizHistory.delete({where:{id:h.id}});passed++;
+const fbs=await p.fbsTsdAssembly.create({data:{clientId:c.id,connectionId:randomUUID(),orderId:'OTHER',requestId:id,requestItemId:line,skuId:sku.id,productName:'Test',barcodes:[],storageBoxes:[],deviceCode:'TSD',status:'IN_PROGRESS',boxId:boxes[0].id,kiz:marks[0].value}});await assert.rejects(check,/другой сборкой/);await p.fbsTsdAssembly.delete({where:{id:fbs.id}});passed++;
+// The lock is identical to the single receipt/use lock and lives until transaction end.
+let unlock,locked;const barrier=new Promise(resolve=>locked=resolve);const hold=p.$transaction(async tx=>{await registry.lockClientKiz(tx,c.id,registry.clientKizIdentity(marks[0].value));locked();await new Promise(resolve=>unlock=resolve)},{timeout:60000});await barrier;
+let completed=false;const waiting=check().then(()=>completed=true);await new Promise(resolve=>setTimeout(resolve,150));assert.equal(completed,false);unlock();await hold;await waiting;assert.equal(completed,true);passed++;
+assert.equal(await p.kizReviewCase.count({where:{requestId:id,status:'CLAIMED'}}),1710);passed++;
+// TEST: regression fails on legacy FINISH, which writes one selection per carton.
+let selectionCreates=0,selectionBatches=0;const transaction=p.$transaction.bind(p);
+p.$transaction=(fn,options)=>transaction(tx=>fn(new Proxy(tx,{get(t,k){if(k!=='clientRequestBoxSelection')return t[k];return new Proxy(t[k],{get(m,f){if(f==='create')return (...args)=>{selectionCreates++;return m.create(...args)};if(f==='createMany')return (...args)=>{selectionBatches++;return m.createMany(...args)};return m[f]}})}})),options);
+const start=Date.now(),dto={action:'FINISH',operationId:randomUUID()};await svc.act(id,dto,user);const elapsedMs=Date.now()-start;
+assert.equal((await p.fboAssembly.findUniqueOrThrow({where:{requestId:id}})).phase,'COMPLETED');assert.equal(await p.clientRequestPackage.count({where:{requestId:id}}),159);passed++;
+assert.equal(selectionCreates,0);assert.equal(selectionBatches,1);
+const movementCount=await p.stockMovement.count();await svc.act(id,dto,user);assert.equal(await p.stockMovement.count(),movementCount);passed++;
+for(const kind of ['products','packages']){const file=await svc.wbFile(id,user,kind);const buffer=file.buffer??file.content??file.data;assert(buffer?.length>0);console.log(JSON.stringify({kind,bytes:buffer.length}));}passed++;
+assert.equal(await p.productMark.count({where:{clientId:c.id,status:'SHIPPING'}}),1710);assert.equal(await p.kizReviewCase.count({where:{requestId:id}}),1710);
+console.log(JSON.stringify({passed,elapsedMs,units:1710,boxes:159,complete:true,retrySafe:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());
+
