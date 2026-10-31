@@ -25,7 +25,7 @@ export function ClientKizPolicySettings({ accessToken, clientId }: { accessToken
     finally { setBusy(false); }
   }
   if (error.includes('Настройка обязательных КИЗ не включена')) return null;
-  return <section aria-label="Обязательные КИЗ" style={{ padding: 20, margin: '16px 0', border: '1px solid var(--line)', borderRadius: 12 }}>
+  return <section className="client-kiz-policy-settings" aria-label="Обязательные КИЗ" style={{ padding: 20, margin: '16px 0', border: '1px solid var(--line)', borderRadius: 12 }}>
     <h3>Маркировка при приёмке и инвентаризации</h3>
     <label><input type="checkbox" role="switch" checked={required} disabled={!ready || busy}
       onChange={e => setRequired(e.target.checked)} /> Все товары с КИЗ</label>

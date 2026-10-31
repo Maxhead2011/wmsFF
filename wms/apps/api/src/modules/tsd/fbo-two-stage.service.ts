@@ -1,3 +1,4 @@
+import {fboCompletionBatchEnabled,validateFboPackedBoxes,fboCompletionPackages,saveFboCompletionSelections,fboCompletionStage,fboCompletionError} from './fbo-completion-batch';
 import { requestStoreContexts } from '../clients/request-store-context';
 import {ozonLabelControlEnabled,ozonBoxLabelConfirmed,confirmOzonBoxLabel} from './ozon-label-control';
 import {assertClientKizUse, assertClientRequestKizShipment, clientPhysicalMark, withClientKizReview} from '../../common/kiz-client-review';
@@ -566,20 +567,28 @@ export class FboTwoStageService {
                 await tx.fboAssemblyBox.update({ where: { id: b.id }, data: { confirmedAt: new Date(), confirmedByUserId: user.id } });
             }
             else if (dto.action === 'FINISH') {
-                await assertClientRequestKizShipment(tx,r,user); // FIX: whole cartons and partial picks share the final gate.
+                if(!fboCompletionBatchEnabled())await assertClientRequestKizShipment(tx,r,user); // FIX: sold path unchanged.
                 requirePhase('CONTROL');
                 const boxes = await tx.fboAssemblyBox.findMany({ where: { requestId: id } });
                 if(ozonShipment&&ozonLabelControlEnabled()&&boxes.some(b=>!ozonBoxLabelConfirmed(ozonShipment.integration,b)))throw new ConflictException('Проверьте каждый короб: отсканируйте наш короб и наклеенный стикер Ozon.');
                 if (!boxes.length || boxes.some(b => !b.confirmedAt) || lines.some(l => l.packed !== l.needed))
                     throw new ConflictException('Отсканируйте все короба поставки.');
+                let packages:any[];
+                if(fboCompletionBatchEnabled()){
+                    await fboCompletionStage(id,'box_validation',()=>validateFboPackedBoxes(tx,r,boxes,units));
+                    await fboCompletionStage(id,'kiz_validation',()=>assertClientRequestKizShipment(tx,r,user));
+                    packages=fboCompletionPackages(r,boxes,units);
+                    await fboCompletionStage(id,'selections',()=>saveFboCompletionSelections(tx,r,boxes,packages));
+                } else {
                 for (const b of boxes)
                     await this.validatePackedBox(tx, r, b.boxId, units);
                 await tx.clientRequestBoxSelection.deleteMany({ where: { requestItem: { requestId: id } } });
-                const packages = boxes.map(b => ({ packageCode: b.boxCode, packageType: 'BOX', items: r.items.map(i => ({ requestItemId: i.id, quantity: units.filter(u => u.targetBoxId === b.boxId && u.requestItemId === i.id && u.state === 'PACKED').length })).filter(i => i.quantity) }));
+                packages = boxes.map(b => ({ packageCode: b.boxCode, packageType: 'BOX', items: r.items.map(i => ({ requestItemId: i.id, quantity: units.filter(u => u.targetBoxId === b.boxId && u.requestItemId === i.id && u.state === 'PACKED').length })).filter(i => i.quantity) }));
                 for (const b of boxes)
                     for (const i of packages.find(p => p.packageCode === b.boxCode)!.items)
                         await tx.clientRequestBoxSelection.create({ data: { requestItemId: i.requestItemId, skuId: r.items.find(l => l.id === i.requestItemId)!.skuId!, boxId: b.boxId, quantity: i.quantity } });
-                await this.stock.packageClientRequest({ requestId: id, idempotencyKey: `fbo-pack:${id}`, boxes: boxes.length, packedUnits: units.length, packages }, user, tx);
+                }
+                await fboCompletionStage(id,'stock_and_packages',()=>this.stock.packageClientRequest({ requestId: id, idempotencyKey: `fbo-pack:${id}`, boxes: boxes.length, packedUnits: units.length, packages }, user, tx));
                 await tx.productMark.updateMany({ where: { id: { in: units.filter(u => u.markId).map(u => u.markId!) }, status: 'PACKING' }, data: { status: 'SHIPPING' } });
                 // FIX: preserve history, but a later documented return may use the same physical KIZ again.
                 await tx.fboAssemblyUnit.updateMany({ where: { requestId: id }, data: { activeMarkId: null } });
@@ -611,7 +620,7 @@ export class FboTwoStageService {
             try { await execute(); break; }
             catch (error) {
                 if (this.recoveryTransaction || !(error instanceof Prisma.PrismaClientKnownRequestError) || !fboRetryableTransactionError(error) || attempt >= 2)
-                    throw error;
+                    throw dto.action==='FINISH'?fboCompletionError(error):error;
                 await new Promise(resolve => setTimeout(resolve, 25 * (attempt + 1)));
             }
         }

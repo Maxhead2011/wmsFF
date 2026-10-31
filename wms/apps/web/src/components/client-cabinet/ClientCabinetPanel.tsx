@@ -735,8 +735,10 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             </div>
           ) : null}
 
-        {canManageClients && <ClientKizPolicySettings key={`kiz-${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id} />}
-        {canManageClients && <ClientProductDisplaySettings key={view.client.id} accessToken={session.accessToken} clientId={view.client.id} />}
+        {canManageClients && <div className="client-cabinet-settings-row">
+          <ClientProductDisplaySettings key={view.client.id} accessToken={session.accessToken} clientId={view.client.id} />
+          <ClientKizPolicySettings key={`kiz-${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id} />
+        </div>}
           {import.meta.env.VITE_CLIENT_STORES_ENABLED === 'true' && session.user.roleCodes.some(role=>role==='ADMIN'||role==='OWNER') &&
             <ClientStoresSettings key={`stores:${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id}/>}
           <ClientBranchStockTiles accessToken={session.accessToken} clientId={view.client.id} />

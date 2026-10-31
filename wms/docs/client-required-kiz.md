@@ -61,3 +61,10 @@ sourceParityVerified=false. Полную локальную сборку на с
 Проверить фактический артефакт, старый ТСД (новый ШК → КИЗ), кабинет и единственный
 основной JavaScript entry. База выпуска ещё не подготовлена; PR целится в
 `feature/wb-print-check` только после согласования публикации.
+
+
+## Release candidate after approved PR807/808 merge
+
+Release candidate on PR807/808: required KIZ per client plus review REJECT validation/attention badge. Exact API14/web3 overlay; responsive adjacent display/KIZ settings, existing flags and single main entry retained. API4233/web587, both TypeScript checks, browser6/bootstrap5 and baseline8 passed. See client-required-kiz.md; sourceParityVerified=false.
+
+Release scripts: `scripts/releases/client-kiz-20261031/` (exact overlay, disposable PostgreSQL/full API health, browser and bootstrap checks, image identity guard, locks and rollback). Main data flags already applied under user authorization; publication does not move stock.
