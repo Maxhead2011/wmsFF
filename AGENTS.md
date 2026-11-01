@@ -1,3 +1,5 @@
+С 01.11.2026 целевая ветка нашей ВМС — `feature/la_panthera`. Для каждой задачи создавайте отдельную `fix/...` или `feature/...` от актуальной целевой ветки и направляйте PR обратно в неё. Проданная ВМС ведётся отдельно в `feature/sold-vm`.
+
 Published PR539 (2026-10-09): WB/Ozon FBO lists separated by persisted Ozon shipment relation. API sha256:fe92f300071c6b51a2a8e5452bfef661910711c4e5b629f9e40d2c191aeb9f24, web sha256:302d0ae012e1317cad9b55b07080adc59472a48ca0367a85b21a4ea3af861dfd. Baseline `2026-10-09-fbo-marketplace`; sourceParityVerified=false. APK223, flags and business records unchanged. API3266/web414, runtime2 and read-only live list handler passed; 144/2 skipped, dedicated KIZ DB integration excluded. Rollback tags: logoff-api:before-fbo-marketplace-20261009 and logoff-web:before-fbo-marketplace-20261009.
 
 # Откуда начинать работу с нашей WMS
@@ -17,8 +19,6 @@ Web обновлён: явный поиск товарооборота без ф
 Старая рабочая копия или успешная сборка исходников не являются доказательством
 соответствия production. Проверять актуальный image ID перед каждым выпуском.
 
-Для нашей WMS фактическая интеграционная ветка на 25.09.2026 —
-`feature/wb-print-check`, а не `main` и не номинальная `feature/our-vm`.
 Новые изменения — отдельная `fix/` или `feature/` от согласованной актуальной базы,
 затем тесты и PR. Не пушить непосредственно в интеграционную/защищённую ветку.
 Не переключаться на `main`/`master`. Конфликты не разрешать без инструкции пользователя.

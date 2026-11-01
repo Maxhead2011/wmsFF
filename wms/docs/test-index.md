@@ -1,3 +1,5 @@
+Эталон нашей ВМС на 01.11.2026 — [манифест](../baselines/our-wms/2026-11-01-la-panthera/manifest.json). Ветка `feature/la_panthera`, исходный коммит `dc0dbbf4` (PR819). Сохранены полный API, схема Prisma, веб-точка входа и хеши всех файлов веб-контейнера. Рабочие образы закреплены метками `logoff-api:baseline-la-panthera-20261101` и `logoff-web:baseline-la-panthera-20261101`. Соответствие полной сборки из исходников не доказано (`sourceParityVerified=false`).
+
 ReceiptBatchesPanel places the client picker immediately below the header and before receipt review/date filters. File refresh stays with files. Fixed-client access retains its existing scope. Regression: ReceiptBatchesPanel.spec.tsx.
 
 FBO Ozon import decision audit for file and link creation. The request event and audit row retain the selected action and displayed SKU shortages in the creation transaction. Existing requests keep their original history. Correction submission, failure, unknown result and successful application have separate history entries. Own-image WMS_OZON_STOCK_DECISION_AUDIT_ENABLED. API4287/web588, candidate browser10/bootstrap5, isolated PostgreSQL6/full health.
