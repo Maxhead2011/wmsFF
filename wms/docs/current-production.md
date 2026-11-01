@@ -1,3 +1,5 @@
+Published PR835: warehouse problem toast, personal acknowledgement and paginated archive, scoped box movement history and exact inventory session. Exact 3 API and 3 web files. Actual public browser6/bootstrap5, isolated PostgreSQL and full API health verified; LOGOFF 250 unchanged.
+
 Published PR820, LOGOFF 250: WB FBO shortage preview, corrected quantities, missing box alerts and scanned box recount; FBS/FBO red notifications for administrators and owners. Signed APK, isolated API/DB, public web and single entry verified. Source parity false.
 
 Published PR813 / 2026-10-31: [Cargo pickup invoices](cargo-pickup-invoices.md). Separate dated cargo invoice alongside independent PRR billing; delivery selection/cost, audited correction, transactional source links, concurrency and cancellation guards. API4280/web587 (156/2 skipped), focused18, TypeScript, isolated PostgreSQL8/full health, browser6/bootstrap5/public5 passed. Exact API5/web2; own-image flag enabled. Live routes/flag verified, no production cargo charges created. Schema/APK/sold unchanged. Baseline2026-10-31-cargo-pickup, sourceParityVerified=false.

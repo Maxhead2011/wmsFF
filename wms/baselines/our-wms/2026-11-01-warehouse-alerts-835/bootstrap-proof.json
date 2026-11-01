@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "assets/problem-navigation-20261101.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "assets/problem-navigation-20261101.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "assets/problem-navigation-20261101.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "assets/problem-navigation-20261101.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "assets/problem-navigation-20261101.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}
