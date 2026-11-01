@@ -1,3 +1,5 @@
+Release candidate PR820: FBO shortage preview, atomic reservation, LOGOFF 250 missing box and missing item actions, warehouse-scoped administrator/owner red bell. Candidate tested against current production images, synthetic PostgreSQL, full API boot, actual web alerts and single entry. scripts/releases/fbo-deficit-20261101/.
+
 Warehouse problem bell: FBS/FBO missing box signals scoped to active branch and ADMIN/OWNER; FBO product missing opens the reported box for recount. Tests: warehouse-problem-bell.spec.ts. Draft PR820, not deployed.
 
 ReceiptBatchesPanel places the client picker immediately below the header and before receipt review/date filters. File refresh stays with files. Fixed-client access retains its existing scope. Regression: ReceiptBatchesPanel.spec.tsx.
