@@ -1,6 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {BellRing,X} from 'lucide-react';
+import {Archive,BellRing,CheckCheck,X} from 'lucide-react';
 import {fetchWarehouseProblems,markWarehouseProblemRead,markWarehouseProblemsRead,type WarehouseProblem} from '../lib/api';
 import './warehouse-problem-bell.css';
 
@@ -80,10 +80,18 @@ export function WarehouseProblemBell({token,scope,onOpen}:{token:string;scope:st
   return <div className="warehouse-problem-bell"><button type="button" aria-label={'Проблемы с товаром: '+unread} aria-expanded={open} onClick={()=>{setToast(null);setOpen(!open);}}><BellRing size={19}/>{unread>0&&<b>{unread}</b>}</button>
     {open&&<section role="dialog" aria-label="Проблемы с товаром"><header><strong>Проблемы с товаром</strong><button aria-label="Закрыть" onClick={()=>setOpen(false)}><X size={18}/></button></header>
     {error&&<p role="alert">{error}</p>}{unread===0&&!error&&<p>Непрочитанных проблем нет</p>}{rows.filter(row=>!row.isRead).map(card)}
-      <button type="button" aria-expanded={archiveOpen} onClick={()=>{setArchiveOpen(!archiveOpen);if(!archiveOpen)void loadArchive();}}>{archiveOpen?'Свернуть архив':'Архив проблем'}</button>
+      {/* FIX: keep the archive and acknowledgement controls together, before the archive list. */}
+      <div className="warehouse-problem-controls">
+        <button type="button" aria-expanded={archiveOpen} onClick={()=>{setArchiveOpen(!archiveOpen);if(!archiveOpen)void loadArchive();}}>
+          <Archive size={16} aria-hidden="true"/>{archiveOpen?'Свернуть архив':'Архив проблем'}
+        </button>
+        <button type="button" className="warehouse-problem-controls__read" disabled={readingAll||unread===0} onClick={()=>void readAll()}>
+          <CheckCheck size={16} aria-hidden="true"/>{readingAll?'Отмечаю…':'Прочитать все'}
+        </button>
+      </div>
       {archiveOpen&&<div>{archiveRows.map(card)}{archiveBusy&&<p>Загрузка архива…</p>}{!archiveBusy&&!archiveRows.length&&!error&&<p>Архив пуст</p>}
       {more&&<button type="button" disabled={archiveBusy} onClick={()=>void loadArchive(true)}>Показать ещё</button>}</div>}
-      <footer><button type="button" disabled={readingAll||unread===0} onClick={()=>void readAll()}>{readingAll?'Отмечаю…':'Прочитать все'}</button></footer>
+
     </section>}
     {toast&&createPortal(<aside className="warehouse-new-signal" role="alert" aria-label="Новая проблема с товаром"><header><strong>Проблема с товаром</strong><button aria-label="Скрыть уведомление" onClick={()=>setToast(null)}><X size={18}/></button></header>{card(toast)}{error&&<p>{error}</p>}</aside>,document.body)}
   </div>;
