@@ -28,9 +28,9 @@ test('binds an existing WB supply from the header while picking',async()=>{
     });
     await page.goto('http://fixture.test');await page.addScriptTag({content:bundle.outputFiles[0].text});
     const header=page.locator('.online-execution-modal__header');
-    const button=header.getByRole('button',{name:'Поставка ВБ',exact:true});
+    const button=header.getByRole('button',{name:'Заявка ВБ',exact:true});
     await header.getByRole('button',{name:'Свернуть окно'}).waitFor();
-    assert.deepEqual(await header.locator('button:visible').allTextContents(),['Поставка ВБ','−','×']);
+    assert.deepEqual(await header.locator('button:visible').allTextContents(),['Заявка ВБ','−','×']);
     await button.click();const popup=page.locator('dialog[open]');
     await popup.getByLabel('Ссылка или номер поставки WB').fill('41834673');
     await popup.getByRole('button',{name:'Привязать поставку WB'}).click();
