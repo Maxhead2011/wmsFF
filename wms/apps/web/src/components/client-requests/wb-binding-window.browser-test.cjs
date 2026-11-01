@@ -31,11 +31,22 @@ test('binds an existing WB supply from the header while picking',async()=>{
     const button=header.getByRole('button',{name:'Заявка ВБ',exact:true});
     await header.getByRole('button',{name:'Свернуть окно'}).waitFor();
     assert.deepEqual(await header.locator('button:visible').allTextContents(),['Заявка ВБ','−','×']);
+    await page.addStyleTag({path:path.join(__dirname,'wb-supply-window.css')});
+    // TEST: both parent controls and the nested close button match the approved 40px size.
+    for(const name of ['Свернуть окно','Закрыть']){
+      const rect=await header.getByRole('button',{name,exact:true}).boundingBox();assert.deepEqual([rect.width,rect.height],[40,40]);
+    }
     await button.click();const popup=page.locator('dialog[open]');
+    await popup.getByRole('heading',{name:'Передача и приёмка'}).waitFor();
+    const closeRect=await popup.getByRole('button',{name:'Закрыть окно'}).boundingBox();
+    assert.deepEqual([closeRect.width,closeRect.height],[40,40]);
     await popup.getByLabel('Ссылка или номер поставки WB').fill('41834673');
     await popup.getByRole('button',{name:'Привязать поставку WB'}).click();
     await popup.getByText('Не подтверждена',{exact:false}).waitFor();assert.equal(binds,1);
     await popup.getByRole('button',{name:'Закрыть окно'}).click();
     assert.equal(await page.locator('dialog[open]').count(),0);assert(await button.isVisible());
+    await header.getByRole('button',{name:'Свернуть окно'}).click();
+    await page.getByTitle(/^Развернуть:/).click();
+    assert(await button.isVisible());assert.equal(binds,1);
   }finally{await browser.close();}
 });

@@ -538,3 +538,24 @@
 .kiz-history-dialog {position:fixed;inset:0;margin:auto;max-height:85vh;overflow:auto;width:min(800px,94vw);border:1px solid var(--line,#cedcdd);border-radius:14px;padding:22px;color:inherit;background:var(--surface,#fff)}
 .kiz-history-dialog::backdrop {background:#20334466}
 .kiz-history-dialog header {display:flex;justify-content:space-between;align-items:center}
+
+/* FIX: receipt review follows the approved 920px card, including themed screens. */
+.kiz-panel:has(.kiz-review-case) {box-sizing:border-box;width:min(100%,960px);margin-inline:auto}
+.kiz-panel .kiz-queue:has(>.kiz-receipt-card) {display:grid;gap:12px;padding:0;border:0}
+.kiz-panel .kiz-queue nav button,.kiz-panel .kiz-queue>.secondary-button,.kiz-panel .kiz-queue>button {border:1px solid #d2dfe0;border-radius:9px;padding:9px 13px;background:#fff;color:#253948;font-weight:600;box-shadow:none;width:fit-content}
+.kiz-panel .kiz-queue nav button[aria-pressed=true] {background:#f2edf8;color:#51436e}
+.kiz-panel details.kiz-receipt-card {width:100%;max-width:920px;box-sizing:border-box;padding:clamp(14px,3vw,24px);border:1px solid #d5e1e1;border-radius:16px;background:#fff;color:#253948}
+.kiz-receipt-card>summary,.kiz-scan-band>div,.kiz-receipt-foot {display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.kiz-receipt-card>summary {cursor:pointer;list-style:none}
+.kiz-receipt-card .kiz-receipt-status {border-radius:18px;background:#fff1cf;color:#76510c;padding:5px 12px;font-weight:600}
+.kiz-receipt-card .kiz-scan-timeline {margin-top:14px}
+.kiz-scan-timeline>strong {font-size:1.35em}
+.kiz-scan-timeline p.kiz-scan-note {border:0;padding:0;margin:8px 0 16px;color:#536875}
+.kiz-scan-band {background:#f8f7fa;color:#253948;border-left:3px solid #bdb0d5;padding:8px 14px;margin:6px 0;border-radius:0 8px 8px 0}
+.kiz-receipt-card small {color:#536875;overflow-wrap:anywhere}
+.kiz-receipt-foot {margin:12px 0 14px;padding-bottom:15px;border-bottom:1px solid #dbe4e4}
+.kiz-panel .kiz-receipt-foot button,.kiz-panel .kiz-receipt-card .kiz-review-actions button {border:1px solid #d2dfe0;border-radius:9px;box-shadow:none;padding:9px 13px;font-weight:600}
+.kiz-panel .kiz-receipt-foot button {background:#f2edf8;color:#51436e}
+.kiz-receipt-card .kiz-review-actions {margin:9px 0;max-width:560px}
+.kiz-panel .kiz-receipt-card .kiz-review-actions button:nth-child(3) {background:#fff6f6;color:#883e43}
+.kiz-panel .kiz-receipt-card .kiz-review-actions button:last-child {background:#eaf1f3;color:#253948}

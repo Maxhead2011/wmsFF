@@ -20,6 +20,13 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
  await page.goto('https://fixture.test/');await page.addScriptTag({content:script});await page.addStyleTag({content:fs.readFileSync(web+'/src/components/kiz/kiz.css','utf8')});
  await page.locator('details.kiz-review-case > summary').click();
  await page.getByText('Повтор в другом коробе',{exact:true}).waitFor();assert.equal(await page.getByRole('heading',{name:'КИЗы, найденные после отгрузки'}).count(),1);
+ // TEST: receipt decisions and scan evidence retain the approved card layout.
+ const receipt=page.locator('details.kiz-review-case[open]');
+ await receipt.getByRole('heading',{name:'Решение по обращению'}).waitFor({timeout:2000});
+ assert((await receipt.boundingBox()).width<=920);
+ const band=receipt.locator('.kiz-scan-band').first();
+ assert.equal(await band.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(248, 247, 250)');
+ if(process.env.KIZ_PREVIEW)await receipt.screenshot({path:process.env.KIZ_PREVIEW});
  const history=page.getByRole('button',{name:'Посмотреть историю КИЗа'});await history.click();let modal=page.getByRole('dialog',{name:'История КИЗа'});await modal.getByText(/BOX-1/).waitFor();await modal.getByText(/BOX-2/).waitFor();await page.keyboard.press('Escape');assert(await history.evaluate(n=>document.activeElement===n));
  await page.getByRole('button',{name:'Закрыть обращение',exact:true}).click();modal=page.getByRole('dialog');await modal.getByRole('checkbox').check();await modal.getByRole('button',{name:'Подтвердить решение'}).click();await page.getByText(/Обращение закрыто/).waitFor();assert.equal(writes,1);
  await page.getByRole('button',{name:'Закрытые ошибки сканирования'}).click();await page.locator('details.kiz-review-case > summary').click();await page.getByText(/Test Admin/).waitFor();await page.getByRole('button',{name:'На проверке',exact:true}).click();

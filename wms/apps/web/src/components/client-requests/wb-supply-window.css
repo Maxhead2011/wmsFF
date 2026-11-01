@@ -1,0 +1,26 @@
+/* FIX: the WB trigger scopes the two assembly controls to this window. */
+:is(.online-execution-modal__actions,.fbo-inline-execution__actions):has(.wb-supply-trigger)>button.icon-button,
+dialog.wb-supply-dialog .wb-window-close {
+  box-sizing:border-box; display:inline-grid; place-items:center; flex:0 0 40px;
+  width:40px; min-width:40px; max-width:40px; height:40px; min-height:40px; max-height:40px;
+  padding:0; margin:0; border:1px solid #cbd8da; border-radius:10px;
+  background:#f7f9f9; color:#253948; font:normal 23px/1 "Segoe UI",sans-serif; box-shadow:none;
+}
+dialog.wb-supply-dialog {
+  box-sizing:border-box; position:fixed; inset:0; margin:auto; width:min(580px,94vw);
+  max-height:86vh; overflow:auto; padding:clamp(16px,3vw,24px); color:#253948;
+  background:white; border:1px solid #ccdcdc; border-radius:16px; box-shadow:0 16px 60px #24344333;
+}
+dialog.wb-supply-dialog::backdrop {background:#20334459}
+.wb-supply-dialog header,.wb-supply-dialog footer {display:flex;align-items:center;justify-content:space-between;gap:8px}
+.wb-supply-dialog header small {font-size:12px;font-weight:700;letter-spacing:.08em;color:#665679}
+.wb-supply-dialog header h2 {font-size:20px;margin:0}
+.wb-supply-dialog .wb-supply-content {padding:0;border:0;margin:12px 0 0}
+.wb-supply-dialog .wb-supply-form {border-top:1px solid #dbe4e4;padding-top:4px;margin-top:18px}
+.wb-supply-dialog label {display:grid;gap:5px;margin:14px 0;font-weight:600}
+.wb-supply-dialog :is(select,input,button) {box-sizing:border-box;font:inherit;color:inherit;background:white;border:1px solid #cfdbdd;border-radius:9px;padding:9px 13px}
+.wb-supply-dialog :is(select,input) {width:100%;min-width:0}
+.wb-supply-dialog footer {margin-top:20px;justify-content:flex-end;flex-wrap:wrap}
+.wb-supply-dialog button {cursor:pointer;font-weight:600}
+.wb-supply-dialog .wb-bind,.wb-supply-trigger {background:#f2edf8;color:#51436e;border-color:#d5c9e4}
+.wb-supply-dialog button:disabled {opacity:.55;cursor:default}
