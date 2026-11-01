@@ -941,13 +941,13 @@ function itemsCountSummary(request: ClientRequestSummary) {
   return `${request.items.length} позиций · ${totalQuantity} шт.`;
 }
 
-function packagesSummary(request: ClientRequestSummary) {
+export function packagesSummary(request: ClientRequestSummary) {
   const totalQuantity = request.packages.reduce(
     (sum, packagePlace) => sum + packagePlace.items.reduce((itemSum, item) => itemSum + item.quantity, 0),
     0,
   );
-  const codes = request.packages.map((packagePlace) => packagePlace.packageCode).join(', ');
-  return `Места: ${codes} · ${totalQuantity} шт.`;
+  // FIX: package identifiers belong in the online view.
+  return `Места: ${request.packages.length} · ${totalQuantity} шт.`;
 }
 
 function formatDate(value: string | null) {
