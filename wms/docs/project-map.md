@@ -1,3 +1,5 @@
+Published PR839 on 2026-11-01: WB FBO binding uses equal nonzero picked/packed quantity after picking closes. Own WMS flag enabled. API 4299 and web 591 tests passed. Public browser initial/reload/FBS/FBO/requests verified single React bootstrap. Exact API1/web2 overlay based on running images. WB 429 still requires retry; supply 41852721 not automatically bound.
+
 WB FBO binding after picking: compare the WB supply quantity with equal nonzero picked and packed units under the request lock. Original plan displayed separately. Test wb-fbo-supply.spec.ts, own WMS flag WMS_WB_FBO_ACTUAL_BINDING_ENABLED. Not deployed.
 
 Published PR837: Moscow creation date/time on every warehouse problem and bulk acknowledgement for visible IDs within user/branch scope. Public browser and isolated API/DB verified. Exact API3/web2; LOGOFF 250 unchanged.
