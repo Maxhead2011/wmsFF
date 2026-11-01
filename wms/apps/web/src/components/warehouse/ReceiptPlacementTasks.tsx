@@ -122,7 +122,8 @@ export function ReceiptPlacementTasks({
     <section aria-label="Приёмки для размещения">
       <h3>Приёмки для размещения</h3>
       {error && <p role="alert">{error}</p>}
-      {items.map((t) => (
+      {/* FIX: hide a just-completed receipt without waiting for the next poll. */}
+      {items.filter(t=>t.status!=="COMPLETED").map((t) => (
         <details key={t.id}>
           <summary>
             {t.client} · {t.document.replace(/^SERIES:\d{4}:/, "")} · размещено{" "}

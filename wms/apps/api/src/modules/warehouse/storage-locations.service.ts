@@ -52,7 +52,9 @@ export class StorageLocationsService {
     const {warehouseId,clientIds}=this.placementScope(user);
     const selected=clientId&&document?{clientId,document}:undefined;
     if(selected&&clientIds&&!clientIds.includes(selected.clientId))throw new ForbiddenException('Приёмка недоступна.');
-    return {items:await placementReceipts(this.prisma,warehouseId,clientIds,selected,!selected)};
+    // FIX: active work list excludes completion; selected receipt retains progress and history.
+    const items=await placementReceipts(this.prisma,warehouseId,clientIds,selected,!selected);
+    return {items:selected?items:items.filter(item=>item.status!=='COMPLETED')};
   }
 
   async receiptPlacementAction(body:Record<string,unknown>,user:AuthUser){

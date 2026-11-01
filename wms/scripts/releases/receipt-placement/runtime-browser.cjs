@@ -25,7 +25,7 @@ async function bytes(name){
    if(p.includes('/api/')){
     if(p.endsWith('/placement-report'))return reply({enabled:true,summary:{pallets:1,boxes:2,awaiting:1},items:u.searchParams.get('summaryOnly')?[]:[{id:'box',code:'BOX-1',clientId:'client',client:'Клиент',receipt:'SERIES:2026:FFL_TEST0111',receiptAt:'2026-11-01T09:00:00Z'}],nextCursor:null});
     if(p.endsWith('/receipt-placement/action')){const body=route.request().postDataJSON();assert(['FINISH','DEFER'].includes(body.action));deferred=body.action==='DEFER';return reply(task());}
-    if(p.endsWith('/receipt-placement'))return reply({items:[task()]});
+    if(p.endsWith('/receipt-placement'))return reply({items:[task(),{...task(),id:'done',document:'SERIES:2026:COMPLETED_FIXTURE',placed:2,remaining:[],status:'COMPLETED'}]});
     if(p.endsWith('/storage-locations'))return reply({warehouse:{id:'wh',code:'TEST',name:'Филиал'},zones:[],pallets:[],summary:{zones:0,pallets:0,boxes:0,unassignedPallets:0},codePrefixes:{pallet:'PALLET',storageCell:'CELL',rackSlot:'SLOT',rack:'RACK',storageBox:'SBOX'},googleSync:{error:null}});
     if(p.endsWith('/clients'))return reply([]);
     if(p.endsWith('/panthera-favorites'))return reply({ids:[],initialized:true});
@@ -48,6 +48,7 @@ async function bytes(name){
    window.fixture.render(R.createElement(R.Fragment,null,R.createElement(m.__TestNav,{groups,userId:'user',accessToken:'synthetic',warehouseId:'wh',activeId:'storage-zones',onOpen:()=>{},kizUnread:0}),R.createElement(m.__TestStorage,{session})));
   },core);
   await page.getByLabel('Ожидают размещения: 1',{exact:true}).waitFor();passed++;
+  assert.equal(await page.getByText(/COMPLETED_FIXTURE/).count(),0);
   await page.getByRole('button',{name:'1 Ожидают размещения'}).click();
   const dialog=page.getByRole('dialog',{name:'Ожидают размещения',exact:true});await dialog.getByText('BOX-1',{exact:true}).waitFor();passed++;
   await page.keyboard.press('Escape');assert.equal(await page.locator('dialog[open]').count(),0);passed++;

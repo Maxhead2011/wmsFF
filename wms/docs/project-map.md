@@ -547,3 +547,5 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 - Контроль размещения приёмок: receipt-placement-report.ts читает остаток, StoragePalletBox и индекс приёмок в одном снимке. ReceiptPlacementPanel показывает три счётчика и диалог; ReceiptPlacementBadge отмечает зоны хранения в меню. Флаг WMS_RECEIPT_PLACEMENT_ENABLED — только наша ВМС.
 - Режим размещения приёмки: receipt-placement-workflow.ts генерирует задачи из фактического хранения, фиксирует события и завершение. StorageLocationsService проверяет приёмку в транзакции размещения. ТСД сохраняет выбор между палетами; веб показывает прогресс, связь с активными заявками и историю.
 - Выпуск размещения приёмок: scripts/releases/receipt-placement/prepare.cjs переносит проверенные методы на текущий runtime; release.py проверяет образы, подпись ТСД252 и откат; isolated.py и postgres.cjs проверяют точный пакет перед включением.
+
+- Рабочий список размещения: StorageLocationsService.receiptPlacementTasks исключает COMPLETED только для общего списка; выбранная приёмка и история сохраняются. ReceiptPlacementTasks скрывает завершение сразу после действия.
