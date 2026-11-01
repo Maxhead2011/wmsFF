@@ -41,3 +41,32 @@ describe('WB FBO tracking',()=>{
   }
  });
 });
+describe('WB binding after a partial FBO pick closes',()=>{
+ afterEach(()=>vi.unstubAllEnvs());
+ // TEST: regression from #2564. Original demand is retained, returns cannot enter the binding total.
+ it.each([
+  [1290,1290,0,true],
+  [1315,1290,0,false],
+  [1290,1290,1,false],
+  [0,0,0,false],
+ ] as const)('WB %i, packed %i, picked-only %i => binds %s',async(wb,packed,loose,allowed)=>{
+  vi.stubEnv('WMS_WB_FBO_ACTUAL_BINDING_ENABLED','true');
+  const groups=vi.fn().mockResolvedValue([{state:'PACKED',_count:packed},{state:'PICKED',_count:loose}]);
+  const tx={fboAssemblyUnit:{groupBy:groups},$queryRaw:vi.fn(),$executeRaw:vi.fn(),systemSetting:{findUnique:vi.fn(),create:vi.fn()}};
+  const svc=new WbFboSupplyService({$transaction:(fn:Function)=>fn(tx)} as never,{} as never);
+  const stub=svc as any;
+  vi.spyOn(stub,'load').mockResolvedValue({id:'r',clientId:'c',items:[{quantity:1315}],fboAssembly:{phase:'COMPLETED'}});
+  vi.spyOn(stub,'connection').mockResolvedValue({});vi.spyOn(stub,'remote').mockResolvedValue({quantity:wb,warehouse:'Тест'});
+  vi.spyOn(stub,'event').mockResolvedValue(undefined);vi.spyOn(stub,'view').mockResolvedValue({});
+  const operation=svc.bind('r','conn','41663060',{id:'u'} as never);
+  if(allowed)await operation;else await expect(operation).rejects.toThrow();
+  expect(groups.mock.calls[0][0].where).toEqual({requestId:'r',state:{not:'RETURNED'}});
+  expect(tx.systemSetting.create).toHaveBeenCalledTimes(allowed?2:0);
+ });
+ it('returns a retry message on HTTP 429 before opening a write transaction', async()=>{
+  const db={$transaction:vi.fn()};const svc=new WbFboSupplyService(db as never,{} as never);
+  vi.spyOn(svc as any,'load').mockResolvedValue({clientId:'c'});vi.spyOn(svc as any,'connection').mockResolvedValue({apiKey:'fixture'});
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValue({ok:false,status:429}));
+  await expect(svc.bind('r','c','41663060',{} as never)).rejects.toThrow('429');expect(db.$transaction).not.toHaveBeenCalled();
+ });
+});

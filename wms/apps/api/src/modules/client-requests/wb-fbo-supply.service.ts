@@ -40,19 +40,34 @@ export class WbFboSupplyService {
  // FIX: fixed read endpoint, bounded timeout, no marketplace writes or raw response logging.
  async remote(c:{apiKey:string},id:string){
   let response:Response;try{response=await fetch('https://supplies-api.wildberries.ru/api/v1/supplies/'+id+'?isPreorderID=false',{headers:{Authorization:c.apiKey},signal:AbortSignal.timeout(20000),redirect:'error'});}catch{throw new BadGatewayException('Нет ответа WB. Повторите проверку.');}
+  if(response.status===429)throw new BadGatewayException('WB временно ограничил запросы (HTTP 429). Повторите проверку поставки позже.');
   if(!response.ok)throw new BadGatewayException(response.status===403?'Нет доступа к поставкам WB у этого API-ключа.':`WB: HTTP ${response.status}.`);
   let data:any;try{data=await response.json();}catch{throw new BadGatewayException('Некорректный ответ WB.');}
   if(!Number.isInteger(data.statusID)||!wbFboStatuses[data.statusID]||!Number.isSafeInteger(data.quantity)||data.quantity<0||!Number.isSafeInteger(data.acceptedQuantity)||data.acceptedQuantity<0)throw new BadGatewayException('WB не подтвердил статус и количество поставки.');
   return {statusId:data.statusID,status:wbFboStatuses[data.statusID],warehouse:String(data.warehouseName??''),date:typeof data.supplyDate==='string'?data.supplyDate:null,quantity:data.quantity,acceptedQuantity:data.acceptedQuantity,checkedAt:new Date().toISOString()};
  }
- async view(id:string,user:AuthUser){const r=await this.load(id,user,'read',this.db,true);return {dispatch:(await this.db.systemSetting.findUnique({where:{key:dispatchKey(id)}}))?.value??null,binding:await this.stored(this.db,id),plannedQuantity:r.items.reduce((n:number,i:any)=>n+i.quantity,0),canWrite:!user.isDemo&&user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:write'),canGate:['PACKED','DONE'].includes(r.status)&&r.fboAssembly?.phase==='COMPLETED',connections:await this.db.clientMarketplaceConnection.findMany({where:{clientId:r.clientId,marketplace:'WILDBERRIES',isActive:true},select:{id:true,accountName:true,sellerId:true}})};}
+ // FIX: after picking closes, use one physical unit per record, excluding returns.
+ private async bindingQuantity(db:any,r:{id:string;items:{quantity:number}[];fboAssembly?:{phase:string}|null}){
+  const plannedQuantity=r.items.reduce((sum,line)=>sum+line.quantity,0);
+  if(process.env.WMS_WB_FBO_ACTUAL_BINDING_ENABLED!=='true'||!r.fboAssembly||
+     !['PACKING','CONTROL','COMPLETED'].includes(r.fboAssembly.phase)){
+   return {plannedQuantity,bindingQuantity:plannedQuantity,quantityBasis:'plan' as const};
+  }
+  const groups:{state:string;_count:number}[]=await db.fboAssemblyUnit.groupBy({by:['state'],where:{requestId:r.id,state:{not:'RETURNED'}},_count:true});
+  const picked=groups.reduce((sum,group)=>sum+group._count,0);
+  const packed=groups.find(group=>group.state==='PACKED')?._count??0;
+  return {plannedQuantity,bindingQuantity:picked>0&&picked===packed?packed:null,quantityBasis:'actual' as const};
+ }
+ async view(id:string,user:AuthUser){const r=await this.load(id,user,'read',this.db,true);return {dispatch:(await this.db.systemSetting.findUnique({where:{key:dispatchKey(id)}}))?.value??null,binding:await this.stored(this.db,id),...await this.bindingQuantity(this.db,r),canWrite:!user.isDemo&&user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:write'),canGate:['PACKED','DONE'].includes(r.status)&&r.fboAssembly?.phase==='COMPLETED',connections:await this.db.clientMarketplaceConnection.findMany({where:{clientId:r.clientId,marketplace:'WILDBERRIES',isActive:true},select:{id:true,accountName:true,sellerId:true}})};}
  private async event(tx:any,r:any,user:AuthUser,title:string,body:string){await tx.clientRequestEvent.create({data:{requestId:r.id,clientId:r.clientId,eventType:'COMMENT',title,body,createdByUserId:user.id}});await tx.auditLog.create({data:{userId:user.id,action:'WB_FBO_TRACKING',entity:'ClientRequest',entityId:r.id,payload:{title,body}}});}
  async bind(id:string,connectionId:string,input:string,user:AuthUser){
   const r=await this.load(id,user,'write'),supplyId=wbFboSupplyId(input),c=await this.connection(connectionId,r.clientId),snapshot=await this.remote(c,supplyId);
-  const quantity=r.items.reduce((n:number,i:any)=>n+i.quantity,0);if(snapshot.quantity!==quantity)throw new ConflictException(`В WB ${snapshot.quantity} шт., в заявке ${quantity} шт. Проверьте номер поставки.`);
   await this.db.$transaction(async tx=>{
    await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${id} FOR UPDATE`;
-   const fresh=await this.load(id,user,'write',tx);if(fresh.items.reduce((n:number,i:any)=>n+i.quantity,0)!==quantity)throw new ConflictException('Состав заявки изменился.');
+   const fresh=await this.load(id,user,'write',tx);
+   const {bindingQuantity,quantityBasis}=await this.bindingQuantity(tx,fresh);
+   if(bindingQuantity===null)throw new ConflictException('Для привязки по факту завершите упаковку всех отобранных единиц.');
+   if(snapshot.quantity!==bindingQuantity)throw new ConflictException(`В WB ${snapshot.quantity} шт., ${quantityBasis==='actual'?'отобрано и упаковано':'в заявке'} ${bindingQuantity} шт. Проверьте поставку.`);
    const claim='wb-fbo-supply-owner:v1:'+connectionId+':'+supplyId;await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${claim}))`;
    const old=await this.stored(tx,id),owner=await tx.systemSetting.findUnique({where:{key:claim}});
    if(owner&&(owner.value as any).requestId!==id)throw new ConflictException('Поставка WB уже привязана к другой заявке.');
