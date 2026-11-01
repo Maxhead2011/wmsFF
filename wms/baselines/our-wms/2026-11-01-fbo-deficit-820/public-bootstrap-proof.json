@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "/assets/warehouse-problems-20261101.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "/assets/warehouse-problems-20261101.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "/assets/warehouse-problems-20261101.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "/assets/warehouse-problems-20261101.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "/assets/warehouse-problems-20261101.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}
