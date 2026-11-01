@@ -47,6 +47,22 @@ export async function receiptDocuments(db: Db, clientId: string, warehouseId: st
   for(const m of movements){if(!m.boxId)continue;const document=m.sourceDocument||`BOX:${m.boxId}`;
     if(latest.get(m.boxId)?.document!==document)continue;
     const box=byId.get(m.boxId);if(!box)continue;const row=groups.get(idFor(clientId,warehouseId,assignments.get(box.id)?.series||receiptSeries(box.code,m.createdAt)));if(row)row.received+=m.quantity;}
+  // FIX: explicit membership can recover a checked receipt whose original upload had no RECEIPT.
+  const recoveredBoxIds=boxes.filter(box=>assignments.has(box.id)&&latest.has(box.id)&&
+    !movements.some(m=>m.boxId===box.id)).map(box=>box.id);
+  if(process.env.WMS_RECEIPT_CHECKED_QUANTITY_ENABLED==='true'&&recoveredBoxIds.length){
+    const adjustments=await db.stockMovement.findMany({where:{clientId,warehouseId,
+      boxId:{in:recoveredBoxIds},type:'INVENTORY_ADJUSTMENT',
+      sourceDocument:{startsWith:'Проверка коробов '}},
+      select:{boxId:true,createdAt:true,quantity:true}});
+    for(const boxId of recoveredBoxIds){
+      const opening=latest.get(boxId)!;
+      const quantity=adjustments.filter(m=>m.boxId===boxId&&m.createdAt>=opening.at)
+        .reduce((sum,m)=>sum+m.quantity,0);
+      const row=groups.get(idFor(clientId,warehouseId,assignments.get(boxId)!.series));
+      if(row)row.received+=Math.max(0,quantity);
+    }
+  }
   return [...groups.values()].filter(g=>g.current||!since||new Date(g.date)>=since).sort((a,b)=>Number(b.current)-Number(a.current)||b.lastActivity.localeCompare(a.lastActivity));
 }
 

@@ -1,3 +1,4 @@
+Prepared explicit receipt membership recovery count. receiptDocuments includes signed box-check adjustments after opening only when no RECEIPT exists, under WMS_RECEIPT_CHECKED_QUANTITY_ENABLED. Test receipt-assigned-adjustment.spec.ts covers previous zero, 32 restored units minus correction, lifecycle boundary, repeat reads, existing receipt and missing membership. Not deployed.
 PR847. Box overlap records and counters respect the selected administrator warehouse. The global cache is used only in the all-warehouse view. Verified delayed branch switches in Edge and live Moscow report (9 checked, 2 shared boxes, 0 errors). Baseline 2026-11-01-overlap-scope.
 
 PR844. Warehouse problem menu groups archive and bulk acknowledgement with accessible active, focus and disabled styles. Web 591 passed/2 skipped, TypeScript, mobile Edge and public browser checks passed. Baseline 2026-11-01-problem-buttons.
