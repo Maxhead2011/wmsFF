@@ -1,3 +1,5 @@
+Online request indicator: match the deployed online control and verify its green background, hidden activity icon, pulsing dot and reduced motion in the browser. Web tests 588 passed/2 skipped.
+
 Request actions in a compact two-column grid with a reduced-motion-aware online indicator. Full-width open menus and wrapped status notes. Browser regression in scripts/releases/request-grid-20261101/browser.cjs.
 
 Compact request places: ClientRequestsTable.packagesSummary shows the number of packages and sum of their item quantities. The existing Online action provides details. Web regression suite 588 passed/2 skipped; deployed-module fixtures 0/1/159 places. Own-WMS web-only release.
