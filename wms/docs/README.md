@@ -1,3 +1,5 @@
+PR831. WB request rows use LegacyWbBi. Its header now opens supply binding. Browser verification starts from the Requests list on published assets with actual request 2565 plan and fixture API responses. Web 593 passed/2 skipped, TypeScript passed. Baseline 2026-11-01-wb-request-entry.
+
 PR829. Both Ozon import methods are collapsed inside Excel assembly in Requests. Verified the live request panel and retained link draft across toggles. Web593/2 skipped, TypeScript and Edge passed. Exact web2 overlay on PR820. Baseline 2026-11-01-ozon-under-excel.
 
 PR826, feature/la_panthera. Request list sorts by Russian client names in either direction. Batch status check has a blue button. Both WB FBO assembly entry points open supply binding from the header. Web 593 passed, 2 skipped. API 4295 passed, 156 skipped, plus 3 KIZ tests on dedicated PostgreSQL. Web TypeScript and candidate/public Edge scenarios passed. Web image changed three files; API image and schema retained. Baseline 2026-11-01-request-client-controls.
