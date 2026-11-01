@@ -1,3 +1,4 @@
+import {ReceiptPlacementBadge} from '../warehouse/ReceiptPlacementPanel';
 import { ChevronDown, CircleHelp } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildSpaceNavigation, type SpaceSectionId } from '../../lib/spaceNavigation';
@@ -7,11 +8,13 @@ type SpaceTopNavProps = {
   items: WorkspaceNavItem[];
   activeWorkspaceId: WorkspaceId;
   kizUnread: number;
+  accessToken?:string;
+  warehouseId?:string|null;
   onOpen: (id: WorkspaceId) => void;
 };
 
 // ADDED: Space uses one horizontal navigation tree instead of the legacy sidebar.
-export function SpaceTopNav({ items, activeWorkspaceId, kizUnread, onOpen }: SpaceTopNavProps) {
+export function SpaceTopNav({ items, activeWorkspaceId, kizUnread, onOpen, accessToken, warehouseId }: SpaceTopNavProps) {
   const groups = useMemo(() => buildSpaceNavigation(items), [items]);
   const [openGroupId, setOpenGroupId] = useState<SpaceSectionId | null>(null);
   const rootRef = useRef<HTMLElement | null>(null);
@@ -87,6 +90,7 @@ export function SpaceTopNav({ items, activeWorkspaceId, kizUnread, onOpen }: Spa
                             <strong>{item.title}</strong>
                             <small>{item.description}</small>
                           </span>
+                          {item.id==='storage-zones'&&accessToken&&<ReceiptPlacementBadge token={accessToken} warehouseId={warehouseId}/>}
                           {item.id === 'kiz' && kizUnread > 0 ? (
                             <em aria-label={`Проблем КИЗ: ${kizUnread}`}>{kizUnread > 99 ? '99+' : kizUnread}</em>
                           ) : null}

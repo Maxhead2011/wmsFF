@@ -544,3 +544,4 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 - KizLocationService.lookup возвращает решения по единице (reviews) и историю WB (matches[].reuse). KizCheckPanel передаёт найденные решения в KizReviewQueuePanel.
 - Карточка проверки приёмки использует ReceiptScanTimeline. WbSupplyWindow открывает форму передачи и приёмки WB из шапки онлайн-сборки.
 - Шапка онлайн-сборки WB переносит название и удерживает кнопки в одном ряду. Колонка проверки приёмки КИЗ центрируется в пределах экрана.
+- Контроль размещения приёмок: receipt-placement-report.ts читает остаток, StoragePalletBox и индекс приёмок в одном снимке. ReceiptPlacementPanel показывает три счётчика и диалог; ReceiptPlacementBadge отмечает зоны хранения в меню. Флаг WMS_RECEIPT_PLACEMENT_ENABLED — только наша ВМС.

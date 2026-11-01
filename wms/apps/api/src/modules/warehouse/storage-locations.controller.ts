@@ -11,6 +11,11 @@ import { StorageLocationsService } from './storage-locations.service';
 export class StorageLocationsController {
   constructor(private readonly storage: StorageLocationsService) {}
 
+  @Get('placement-report')
+  placementReport(@CurrentUser() user: AuthUser,@Query('cursor') cursor?:string,@Query('summaryOnly') summaryOnly?:string) {
+    return this.storage.placementReport(user,cursor,summaryOnly==='true');
+  }
+
   @Get()
   list(
     @CurrentUser() user: AuthUser,

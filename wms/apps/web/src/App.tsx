@@ -1,3 +1,4 @@
+import {ReceiptPlacementBadge} from './components/warehouse/ReceiptPlacementPanel';
 import {magicEnabled, welcomeStyle} from './components/layout/magicAppearanceState';
 import {MagicWelcome} from './components/layout/MagicWelcome'; // FIX: personalized loading without delay.
 import {ThemeStyleSwitcher} from './components/layout/ThemeStyleSwitcher'; // FIX: independent user appearance.
@@ -584,6 +585,8 @@ export function App() {
     >
       {uiTheme === 'space' ? (
         <SpaceTopNav
+          accessToken={session.accessToken}
+          warehouseId={session.user.activeWarehouseId}
           items={availableWorkspaces}
           activeWorkspaceId={activeWorkspace.id}
           kizUnread={kizUnread}
@@ -607,7 +610,7 @@ export function App() {
         </div>
 
         <nav className="workspace-nav">
-          {uiTheme === 'la_panthera' ? <PantheraNavigation counts={sidebarCounts} accessToken={session.accessToken} key={session.user.id} groups={groupedWorkspaces} userId={session.user.id} activeId={activeWorkspace.id} onOpen={id=>setActiveWorkspaceId(id as WorkspaceId)} kizUnread={kizUnread}/> : groupedWorkspaces.map((group) => (
+          {uiTheme === 'la_panthera' ? <PantheraNavigation warehouseId={session.user.activeWarehouseId} counts={sidebarCounts} accessToken={session.accessToken} key={session.user.id} groups={groupedWorkspaces} userId={session.user.id} activeId={activeWorkspace.id} onOpen={id=>setActiveWorkspaceId(id as WorkspaceId)} kizUnread={kizUnread}/> : groupedWorkspaces.map((group) => (
             <section className="workspace-nav__group" key={group.id}>
               <p>{group.title}</p>
               {group.items.map((item) => {
@@ -624,6 +627,7 @@ export function App() {
                     <Icon size={18} aria-hidden="true" />
                     <span>{item.title}</span>
                     <SidebarRequestBadge id={item.id} state={sidebarCounts}/>
+                    {item.id === 'storage-zones' && <ReceiptPlacementBadge token={session.accessToken} warehouseId={session.user.activeWarehouseId}/>}
                     {item.id === 'kiz' && kizUnread > 0 ? (
                       <strong
                         className="workspace-nav__badge"

@@ -1,3 +1,4 @@
+import { receiptPlacementReport } from './receipt-placement-report';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementType, Prisma, StockStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
@@ -30,6 +31,21 @@ export class StorageLocationsService {
     private readonly balances: StockBalancesService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
   ) {}
+
+  async placementReport(user: AuthUser, cursor?: string, summaryOnly = false) {
+    if (process.env.WMS_RECEIPT_PLACEMENT_ENABLED !== 'true') {
+      return { summary: { pallets: 0, boxes: 0, awaiting: 0 }, items: [], nextCursor: null, enabled: false };
+    }
+    const warehouseId = user.activeWarehouseId;
+    if (!warehouseId || (!user.permissionCodes.includes('system:admin') && !user.warehouseIds?.includes(warehouseId))) {
+      throw new ForbiddenException('Выберите доступный филиал.');
+    }
+    const clientIds = user.clientScopeMode === 'ALL' && !user.roleCodes.includes('CLIENT')
+      ? undefined
+      : user.clientIds;
+    const report = await receiptPlacementReport(this.prisma, warehouseId, clientIds, cursor, summaryOnly);
+    return { ...report, enabled: true };
+  }
 
   async listLayout(
     warehouseId: string | undefined,
