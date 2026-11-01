@@ -14,7 +14,7 @@ test('header first, three independent folds and compact request search',async()=
  const row={id:'r',number:2564,status:'IN_WORK',type:'OUTBOUND',title:'FBS — 1 заказ',priority:'NORMAL',clientId:'c',client,items:[],files:[],packages:[],_count:{fbsOrderLinks:1},createdAt:'2026-11-01'};
  let searches=0;const errors=[];page.on('pageerror',e=>errors.push(e.stack));
  await page.route('**/*',route=>{const url=new URL(route.request().url());if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<html lang="ru"><div id="root"></div></html>'});
- let data=[];if(url.pathname.endsWith('/client-requests'))data=[row];if(url.pathname.endsWith('/clients'))data=[client];
+ let data=[];if(url.pathname.endsWith('/ozon-fbo-import/capability'))data={enabled:true};if(url.pathname.endsWith('/client-requests'))data=[row];if(url.pathname.endsWith('/clients'))data=[client];
  if(url.pathname.endsWith('/operations-tools/requests')){searches++;data={rows:[],truncated:false};}
  return route.fulfill({json:data});});await page.goto('http://fixture.test');
  await page.addStyleTag({content:bundle.outputFiles.find(f=>f.path.endsWith('.css')).text});
@@ -24,6 +24,20 @@ test('header first, three independent folds and compact request search',async()=
  assert(await panel.locator(':scope > :first-child').evaluate(el=>el.classList.contains('client-requests-panel__heading')));
  assert.deepEqual(await folds.locator(':scope > summary').allTextContents(),['Проверки и поиск','Сборка из Excel','Новая заявка из хвостов FBS']);
  assert.equal(await panel.locator(':scope > details.request-fold[open]').count(),0);
+ // TEST: both Ozon methods belong inside Excel and keep drafts across disclosure toggles.
+ const excel=folds.nth(1), excelTitle=excel.locator(':scope > summary');
+ const ozon=panel.locator('.ozfbo-customer-import');await ozon.waitFor({state:'attached'});
+ assert.equal(await excel.locator('.ozfbo-customer-import').count(),1);
+ await excelTitle.click();
+ const fileFold=ozon.locator('details').filter({has:page.locator('summary',{hasText:'файл клиента по направлениям'})});
+ const linkFold=ozon.locator('details').filter({has:page.locator('summary',{hasText:'Создать сборку по ссылке Ozon'})});
+ assert.equal(await fileFold.count(),1);assert.equal(await linkFold.count(),1);
+ assert.equal(await fileFold.getAttribute('open'),null);assert.equal(await linkFold.getAttribute('open'),null);
+ await fileFold.locator('summary').click();await fileFold.locator('select:has(option[value="c"])').selectOption('c');await fileFold.locator('summary').click();
+ await linkFold.locator('summary').click();const link=linkFold.getByLabel('Ссылка на заявку Ozon');await link.fill('https://seller.ozon.ru/app/supply/orders/12345');
+ await linkFold.locator('summary').click();assert.equal(await link.isVisible(),false);
+ await excelTitle.click();await excelTitle.click();await linkFold.locator('summary').click();assert.equal(await link.inputValue(),'https://seller.ozon.ru/app/supply/orders/12345');
+ await excelTitle.click();
  const tail=folds.nth(2);await tail.locator('summary').focus();await page.keyboard.press('Enter');await tail.getByRole('combobox').waitFor();
  assert(await tail.getByRole('button',{name:'Показать, что будет перенесено'}).isDisabled());await tail.locator('summary').click();
  const tools=folds.first();await tools.locator('summary').click();const input=tools.locator('input'),button=tools.getByRole('button',{name:'Проверить',exact:true});assert(await button.isDisabled());const a=await input.boundingBox(),b=await button.boundingBox();

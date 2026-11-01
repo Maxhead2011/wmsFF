@@ -2002,6 +2002,8 @@ export function ClientRequestsPanel({
       <OperationsTools token={session.accessToken} userId={session.user.id} permissions={session.user.permissionCodes} onOpen={canPickOutbound ? (request)=>void openOnlineExecution(request) : undefined} />
       {!showArchive && canWrite && clients.status === 'ready' && (<details className="client-request-excel-collapse request-fold"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
           <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} outboundOnly={fboOnly} />
+          {/* FIX: keep both Ozon methods in the Excel disclosure. */}
+          {!fboOnly && <OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/>}
         </details>)}
       {!showArchive && canWrite && fbsTailEligibleRequests.length > 0 ? (
         <details className="request-fold"><summary>Новая заявка из хвостов FBS</summary>
@@ -2093,7 +2095,7 @@ export function ClientRequestsPanel({
         />
       ) : null}
 
-      {!showArchive && canWrite && clients.status === 'ready' && !fboOnly && <OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/>}
+
 
       {error ? <p className="form-error">{error}</p> : null}
       {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
