@@ -1,3 +1,5 @@
+Published PR849: explicit receipt membership counts checked-stock recovery after opening when no RECEIPT movement exists. Own-WMS WMS_RECEIPT_CHECKED_QUANTITY_ENABLED enabled. Live FFL_KEV3110 verified 2136 units, 68 boxes including 007 (previous 2104). API 4303 assertions and web 591 passed; kiz-duplicate integration suite unavailable without dedicated local DB. Typecheck passed; isolated real-data candidate verified delta +32. API health verified.
+
 Prepared explicit receipt membership recovery count. receiptDocuments includes signed box-check adjustments after opening only when no RECEIPT exists, under WMS_RECEIPT_CHECKED_QUANTITY_ENABLED. Test receipt-assigned-adjustment.spec.ts covers previous zero, 32 restored units minus correction, lifecycle boundary, repeat reads, existing receipt and missing membership. Not deployed.
 PR847. Box overlap records and counters respect the selected administrator warehouse. The global cache is used only in the all-warehouse view. Verified delayed branch switches in Edge and live Moscow report (9 checked, 2 shared boxes, 0 errors). Baseline 2026-11-01-overlap-scope.
 
