@@ -23,7 +23,13 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
  // TEST: receipt decisions and scan evidence retain the approved card layout.
  const receipt=page.locator('details.kiz-review-case[open]');
  await receipt.getByRole('heading',{name:'Решение по обращению'}).waitFor({timeout:2000});
- assert((await receipt.boundingBox()).width<=920);
+ const cardBounds=await receipt.boundingBox();
+ assert(cardBounds.width<=920);
+ const titleBounds=await receipt.locator('summary').boundingBox();
+ const timelineBounds=await receipt.locator('.kiz-scan-timeline').boundingBox();
+ assert(Math.abs(titleBounds.x-timelineBounds.x)<1);
+ assert(Math.abs(cardBounds.x-(page.viewportSize().width-cardBounds.width)/2)<2);
+
  const band=receipt.locator('.kiz-scan-band').first();
  assert.equal(await band.evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(248, 247, 250)');
  if(process.env.KIZ_PREVIEW)await receipt.screenshot({path:process.env.KIZ_PREVIEW});

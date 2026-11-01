@@ -510,3 +510,4 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
 - Проверки КИЗ при приёмке: ReceiptProgressActivityTest, kiz-client-review.spec.ts, KizReviewQueuePanel.test.tsx и wms/scripts/releases/kiz-review-timeline/browser.cjs (модальное окно, закрытие и архив).
 - Поиск КИЗ: kiz-location.service.spec.ts проверяет сохранение решений по единице и фильтрацию истории WB по филиалу. Браузерный сценарий проверяет выбор переклейки после поиска.
 - Макеты приёмки КИЗ и окна WB проверяются browser.cjs в kiz-review-timeline и wb-binding-window.browser-test.cjs (размер кнопок, привязка, закрытие и сворачивание).
+- Браузерные проверки WB на 390/640/980 px с длинным названием и проверка центровки карточки КИЗ входят в сценарии wb-binding-window и kiz-review-timeline.

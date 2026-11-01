@@ -559,3 +559,18 @@
 .kiz-receipt-card .kiz-review-actions {margin:9px 0;max-width:560px}
 .kiz-panel .kiz-receipt-card .kiz-review-actions button:nth-child(3) {background:#fff6f6;color:#883e43}
 .kiz-panel .kiz-receipt-card .kiz-review-actions button:last-child {background:#eaf1f3;color:#253948}
+
+/* FIX: keep one centered reading column and the same inset for heading, evidence and decisions. */
+:root .kiz-panel:has(.kiz-receipt-card) {
+  display:grid;grid-template-columns:minmax(0,1fr);box-sizing:border-box;
+  width:100%;max-width:none;margin:0;justify-items:center;padding:clamp(12px,2vw,24px)
+}
+:root .kiz-panel:has(.kiz-receipt-card)>:is(h2,section,p,form) {box-sizing:border-box;width:min(100%,920px);min-width:0;margin-inline:auto}
+:root .kiz-panel .kiz-queue:has(>.kiz-receipt-card) {background:transparent;border:none;padding:0;gap:10px}
+:root .kiz-panel .kiz-queue:has(>.kiz-receipt-card)>:is(p,h3,nav) {margin:0}
+:root .kiz-panel .kiz-queue:has(>.kiz-receipt-card)>section.kiz-queue {padding:16px;background:white;border-radius:14px}
+:root .kiz-panel .kiz-queue details.kiz-receipt-card {
+  padding:clamp(14px,2vw,24px);display:block;box-sizing:border-box;margin:0
+}
+:root .kiz-panel details.kiz-receipt-card>summary {padding:0;margin:0}
+:root .kiz-panel details.kiz-receipt-card>.kiz-scan-timeline {padding:0;margin-inline:0}

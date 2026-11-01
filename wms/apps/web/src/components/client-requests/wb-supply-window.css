@@ -24,3 +24,23 @@ dialog.wb-supply-dialog::backdrop {background:#20334459}
 .wb-supply-dialog button {cursor:pointer;font-weight:600}
 .wb-supply-dialog .wb-bind,.wb-supply-trigger {background:#f2edf8;color:#51436e;border-color:#d5c9e4}
 .wb-supply-dialog button:disabled {opacity:.55;cursor:default}
+
+/* FIX: wrap the request title and reserve a single row for the controls. */
+:is(.online-execution-modal__header,.fbo-inline-execution__header):has(.wb-supply-trigger) {flex-wrap:wrap}
+:is(.online-execution-modal__header,.fbo-inline-execution__header):has(.wb-supply-trigger)>h2 {flex:1 1 12ch;min-width:0;white-space:normal;overflow-wrap:anywhere}
+:is(.online-execution-modal__actions,.fbo-inline-execution__actions):has(.wb-supply-trigger) {display:flex;flex:0 0 auto;align-items:center;flex-flow:row nowrap;gap:8px;margin-inline-start:auto;width:max-content}
+.wb-supply-trigger {white-space:nowrap}
+:root :is(.online-execution-modal__actions,.fbo-inline-execution__actions):has(.wb-supply-trigger)>button.icon-button,
+:root dialog.wb-supply-dialog button.wb-window-close {
+  box-sizing:border-box;width:40px;height:40px;min-width:40px;min-height:40px;max-width:40px;max-height:40px;
+  flex:0 0 40px;border:1px solid #cbd8da;border-radius:10px;background:#f7f9f9;color:#253948;
+  padding:0;margin:0;font-size:0;line-height:0;display:inline-grid;place-items:center;
+  --wb-window-glyph:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='m3 3 14 14M17 3 3 17' fill='none' stroke='black' stroke-linecap='round' stroke-width='2'/%3E%3C/svg%3E");
+}
+:root :is(.online-execution-modal__actions,.fbo-inline-execution__actions):has(.wb-supply-trigger)>button.panthera-window-minimize {
+  --wb-window-glyph:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M3 10h14' fill='none' stroke='black' stroke-linecap='round' stroke-width='2'/%3E%3C/svg%3E");
+}
+:root :is(.online-execution-modal__actions,.fbo-inline-execution__actions):has(.wb-supply-trigger)>button.icon-button::before,
+:root dialog.wb-supply-dialog button.wb-window-close::before {
+  content:"";grid-area:1/1;display:block;width:20px;height:20px;background:currentColor;mask:var(--wb-window-glyph) center/contain no-repeat
+}
