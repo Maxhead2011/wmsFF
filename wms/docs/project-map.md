@@ -543,3 +543,4 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 - Проверки КИЗ при приёмке: KizReviewCard, ReceiptScanTimeline и KizCheckPanel показывают события ТСД и историю. Решение CLOSE в kiz-client-review закрывает ошибочный скан без движения товара.
 - KizLocationService.lookup возвращает решения по единице (reviews) и историю WB (matches[].reuse). KizCheckPanel передаёт найденные решения в KizReviewQueuePanel.
 - Карточка проверки приёмки использует ReceiptScanTimeline. WbSupplyWindow открывает форму передачи и приёмки WB из шапки онлайн-сборки.
+- Шапка онлайн-сборки WB переносит название и удерживает кнопки в одном ряду. Колонка проверки приёмки КИЗ центрируется в пределах экрана.
