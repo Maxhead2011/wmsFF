@@ -62,11 +62,11 @@ export class WbFboSupplyService {
    await this.event(tx,fresh,user,'Привязана поставка ФБО WB',`WB №${supplyId} · ${snapshot.quantity} шт. · ${snapshot.warehouse}`);
   });return this.view(id,user);
  }
- async refresh(id:string,user:AuthUser){
+ async refresh(id:string,user:AuthUser,manual=false){
   const r=await this.load(id,user,'read');if(user.isDemo)throw new ForbiddenException();
   const before=await this.stored(this.db,id);if(!before)throw new ConflictException('Сначала привяжите поставку WB.');
   // FIX: shared fresh read avoids polling the same supply repeatedly across viewers.
-  if(Date.now()-Date.parse(before.attemptedAt??before.checkedAt)<30000)return this.view(id,user);
+  if(!manual&&Date.now()-Date.parse(before.attemptedAt??before.checkedAt)<30000)return this.view(id,user);
   let snapshot:Awaited<ReturnType<WbFboSupplyService['remote']>>|undefined,error:string|undefined;
   try{snapshot=await this.remote(await this.connection(before.connectionId,r.clientId),before.supplyId);}catch(e){error=e instanceof Error?e.message:'Ошибка проверки WB';}
   await this.db.$transaction(async tx=>{
@@ -78,7 +78,7 @@ export class WbFboSupplyService {
    if(snapshot&&current.statusId!==snapshot.statusId)await this.event(tx,fresh,user,'Обновлён статус поставки WB',`WB №${current.supplyId}: ${snapshot.status}. Принято ${snapshot.acceptedQuantity} из ${snapshot.quantity} шт.`);
   });
   const latest=await this.stored(this.db,id),dispatch=await this.db.systemSetting.findUnique({where:{key:dispatchKey(id)}});
-  if(r.status==='PACKED'&&r.fboAssembly?.phase==='COMPLETED'&&snapshot&&latest&&latest.quantity===r.items.reduce((n:number,i:any)=>n+i.quantity,0)&&[4,5,6].includes(latest.statusId)&&dispatch&&this.stock&&!user.isDemo&&user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:write')){
+  if(!manual&&r.status==='PACKED'&&r.fboAssembly?.phase==='COMPLETED'&&snapshot&&latest&&latest.quantity===r.items.reduce((n:number,i:any)=>n+i.quantity,0)&&[4,5,6].includes(latest.statusId)&&dispatch&&this.stock&&!user.isDemo&&user.permissionCodes.some(p=>p==='system:admin'||p==='client-requests:write')){
    await this.load(id,user,'write');
    // FIX: reuse idempotent stock shipment, never change quantities directly from a remote snapshot.
    await this.stock.shipClientRequest({requestId:id,idempotencyKey:`ship-request:${id}`,comment:`Сдано: WB №${latest.supplyId}, ${latest.status}.`},user);
