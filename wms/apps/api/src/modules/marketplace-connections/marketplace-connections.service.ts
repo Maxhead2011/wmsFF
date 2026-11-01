@@ -22777,7 +22777,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return this.readWbStatusesForConnection(connection.apiKey, orderIds);
   }
 
-  private async readWbStatusesForConnection(apiKey: string, orderIds: string[]) {
+  async readWbStatusesForConnection(apiKey: string, orderIds: string[]) {
     const result = new Map<string, { supplierStatus: string; wbStatus: string }>();
     for (const ids of chunks(orderIds, 1000)) {
       const numericIds = ids.map(id => Number(id));

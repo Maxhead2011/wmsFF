@@ -78,9 +78,10 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
    market==='OZON'?link:[link.connectionId,link.supplyId],dispatch]);
   return {r,link,market,connection,dispatch,version};
  }
- async reconcile(id:string,initial?:any){
+ async reconcile(id:string,initial?:any,scope?:{clientId:string;warehouseId:string|null}){
   if(!fboDeliveryEnabled())return 'DISABLED';
   const c=initial??await this.context(id);if(!c||c.r.status==='DONE')return 'SKIPPED';
+  if(scope&&(c.r.clientId!==scope.clientId||c.r.warehouseId!==scope.warehouseId))throw new ConflictException('Заявка сменила клиента или филиал. Обновите список.');
   let evidence:any,accepted=false;
   if(c.market==='OZON'){
    const ids=supplyOrders(c.link).map(o=>Number(o.orderId));

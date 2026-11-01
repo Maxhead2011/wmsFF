@@ -1542,6 +1542,12 @@ export type ClientRequestTimeline = {
   events: ClientRequestEventSummary[];
 };
 
+export const checkRequestMarketStatus = (accessToken: string, id: string) =>
+  request<{status:ClientRequestStatus;message:string;checkedAt:string}>(
+    '/client-requests/'+encodeURIComponent(id)+'/market-status',{accessToken,method:'POST'});
+export const marketStatusTargets = (accessToken:string) =>
+  request<Array<{id:string;number:number}>>('/client-requests/market-status/targets',{accessToken});
+
 export type ClientRequestSummary = {
   storeNames?: string[];
   storeState?: 'ASSIGNED'|'MIXED'|'UNASSIGNED';
