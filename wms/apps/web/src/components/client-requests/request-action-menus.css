@@ -68,7 +68,7 @@
 .request-online-menu > summary { padding: 10px 12px; cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
 .request-online-menu__items { display: grid; grid-template-columns: minmax(0,1fr); gap: 6px; padding: 6px; }
 .online-execution-modal__actions .request-online-menu button { width: 100%; min-width: 0; height: auto; white-space: normal; overflow-wrap: anywhere; }
-/* FIX: four equal full-width rows, with centered labels and one shared surface. */
+/* FIX: two equal columns, with centered labels and one shared surface. */
 @media screen {
   .client-request-actions > .request-action-menu {
     grid-template-columns: minmax(0, 1fr);
@@ -121,4 +121,62 @@
   .request-action-menu > details > summary::before { content: '▸'; flex: none; }
   .request-action-menu > details[open] > summary::before { content: '▾'; }
   .request-action-menu > details[open] > .request-action-menu__items { margin-top: 6px; }
+}
+
+@media screen {
+  .client-request-actions > .request-action-menu { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .client-request-actions .request-action-menu > button { grid-column: auto !important; }
+  .client-request-actions .request-action-menu > details:not([open]) { grid-column: auto; }
+}
+/* FIX: compact request controls, with full-width content when a disclosure opens. */
+@media screen {
+  .client-request-table__warehouse-cell .client-request-actions > .request-action-menu {
+    display: grid !important;
+    width: min(100%, 257px) !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 9px;
+  }
+  .client-request-table__warehouse-cell .request-action-menu > button,
+  .client-request-table__warehouse-cell .request-action-menu > details > summary {
+    grid-column: auto !important;
+    box-sizing: border-box;
+    width: 100% !important;
+    height: 53px !important;
+    min-height: 53px !important;
+    padding: 5px 7px !important;
+  }
+  .client-request-table__warehouse-cell .request-action-menu > details:not([open]) { grid-column: auto !important; }
+  .client-request-table__warehouse-cell .request-action-menu > details[open] { grid-column: 1 / -1 !important; }
+  .client-request-table__warehouse-cell .request-action-menu > button[title="Открыть сборку"] {
+    background: #daf5e6 !important;
+    border-color: #9dd6b7 !important;
+    color: #115b39 !important;
+  }
+  .request-action-menu > button[title="Открыть сборку"] > svg { display: none; }
+  .request-action-menu > button[title="Открыть сборку"]::before {
+    content: "";
+    flex: 0 0 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #188552;
+  }
+  .request-action-menu > .client-request-action-button--fbs-box-search span {
+    max-width: 7ch;
+    line-height: 1.15;
+  }
+}
+@media screen and (prefers-reduced-motion: no-preference) {
+  .request-action-menu > button[title="Открыть сборку"]::before { animation: request-online-pulse 2s ease-out infinite; }
+}
+@keyframes request-online-pulse {
+  0% { box-shadow: 0 0 0 0 #18855255; }
+  75%, 100% { box-shadow: 0 0 0 6px #18855200; }
+}
+
+/* FIX: allow the complete status note to wrap inside its table column. */
+.client-request-table .client-request-due-status { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.client-request-table td .client-request-status-comment {
+  display: block !important; min-width: 0; max-width: 100%; max-height: none !important;
+  white-space: normal !important; overflow-wrap: anywhere; overflow: visible !important;
+  -webkit-line-clamp: unset !important;
 }
