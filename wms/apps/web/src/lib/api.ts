@@ -12742,5 +12742,6 @@ export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:st
  return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
 }
 
-export type WarehouseProblem={id:string;title:string;client:string;worker:string;detail:string;createdAt:string};
-export function fetchWarehouseProblems(accessToken:string){return request<WarehouseProblem[]>('/inventory/warehouse-problems',{accessToken});}
+export type WarehouseProblem={id:string;status:string;clientId:string;isRead:boolean;kind:'box'|'product';boxCode:string|null;title:string;client:string;worker:string;detail:string;createdAt:string};
+export function markWarehouseProblemRead(token:string,id:string){return request<{read:boolean}>(`/inventory/warehouse-problems/${encodeURIComponent(id)}/read`,{accessToken:token,method:'POST'});}
+export function fetchWarehouseProblems(accessToken:string,archive=false,cursor=''){const query=archive?'?archive=true&cursor='+encodeURIComponent(cursor):'';return request<WarehouseProblem[]>('/inventory/warehouse-problems'+query,{accessToken});}

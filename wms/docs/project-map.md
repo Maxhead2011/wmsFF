@@ -1,3 +1,5 @@
+Warehouse problem navigation: separate portal alert, durable personal acknowledgement and collapsed paginated archive for read/completed/cancelled signals; missing box opens scoped turnover history, missing product opens exact inventory session. Test: warehouse-problem-bell.spec.ts. Prepared only.
+
 Published PR820, LOGOFF 250: WB FBO shortage preview, corrected quantities, missing box alerts and scanned box recount; FBS/FBO red notifications for administrators and owners. Signed APK, isolated API/DB, public web and single entry verified. Source parity false.
 
 Release candidate PR820: FBO shortage preview, atomic reservation, LOGOFF 250 missing box and missing item actions, warehouse-scoped administrator/owner red bell. Candidate tested against current production images, synthetic PostgreSQL, full API boot, actual web alerts and single entry. scripts/releases/fbo-deficit-20261101/.

@@ -86,7 +86,7 @@ const actionOptions: Array<{ value: TurnoverActionKind; label: string; hint: str
   { value: 'HOLD', label: 'Отложить на отдельное хранение', hint: 'Переносит товар в отдельную ячейку со статусом отложено.' },
 ];
 
-export function TurnoverPanel({ session }: { session: AuthSession }) {
+export function TurnoverPanel({ session,initialBox }: { session: AuthSession;initialBox?:{clientId:string;boxCode:string|null} }) {
   const reportGeneration = useRef(0);
   const [activeTile, setActiveTile] = useState<ActiveTile>('home');
   const [clients, setClients] = useState<LoadState<ClientSummary[]>>({ status: 'idle', data: [] });
@@ -284,6 +284,10 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
       setSuggestions((current) => ({ ...current, status: 'error', error: errorMessage(caught) }));
     }
   }
+
+  useEffect(()=>{
+    if(initialBox?.boxCode){setSelectedClientId(initialBox.clientId);setActiveTile('movement');void loadBoxDetails(initialBox.boxCode,initialBox.clientId);}
+  },[initialBox]);
 
   async function loadBoxDetails(nextBoxCode = boxSearch, clientId = selectedClientId) {
     const cleanBoxCode = nextBoxCode.trim();
@@ -1104,6 +1108,7 @@ function BoxDetailsSection({
   onAction: (item: TurnoverBoxDetails['contents'][number], action: TurnoverActionKind) => void;
 }) {
   const details = state.data;
+  const latestMovement=details?.movements.reduce<TurnoverBoxDetails['movements'][number]|undefined>((latest,row)=>!latest||Date.parse(row.date)>Date.parse(latest.date)?row:latest,undefined);
 
   return (
     <section className="turnover-panel turnover-box-details" aria-label="Содержимое короба">
@@ -1111,6 +1116,7 @@ function BoxDetailsSection({
         <div>
           <p className="eyebrow">Поиск по коробу</p>
           <h3>{details ? details.box.code : 'Короб'}</h3>
+          {details && <p>{latestMovement ? `Последнее движение товара: ${formatDateTime(latestMovement.date)} · ${latestMovement.typeLabel}` : 'Движения товара по коробу не зарегистрированы.'}</p>}
           {details ? <span>{details.box.client.name} · статус {details.box.status}</span> : null}
         </div>
         <button className="icon-button" type="button" onClick={onClose} title="Закрыть короб">
