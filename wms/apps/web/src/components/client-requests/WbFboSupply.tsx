@@ -15,7 +15,7 @@ export function WbFboSupply({requestId,accessToken,disabled=false}:{requestId:st
  <p><strong>Передача со склада:</strong> {data?.dispatch?`Отгружено · ${date(data?.dispatch.at)} МСК`:'Не подтверждена'}</p>
  <p><strong>Статус WB:</strong> {[4,5,6].includes(b.statusId)?'Сдано · '+b.status:b.status} · принято {b.acceptedQuantity} из {b.quantity} шт.</p>
  <p>Последняя успешная проверка: {date(b.checkedAt)} МСК</p>{b.lastError&&<p role="alert">{b.lastError} Показан последний подтверждённый статус.</p>}
- {b.quantity!==data?.plannedQuantity&&<p role="alert">Количество WB и WMS отличается: {b.quantity} / {data?.plannedQuantity} шт.</p>}
+ {b.quantity!==(data?.bindingQuantity??data?.plannedQuantity)&&<p role="alert">Количество WB и WMS отличается: {b.quantity} / {data?.bindingQuantity??data?.plannedQuantity} шт.</p>}
  <button type="button" disabled={busy||disabled} onClick={()=>void action('refresh')}>Проверить статус WB</button>{data?.canWrite&&!data?.dispatch&&<button type="button" disabled={busy||disabled||!data.canGate} onClick={()=>void action('gate')}>Отгружено</button>}
  {!data?.dispatch&&!data?.canGate&&<p>Передачу можно подтвердить после завершения упаковки и проверки коробов.</p>}</>}
  </section>;

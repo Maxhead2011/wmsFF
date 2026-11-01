@@ -1,3 +1,5 @@
+Prepared WB confirmed handover completion: compare completed pick/pack quantity, including partial pick closure. Confirmed WB status 6 means surrendered even when later refresh is 429; fresh statuses 4/5 retain prior flow. Own-WMS actual-binding flag. UI mismatch uses actual count. Regression wb-fbo-supply.spec.ts verifies matching/nonmatching actual units and preserves last confirmed timestamp. Not deployed.
+
 Published PR854: receipt Excel consumes the exact recovery movement IDs used by receiptDocuments. Actual XLSX generated against production data in isolated candidate verified 2136 total and 32 units for FFL_KEV3110_007. Exact API2 overlay preserves latest server logic; health verified. API 4304 and web 591 passed; unavailable dedicated KIZ integration suite excluded. TypeScript passed.
 
 Prepared receipt XLSX recovery fix: receiptDocuments returns scoped recovery movement IDs and file.xlsx uses the same evidence as the received counter. Regression parses actual XLSX and checks 2136 units. Files receipt-channel-policy.ts, receipt-channels.controller.ts, receipt-export-recovered.spec.ts. Own-WMS recovery flag; no new stock writes.
