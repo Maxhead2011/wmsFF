@@ -1,0 +1,25 @@
+// TEST: published candidate, disposable database, stubbed read-only marketplace.
+require('reflect-metadata');const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'panthera-market-buttons-test-pg');
+const root='/app/apps/api/dist/modules/',{PrismaClient}=require('@prisma/client'),p=new PrismaClient();
+const {RequestMarketStatusController}=require(root+'client-requests/request-market-status.controller'),{ClientScopeService}=require(root+'auth/client-scope.service'),{WbFboSupplyService}=require(root+'client-requests/wb-fbo-supply.service');
+(async()=>{const c=await p.client.create({data:{code:'SYN',name:'Fixture'}}),wh=await p.warehouse.create({data:{code:'SYN',name:'Fixture'}}),actor=await p.user.create({data:{name:'Synthetic',email:'fixture@test.invalid',passwordHash:'disabled'}});
+const user={id:actor.id,permissionCodes:['system:admin'],roleCodes:['OWNER'],clientIds:[c.id],writableClientIds:[c.id],activeWarehouseId:wh.id,warehouseIds:[wh.id],writableWarehouseIds:[wh.id]};
+const account=await p.clientMarketplaceConnection.create({data:{clientId:c.id,apiKey:'synthetic',marketplace:'WILDBERRIES'}}),scopes=new ClientScopeService(),wb=new WbFboSupplyService(p,scopes);
+const seed=async(status,title)=>p.clientRequest.create({data:{clientId:c.id,warehouseId:wh.id,status,type:'OUTBOUND',title,items:{create:{name:'Fixture',quantity:2}}}});
+const a=await seed('PACKED','FBS'),b=await seed('IN_WORK','FBO');
+for(const id of ['101','102'])await p.fbsOrderRequestLink.create({data:{requestId:a.id,clientId:c.id,marketplace:'WILDBERRIES',connectionId:account.id,orderId:id}});
+let complete=false;const con={readWbStatusesForConnection:async()=>new Map(['101','102'].map(id=>[id,{supplierStatus:'complete',wbStatus:!complete&&id==='102'?'waiting':'sorted'}]))};
+const service=new RequestMarketStatusController(p,scopes,con,{},wb,{reconcile:async()=> 'SKIPPED'});
+assert((await service.targets(user)).some(x=>x.id===a.id));
+assert.equal((await service.check(a.id,user)).status,'PACKED');complete=true;
+assert.equal((await service.check(a.id,user)).status,'DONE');
+assert.equal(await p.clientRequestEvent.count({where:{requestId:a.id,eventType:'STATUS_CHANGED'}}),1);
+assert.equal(await p.stockMovement.count(),0);await assert.rejects(()=>service.check(a.id,user));
+assert(!(await service.targets(user)).some(x=>x.id===a.id));
+await p.fboAssembly.create({data:{requestId:b.id,phase:'PICKING',compositionHash:'synthetic'}});
+wb.remote=async()=>({statusId:2,status:'Planned',warehouse:'Fixture',quantity:2,acceptedQuantity:0,date:null,checkedAt:new Date().toISOString()});
+await wb.bind(b.id,account.id,'41834673',user);const v=await wb.view(b.id,user);assert.equal(v.binding.supplyId,'41834673');assert.equal(v.canGate,false);
+assert.equal((await p.clientRequest.findUniqueOrThrow({where:{id:b.id}})).status,'IN_WORK');
+assert((await service.targets(user)).some(x=>x.id===b.id));assert.equal((await service.check(b.id,user)).status,'IN_WORK');assert.equal(await p.stockMovement.count(),0);
+console.log(JSON.stringify({passed:12,stockUnchanged:true,earlyBinding:true}));})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());
