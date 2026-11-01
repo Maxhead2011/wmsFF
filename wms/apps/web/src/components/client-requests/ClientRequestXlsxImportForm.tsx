@@ -1,3 +1,4 @@
+import { DeficitActions } from './DeficitActions';
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Send, Trash2, Upload, Wand2 } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import {
@@ -102,7 +103,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
       return;
     }
 
-    if (!file || !preview || validLines.length === 0) {
+    if (!file || !preview || validLines.length === 0 || validLines.length !== editableLines.length) {
       setError('Исправьте позиции перед созданием заявки.');
       return;
     }
@@ -120,6 +121,12 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
       createdRequest = await createClientRequest(session.accessToken, {
         clientId,
         type: 'OUTBOUND',
+        fboExcel: true,
+        fboDecisions: preview.lines.flatMap((line,index) => {
+          const key = `${line.barcode ?? line.originalName ?? line.internalSku ?? index}-${index}`;
+          const finalQuantity = validLines.find(row=>row.key===key)?.requestedQuantity ?? 0;
+          return finalQuantity===line.requestedQuantity ? [] : [{barcode:line.barcode ?? '', originalQuantity:line.requestedQuantity, finalQuantity}];
+        }),
         priority,
         title: title || preview.title,
         comment: `Создано из Excel: ${file.name}. Позиций: ${validLines.length}, количество: ${validLines.reduce((sum, line) => sum + line.requestedQuantity, 0)}.`,
@@ -276,6 +283,11 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
                   aria-label={`Количество ${xlsxLineLabel(line)}`}
                 />
                 <small>{xlsxLineText(line)}</small>
+                {line.skuId && adjustedShortage(line) > 0 && (
+                  <DeficitActions available={line.availableQuantity} disabled={isCommitting}
+                    onAdjust={(quantity) => updateEditableLine(index, quantity)}
+                    onExclude={() => removeEditableLine(index)} />
+                )}
                 {line.actionSuggestions?.length ? (
                   <div className="client-request-xlsx-suggestions">
                     {line.actionSuggestions.map((suggestion, suggestionIndex) => (

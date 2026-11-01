@@ -483,6 +483,9 @@ final class FboTwoStageScreen {
                         if(!pickingChoices()||pickingMode==FboPickingRoute.Mode.PARTIAL)button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
                         if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
                         if(r.wholeBox&&showWholePicking(r)&&(!pickingChoices()||!r.recount))button(root,wholePickingTitle(),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
+                        if (plan.missingStockReportingSupported && "logoff".equals(BuildConfig.FLAVOR) && "PICKING".equals(screenPhase())) {
+                            button(root,"Товар в коробе не найден",ready(),this::reportMissing);
+                        }
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
                         if(state.pallet.isEmpty()){
@@ -702,6 +705,26 @@ final class FboTwoStageScreen {
             });
         });
     }
+    // FIX: choose a product from the scanned box and explicitly confirm the missing quantity.
+    private void reportMissing(){
+        for(TsdFboPlan.Route box:plan.route){
+            if(!state.source.equals(box.boxCode)||box.tasks==null)continue;
+            String[] labels=new String[box.tasks.size()];
+            for(int i=0;i<labels.length;i++)labels[i]=box.tasks.get(i).name+" · "+box.tasks.get(i).barcode;
+            new AlertDialog.Builder(activity).setTitle("Какой товар не найден?").setItems(labels,(dialog,index)->{
+                TsdFboPlan.Task task=box.tasks.get(index);
+                android.widget.EditText count=new android.widget.EditText(activity);
+                count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);count.setText("1");count.selectAll();
+                new AlertDialog.Builder(activity).setTitle("Не найдено в "+box.boxCode+" (до "+task.quantity+")").setView(count)
+                    .setNegativeButton("Отмена",null).setPositiveButton("Отправить на пересчёт",(d,w)->{
+                        int n;try{n=Integer.parseInt(count.getText().toString());}catch(NumberFormatException e){n=0;}
+                        if(n<1||n>task.quantity){message="Проверьте количество";render();return;}
+                        state.barcode=task.barcode;send("REPORT_MISSING",null,n);
+                    }).show();
+            }).show();return;
+        }
+    }
+
     private void send(String action,String kiz){send(action,kiz,null);}
     private String relabelUnitId="";
     // FIX: only LOGOFF and an explicit server capability expose the replacement-label step.
@@ -770,6 +793,7 @@ final class FboTwoStageScreen {
         });});dialog.show();
     }
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;retrySending=state.pending()!=null;feedbackColor=Color.TRANSPARENT;Map<String,String> payload=state.prepare(action,kiz,quantity);
+        if("REPORT_MISSING".equals(action)&&!retrySending){payload.put("missingQuantity",String.valueOf(quantity));payload.remove("confirmedQuantity");state.restore(payload);}
         if("RELABEL_UNIT".equals(payload.get("action"))&&!retrySending){payload.put("relabelUnitId",relabelUnitId);state.restore(payload);}
         // FIX: persist before sending, so a restart can retry the identical operation.
         boolean fast=!"RELABEL_UNIT".equals(payload.get("action"))&&!"PACK_PRODUCT".equals(payload.get("action"))&&!"UNDO_PACK_UNIT".equals(payload.get("action"))&&fastConfirmation();

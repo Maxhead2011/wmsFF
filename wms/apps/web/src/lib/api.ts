@@ -2599,6 +2599,8 @@ export type TsdAssemblyPlan = {
 };
 
 export type CreateClientRequestPayload = {
+  fboExcel?: boolean;
+  fboDecisions?: {barcode:string; originalQuantity:number; finalQuantity:number}[];
   clientId: string;
   warehouseId?: string;
   type: ClientRequestType;

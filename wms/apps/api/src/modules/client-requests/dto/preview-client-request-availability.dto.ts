@@ -1,3 +1,4 @@
+import { IsBoolean } from 'class-validator';
 import { ClientRequestType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsEnum, IsInt, IsOptional, IsString, Min, ValidateNested } from 'class-validator';
@@ -25,6 +26,9 @@ export class PreviewClientRequestAvailabilityItemDto {
 }
 
 export class PreviewClientRequestAvailabilityDto {
+  @IsOptional()
+  @IsBoolean()
+  fboExcel?: boolean;
   @IsString()
   clientId!: string;
 

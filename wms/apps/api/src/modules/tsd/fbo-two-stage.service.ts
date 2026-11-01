@@ -1,3 +1,5 @@
+import {missingStockComment,missingStockHolds} from '../../common/stock/fbo-missing-stock';
+import {busyBoxes} from './fbo-picking-capacity';
 import {fboCompletionBatchEnabled,validateFboPackedBoxes,fboCompletionPackages,saveFboCompletionSelections,fboCompletionStage,fboCompletionError} from './fbo-completion-batch';
 import { requestStoreContexts } from '../clients/request-store-context';
 import {ozonLabelControlEnabled,ozonBoxLabelConfirmed,confirmOzonBoxLabel} from './ozon-label-control';
@@ -42,9 +44,6 @@ type Request = Prisma.ClientRequestGetPayload<{
 }>;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 // FIX: untouched routes allow partial FBO picking, but their quantity remains protected below.
-const untouchedFbsRoute = (task: FbsTsdAssembly) =>
-    !task.sourceBarcode && !task.barcode && !task.kiz && !task.relabelConfirmedAt &&
-    ((task.status === 'RESERVED' && task.deviceCode === 'AUTO:FBS:PALLET_SORT' && !task.boxId) || task.status === 'IN_PROGRESS');
 const identity = (value: string) => physicalKizIdentity(value) || value.trim();
 const composition = (r: Request) => hash(r.items.map(i => [i.id, i.skuId, i.barcode, i.quantity]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
 @Injectable()
@@ -266,7 +265,7 @@ export class FboTwoStageService {
         }
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         const storeContexts = await requestStoreContexts(tx, [r]);
-        return { ...storeContexts.get(r.id), alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
+        return { ...storeContexts.get(r.id), missingStockReportingSupported:process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED==='true', alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
             marketplace: yandex ? 'YANDEX_MARKET' : lamoda ? 'LAMODA' : shipment ? 'OZON' : 'WILDBERRIES',
             relabelRequired,
             relabelUnits:relabelUnits.map(u=>({id:u.id,skuId:u.skuId,sourceBarcode:u.barcode,kiz:u.kiz,pickedByUserId:u.pickedByUserId,
@@ -316,6 +315,7 @@ export class FboTwoStageService {
             const key = `${id}:${dto.operationId}`, payloadHash = hash([
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
                 ...(directions ? [dto.direction ?? null] : []),
+                ...(dto.action==='REPORT_MISSING' ? [dto.missingQuantity] : []),
                 ...(dto.undoOperationId === undefined ? [] : [dto.undoOperationId]),
                 ...(dto.relabelUnitId === undefined ? [] : [dto.relabelUnitId]),
             ]);
@@ -364,7 +364,24 @@ export class FboTwoStageService {
                 if (directions && a!.phase === 'PICKING' && process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && units.length > 0) return;
                 requirePhase('PACKING');
             };
-            if (unboxedFboEnabled() && r.client.storesWithoutBoxes && (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX')) {
+            if(dto.action==='REPORT_MISSING'){
+                requirePhase('PICKING');
+                if(process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED!=='true')throw new BadRequestException('Сообщения о недостаче отключены.');
+                const plan=await this.snapshot(tx,r);
+                const location=plan.route.find(b=>b.boxCode===dto.sourceBoxCode);
+                const task=location?.tasks.find(t=>t.barcode===dto.barcode);
+                const quantity=Number(dto.missingQuantity);
+                if(!task||!Number.isSafeInteger(quantity)||quantity<1||quantity>task.quantity)throw new ConflictException('Проверьте короб, товар и недостающее количество.');
+                const box=await tx.box.findFirstOrThrow({where:{code:dto.sourceBoxCode,clientId:r.clientId,warehouseId:r.warehouseId,status:'active'}});
+                const open=await missingStockHolds(tx,r.clientId,r.warehouseId,[task.skuId]);
+                if(open.get(box.id)?.has(task.skuId))throw new ConflictException('По этому товару в коробе уже назначен пересчёт.');
+                await tx.auditLog.create({data:{userId:user.id,entity:'FboMissingStock',entityId:r.warehouseId,action:'HOLD',
+                    payload:{requestId:id,clientId:r.clientId,boxId:box.id,skuId:task.skuId,quantity}}});
+                await tx.inventorySession.create({data:{clientId:r.clientId,warehouseId:r.warehouseId,type:'BOX_CHECK',
+                    title:`Пересчёт ${box.code} · ${dto.barcode} · ${quantity} шт. · ФБО №${r.number}`,
+                    comment:missingStockComment(box.id,task.skuId,quantity),createdByUserId:user.id,createdByName:user.name}});
+            }
+            else if (unboxedFboEnabled() && r.client.storesWithoutBoxes && (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX')) {
                 requirePhase('PICKING');
                 await pickUnboxed(tx,r,lines,dto,key,user,this.move.bind(this),(db: any, code: string) => this.exactMark(db,code,r.clientId));
             }
@@ -642,18 +659,7 @@ export class FboTwoStageService {
         await tx.box.upsert({ where: { code }, create: { code, clientId: r.clientId, warehouseId: r.warehouseId }, update: {} });
         return this.box(tx, r, code);
     }
-    private async busyBoxes(tx: Prisma.TransactionClient, ids: string[], requestId: string, allowUntouchedRoutes = false) {
-        if (!ids.length) return new Set<string>();
-        const boxId = { in: ids };
-        const [counts, tasks, selections, parcels] = await Promise.all([
-            tx.inventoryAuditBox.findMany({ where: { boxId, status: { in: ['COUNTING', 'MISMATCH'] }, session: { status: { in: ['ACTIVE', 'REVIEW'] } } }, select: { boxId: true } }),
-            tx.fbsTsdAssembly.findMany({ where: { OR: [{ boxId }, { reservedBoxId: boxId }], status: { in: ['RESERVED', 'IN_PROGRESS'] } } }),
-            tx.clientRequestBoxSelection.findMany({ where: { boxId, requestItem: { request: { id: { not: requestId }, status: { in: ['APPROVED', 'IN_WORK'] } } } }, select: { boxId: true } }),
-            tx.fboAssemblyBox.findMany({ where: { activeBoxId: boxId, requestId: { not: requestId } }, select: { activeBoxId: true } }),
-        ]);
-        return new Set([...counts.map(b => b.boxId), ...selections.map(b => b.boxId), ...parcels.map(b => b.activeBoxId),
-            ...tasks.filter(t => !allowUntouchedRoutes || !untouchedFbsRoute(t)).flatMap(t => [t.boxId, t.reservedBoxId])].filter((id): id is string => !!id));
-    }
+    private readonly busyBoxes = busyBoxes;
     private async requireIdleBox(tx: Prisma.TransactionClient, boxId: string, requestId: string, allowUntouchedRoutes = false) {
         if ((await this.busyBoxes(tx, [boxId], requestId, allowUntouchedRoutes)).has(boxId))
             throw new ConflictException('Короб участвует в актуализации или другой активной сборке.');

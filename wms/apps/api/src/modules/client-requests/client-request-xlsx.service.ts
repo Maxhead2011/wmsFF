@@ -126,6 +126,7 @@ export class ClientRequestXlsxService {
       {
         clientId: preview.clientId,
         type: ClientRequestType.OUTBOUND,
+        fboExcel: true,
         priority: dto.priority ?? ClientRequestPriority.NORMAL,
         title: preview.title,
         comment: this.buildImportComment(dto.comment, normalizeUploadedFileName(file!.originalname), preview),
@@ -238,6 +239,7 @@ export class ClientRequestXlsxService {
       {
         clientId,
         type: ClientRequestType.OUTBOUND,
+        fboExcel: true,
         items: resolvedLines.map(({ line, match }) => ({
           skuId: match && match !== 'duplicate' ? match.sku.id : undefined,
           barcode: line.barcode,

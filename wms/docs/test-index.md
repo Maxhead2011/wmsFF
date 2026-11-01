@@ -1,3 +1,5 @@
+Prepared on fix/fbo-client-deficit-actions: WB FBO Excel availability and serializable creation check, explicit adjustment/exclusion, stock decision audit, LOGOFF TSD missing-unit report and BOX_CHECK holds. Own WMS flag WMS_FBO_EXCEL_PICK_CHECK_ENABLED. Tests: fbo-picking-capacity, fbo-missing-stock, DeficitActions. Not deployed.
+
 FBO Ozon import decision audit for file and link creation. The request event and audit row retain the selected action and displayed SKU shortages in the creation transaction. Existing requests keep their original history. Correction submission, failure, unknown result and successful application have separate history entries. Own-image WMS_OZON_STOCK_DECISION_AUDIT_ENABLED. API4287/web588, candidate browser10/bootstrap5, isolated PostgreSQL6/full health.
 
 Online request indicator: match the deployed online control and verify its green background, hidden activity icon, pulsing dot and reduced motion in the browser. Web tests 588 passed/2 skipped.
