@@ -1,0 +1,14 @@
+require('reflect-metadata');
+const assert=require('node:assert/strict');assert.equal(new URL(process.env.DATABASE_URL).hostname,'stock-decision-test-pg');
+const db=new(require('@prisma/client').PrismaClient)(),dir='/app/apps/api/dist/modules/client-requests/';
+const {OzonFboImportService}=require(dir+'ozon-fbo-import.service'),{recordOzonCorrectionEvent}=require(dir+'ozon-stock-decision');
+(async()=>{const client=await db.client.create({data:{code:'TEST',name:'Synthetic'}}),wh=await db.warehouse.create({data:{code:'TEST',name:'Synthetic'}}),u=await db.user.create({data:{name:'Operator',email:'audit@example.invalid',passwordHash:'unused'}}),sku=await db.sku.create({data:{clientId:client.id,internalSku:'A',name:'Dress',article:'A',size:'58'}});
+const p={warehouseId:wh.id,importKey:'audit-test',directions:[],items:[{skuId:sku.id,name:'Dress',barcode:'123',quantity:15}],totalQuantity:15},file={originalname:'test.xlsx',buffer:Buffer.from('test'),mimetype:'application/octet-stream'};
+const decision={mode:'OPEN_CORRECTION',lines:[{skuId:sku.id,requestedQuantity:15,availableQuantity:2,shortageQuantity:13}]},dto={clientId:client.id,destinationCity:'Test',stockDecision:JSON.stringify(decision)};const service=new OzonFboImportService(db,{});const create=(plan,input)=>db.$transaction(tx=>service.createPrepared(tx,plan,file,input,u,'conn'));
+const {request}=await create(p,dto);const a=await db.auditLog.findFirstOrThrow({where:{entityId:request.id,action:'OZON_IMPORT_STOCK_DECISION'}});assert.equal(a.userId,u.id);assert.equal(a.payload.mode,'OPEN_CORRECTION');assert.equal(a.payload.shortages[0].size,'58');assert.equal(a.payload.shortages[0].shortage,13);assert.equal(a.payload.connectionId,'conn');
+await create(p,dto);assert.equal(await db.auditLog.count({where:{entityId:request.id,action:'OZON_IMPORT_STOCK_DECISION'}}),1);
+await assert.rejects(()=>create({...p,importKey:'bad'},{...dto,stockDecision:'{}'}));assert.equal(await db.clientRequest.count(),1);
+const original=await create({...p,importKey:'full'},{...dto,stockDecision:JSON.stringify({...decision,mode:'AS_IS'})});assert.equal((await db.auditLog.findFirstOrThrow({where:{entityId:original.request.id}})).payload.mode,'AS_IS');
+for(const state of ['STARTED','FAILED','UNKNOWN','APPLIED'])await db.$transaction(tx=>recordOzonCorrectionEvent(tx,request.id,client.id,u.id,state,'synthetic'));assert.equal(await db.clientRequestEvent.count({where:{requestId:request.id,eventType:'COMMENT'}}),5);
+process.env.WMS_OZON_STOCK_DECISION_AUDIT_ENABLED='false';const legacy=await create({...p,importKey:'legacy'},dto);assert.equal(await db.auditLog.count({where:{entityId:legacy.request.id}}),0);console.log(JSON.stringify({passed:6}));
+})().finally(()=>db.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});

@@ -1,3 +1,5 @@
+FBO Ozon import decision audit for file and link creation. The request event and audit row retain the selected action and displayed SKU shortages in the creation transaction. Existing requests keep their original history. Correction submission, failure, unknown result and successful application have separate history entries. Own-image WMS_OZON_STOCK_DECISION_AUDIT_ENABLED. API4287/web588, candidate browser10/bootstrap5, isolated PostgreSQL6/full health.
+
 Online request indicator: match the deployed online control and verify its green background, hidden activity icon, pulsing dot and reduced motion in the browser. Web tests 588 passed/2 skipped.
 
 Request actions in a compact two-column grid with a reduced-motion-aware online indicator. Full-width open menus and wrapped status notes. Browser regression in scripts/releases/request-grid-20261101/browser.cjs.
