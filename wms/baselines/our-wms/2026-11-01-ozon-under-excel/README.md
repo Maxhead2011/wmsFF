@@ -1,0 +1,1 @@
+PR829. Both Ozon import methods are collapsed inside Excel assembly in Requests. Verified the live request panel and retained link draft across toggles. Web593/2 skipped, TypeScript and Edge passed. Exact web2 overlay on PR820. Baseline 2026-11-01-ozon-under-excel.
