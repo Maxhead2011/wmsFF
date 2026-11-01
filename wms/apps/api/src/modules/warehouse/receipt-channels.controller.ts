@@ -73,7 +73,7 @@ export class ReceiptChannelsController {
   async file(@CurrentUser() user:AuthUser,@Query('clientId') clientId:string,@Query('warehouseId') warehouseId:string,@Query('id') id:string,@Res() response:Response){
     const doc=await this.readReceipt(user,clientId,warehouseId,id);
     const boxes=new Map(doc.boxes.map(b=>[b.id,b.code]));
-    const rows=await this.prisma.stockMovement.findMany({where:{clientId,warehouseId,type:'RECEIPT',quantity:{gt:0},OR:doc.boxes.map(b=>({boxId:b.id,sourceDocument:b.receiptDocument?.startsWith('BOX:')?null:b.receiptDocument})),createdAt:{gte:new Date(doc.date.slice(0,4)+'-01-01T00:00:00Z'),lt:new Date((Number(doc.date.slice(0,4))+1)+'-01-01T00:00:00Z')}},include:{sku:{include:{barcodes:true}}},orderBy:{createdAt:'asc'}});
+    const rows=await this.prisma.stockMovement.findMany({where:{clientId,warehouseId,OR:[{type:'RECEIPT',quantity:{gt:0},OR:doc.boxes.map(b=>({boxId:b.id,sourceDocument:b.receiptDocument?.startsWith('BOX:')?null:b.receiptDocument}))},{id:{in:doc.boxes.flatMap(b=>b.recoveredMovementIds??[])}}],createdAt:{gte:new Date(doc.date.slice(0,4)+'-01-01T00:00:00Z'),lt:new Date((Number(doc.date.slice(0,4))+1)+'-01-01T00:00:00Z')}},include:{sku:{include:{barcodes:true}}},orderBy:{createdAt:'asc'}});
     // FIX: select the barcode recorded by the receipt operation, not the first catalog alias.
     const barcodes=await receiptExportBarcodes(this.prisma,rows,boxes);
     const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('Приёмка');

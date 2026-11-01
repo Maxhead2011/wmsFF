@@ -11,7 +11,7 @@ export const receiptOrderKey = (t: { marketplace?: string; connectionId: string;
 export type ReceiptRule = { id: string; clientId: string; warehouseId: string; sourceDocument: string;
   fbs: boolean; fbo: boolean; protectedOrders: string[]; changedAt: string; revision: number; stockAvailable?: boolean };
 type Receipt = { id: string; clientId: string; warehouseId: string; sourceDocument: string; date: string;
-  boxes: Array<{ id: string; code: string; status: string; receiptDocument?: string }>; received: number; current: boolean; lastActivity: string };
+  boxes: Array<{ id: string; code: string; status: string; receiptDocument?: string; recoveredMovementIds?: string[] }>; received: number; current: boolean; lastActivity: string };
 export const receiptSeries = (code:string,at:Date) => `SERIES:${at.getUTCFullYear()}:${code.replace(/_[0-9]+$/, '')}`;
 const idFor = (client: string, warehouse: string, document: string) => createHash('sha256').update(JSON.stringify([client,warehouse,document])).digest('hex').slice(0,32);
 
@@ -54,13 +54,18 @@ export async function receiptDocuments(db: Db, clientId: string, warehouseId: st
     const adjustments=await db.stockMovement.findMany({where:{clientId,warehouseId,
       boxId:{in:recoveredBoxIds},type:'INVENTORY_ADJUSTMENT',
       sourceDocument:{startsWith:'Проверка коробов '}},
-      select:{boxId:true,createdAt:true,quantity:true}});
+      select:{id:true,boxId:true,createdAt:true,quantity:true}});
     for(const boxId of recoveredBoxIds){
       const opening=latest.get(boxId)!;
       const quantity=adjustments.filter(m=>m.boxId===boxId&&m.createdAt>=opening.at)
         .reduce((sum,m)=>sum+m.quantity,0);
       const row=groups.get(idFor(clientId,warehouseId,assignments.get(boxId)!.series));
-      if(row)row.received+=Math.max(0,quantity);
+      if(row&&quantity>0){
+        row.received+=quantity;
+        // FIX: the downloadable receipt consumes exactly the same recovery evidence.
+        const box=row.boxes.find(b=>b.id===boxId)!;
+        box.recoveredMovementIds=adjustments.filter(m=>m.boxId===boxId&&m.createdAt>=opening.at).map(m=>m.id);
+      }
     }
   }
   return [...groups.values()].filter(g=>g.current||!since||new Date(g.date)>=since).sort((a,b)=>Number(b.current)-Number(a.current)||b.lastActivity.localeCompare(a.lastActivity));
