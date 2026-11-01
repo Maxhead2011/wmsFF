@@ -1,0 +1,113 @@
+/* FIX: keep the request number and its action together at every viewport size. */
+.client-requests-panel > .request-fold {
+  margin: 0 0 .5rem;
+  padding: 0;
+  border: 1px solid var(--line, #cbd6de);
+  border-radius: .75rem;
+  background: var(--surface, #fff);
+}
+.client-requests-panel > .request-fold > summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  padding: .7rem 1rem;
+  border-radius: inherit;
+  cursor: pointer;
+  font-weight: 650;
+  color: var(--text-primary, #243440);
+}
+.request-fold > summary::-webkit-details-marker { display: none; }
+.client-requests-panel > .request-fold > summary::after {
+  content: '';
+  flex: none;
+  width: .45rem;
+  height: .45rem;
+  margin-inline-end: .2rem;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(-45deg);
+}
+.client-requests-panel > .request-fold[open] > summary::after { transform: rotate(45deg); }
+.client-requests-panel > .request-fold > summary:hover {
+  background: color-mix(in srgb, var(--accent, #395f99) 6%, var(--surface, #fff));
+}
+.request-fold > summary:focus-visible { outline: 2px solid var(--accent, #395f99); outline-offset: 2px; }
+.operations-tools.request-fold > :not(summary) { margin-inline: 1rem; }
+.client-requests-panel > .request-fold[open] { padding-bottom: .75rem; }
+.request-fold > .client-request-fbs-tails { margin: 0; border: 0; }
+.operations-tools {
+  --tools-accent: var(--accent, #395f99);
+  --tools-ink: var(--text-primary, #243440);
+  --tools-line: var(--border-color, #cbd6de);
+  --tools-surface: var(--surface, #fff);
+}
+.operations-tools > [role='tablist'] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .375rem;
+  margin: .75rem 0 1rem;
+}
+.operations-tools button {
+  box-sizing: border-box;
+  width: auto;
+  min-height: 2.25rem;
+  padding: .4rem .85rem;
+  border: 1px solid var(--tools-line);
+  border-radius: .6rem;
+  background: var(--tools-surface);
+  color: var(--tools-ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.operations-tools button:hover:enabled,
+.operations-tools [role='tab'][aria-selected='true'] {
+  border-color: color-mix(in srgb, var(--tools-accent) 60%, var(--tools-line));
+  background: color-mix(in srgb, var(--tools-accent) 12%, var(--tools-surface));
+}
+.operations-tools [role='tab'][aria-selected='true'] {
+  box-shadow: inset 0 -2px var(--tools-accent);
+}
+.operations-tools > form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: .5rem;
+}
+.operations-tools > form > label {
+  display: grid;
+  flex: 0 1 12rem;
+  gap: .3rem;
+  max-width: 100%;
+  min-width: 0;
+}
+.operations-tools:has([role='tab']:nth-child(2)[aria-selected='true']) > form > label {
+  flex-basis: 25rem;
+}
+.operations-tools > form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 2.375rem;
+  padding: .35rem .65rem;
+  border: 1px solid var(--tools-line);
+  border-radius: .5rem;
+  background: var(--tools-surface);
+  color: var(--tools-ink);
+  font: inherit;
+}
+.operations-tools > form > button:enabled {
+  background: var(--tools-ink);
+  color: var(--tools-surface);
+  border-color: var(--tools-ink);
+}
+.operations-tools button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+.operations-tools :is(button,input):focus-visible {
+  outline: 2px solid var(--tools-accent);
+  outline-offset: 2px;
+}
