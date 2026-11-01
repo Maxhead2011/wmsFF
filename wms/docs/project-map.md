@@ -1,3 +1,5 @@
+PR844. Warehouse problem menu groups archive and bulk acknowledgement with accessible active, focus and disabled styles. Web 591 passed/2 skipped, TypeScript, mobile Edge and public browser checks passed. Baseline 2026-11-01-problem-buttons.
+
 PR842. Scoped FBO picking plan reads and a single pass over mark states. Snapshot 2567: original 1954/1796 ms, candidate 1369/1286 ms; selected source 1659 vs 1218 ms with identical full plan. Post-release control plan 1473 ms. Two API modules, existing picking validations retained.
 
 Published PR839 on 2026-11-01: WB FBO binding uses equal nonzero picked/packed quantity after picking closes. Own WMS flag enabled. API 4299 and web 591 tests passed. Public browser initial/reload/FBS/FBO/requests verified single React bootstrap. Exact API1/web2 overlay based on running images. WB 429 still requires retry; supply 41852721 not automatically bound.

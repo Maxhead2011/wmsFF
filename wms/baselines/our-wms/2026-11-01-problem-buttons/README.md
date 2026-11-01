@@ -1,0 +1,1 @@
+PR844. Warehouse problem menu groups archive and bulk acknowledgement with accessible active, focus and disabled styles. Web 591 passed/2 skipped, TypeScript, mobile Edge and public browser checks passed. Baseline 2026-11-01-problem-buttons.
