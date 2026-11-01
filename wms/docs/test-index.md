@@ -1,3 +1,5 @@
+PR847. Box overlap records and counters respect the selected administrator warehouse. The global cache is used only in the all-warehouse view. Verified delayed branch switches in Edge and live Moscow report (9 checked, 2 shared boxes, 0 errors). Baseline 2026-11-01-overlap-scope.
+
 PR844. Warehouse problem menu groups archive and bulk acknowledgement with accessible active, focus and disabled styles. Web 591 passed/2 skipped, TypeScript, mobile Edge and public browser checks passed. Baseline 2026-11-01-problem-buttons.
 
 PR842. Scoped FBO picking plan reads and a single pass over mark states. Snapshot 2567: original 1954/1796 ms, candidate 1369/1286 ms; selected source 1659 vs 1218 ms with identical full plan. Post-release control plan 1473 ms. Two API modules, existing picking validations retained.

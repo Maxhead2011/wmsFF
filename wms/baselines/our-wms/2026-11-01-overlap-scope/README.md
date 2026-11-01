@@ -1,0 +1,1 @@
+PR847. Box overlap records and counters respect the selected administrator warehouse. The global cache is used only in the all-warehouse view. Verified delayed branch switches in Edge and live Moscow report (9 checked, 2 shared boxes, 0 errors). Baseline 2026-11-01-overlap-scope.
