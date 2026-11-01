@@ -113,3 +113,16 @@ it('includes confirmed shipment date and previous order in the refusal',async()=
  const f=fixture();f.db.shippedKizHistory.findMany.mockResolvedValue([{id:'old',kiz,orderId:'123456',requestNumber:99,shippedAt:new Date('2026-10-01T10:00:00Z')}]);
  await expect(assertClientKizUse(f.db,input,user)).rejects.toThrow(/01\.10\.2026.*123456/);
 });
+
+it('closes a receipt scan mistake once and never grants reuse',async()=>{
+ const f=fixture();
+ const row={id:'receipt-review',clientId:'client',warehouseId:'wh',kizIdentity:kiz,taskId:'GUARD:RECEIPT:operation-1',context:'receipt',status:'OPEN',snapshot:{scope:'RECEIPT'}};
+ f.setRow(row);
+ const close=()=>decideClientKizReview(f.db,{requireClientAccess:vi.fn()},row,'CLOSE','Ошибка сканирования',true,user);
+ // TEST: a replay preserves the original closure and creates no second decision.
+ await close();await close();
+ expect(f.getRow()).toMatchObject({resolution:'CLOSE',status:'CLOSED',taskId:row.taskId,decidedById:user.id});
+ expect(f.db.kizReviewCase.update).toHaveBeenCalledTimes(1);
+ expect(f.db.auditLog.create).toHaveBeenCalledTimes(1);
+ expect(f.db.productMark.findMany).not.toHaveBeenCalled();
+});

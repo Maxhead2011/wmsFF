@@ -142,7 +142,7 @@ export async function assertClientKizUse(tx:any,i:ClientKizUse,user:any,read?:Sh
  await assertNoActiveBinding(tx,i,key,read);
  if(e.decision==='ALLOW'){
   if(row?.status==='CLAIMED'&&row.resolution==='FIRST_USE'&&row.context===clientUseContext(i)&&await ownExpectedMovement(tx,i,mark,proof,read))return 'ALLOW';
-  if(['OPEN','CLAIMED','USED','REJECTED'].includes(row?.status))throw new ClientKizReviewRequired(i,row?.evidence??e);
+  if(['OPEN','CLAIMED','USED','REJECTED','CLOSED'].includes(row?.status))throw new ClientKizReviewRequired(i,row?.evidence??e);
   // FIX: receipt and picking serialize on the same identity, including an as-yet unregistered physical mark.
   // Unknown origin stays unknown; an existing genuine receipt is immutable and is never overwritten.
   await tx.$executeRaw(Prisma.sql`INSERT INTO "KizClientRegistry"
@@ -178,6 +178,7 @@ export async function queueClientKizReview(db:any,i:ClientKizUse,user:any){
   let mark:any=null;try{mark=await clientPhysicalMark(tx,i.clientId,i.kiz);}catch(error){if(!(error instanceof ConflictException))throw error;}
   const old=await tx.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:clientUseTaskKey(i),kizIdentity:key}}});
   // FIX: a retry cannot erase already recorded shipment evidence from an open review.
+  if(old?.status==='CLOSED' && i.operationKey)return {id:old.id,status:'CLOSED',message:'Это обращение уже закрыто.'};
   if(old?.status==='OPEN'&&e.history.length===0&&old.evidence?.history?.length){
    e.history=old.evidence.history;e.decision='REVIEW';e.fingerprint=old.evidence.fingerprint;
   }
@@ -222,6 +223,14 @@ export async function queueReceiptKizReview(db:any,clients:any,body:any,user:any
   duplicate={identity:clientKizIdentity(body.kiz),localDuplicate:true,serverConfirmed:false,currentBoxCode:box.code??body.boxCode,
    productName:'Повторный скан КИЗ на ТСД',currentStatus:'PENDING_RECEIPT'};
  }
+ const scanTime=(value:unknown)=>{
+  if(typeof value!=='string'||!/^\d{13}$/.test(value)) return null;
+  return new Date(Number(value)).toISOString();
+ };
+ duplicate={...duplicate,firstScanAt:scanTime(body.firstScanAt),repeatScanAt:scanTime(body.repeatScanAt),
+  firstScanBox:typeof body.firstScanBox==='string'?body.firstScanBox.slice(0,200):null,
+  repeatScanWorker:typeof body.repeatScanWorker==='string'?body.repeatScanWorker.slice(0,200):null,
+  firstScanWorker:typeof body.firstScanWorker==='string'?body.firstScanWorker.slice(0,200):null,repeatScanBox:box?.code??null};
  return queueClientKizReview(db,{scope:'RECEIPT',clientId:body.clientId,warehouseId:user.activeWarehouseId,requestId:'',kiz:body.kiz,
   boxId:box?.id??null,operationKey:body.operationKey,sourceDocument:body.sourceDocument,receiptInfo:duplicate},user);
 }
@@ -237,8 +246,21 @@ export async function decideClientKizReview(db:any,clients:any,row:any,resolutio
  if(!user.activeWarehouseId||row.warehouseId!==user.activeWarehouseId||(!user.permissionCodes?.includes('system:admin')&&user.writableWarehouseIds&&!user.writableWarehouseIds.includes(row.warehouseId)))
   throw new ForbiddenException('Нет права изменять данные филиала.');
  clients.requireClientAccess(user,row.clientId,'write');
- if(!confirmed||!['REUSE','RELABEL','REJECT'].includes(resolution)||typeof reason!=='string'||reason.trim().length<5||reason.length>1000)
+ if(!confirmed||!['REUSE','RELABEL','REJECT','CLOSE'].includes(resolution)||typeof reason!=='string'||reason.trim().length<5||reason.length>1000)
   throw new BadRequestException('Подтвердите физическую проверку и укажите основание решения.');
+ if(resolution==='CLOSE'){
+  if(row.snapshot?.scope!=='RECEIPT')throw new BadRequestException('Закрытие ошибки скана доступно для приёмки.');
+  return db.$transaction(async(tx:any)=>{
+   await identityLock(tx,row.clientId,row.kizIdentity);
+   const current=await tx.kizReviewCase.findUnique({where:{id:row.id}});
+   if(current?.status==='CLOSED'&&current.resolution==='CLOSE')return {id:row.id,status:'CLOSED',resolution};
+   if(current?.status!=='OPEN'||current.context!==row.context)throw new ConflictException('Обращение изменилось.');
+   // FIX: keep the operation key to distinguish an offline retry from a genuinely new scan.
+   await tx.kizReviewCase.update({where:{id:row.id},data:{status:'CLOSED',resolution,reason:reason.trim(),decidedById:user.id,decidedByName:user.name,decidedAt:new Date()}});
+   await tx.auditLog.create({data:{userId:user.id,entity:'KizReviewCase',entityId:row.id,action:'KIZ_RECEIPT_SCAN_ERROR_CLOSED',payload:{reason:reason.trim(),taskId:current.taskId}}});
+   return {id:row.id,status:'CLOSED',resolution};
+  });
+ }
  const input=row.snapshot?.clientGuard?.input;
  // Recheck marketplace evidence when the decision depends on it; never trust a stale screen.
  const external=input?.externalEvidence&&resolution!=='REJECT'

@@ -1,3 +1,5 @@
+import {ReceiptScanTimeline} from './KizReviewCard';
+import type {KizReviewCase} from '../../lib/api';
 import { useRef, useState } from 'react';
 import { checkKizHistory, type AuthSession, type KizCheckResult } from '../../lib/api';
 import { KizReviewQueuePanel } from './KizReviewQueuePanel';
@@ -9,26 +11,11 @@ export function KizCheckPanel({ session }: { session: AuthSession }) {
   const [result, setResult] = useState<KizCheckResult | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const historyDialog=useRef<HTMLDialogElement>(null);
+  const [review,setReview]=useState<KizReviewCase|null>(null);
+  const [fromQueue,setFromQueue]=useState(false);
   const lock = useRef(false);
-  return <section className="kiz-panel">
-    <h2>Проверка КИЗов</h2>
-    {import.meta.env.VITE_KIZ_REVIEW_QUEUE_ENABLED==='true'&&<KizReviewQueuePanel session={session} onInspect={async kiz=>{
-      if(lock.current)return;lock.current=true;setScan(kiz);setBusy(true);setError('');setResult(null);
-      try{setResult(await checkKizHistory(session.accessToken,kiz));}catch(e){setError(e instanceof Error?e.message:'Не удалось проверить КИЗ.');}
-      finally{lock.current=false;setBusy(false);}
-    }}/>}
-    <p>Отсканируйте или вставьте КИЗ. Проверка не изменяет остатки и привязки.</p>
-    <form className="kiz-search" onSubmit={async event => {
-      event.preventDefault(); if (lock.current || !scan.trim()) return;
-      lock.current = true; setBusy(true); setError(''); setResult(null);
-      try { setResult(await checkKizHistory(session.accessToken, scan.trim())); }
-      catch (e) { setError(e instanceof Error ? e.message : 'Не удалось проверить КИЗ.'); }
-      finally { lock.current = false; setBusy(false); }
-    }}>
-      <label htmlFor="kiz-history-scan">КИЗ</label>
-      <input id="kiz-history-scan" autoFocus value={scan} onChange={e => setScan(e.target.value)} disabled={busy} autoComplete="off" />
-      <button className="primary-button" type="submit" disabled={busy || !scan.trim()}>{busy ? 'Проверяю…' : 'Проверить'}</button>
-    </form>
+  const historyContent=<>
     {error && <p role="alert">{error}</p>}
     {result && !result.found && <p>КИЗ не найден в выбранном филиале.</p>}
     {result?.ambiguous && <p role="alert">Найдено несколько записей. Нужна проверка привязок.</p>}
@@ -51,6 +38,34 @@ export function KizCheckPanel({ session }: { session: AuthSession }) {
         </table></div>
       </>}
     </article>)}
+  </>;
+  return <section className="kiz-panel">
+    <h2>Проверка КИЗов</h2>
+    {import.meta.env.VITE_KIZ_REVIEW_QUEUE_ENABLED==='true'&&<KizReviewQueuePanel session={session} lookupRows={result?.reviews} onUnitDecision={identity=>{
+      setResult(current=>current?.identity===identity?{...current,reviews:undefined}:current);
+    }} onInspect={async (kiz,row)=>{
+      if(lock.current)return;lock.current=true;setReview(row);setFromQueue(true);historyDialog.current?.showModal();setScan(kiz);setBusy(true);setError('');setResult(null);
+      try{setResult(await checkKizHistory(session.accessToken,kiz));}catch(e){setError(e instanceof Error?e.message:'Не удалось проверить КИЗ.');}
+      finally{lock.current=false;setBusy(false);}
+    }}/>}
+    <p>Отсканируйте или вставьте КИЗ. Проверка не изменяет остатки и привязки.</p>
+    <form className="kiz-search" onSubmit={async event => {
+      event.preventDefault(); if (lock.current || !scan.trim()) return;
+      lock.current = true; setFromQueue(false); setBusy(true); setError(''); setResult(null);
+      try { setResult(await checkKizHistory(session.accessToken, scan.trim())); }
+      catch (e) { setError(e instanceof Error ? e.message : 'Не удалось проверить КИЗ.'); }
+      finally { lock.current = false; setBusy(false); }
+    }}>
+      <label htmlFor="kiz-history-scan">КИЗ</label>
+      <input id="kiz-history-scan" autoFocus value={scan} onChange={e => setScan(e.target.value)} disabled={busy} autoComplete="off" />
+      <button className="primary-button" type="submit" disabled={busy || !scan.trim()}>{busy ? 'Проверяю…' : 'Проверить'}</button>
+    </form>
+    {!fromQueue && historyContent}
+    <dialog ref={historyDialog} className="kiz-history-dialog" aria-label="История КИЗа">
+      <header><h3>История КИЗа</h3><button type="button" onClick={()=>historyDialog.current?.close()}>Закрыть</button></header>
+      <p>{scan}</p>{review?.snapshot.scope==='RECEIPT'&&<ReceiptScanTimeline row={review}/>}
+      {fromQueue && (busy?<p role="status">Загружаю историю…</p>:historyContent)}
+    </dialog>
   </section>;
 }
 function date(value: string | null) {

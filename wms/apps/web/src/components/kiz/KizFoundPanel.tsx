@@ -8,9 +8,9 @@ export function KizFoundPanel({session,candidate}:{session:AuthSession;candidate
  useEffect(()=>{let live=true;fetchFoundKiz(session.accessToken).then(rows=>{if(live)setItems(rows);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[session.accessToken,candidate?.markId]);
  function choose(action:string,row?:any){setSelected({action,row});setReason('');setBox('');setConfirmed(false);setRelease(false);setError('');}
  const rows=candidate?items.filter(r=>r.snapshot.markId===candidate.markId):items;
- return <section className="kiz-queue"><h3>КИЗы, найденные после отгрузки</h3><p>Обращение и разрешение использования не увеличивают остаток. Короб нужен при возврате на склад.</p>
+ return <section className="kiz-queue">{!candidate&&<h3>КИЗы, найденные после отгрузки</h3>}<p>Обращение и разрешение использования не увеличивают остаток. Короб нужен при возврате на склад.</p>
  {candidate&&!rows.length&&<button disabled={busy} onClick={()=>choose('OPEN')}>{foundCaptions.OPEN}</button>}
- <button disabled={busy} onClick={()=>void load()}>Обновить найденные КИЗы</button>{error&&<p role="alert">{error}</p>}
+ {!candidate&&<button className="secondary-button" disabled={busy} onClick={()=>void load()}>Обновить найденные КИЗы</button>}{error&&<p role="alert">{error}</p>}
  {rows.map(row=><details key={row.id}><summary>{row.snapshot.productName} · {row.snapshot.boxCode??'Без короба'} · {row.resolution?foundCaptions[row.resolution]:'Требует решения'}</summary>
  <p>КИЗ: {row.kizIdentity}</p><p>Нашёл: {row.snapshot.workerName} · {new Date(row.createdAt).toLocaleString('ru-RU')}</p>
  <p>{row.snapshot.returned?'Возврат учтён':'Возврат ещё не учтён'}{row.resolution?' · разрешение сохранено для одного следующего отбора':''}</p>

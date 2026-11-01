@@ -7,10 +7,37 @@ import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service
 @Injectable()
 export class KizLocationService {
   constructor(private readonly prisma: PrismaService, private readonly clients: ClientScopeService) {}
+  private historyProvider() { return require('../../common/kiz-wb-reuse'); }
+  private reviewQueue() {
+    return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients);
+  }
   // FIX: delegate to the existing published queue; retain its authorization and audit.
-  reviews(user: AuthUser, cursor?: string) { return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).list(user, cursor); }
-  decideReview(id: string, resolution: string, reason: string, confirmed: boolean, user: AuthUser) {
-    return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).decide(id, resolution, reason, confirmed, user);
+  async reviews(user: AuthUser, cursor?: string, status?:string) {
+    if (status === 'CLOSED') {
+      if (!require('../../common/kiz-review-queue').kizReviewEnabled() || user.isDemo ||
+          !user.roleCodes.some(role=>['ADMIN','OWNER','SUPER_ADMIN'].includes(role)) ||
+          !user.activeWarehouseId || (!user.permissionCodes.includes('system:admin') && !user.warehouseIds?.includes(user.activeWarehouseId))) {
+        throw new ForbiddenException('Нет доступа к истории обращений филиала.');
+      }
+      const rows=await (this.prisma as any).kizReviewCase.findMany({where:{warehouseId:user.activeWarehouseId,
+        clientId:this.clients.resolveClientFilter(user),status:'CLOSED',resolution:'CLOSE'},
+        orderBy:[{decidedAt:'desc'},{id:'desc'}],take:51,...(cursor?{cursor:{id:cursor},skip:1}:{})});
+      const items=rows.slice(0,50).map((row:any)=>({id:row.id,taskId:row.taskId,kizIdentity:row.kizIdentity,
+        status:row.status,resolution:row.resolution,reason:row.reason,attempts:row.attempts,createdAt:row.createdAt,
+        updatedAt:row.updatedAt,decidedAt:row.decidedAt,decidedByName:row.decidedByName,
+        ...require('../../common/kiz-client-review').clientReviewPresentation(row,user.activeWarehouseId)}));
+      return {items,nextCursor:rows.length>50?items[49].id:null};
+    }
+    return this.reviewQueue().list(user, cursor); }
+  async decideReview(id: string, resolution: string, reason: string, confirmed: boolean, user: AuthUser) {
+    if (resolution === 'CLOSE') {
+      if (!require('../../common/kiz-review-queue').kizReviewEnabled() || user.isDemo || !user.roleCodes.some(role=>['ADMIN','OWNER','SUPER_ADMIN'].includes(role))) throw new ForbiddenException('Закрытие обращения доступно администратору.');
+
+      const row = await (this.prisma as any).kizReviewCase.findUnique({where:{id}});
+      if (!row || row.snapshot?.scope !== 'RECEIPT') throw new BadRequestException('Не найдено обращение приёмки.');
+      return require('../../common/kiz-client-review').decideClientKizReview(this.prisma,this.clients,row,resolution,reason,confirmed,user);
+    }
+    return this.reviewQueue().decide(id, resolution, reason, confirmed, user);
   }
   async lookup(kiz: string, user: AuthUser) {
     // FIX: read-only administrator feature, isolated from sold installations and scoped before lookup.
@@ -59,25 +86,35 @@ export class KizLocationService {
       select: { boxId: true, boxCode: true, pallet: { select: { code: true, clientId: true, warehouseId: true,
         zone: { select: { name: true, warehouseId: true } } } } },
     }) : [];
-    const matches = marks.map(mark => {
+    const historyEnabled = process.env.WMS_KIZ_REUSE_EVIDENCE_ENABLED === 'true';
+    const matches = await Promise.all(marks.map(async mark => {
       const box = mark.box;
       const placement = box ? placements.find(p => p.pallet.clientId === mark.clientId && p.pallet.warehouseId === warehouseId &&
         (p.boxId === box.id || (!p.boxId && p.boxCode === box.code))) : null;
       const boxIsConsistent = box?.clientId === mark.clientId && box.warehouseId === warehouseId;
       const legacy = boxIsConsistent && !placement && box?.pallet?.clientId === mark.clientId ? box.pallet : null;
       const room = placement?.pallet.zone ?? legacy?.zone ?? (boxIsConsistent ? box?.zone : null);
+      // FIX: preserve the published history and available decisions for this warehouse.
+      const provider = historyEnabled ? this.historyProvider() : undefined;
+      const evidence = await provider?.inspectKizReuse(this.prisma, mark.clientId, mark.value);
+      const history = evidence?.history.filter((h: { request?: { warehouseId: string } }) => h.request?.warehouseId === warehouseId);
+      const reuse = evidence && { ...evidence, history,
+        orders: evidence.orders.filter((o: { orderId: string }) => history.some((h: { orderId: string }) => h.orderId === o.orderId)),
+        message: evidence.history.length ? provider.kizReuseMessage(evidence.decision) : 'История использования в WB не найдена.' };
       return {
-        id: mark.id, product: mark.sku, client: mark.client.name, status: mark.status,
+        reuse, id: mark.id, product: mark.sku, client: mark.client.name, status: mark.status,
         boxCode: boxIsConsistent ? box!.code : null, boxStatus: boxIsConsistent ? box!.status : null,
         palletCode: boxIsConsistent ? placement?.pallet.code ?? legacy?.code ?? null : null,
         room: boxIsConsistent && room?.warehouseId === warehouseId ? room.name : null,
         warehouse: boxIsConsistent ? box?.warehouse?.name ?? null : !box ? mark.stockMovement?.warehouse?.name ?? null : null,
         locationWarning: box && !boxIsConsistent ? 'Принадлежность короба не совпадает с КИЗ. Нужна проверка.' : null,
       };
-    });
+    }));
+    const reviews = historyEnabled && process.env.WMS_KIZ_REVIEW_QUEUE_ENABLED === 'true'
+      ? await this.reviewQueue().unitChoices(identity, user) : undefined;
     // FIX: lookup remains read-only; explicit physical confirmation opens the case.
     const foundCandidate = process.env.WMS_KIZ_FOUND_REVIEW_ENABLED === 'true' && matches.length === 1 &&
       matches[0].status === 'SHIPPING' && !matches[0].boxCode ? {markId: matches[0].id, identity} : undefined;
-    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches, foundCandidate };
+    return { found: matches.length > 0, ambiguous: matches.length > 1, identity, matches, reviews, foundCandidate };
   }
 }

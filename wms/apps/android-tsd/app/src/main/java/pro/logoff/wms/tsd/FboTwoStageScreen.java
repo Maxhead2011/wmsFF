@@ -483,8 +483,14 @@ final class FboTwoStageScreen {
                         if(!pickingChoices()||pickingMode==FboPickingRoute.Mode.PARTIAL)button(root,"Отобрать товар по ШК + КИЗ",ready(),()->{state.barcode="";message="Сканируйте ШК нужного товара, затем КИЗ.";render();});
                         if(r.remainderQuantity>0&&moveRemainder!=null)button(root,"Переместить ненужный остаток ("+r.remainderQuantity+" ед.)",ready()&&state.barcode.isEmpty(),()->{if(!canLeave())return;close();moveRemainder.run();});
                         if(r.wholeBox&&showWholePicking(r)&&(!pickingChoices()||!r.recount))button(root,wholePickingTitle(),ready()&&state.barcode.isEmpty(),this::confirmWholeBoxDialog);
+                        if (plan.missingStockReportingSupported && "logoff".equals(BuildConfig.FLAVOR) && "PICKING".equals(screenPhase())) {
+                            button(root,"Товар в коробе не найден",ready(),this::reportMissing);
+                        }
                         button(root,"Другой исходный короб",ready(),()->{state.source="";state.barcode="";render();});
                     }else {
+                        if(plan.missingStockReportingSupported && !state.pallet.isEmpty() && "logoff".equals(BuildConfig.FLAVOR)){
+                            button(root,"Нет короба на палет-сорте",ready(),this::reportMissingBox);
+                        }
                         if(state.pallet.isEmpty()){
                             Map<String,Integer> pallets=new LinkedHashMap<>();for(TsdFboPlan.Route row:pickingRoute())if(!row.pallet.isEmpty())pallets.put(row.pallet,pallets.getOrDefault(row.pallet,0)+1);
                             for(Map.Entry<String,Integer> p:pallets.entrySet())text(root,p.getKey()+" · Нужных коробов: "+p.getValue());
@@ -658,6 +664,12 @@ final class FboTwoStageScreen {
     // FIX: the compact receipt clears the durable request before any route recalculation.
     private boolean validReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){return ack!=null&&ack.accepted&&id.equals(ack.requestId)
         &&payload.get("operationId").equals(ack.operationId)&&payload.get("action").equals(ack.action);}
+    private boolean openReportedBoxAfterConfirmation(Map<String,String> payload){
+        if("REPORT_MISSING_BOX".equals(payload.get("action")))state.source="";
+        if(!"REPORT_MISSING".equals(payload.get("action"))||!(activity instanceof MainActivity))return false;
+        ((MainActivity)activity).openReportedFboBox(id+":"+payload.get("operationId"),payload.get("sourceBoxCode"));
+        return true;
+    }
     private void acceptReceipt(TsdFboAcknowledgement ack,Map<String,String> payload){
         if(closed||!validReceipt(ack,payload))return;
         Map<String,String> position=state.confirmedPosition(payload);
@@ -666,6 +678,7 @@ final class FboTwoStageScreen {
             busy=false;message="Операция принята, но подтверждение не сохранилось на ТСД. Повторите отправку.";render();return;
         }
         state.accepted();if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;state.restoreCheckpoint(position);busy=false;routeStale=true;feedbackColor=Color.rgb(187,247,208);
+        if(openReportedBoxAfterConfirmation(payload))return;
         // FIX: compact absolute state enables the next scan without fetching the full route.
         boolean compact=FboPackingReceipt.apply(plan,ack.packing,packing,BuildConfig.FLAVOR);
         if(compact){routeStale=false;state.reconcile(plan,true);}
@@ -702,6 +715,38 @@ final class FboTwoStageScreen {
             });
         });
     }
+    // FIX: choose a product from the scanned box and explicitly confirm the missing quantity.
+    private void reportMissingBox(){
+        java.util.ArrayList<String> codes=new java.util.ArrayList<>();
+        for(TsdFboPlan.Route row:pickingRoute())if(state.pallet.equals(row.pallet))codes.add(row.boxCode);
+        new AlertDialog.Builder(activity).setTitle("Какого короба нет на "+state.pallet+"?").setItems(codes.toArray(new String[0]),(dialog,index)->{
+            String box=codes.get(index);
+            new AlertDialog.Builder(activity).setTitle("Нет короба "+box+" на "+state.pallet+"?")
+                .setNegativeButton("Отмена",null).setPositiveButton("Сообщить администраторам",(d,w)->{
+                    state.source=box;send("REPORT_MISSING_BOX",null);
+                }).show();
+        }).show();
+    }
+
+    private void reportMissing(){
+        for(TsdFboPlan.Route box:plan.route){
+            if(!state.source.equals(box.boxCode)||box.tasks==null)continue;
+            String[] labels=new String[box.tasks.size()];
+            for(int i=0;i<labels.length;i++)labels[i]=box.tasks.get(i).name+" · "+box.tasks.get(i).barcode;
+            new AlertDialog.Builder(activity).setTitle("Какой товар не найден?").setItems(labels,(dialog,index)->{
+                TsdFboPlan.Task task=box.tasks.get(index);
+                android.widget.EditText count=new android.widget.EditText(activity);
+                count.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);count.setText("1");count.selectAll();
+                new AlertDialog.Builder(activity).setTitle("Не найдено в "+box.boxCode+" (до "+task.quantity+")").setView(count)
+                    .setNegativeButton("Отмена",null).setPositiveButton("Отправить на пересчёт",(d,w)->{
+                        int n;try{n=Integer.parseInt(count.getText().toString());}catch(NumberFormatException e){n=0;}
+                        if(n<1||n>task.quantity){message="Проверьте количество";render();return;}
+                        state.barcode=task.barcode;send("REPORT_MISSING",null,n);
+                    }).show();
+            }).show();return;
+        }
+    }
+
     private void send(String action,String kiz){send(action,kiz,null);}
     private String relabelUnitId="";
     // FIX: only LOGOFF and an explicit server capability expose the replacement-label step.
@@ -770,6 +815,7 @@ final class FboTwoStageScreen {
         });});dialog.show();
     }
     private void send(String action,String kiz,Integer quantity){if(busy||closed)return;retrySending=state.pending()!=null;feedbackColor=Color.TRANSPARENT;Map<String,String> payload=state.prepare(action,kiz,quantity);
+        if("REPORT_MISSING".equals(action)&&!retrySending){payload.put("missingQuantity",String.valueOf(quantity));payload.remove("confirmedQuantity");state.restore(payload);}
         if("RELABEL_UNIT".equals(payload.get("action"))&&!retrySending){payload.put("relabelUnitId",relabelUnitId);state.restore(payload);}
         // FIX: persist before sending, so a restart can retry the identical operation.
         boolean fast=!"RELABEL_UNIT".equals(payload.get("action"))&&!"PACK_PRODUCT".equals(payload.get("action"))&&!"UNDO_PACK_UNIT".equals(payload.get("action"))&&fastConfirmation();
@@ -786,7 +832,9 @@ final class FboTwoStageScreen {
                 Map<String,String> position=state.confirmedPosition(payload);
                 confirmation.putString(pendingKey+":position",new JSONObject(position).toString());
                 if(!confirmation.commit()){message="Сервер принял операцию, но ТСД не сохранил подтверждение. Повторите отправку.";render();return;}
-                state.accepted();state.restoreCheckpoint(position);if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message="UNDO_PACK_UNIT".equals(payload.get("action"))?"Последняя единица отменена. Возвращена в отобранные.":FboFeedback.accepted(payload,plan);
+                state.accepted();state.restoreCheckpoint(position);
+                if(openReportedBoxAfterConfirmation(payload))return;
+                if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message="UNDO_PACK_UNIT".equals(payload.get("action"))?"Последняя единица отменена. Возвращена в отобранные.":FboFeedback.accepted(payload,plan);
                 if("PACK_PRODUCT".equals(payload.get("action")))message="Упаковано: 1 шт. · "+payload.get("direction")+" · "+payload.get("targetBoxCode");
                 if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);reconcilePickingMode();packingAccepted(payload);
                 // FIX: preserve confirmed state persistence before announcing closure.

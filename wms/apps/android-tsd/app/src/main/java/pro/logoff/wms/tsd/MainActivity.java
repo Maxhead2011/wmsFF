@@ -2843,6 +2843,20 @@ public class MainActivity extends Activity {
         });
     }
 
+    void openReportedFboBox(String sessionId,String boxCode){
+        final TsdSession session=safeSession();
+        if(session==null)return;
+        if(fboTwoStageScreen!=null){fboTwoStageScreen.close();fboTwoStageScreen=null;}
+        activeInventory=null;activeInventoryBox=null;statusMessage="Открываю актуализацию "+boxCode;renderInventoryCountScreen();
+        runBackground(()->{
+            MandatoryFbsAuditLoader.Result opened=MandatoryFbsAuditLoader.load(WmsApiFactory.create(DEFAULT_BASE_URL),session.authorizationHeader(),
+                sessionId,boxCode,java.util.Collections.emptyMap(),ignored->{},this::inventoryHttpError);
+            mainHandler.post(()->{if(!fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
+                activeInventory=opened.session;activeInventoryBox=opened.box;inventoryKizScan.clear();
+                statusMessage="Пересчитайте содержимое короба "+boxCode;renderInventoryCountScreen();});
+        });
+    }
+
     private void renderInventoryCountScreen() {
         screen = Screen.INVENTORY_COUNT;
         inventoryKizScan.syncBox(activeInventoryBox == null ? null : activeInventoryBox.id);
@@ -3820,6 +3834,7 @@ public class MainActivity extends Activity {
             if (!statusMessage.isEmpty()) root.addView(messageView(statusMessage));
             Button next = primaryMenuButton("Сканировать другой товар", view -> {
                 receiptKizConflicts.remove(0);
+                saveScanConflicts();
                 clearPendingReceiptProductFields(); receiptFeedbackColor = receiptKizConflicts.isEmpty() ? 0 : BOX_NOT_NEEDED_RED;
                 statusMessage = "Товар отложен. Сканируйте другой товар."; renderReceiptScreen();
             });
@@ -6299,7 +6314,7 @@ public class MainActivity extends Activity {
 
         fbsBusy = true;
         fbsFeedbackColor = Color.rgb(254, 240, 138);
-        statusMessage = tr("Отправляю сигнал менеджеру…", "Menejerga xabar yuborilmoqda…");
+        statusMessage = tr("Отправляю сигнал администраторам…", "Menejerga xabar yuborilmoqda…");
         renderFbsAssemblyScreen();
         runBackground(() -> {
             Map<String, Object> request = new LinkedHashMap<>();
@@ -8530,6 +8545,7 @@ public class MainActivity extends Activity {
         receiptSessionBoxes.clear();
         receiptKizValues.clear();
         receiptKizBoxes.clear();
+        restoreScanEvidence();
         receiptFeedbackColor = 0;
         statusMessage = !receiptUsesBoxes()
             ? "Клиент выбран. Сканируйте ШК товара."
@@ -8826,6 +8842,7 @@ public class MainActivity extends Activity {
             renderReceiptScreen();
             return;
         }
+        receiptScanAt = System.currentTimeMillis();
         String normalizedKiz = receiptKizKey(kiz);
         if (receiptKizValues.contains(normalizedKiz)) {
             String duplicateBox = receiptKizBoxes.get(normalizedKiz);
@@ -8915,6 +8932,7 @@ public class MainActivity extends Activity {
             String normalizedKiz = receiptKizKey(kiz);
             receiptKizValues.add(normalizedKiz);
             receiptKizBoxes.put(normalizedKiz, receiptBoxCode);
+            rememberFirstReceiptScan(normalizedKiz, receiptBoxCode);
         }
         clearPendingReceiptProductFields();
         receiptFeedbackColor = 0;
@@ -8935,6 +8953,7 @@ public class MainActivity extends Activity {
             String normalizedKiz = receiptKizKey(kiz);
             receiptKizValues.add(normalizedKiz);
             receiptKizBoxes.put(normalizedKiz, "Без короба");
+            rememberFirstReceiptScan(normalizedKiz, "Без короба");
         }
         String secondBarcodeScan = receiptBarcodeRescan.evidence();
         clearPendingReceiptProductFields();
@@ -9169,6 +9188,7 @@ public class MainActivity extends Activity {
             : !receiptUsesBoxes()
             ? "Приемка закрыта. Товаров: " + receiptAcceptedItems + "."
             : "Приемка по боксам закрыта. Боксов: " + receiptClosedBoxes + ", товаров: " + receiptAcceptedItems + ".";
+        if ("logoff".equals(BuildConfig.FLAVOR)) scanEvidence().edit().clear().apply();
         if ("logoff".equals(BuildConfig.FLAVOR) && !receiptDocumentPreferenceKey.isEmpty())
             uiStore.edit().remove(receiptDocumentPreferenceKey).apply();
         resetReceiptState();
@@ -11109,14 +11129,72 @@ public class MainActivity extends Activity {
         return ReceiptKizIdentity.key(receiptClientId, kiz, "logoff".equals(BuildConfig.FLAVOR) && receiptClientKizGuardEnabled);
     }
 
+    private long receiptScanAt;
+    private android.content.SharedPreferences scanEvidence() {
+        String scope = receiptDocumentPreferenceKey + "/" + scanEvidenceScope();
+        return getSharedPreferences("receipt-scan-evidence-" + UUID.nameUUIDFromBytes(scope.getBytes(java.nio.charset.StandardCharsets.UTF_8)), MODE_PRIVATE);
+    }
+    private String scanEvidenceScope() {
+        return receiptClientId + "/" + receiptSourceDocument;
+    }
+    private static final com.squareup.moshi.JsonAdapter<TsdOperationResponse[]> SCAN_CONFLICTS_JSON =
+        new com.squareup.moshi.Moshi.Builder().build().adapter(TsdOperationResponse[].class);
+    private void saveScanConflicts() {
+        if ("logoff".equals(BuildConfig.FLAVOR) && !receiptSourceDocument.isEmpty())
+            scanEvidence().edit().putString("pending", SCAN_CONFLICTS_JSON.toJson(receiptKizConflicts.toArray(new TsdOperationResponse[0]))).apply();
+    }
+    private void restoreScanEvidence() {
+        if (!"logoff".equals(BuildConfig.FLAVOR)) return;
+        android.content.SharedPreferences prefs = scanEvidence();
+        for (String field : prefs.getAll().keySet()) {
+            if (!field.startsWith("box:")) continue;
+            String key = field.substring(4);
+            receiptKizValues.add(key);
+            receiptKizBoxes.put(key, prefs.getString(field, ""));
+        }
+        TsdOperationResponse[] pending;
+        try { pending = SCAN_CONFLICTS_JSON.fromJson(prefs.getString("pending", "[]")); }
+        catch (IOException | RuntimeException error) {
+            android.util.Log.w("ReceiptScan", "Cannot restore pending receipt review");
+            return;
+        }
+        if (pending != null) for (TsdOperationResponse item : pending) {
+            if (!receiptClientId.equals(item.clientId) || !receiptSourceDocument.equals(item.sourceDocument)) continue;
+            boolean exists = false;
+            for (TsdOperationResponse saved : receiptKizConflicts) if (item.operationKey.equals(saved.operationKey)) exists = true;
+            if (!exists) receiptKizConflicts.add(item);
+        }
+        if (!receiptKizConflicts.isEmpty()) receiptClientKizGuardEnabled = true;
+    }
+    private void rememberFirstReceiptScan(String key, String box) {
+        if (!"logoff".equals(BuildConfig.FLAVOR) || receiptScanAt <= 0) return;
+        android.content.SharedPreferences prefs = scanEvidence();
+        android.content.SharedPreferences.Editor write = prefs.edit();
+        if (!scanEvidenceScope().equals(prefs.getString("scope", ""))) write.clear();
+        TsdSession actor = safeSession();
+        write.putString("scope", scanEvidenceScope()).putLong("at:" + key, receiptScanAt)
+            .putString("box:" + key, box).putString("worker:" + key, actor == null ? "" : actor.userName).apply();
+    }
+
     private void showReceiptKizConflict(String kiz, TsdKizDuplicateInfo info, String message, String operationKey, boolean localDuplicate) {
         TsdOperationResponse conflict = new TsdOperationResponse();
         conflict.code = "KIZ_DUPLICATE"; conflict.status = "NEEDS_REVIEW"; conflict.duplicate = true;
         conflict.kiz = kiz; conflict.clientId = receiptClientId; conflict.boxCode = receiptBoxCode;
         conflict.sourceDocument = receiptSourceDocument; conflict.duplicateInfo = info; conflict.message = message;
         conflict.localDuplicate = localDuplicate;
+        TsdSession scanActor = safeSession();
+        conflict.repeatScanWorker = scanActor == null ? null : scanActor.userName;
+        if (receiptScanAt > 0) conflict.repeatScanAt = Long.toString(receiptScanAt);
+        String scanKey = receiptKizKey(kiz);
+        android.content.SharedPreferences prefs = scanEvidence();
+        if (scanEvidenceScope().equals(prefs.getString("scope", "")) && prefs.contains("at:" + scanKey)) {
+            conflict.firstScanAt = Long.toString(prefs.getLong("at:" + scanKey, 0));
+            conflict.firstScanBox = prefs.getString("box:" + scanKey, null);
+            conflict.firstScanWorker = prefs.getString("worker:" + scanKey, null);
+        }
+        if (localDuplicate && conflict.firstScanBox == null && info != null) conflict.firstScanBox = info.currentBoxCode;
         conflict.operationKey = operationKey == null ? UUID.randomUUID().toString() : operationKey;
-        receiptKizConflicts.add(conflict); receiptFeedbackColor = BOX_NOT_NEEDED_RED; statusMessage = "";
+        receiptKizConflicts.add(conflict); saveScanConflicts(); receiptFeedbackColor = BOX_NOT_NEEDED_RED; statusMessage = "";
     }
 
     private void captureReceiptKizConflicts(TsdSyncSummary summary) {
@@ -11125,7 +11203,7 @@ public class MainActivity extends Activity {
             if (!receiptClientId.equals(conflict.clientId)) continue;
             boolean exists = false;
             for (TsdOperationResponse previous : receiptKizConflicts) if (conflict.operationKey.equals(previous.operationKey)) exists = true;
-            if (!exists) receiptKizConflicts.add(conflict);
+            if (!exists) { receiptKizConflicts.add(conflict); saveScanConflicts(); }
             receiptClientKizGuardEnabled = true; receiptFeedbackColor = BOX_NOT_NEEDED_RED;
         }
     }
@@ -11135,6 +11213,11 @@ public class MainActivity extends Activity {
         TsdSession session = safeSession(); if (session == null) return;
         Map<String, String> body = new LinkedHashMap<>();
         body.put("clientId", conflict.clientId); body.put("kiz", conflict.kiz); body.put("operationKey", conflict.operationKey);
+        if (conflict.firstScanAt != null) body.put("firstScanAt", conflict.firstScanAt);
+        if (conflict.firstScanBox != null) body.put("firstScanBox", conflict.firstScanBox);
+        if (conflict.firstScanWorker != null) body.put("firstScanWorker", conflict.firstScanWorker);
+        if (conflict.repeatScanWorker != null) body.put("repeatScanWorker", conflict.repeatScanWorker);
+        if (conflict.repeatScanAt != null) body.put("repeatScanAt", conflict.repeatScanAt);
         if (conflict.localDuplicate) body.put("localDuplicate", "true"); // FIX: allow reporting before the first scan reaches WMS.
         if (conflict.boxCode != null && !conflict.boxCode.isEmpty()) body.put("boxCode", conflict.boxCode);
         if (conflict.sourceDocument != null) body.put("sourceDocument", conflict.sourceDocument);
@@ -11149,6 +11232,7 @@ public class MainActivity extends Activity {
                     receiptKizReviewBusy = false;
                     if (conflict.duplicateInfo == null) conflict.duplicateInfo = new TsdKizDuplicateInfo();
                     conflict.duplicateInfo.reviewId = result.id;
+                    saveScanConflicts();
                     statusMessage = result.message == null ? "Передано в «КИЗ → Проверки КИЗ»." : result.message;
                     renderReceiptScreen();
                 });
