@@ -330,6 +330,7 @@ export function StorageZonesPanel({ session }: { session: AuthSession }) {
 
       {data ? (
         <ReceiptPlacementPanel
+          canManage={session.user.permissionCodes.includes('warehouse:write')||session.user.permissionCodes.includes('system:admin')}
           token={session.accessToken}
           warehouseId={session.user.activeWarehouseId}
           revision={state.data}

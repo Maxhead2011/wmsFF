@@ -3,6 +3,7 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdStoragePalletResponse {
+    public boolean receiptPlacementEnabled;
     public String state;
     public String message;
     public boolean duplicate;

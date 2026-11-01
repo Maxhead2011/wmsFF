@@ -164,6 +164,13 @@ public interface WmsApi {
     @POST("api/v1/tsd/transfers/kiz-recount/confirm")
     Call<TsdTransferResponse> confirmKizRecount(@Header("Authorization") String authorization, @Body Map<String, Object> request);
 
+    @GET("api/v1/tsd/receipt-placement")
+    Call<TsdReceiptPlacementTasks> receiptPlacementTasks(@Header("Authorization") String authorization);
+    @GET("api/v1/tsd/receipt-placement")
+    Call<TsdReceiptPlacementTasks> receiptPlacementTask(@Header("Authorization") String authorization,@Query("placementClientId") String clientId,@Query("placementDocument") String document);
+    @POST("api/v1/tsd/receipt-placement/action")
+    Call<TsdReceiptPlacementTask> receiptPlacementAction(@Header("Authorization") String authorization, @Body Map<String,Object> body);
+
     @GET("api/v1/tsd/storage-pallet/current")
     Call<TsdStoragePalletResponse> currentStoragePallet(
         @Header("Authorization") String authorization,

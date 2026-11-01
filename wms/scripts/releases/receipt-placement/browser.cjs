@@ -32,7 +32,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
           contentType: "text/html",
           body: '<div id="root"></div>',
         });
-      assert(p.pathname.endsWith("/placement-report"));
+      if(p.pathname.endsWith('/receipt-placement'))return route.fulfill({json:{items:[]}});
+    assert(p.pathname.endsWith("/placement-report"));
       scope = route.request().headers().authorization.slice(7);
       return route.fulfill({
         json: {
