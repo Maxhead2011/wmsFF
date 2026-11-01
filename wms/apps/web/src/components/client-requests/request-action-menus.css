@@ -147,13 +147,13 @@
   }
   .client-request-table__warehouse-cell .request-action-menu > details:not([open]) { grid-column: auto !important; }
   .client-request-table__warehouse-cell .request-action-menu > details[open] { grid-column: 1 / -1 !important; }
-  .client-request-table__warehouse-cell .request-action-menu > button[title="Открыть сборку"] {
+  .client-request-table__warehouse-cell .request-action-menu > button:is(:has(> svg.lucide-activity), .document-open-button--online, .request-action-menu__open, [title="Онлайн-выполнение заявки"], [title="Открыть сборку"]) {
     background: #daf5e6 !important;
     border-color: #9dd6b7 !important;
     color: #115b39 !important;
   }
-  .request-action-menu > button[title="Открыть сборку"] > svg { display: none; }
-  .request-action-menu > button[title="Открыть сборку"]::before {
+  .request-action-menu > button:is(:has(> svg.lucide-activity), .document-open-button--online, .request-action-menu__open, [title="Онлайн-выполнение заявки"], [title="Открыть сборку"]) > svg { display: none !important; }
+  .request-action-menu > button:is(:has(> svg.lucide-activity), .document-open-button--online, .request-action-menu__open, [title="Онлайн-выполнение заявки"], [title="Открыть сборку"])::before {
     content: "";
     flex: 0 0 9px;
     height: 9px;
@@ -166,7 +166,7 @@
   }
 }
 @media screen and (prefers-reduced-motion: no-preference) {
-  .request-action-menu > button[title="Открыть сборку"]::before { animation: request-online-pulse 2s ease-out infinite; }
+  .request-action-menu > button:is(:has(> svg.lucide-activity), .document-open-button--online, .request-action-menu__open, [title="Онлайн-выполнение заявки"], [title="Открыть сборку"])::before { animation: request-online-pulse 2s ease-out infinite; }
 }
 @keyframes request-online-pulse {
   0% { box-shadow: 0 0 0 0 #18855255; }

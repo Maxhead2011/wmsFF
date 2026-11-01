@@ -11,13 +11,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       const el=document.createElement('div'); el.id='grid-test'; el.className='client-request-table__warehouse-cell';
       el.style.cssText='position:fixed;inset:20px auto auto 20px;background:white;width:320px;z-index:999999';
       document.body.append(el);
-      el.innerHTML='<div class="client-request-actions"><div class="request-action-menu"><button title="Открыть сборку"><span>Онлайн</span></button><button class="client-request-action-button--fbs-box-search"><span>Остатки и короба</span></button><details class="request-action-menu__group"><summary>Документы</summary><button>Файл</button></details><details class="request-action-menu__group"><summary>Ещё</summary></details></div></div>';
+      el.innerHTML='<div class="client-request-actions"><div class="request-action-menu"><button class="document-open-button document-open-button--online" title="Онлайн-выполнение заявки"><svg></svg><span>Онлайн</span></button><button class="client-request-action-button--fbs-box-search"><span>Остатки и короба</span></button><details class="request-action-menu__group"><summary>Документы</summary><button>Файл</button></details><details class="request-action-menu__group"><summary>Ещё</summary></details></div></div>';
     });
     const buttons=page.locator('#grid-test .request-action-menu > button, #grid-test summary');
     const boxes=await buttons.evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}));
     assert.equal(boxes.length,4);assert.equal(boxes[0][0],boxes[2][0]);assert.equal(boxes[1][1],boxes[0][1]);assert(boxes[1][0]>boxes[0][0]);assert(boxes[2][1]>boxes[0][1]);
     for(const b of boxes){assert.equal(b[2],124);assert.equal(b[3],53)}
-    const online=buttons.first();assert.equal(await online.evaluate(n=>getComputedStyle(n,'::before').animationName),'request-online-pulse');
+    const online=buttons.first();assert.equal(await online.evaluate(n=>getComputedStyle(n).backgroundColor),"rgb(218, 245, 230)");assert.equal(await online.locator("svg").evaluate(n=>getComputedStyle(n).display),"none");assert.equal(await online.evaluate(n=>getComputedStyle(n,'::before').animationName),'request-online-pulse');
     await page.emulateMedia({reducedMotion:'reduce'});assert.equal(await online.evaluate(n=>getComputedStyle(n,'::before').animationName),'none');
     await buttons.nth(2).click();assert.equal(Math.round((await buttons.nth(2).boundingBox()).width),257);
     const note = await page.evaluate(() => {
