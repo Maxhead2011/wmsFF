@@ -4,6 +4,11 @@ import { requestStatusOptions } from './clientRequestMeta';
 export function compareRequestStatus(a: ClientRequestSummary, b: ClientRequestSummary) {
   return requestStatusOptions.findIndex(x => x.value === a.status) - requestStatusOptions.findIndex(x => x.value === b.status) || a.number - b.number;
 }
+const clientNames = new Intl.Collator('ru', {numeric: true, sensitivity: 'base'});
+// FIX: use the client name shown in the row and order ties by request number.
+export function compareRequestClient(a: ClientRequestSummary, b: ClientRequestSummary) {
+  return clientNames.compare(a.client.name, b.client.name) || a.number - b.number;
+}
 export function canBatchComplete(r: ClientRequestSummary) { return !['DONE', 'CANCELLED', 'REJECTED'].includes(r.status); }
 export function needsManualStockClose(r: ClientRequestSummary) {
   return ['OUTBOUND', 'DELIVERY'].includes(r.type) && r.items.length > 0 && !r.comment?.toLocaleLowerCase('ru-RU').includes('создано из excel:');

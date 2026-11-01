@@ -6,7 +6,7 @@ import { startVisiblePolling } from '../../lib/visiblePolling';
 import { onlineRequestToolbar } from './onlineRequestToolbar';
 import { isSkuCollectionRequest } from './skuCollectionRow';
 import './request-action-menus.css'; // FIX: scoped modern request disclosures.
-import {compareRequestStatus, missingSourceOnly} from './requestBatch';
+import {compareRequestClient, compareRequestStatus, missingSourceOnly} from './requestBatch';
 import {useRequestBatch} from './RequestBatchControls';
 import './request-batch.css';
 import {RequestZoneProvider} from './RequestZoneProvider';
@@ -122,7 +122,7 @@ type ClientRequestsPanelProps = {
   onFocusRequestHandled?: () => void;
 };
 
-type RequestSortField = 'number' | 'createdAt' | 'quantity' | 'status';
+type RequestSortField = 'number' | 'createdAt' | 'quantity' | 'status' | 'client';
 type RequestSortDirection = 'asc' | 'desc';
 
 type ManualCloseState = {
@@ -315,6 +315,7 @@ export function ClientRequestsPanel({
           return showArchive ? isArchived : !isArchived;
         })
         .sort((left, right) => {
+          if (requestSortField === 'client') return compareRequestClient(left, right) * (requestSortDirection === 'asc' ? 1 : -1);
           if(requestSortField === 'status') return compareRequestStatus(left,right) * (requestSortDirection === 'asc' ? 1 : -1);
           const leftValue = requestSortField === 'number'
             ? left.number
@@ -2158,6 +2159,7 @@ export function ClientRequestsPanel({
             }}
           >
             <option value="number">По номеру</option>
+            <option value="client">По клиенту</option>
             <option value="createdAt">По дате создания</option>
             <option value="quantity">По количеству товаров</option><option value="status">По статусу</option>
           </select>
@@ -2172,8 +2174,8 @@ export function ClientRequestsPanel({
               window.localStorage.setItem(`wms-request-sort-direction:${session.user.id}`, value);
             }}
           >
-            <option value="desc">{requestSortField === 'status' ? 'В обратном порядке этапов' : 'Сначала большие / новые'}</option>
-            <option value="asc">{requestSortField === 'status' ? 'По порядку этапов' : 'Сначала маленькие / старые'}</option>
+            <option value="desc">{requestSortField === 'client' ? 'От Я до А' : requestSortField === 'status' ? 'В обратном порядке этапов' : 'Сначала большие / новые'}</option>
+            <option value="asc">{requestSortField === 'client' ? 'От А до Я' : requestSortField === 'status' ? 'По порядку этапов' : 'Сначала маленькие / старые'}</option>
           </select>
         </label>
         <label>Статус<select aria-label="Статус заявки" value={requestStatusFilter} onChange={event=>{const value=event.target.value;setRequestStatusFilter(value);if(value)setShowArchive(['DONE','CANCELLED','REJECTED'].includes(value));}}><option value="">Все статусы</option>{requestStatusOptions.map(option=><option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
