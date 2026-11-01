@@ -1,3 +1,5 @@
+PR842. Scoped FBO picking plan reads and a single pass over mark states. Snapshot 2567: original 1954/1796 ms, candidate 1369/1286 ms; selected source 1659 vs 1218 ms with identical full plan. Post-release control plan 1473 ms. Two API modules, existing picking validations retained.
+
 Published PR837: Moscow creation date/time on every warehouse problem and bulk acknowledgement for visible IDs within user/branch scope. Public browser and isolated API/DB verified. Exact API3/web2; LOGOFF 250 unchanged.
 
 Published PR835: warehouse problem toast, personal acknowledgement and paginated archive, scoped box movement history and exact inventory session. Exact 3 API and 3 web files. Actual public browser6/bootstrap5, isolated PostgreSQL and full API health verified; LOGOFF 250 unchanged.
