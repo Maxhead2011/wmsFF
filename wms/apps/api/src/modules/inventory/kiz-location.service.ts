@@ -8,8 +8,31 @@ import { storageBoxTransferKizIdentity } from '../stock/stock-operations.service
 export class KizLocationService {
   constructor(private readonly prisma: PrismaService, private readonly clients: ClientScopeService) {}
   // FIX: delegate to the existing published queue; retain its authorization and audit.
-  reviews(user: AuthUser, cursor?: string) { return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).list(user, cursor); }
-  decideReview(id: string, resolution: string, reason: string, confirmed: boolean, user: AuthUser) {
+  async reviews(user: AuthUser, cursor?: string, status?:string) {
+    if (status === 'CLOSED') {
+      if (!require('../../common/kiz-review-queue').kizReviewEnabled() || user.isDemo ||
+          !user.roleCodes.some(role=>['ADMIN','OWNER','SUPER_ADMIN'].includes(role)) ||
+          !user.activeWarehouseId || (!user.permissionCodes.includes('system:admin') && !user.warehouseIds?.includes(user.activeWarehouseId))) {
+        throw new ForbiddenException('Нет доступа к истории обращений филиала.');
+      }
+      const rows=await (this.prisma as any).kizReviewCase.findMany({where:{warehouseId:user.activeWarehouseId,
+        clientId:this.clients.resolveClientFilter(user),status:'CLOSED',resolution:'CLOSE'},
+        orderBy:[{decidedAt:'desc'},{id:'desc'}],take:51,...(cursor?{cursor:{id:cursor},skip:1}:{})});
+      const items=rows.slice(0,50).map((row:any)=>({id:row.id,taskId:row.taskId,kizIdentity:row.kizIdentity,
+        status:row.status,resolution:row.resolution,reason:row.reason,attempts:row.attempts,createdAt:row.createdAt,
+        updatedAt:row.updatedAt,decidedAt:row.decidedAt,decidedByName:row.decidedByName,
+        ...require('../../common/kiz-client-review').clientReviewPresentation(row,user.activeWarehouseId)}));
+      return {items,nextCursor:rows.length>50?items[49].id:null};
+    }
+    return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).list(user, cursor); }
+  async decideReview(id: string, resolution: string, reason: string, confirmed: boolean, user: AuthUser) {
+    if (resolution === 'CLOSE') {
+      if (!require('../../common/kiz-review-queue').kizReviewEnabled() || user.isDemo || !user.roleCodes.some(role=>['ADMIN','OWNER','SUPER_ADMIN'].includes(role))) throw new ForbiddenException('Закрытие обращения доступно администратору.');
+
+      const row = await (this.prisma as any).kizReviewCase.findUnique({where:{id}});
+      if (!row || row.snapshot?.scope !== 'RECEIPT') throw new BadRequestException('Не найдено обращение приёмки.');
+      return require('../../common/kiz-client-review').decideClientKizReview(this.prisma,this.clients,row,resolution,reason,confirmed,user);
+    }
     return new (require('../../common/kiz-review-queue').KizReviewQueue)(this.prisma, this.clients).decide(id, resolution, reason, confirmed, user);
   }
   async lookup(kiz: string, user: AuthUser) {

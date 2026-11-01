@@ -529,3 +529,5 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 Подготовлен выпуск магазинов: scripts/releases/client-stores-20261030 сохраняет опубликованную серверную логику и добавляет настройки/метаданные. LOGOFF248; строгая приёмка выключена. Состояние: client-store-separation.md.
 `web.cjs` сохраняет единый основной JS-модуль из PR789 при добавлении магазинов; LOGOFF249 сохраняет контроль этикеток Ozon. Проверка страницы: `scripts/releases/client-stores-20261030/bootstrap.cjs`.
 Выпуск магазинов пересобран от PR791/792: сохраняет sidebar counts, Ozon label control и единственный HTML entry. PR787 объединён, перед выкладкой свежая база проверяется повторно.
+
+- Проверки КИЗ при приёмке: KizReviewCard, ReceiptScanTimeline и KizCheckPanel показывают события ТСД и историю. Решение CLOSE в kiz-client-review закрывает ошибочный скан без движения товара.

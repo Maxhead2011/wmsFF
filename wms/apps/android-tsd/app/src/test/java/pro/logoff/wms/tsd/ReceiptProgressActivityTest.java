@@ -14,6 +14,33 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class ReceiptProgressActivityTest {
+    // TEST: a restarted terminal retains the first box/time and an unsubmitted repeat.
+    @Test public void receiptScanEvidenceSurvivesRestartAndKeepsBothBoxes() throws Exception {
+        String doc = "scan-test-" + UUID.randomUUID(), key = "KEY-ONE";
+        for (int pass=0; pass<2; pass++) {
+            try (var controller=Robolectric.buildActivity(MainActivity.class)) {
+                MainActivity a=controller.get();
+                set(a,"executor",new Executor(false));set(a,"monitorExecutor",new Executor(false));controller.setup();
+                set(a,"receiptClientId","client");set(a,"receiptSourceDocument",doc);set(a,"receiptDocumentPreferenceKey","device-scope");
+                if (pass==0) {
+                    set(a,"receiptScanAt",1700000000000L);
+                    var save=MainActivity.class.getDeclaredMethod("rememberFirstReceiptScan",String.class,String.class);
+                    save.setAccessible(true);save.invoke(a,key,"BOX-ONE");
+                    TsdOperationResponse repeat=new TsdOperationResponse();
+                    repeat.operationKey="operation";repeat.clientId="client";repeat.sourceDocument=doc;repeat.boxCode="BOX-TWO";
+                    repeat.firstScanAt="1700000000000";repeat.repeatScanAt="1700000002000";repeat.firstScanBox="BOX-ONE";
+                    ((List<TsdOperationResponse>)get(a,"receiptKizConflicts")).add(repeat);
+                    var pending=MainActivity.class.getDeclaredMethod("saveScanConflicts");pending.setAccessible(true);pending.invoke(a);
+                } else {
+                    var restore=MainActivity.class.getDeclaredMethod("restoreScanEvidence");restore.setAccessible(true);restore.invoke(a);
+                    assertEquals("BOX-ONE",((Map<?,?>)get(a,"receiptKizBoxes")).get(key));
+                    TsdOperationResponse repeat=((List<TsdOperationResponse>)get(a,"receiptKizConflicts")).get(0);
+                    assertEquals("BOX-TWO",repeat.boxCode);assertEquals("1700000002000",repeat.repeatScanAt);
+                    assertEquals("BOX-ONE",repeat.firstScanBox);assertEquals("1700000000000",repeat.firstScanAt);
+                }
+            }
+        }
+    }
     // TEST: a real queue refresh replaces the stale 3 with 9 without rebuilding the scan field.
     @Test public void queueRefreshUpdatesCounterAndPreservesFocus() throws Exception {
         try(var controller=Robolectric.buildActivity(MainActivity.class)) {

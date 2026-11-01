@@ -19,7 +19,7 @@ export class KizLocationController {
   constructor(private readonly location: KizLocationService) {}
   // FIX: keep the published review routes represented in source.
   @Get('reviews')
-  reviews(@CurrentUser() user: AuthUser, @Query('cursor') cursor?: string) { return this.location.reviews(user, cursor); }
+  reviews(@CurrentUser() user: AuthUser, @Query('cursor') cursor?: string, @Query('status') status?:string) { return this.location.reviews(user, cursor, status); }
   @Post('reviews/:id/decision')
   decide(@Param('id') id: string, @Body() dto: DecideKizReviewDto, @CurrentUser() user: AuthUser) {
     return this.location.decideReview(id, dto.resolution, dto.reason, dto.confirmed, user);

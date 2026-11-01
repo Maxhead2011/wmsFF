@@ -30,3 +30,9 @@ it('identifies FBO context and exposes an explicit refusal',()=>{
  const html=renderToStaticMarkup(<KizReviewCard row={row} disabled={false} onInspect={()=>{}} onDecision={()=>{}}/>);
  expect(html).toContain('FBO');expect(html).toContain('Отказать');expect(html).not.toContain('заказ WB');
 });
+
+it('leaves missing device times unknown even when the registration time exists',()=>{
+ const row={id:'case',active:true,status:'OPEN',attempts:1,createdAt:'2026-11-01T08:14:22Z',snapshot:{scope:'RECEIPT',receiptInfo:{localDuplicate:true,currentBoxCode:'B55'}}} as unknown as KizReviewCase;
+ const html=renderToStaticMarkup(<KizReviewCard row={row} disabled={false} onInspect={()=>{}} onDecision={()=>{}}/>);
+ expect(html).toContain('Короб первого скана неизвестен');expect(html.match(/Время скана не сохранено/g)).toHaveLength(2);expect(html).toContain('Закрыть обращение');
+});

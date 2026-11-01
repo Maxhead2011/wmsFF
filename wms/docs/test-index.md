@@ -496,3 +496,5 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
 Выпуск магазинов: API4138/Web570/Android924; runtime.cjs — 12, postgres.cjs — 15 и полный Nest health, browser.cjs — 8 проверок кандидата; TypeScript и точный состав 17 API файлов подтверждены. Скрипты: scripts/releases/client-stores-20261030.
 Обновление PR787: API4146/Web576/Android933, runtime12/PostgreSQL15/browser8. `bootstrap.cjs`: RED два createRoot, GREEN пять сценариев с единственным запуском; PUBLIC_URL проверяет опубликованные файлы без записи данных. Строгая приёмка остаётся выключенной.
 Актуальная база PR791/792: API4149/Web578, Android933 без изменений; browser8 + bootstrap5 + sidebar9. Повторный полный прогон и TypeScript зелёные; API156/Web2 skipped, отдельный KIZ DB suite исключён без URL.
+
+- Проверки КИЗ при приёмке: ReceiptProgressActivityTest, kiz-client-review.spec.ts, KizReviewQueuePanel.test.tsx и wms/scripts/releases/kiz-review-timeline/browser.cjs (модальное окно, закрытие и архив).
