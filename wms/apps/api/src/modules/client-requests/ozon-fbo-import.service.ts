@@ -1,3 +1,4 @@
+import {readOzonStockDecision} from './ozon-stock-decision';
 import {supplyOrders,type SupplyIntegration} from './ozon-supply-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
 import { requestStoreContexts } from '../clients/request-store-context';
@@ -121,10 +122,11 @@ export class OzonFboImportService {
     return this.db.$transaction(tx => this.createPrepared(tx,p,file,dto,user));
   }
   // FIX: link import creates demand and external ownership in the same transaction.
-  async createPrepared(tx: any, p: Awaited<ReturnType<OzonFboImportService['preview']>>, file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {
+  async createPrepared(tx: any, p: Awaited<ReturnType<OzonFboImportService['preview']>>, file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser, connectionId?:string) {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${p.importKey}))`;
       const prior = await tx.ozonFboShipment.findUnique({ where: { importKey: p.importKey }, include: { request: true } });
       if (prior) return { request: prior.request, directions: p.directions, existing: true };
+      const decision = process.env.WMS_OZON_STOCK_DECISION_AUDIT_ENABLED==='true' ? readOzonStockDecision(dto.stockDecision,p.items) : null;
       const request = await tx.clientRequest.create({ data: {
         clientId: dto.clientId, warehouseId: p.warehouseId, type: 'OUTBOUND', status: 'SUBMITTED', priority: dto.priority ?? 'NORMAL',
         title: dto.title?.trim() || `ФБО Ozon · ${p.directions.length} направлений`,
@@ -136,6 +138,20 @@ export class OzonFboImportService {
         files: { create: { clientId: dto.clientId, fileName: file.originalname, mimeType: file.mimetype, sizeBytes: file.buffer.length, content: Uint8Array.from(file.buffer), uploadedByUserId: user.id } },
         events: { create: { clientId: dto.clientId, eventType: 'CREATED', title: 'Единая сборка ФБО Ozon из файла клиента', statusTo: 'SUBMITTED', createdByUserId: user.id } },
       } });
+      if (decision) {
+        const action = decision.mode === 'AS_IS' ? 'Сформировать как есть' : 'Скорректировать по фактическим остаткам';
+        const cards: Array<{id:string;article:string|null;internalSku:string;size:string|null}> = decision.shortages.length
+          ? await tx.sku.findMany({where:{clientId:dto.clientId,id:{in:decision.shortages.map(i=>i.skuId)}},select:{id:true,article:true,internalSku:true,size:true}}) : [];
+        const byId=new Map(cards.map(card=>[card.id,card]));
+        const shortages=decision.shortages.map(row=>({...row,article:byId.get(row.skuId)?.article??byId.get(row.skuId)?.internalSku??null,size:byId.get(row.skuId)?.size??null}));
+        const context = {clientId:dto.clientId,warehouseId:p.warehouseId,connectionId:connectionId??null,source:connectionId?'LINK':'FILE'};
+        await tx.auditLog.create({data:{entity:'ClientRequest',entityId:request.id,userId:user.id,
+          action:'OZON_IMPORT_STOCK_DECISION',payload:{...context,...decision,shortages}}});
+        await tx.clientRequestEvent.create({data:{requestId:request.id,clientId:dto.clientId,
+          eventType:'COMMENT',createdByUserId:user.id,title:'Выбор при создании ФБО Ozon: '+action,
+          body:['Создана заявка на '+decision.requested+' шт. По сверке доступно для заявки '+decision.availableForPlan+' шт.',
+            ...shortages.map(i=>[i.name,i.article,i.size,i.barcode].filter(Boolean).join(' · ')+' · нужно '+i.quantity+', доступно '+i.available+', не хватает '+i.shortage)].join('\n')}});
+      }
       return { request, directions: p.directions, existing: false };
   }
 }

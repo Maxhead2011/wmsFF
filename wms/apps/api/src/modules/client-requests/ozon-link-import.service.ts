@@ -7,7 +7,7 @@ import type {AuthUser} from '../auth/auth.types';
 import {OzonFboImportService} from './ozon-fbo-import.service';
 import {OzonAssemblySupplyService} from './ozon-assembly-supply.service';
 import {mergeSupplyOrders,supplyOrders,supplyDifferences,type SupplyIntegration} from './ozon-supply-policy';
-export type OzonLinksInput={clientId:string;connectionId:string;links:string;warehouseId?:string;previewHash?:string};
+export type OzonLinksInput={stockDecision?:string;clientId:string;connectionId:string;links:string;warehouseId?:string;previewHash?:string};
 // FIX: only exact seller order URLs are accepted; input never becomes a fetch URL.
 export function ozonLinkIds(links:unknown){
  if(typeof links!=='string'||links.length>5000)throw new BadRequestException('Вставьте ссылки Ozon.');
@@ -69,7 +69,7 @@ export class OzonLinkImportService {
   for(let attempt=0;;attempt++){try{return await this.db.$transaction(async tx=>{
    for(const key of x.keys)await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key},0))::text`;
    const existing=await this.existing(tx,x.keys,body.clientId,x.warehouseId);if(existing)return {request:existing,existing:true};
-   const made=await this.importer.createPrepared(tx,x.p,x.file,x.dto,user);if(made.existing)throw new ConflictException('Сборка уже существует. Требуется сверка привязки.');
+   const made=await this.importer.createPrepared(tx,x.p,x.file,{...x.dto,stockDecision:body.stockDecision},user,body.connectionId);if(made.existing)throw new ConflictException('Сборка уже существует. Требуется сверка привязки.');
    await tx.ozonFboShipment.update({where:{requestId:made.request.id},data:{integration:x.integration as any,externalOrderKey:x.keys[0]}});
    await tx.ozonFboOrderBinding.createMany({data:x.keys.map(externalOrderKey=>({externalOrderKey,requestId:made.request.id,orderId:externalOrderKey.split(':').pop()!}))});
    await tx.clientRequest.update({where:{id:made.request.id},data:{comment:`Состав получен из Ozon: ${supplyOrders(x.integration).map(o=>o.orderNumber).join(', ')}. ${x.p.totalQuantity} шт.`}});

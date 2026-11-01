@@ -1,3 +1,4 @@
+import {ozonStockDecision} from './ozonStockDecision';
 import '../ozon-fbo/ozon-workspace.css';
 import {OzonLinkImport} from './OzonLinkImport';
 import {useEffect,useRef,useState,type ReactNode} from 'react';
@@ -30,7 +31,7 @@ export function OzonCustomerImport({session,clients,onCreated,onWarehouseChange,
   const change=(fn:()=>void)=>{generation.current++;fn();setPreview(null);setStock(null);setCorrection(null);setMessage('');};
   async function run(commit:boolean,adjust=false){if(inFlight.current||!file||!clientId||!warehouseId||!destinationCity)return;const g=generation.current;inFlight.current=true;setBusy(true);setMessage('');try{
     const payload={file,clientId,warehouseId,destinationCity,title,desiredDate:desiredDate||undefined};
-    if(commit){if(!preview||!stock)return;const r=await createOzonCustomerFile(session.accessToken,payload);if(g!==generation.current)return;setMessage(`Сборка №${r.request.number} ${r.existing?'уже существует':'создана'}. Все направления внутри одной заявки.`);setPreview(null);setStock(null);if(adjust)setCorrection(r.request);onCreated();}
+    if(commit){if(!preview||!stock)return;const r=await createOzonCustomerFile(session.accessToken,{...payload,stockDecision:ozonStockDecision(stock,Boolean(adjust))});if(g!==generation.current)return;setMessage(`Сборка №${r.request.number} ${r.existing?'уже существует':'создана'}. Все направления внутри одной заявки.`);setPreview(null);setStock(null);if(adjust)setCorrection(r.request);onCreated();}
     else {setPreview(null);setStock(null);setCorrection(null);const p=await previewOzonCustomerFile(session.accessToken,payload);const s=await checkOzonImportStock(session.accessToken,clientId,warehouseId,p);if(g===generation.current){setPreview(p);setStock(s);}}
   }catch(e){if(g===generation.current)setMessage(e instanceof Error?e.message:String(e));}finally{inFlight.current=false;setBusy(false);}}
   const branchPicker=<label>Филиал<select disabled={busy} value={warehouseId} onChange={e=>{const selected=e.target.value;change(()=>setBranches(old=>({...old,selected})));onWarehouseChange?.(clientId,selected);}}>

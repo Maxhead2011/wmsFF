@@ -1,3 +1,4 @@
+import {ozonStockDecision} from './ozonStockDecision';
 import '../ozon-fbo/ozon-workspace.css';
 import {useEffect,useRef,useState} from 'react';
 import {checkOzonImportStock,OzonImportStockReview} from './OzonImportStockReview';
@@ -23,7 +24,7 @@ export function OzonLinkImport({session,clientId,clientName,warehouseId,onCreate
  function change(fn:()=>void){generation.current++;fn();setPreview(null);setStock(null);setCorrection(null);setMessage('');}
  async function run(commit:boolean,adjust=false){if(inFlight.current||!warehouseId)return;const g=generation.current;inFlight.current=true;setBusy(true);setMessage('');try{
   const body={clientId,connectionId,links,warehouseId,previewHash:preview?.previewHash};
-  if(commit){if(!preview||!stock)return;const result=await createOzonLinks(session.accessToken,body);if(g!==generation.current)return;setMessage(`Сборка №${result.request.number} ${result.existing?'уже существует':'создана'}.`);setPreview(null);setStock(null);if(adjust)setCorrection(result.request);onCreated();}
+  if(commit){if(!preview||!stock)return;const result=await createOzonLinks(session.accessToken,{...body,stockDecision:ozonStockDecision(stock,Boolean(adjust))});if(g!==generation.current)return;setMessage(`Сборка №${result.request.number} ${result.existing?'уже существует':'создана'}.`);setPreview(null);setStock(null);if(adjust)setCorrection(result.request);onCreated();}
   else {setPreview(null);setStock(null);setCorrection(null);const result=await previewOzonLinks(session.accessToken,body);const s=await checkOzonImportStock(session.accessToken,clientId,warehouseId,result);if(g===generation.current){setPreview(result);setStock(s);}}
  }catch(e){if(g===generation.current)setMessage(e instanceof Error?e.message:String(e));}finally{inFlight.current=false;setBusy(false);}}
  return <section className="ozfbo-link-import" aria-label="Создать сборку по ссылке Ozon"><h3>Создать сборку по ссылке Ozon</h3>
