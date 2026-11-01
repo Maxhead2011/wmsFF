@@ -1,3 +1,5 @@
+WB FBO binding after picking: compare the WB supply quantity with equal nonzero picked and packed units under the request lock. Original plan displayed separately. Test wb-fbo-supply.spec.ts, own WMS flag WMS_WB_FBO_ACTUAL_BINDING_ENABLED. Not deployed.
+
 Published PR837: Moscow creation date/time on every warehouse problem and bulk acknowledgement for visible IDs within user/branch scope. Public browser and isolated API/DB verified. Exact API3/web2; LOGOFF 250 unchanged.
 
 Warehouse problem cards show signal creation time (Moscow); read-all acknowledges displayed signal IDs for one user and branch. Test: warehouse-problem-bell.spec.ts. Prepared, not deployed.
