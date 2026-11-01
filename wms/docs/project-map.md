@@ -549,3 +549,5 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 - Выпуск размещения приёмок: scripts/releases/receipt-placement/prepare.cjs переносит проверенные методы на текущий runtime; release.py проверяет образы, подпись ТСД252 и откат; isolated.py и postgres.cjs проверяют точный пакет перед включением.
 
 - Рабочий список размещения: StorageLocationsService.receiptPlacementTasks исключает COMPLETED только для общего списка; выбранная приёмка и история сохраняются. ReceiptPlacementTasks скрывает завершение сразу после действия.
+
+- PR852 published: active placement list, public runtime6 and read-only list verified; baseline 2026-11-01-placement-active-list.
