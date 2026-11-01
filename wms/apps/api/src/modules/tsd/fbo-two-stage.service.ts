@@ -1,3 +1,4 @@
+import {InventorySessionStatus} from '@prisma/client';
 import {missingStockComment,missingStockHolds} from '../../common/stock/fbo-missing-stock';
 import {busyBoxes} from './fbo-picking-capacity';
 import {fboCompletionBatchEnabled,validateFboPackedBoxes,fboCompletionPackages,saveFboCompletionSelections,fboCompletionStage,fboCompletionError} from './fbo-completion-batch';
@@ -364,7 +365,18 @@ export class FboTwoStageService {
                 if (directions && a!.phase === 'PICKING' && process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true' && units.length > 0) return;
                 requirePhase('PACKING');
             };
-            if(dto.action==='REPORT_MISSING'){
+            if(dto.action==='REPORT_MISSING_BOX'){
+                requirePhase('PICKING');
+                if(process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED!=='true')throw new BadRequestException('Сигналы ФБО отключены.');
+                const location=(await this.snapshot(tx,r)).route.find(b=>b.boxCode===dto.sourceBoxCode && b.pallet===dto.palletCode && !!b.pallet);
+                if(!location)throw new ConflictException('Обновите маршрут и выберите короб с указанного палет-сорта.');
+                const title=`Нет короба ${location.boxCode} на палет-сорте ${location.pallet} · ФБО №${r.number}`;
+                await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${r.clientId+title}))`;
+                const where={warehouseId:r.warehouseId,clientId:r.clientId,title,status:{in:[InventorySessionStatus.ACTIVE,InventorySessionStatus.REVIEW]}};
+                if(!await tx.inventorySession.findFirst({where,select:{id:true}}))await tx.inventorySession.create({data:{warehouseId:r.warehouseId,clientId:r.clientId,title,type:'BOX_CHECK',
+                    comment:`[FBO_MISSING_PALLET_BOX] Короб: ${location.boxCode}; палет-сорт: ${location.pallet}; заявка: №${r.number}`, createdByName:user.name,createdByUserId:user.id}});
+            }
+            else if(dto.action==='REPORT_MISSING'){
                 requirePhase('PICKING');
                 if(process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED!=='true')throw new BadRequestException('Сообщения о недостаче отключены.');
                 const plan=await this.snapshot(tx,r);
@@ -378,7 +390,7 @@ export class FboTwoStageService {
                 await tx.auditLog.create({data:{userId:user.id,entity:'FboMissingStock',entityId:r.warehouseId,action:'HOLD',
                     payload:{requestId:id,clientId:r.clientId,boxId:box.id,skuId:task.skuId,quantity}}});
                 await tx.inventorySession.create({data:{clientId:r.clientId,warehouseId:r.warehouseId,type:'BOX_CHECK',
-                    title:`Пересчёт ${box.code} · ${dto.barcode} · ${quantity} шт. · ФБО №${r.number}`,
+                    id:key,title:`Пересчёт ${box.code} · палет-сорт ${location?.pallet || "без размещения"} · ${dto.barcode} · ${quantity} шт. · ФБО №${r.number}`,
                     comment:missingStockComment(box.id,task.skuId,quantity),createdByUserId:user.id,createdByName:user.name}});
             }
             else if (unboxedFboEnabled() && r.client.storesWithoutBoxes && (dto.action === 'PICK_UNIT' || dto.action === 'PICK_BOX')) {

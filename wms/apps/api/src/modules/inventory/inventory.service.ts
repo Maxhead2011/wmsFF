@@ -150,6 +150,19 @@ export class InventoryService {
     return this.runSerializableInventoryDecision(tx=>confirmFoundUnit(tx,auditId,dto,user));
   }
 
+  async warehouseProblems(user:AuthUser) {
+    if(!user.roleCodes.some(role=>['ADMIN','OWNER','SUPER_ADMIN'].includes(role))) throw new ForbiddenException();
+    const warehouseId=this.resolveScopedWarehouseId(user,'read') ?? user.activeWarehouseId;
+    if(!warehouseId)return [];
+    const clients=await this.prisma.client.findMany({where:{isDemo:Boolean(user.isDemo),id:this.clientScopes.resolveClientFilter(user)},select:{id:true,name:true}});
+    const names=new Map(clients.map(c=>[c.id,c.name]));
+    const sessions=await this.prisma.inventorySession.findMany({where:{warehouseId,clientId:{in:[...names.keys()]},type:'BOX_CHECK',
+      status:{in:['ACTIVE','REVIEW']},OR:['[FBS_MISSING_PALLET_BOX]','[FBS_MANDATORY_BOX_CHECK]','[FBO_MISSING_PALLET_BOX]','[FBO_MISSING_STOCK]'].map(marker=>({comment:{startsWith:marker}}))},
+      orderBy:{createdAt:'desc'},select:{id:true,clientId:true,createdByName:true,title:true,comment:true,createdAt:true}});
+    return sessions.map(s=>({id:s.id,title:s.title,client:names.get(s.clientId!),worker:s.createdByName,createdAt:s.createdAt,
+      detail:s.comment?.startsWith('[FBO_MISSING_STOCK]') ? '' : s.comment?.replace(/^\[[^\]]+\]\s*/, '')}));
+  }
+
   async listSessions(type: string | undefined, user: AuthUser) {
     const parsedType = Object.values(InventorySessionType).includes(type as InventorySessionType)
       ? (type as InventorySessionType)

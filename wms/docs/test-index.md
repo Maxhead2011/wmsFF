@@ -1,3 +1,5 @@
+Warehouse problem bell: FBS/FBO missing box signals scoped to active branch and ADMIN/OWNER; FBO product missing opens the reported box for recount. Tests: warehouse-problem-bell.spec.ts. Draft PR820, not deployed.
+
 ReceiptBatchesPanel places the client picker immediately below the header and before receipt review/date filters. File refresh stays with files. Fixed-client access retains its existing scope. Regression: ReceiptBatchesPanel.spec.tsx.
 
 Prepared on fix/fbo-client-deficit-actions: WB FBO Excel availability and serializable creation check, explicit adjustment/exclusion, stock decision audit, LOGOFF TSD missing-unit report and BOX_CHECK holds. Own WMS flag WMS_FBO_EXCEL_PICK_CHECK_ENABLED. Tests: fbo-picking-capacity, fbo-missing-stock, DeficitActions. Not deployed.

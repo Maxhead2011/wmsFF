@@ -17,7 +17,7 @@ export class FboActionDto {
     @IsString()
     @MaxLength(6)
     missingQuantity?: string;
-    @IsIn(['REPORT_MISSING','RELABEL_UNIT', 'START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'REOPEN_BOX', 'PACK_UNIT', 'PACK_PRODUCT', 'UNDO_PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
+    @IsIn(['REPORT_MISSING_BOX','REPORT_MISSING','RELABEL_UNIT', 'START', 'PICK_UNIT', 'PICK_BOX', 'FINISH_PICK', 'OPEN_BOX', 'REOPEN_BOX', 'PACK_UNIT', 'PACK_PRODUCT', 'UNDO_PACK_UNIT', 'PACK_BOX', 'CLOSE_BOX', 'CANCEL_EMPTY_BOX', 'SORTED', 'CONFIRM_BOX', 'FINISH'])
     action!: string;
     @IsString()
     @MinLength(8)
