@@ -1,3 +1,4 @@
+import './wb-supply-window.css';
 import {useEffect,useRef,useState} from 'react';
 
 // FIX: binding is available from the assembly header at every phase, including picking.
@@ -5,19 +6,19 @@ export function WbSupplyWindow({requestId,accessToken}:{requestId:string;accessT
  const dialog=useRef<HTMLDialogElement>(null);
  const [open,setOpen]=useState(false);
  return <>
-   <button type="button" className="primary-button" title="Открыть привязку поставки Wildberries" aria-haspopup="dialog"
+   <button type="button" className="primary-button wb-supply-trigger" title="Открыть привязку поставки Wildberries" aria-haspopup="dialog"
      onClick={()=>{dialog.current?.showModal();setOpen(true);}}>Заявка ВБ</button>
    <dialog ref={dialog} aria-label="Поставка ВБ" onClose={()=>setOpen(false)}
      onKeyDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()}
-     style={{width:'min(640px,92vw)',maxHeight:'85vh',overflow:'auto',border:'1px solid #cbdadb',borderRadius:12,padding:20}}>
-     {open&&<><header style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-       <strong>Поставка ВБ</strong><button type="button" autoFocus onClick={()=>dialog.current?.close()}>Закрыть окно</button>
-     </header><WbFboSupply key={requestId} requestId={requestId} accessToken={accessToken}/></>}
+     className="wb-supply-dialog">
+     {open&&<><header><div><small>ФБО WB · ПОСТАВКА</small><h2>Передача и приёмка</h2></div>
+       <button type="button" className="wb-window-close" aria-label="Закрыть окно" title="Закрыть окно" autoFocus onClick={()=>dialog.current?.close()}>×</button>
+     </header><WbFboSupply key={requestId} requestId={requestId} accessToken={accessToken} onCancel={()=>dialog.current?.close()}/></>}
    </dialog>
  </>;
 }
 type View={dispatch?:{at:string}|null;plannedQuantity:number;canWrite:boolean;canGate:boolean;connections:Array<{id:string;accountName:string|null;sellerId:string|null}>;binding:null|{supplyId:string;statusId:number;status:string;warehouse:string;date:string|null;quantity:number;acceptedQuantity:number;checkedAt:string;lastError?:string;gate?:{at:string}}};
-export function WbFboSupply({requestId,accessToken,disabled=false}:{requestId:string;accessToken:string;disabled?:boolean}){
+export function WbFboSupply({requestId,accessToken,disabled=false,onCancel}:{requestId:string;accessToken:string;disabled?:boolean;onCancel?:()=>void}){
  const [data,setData]=useState<View|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[input,setInput]=useState(''),[connection,setConnection]=useState('');
  const path='/api/v1/client-requests/'+encodeURIComponent(requestId)+'/wb-fbo-supply';
  async function call(action='',body?:object,signal?:AbortSignal){const r=await fetch(path+(action?'/'+action:''),{method:action?'POST':'GET',headers:{Authorization:`Bearer ${accessToken}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal});let v:any;try{v=await r.json();}catch{throw new Error('Не удалось прочитать ответ WMS.');}if(!r.ok)throw new Error(typeof v.message==='string'?v.message:'Не удалось проверить поставку WB.');return v as View;}
@@ -25,9 +26,9 @@ export function WbFboSupply({requestId,accessToken,disabled=false}:{requestId:st
  useEffect(()=>{if(!data?.binding||disabled||busy)return;let active=true,pending=false;const controller=new AbortController();const refresh=async()=>{if(pending||document.visibilityState==='hidden')return;pending=true;try{const v=await call('refresh',undefined,controller.signal);if(active){setData(v);setError('');}}catch(e){if(active)setError(e instanceof Error?e.message:'Ошибка проверки WB');}finally{pending=false;}};const timer=window.setInterval(refresh,60000);window.addEventListener('focus',refresh);return()=>{active=false;controller.abort();window.clearInterval(timer);window.removeEventListener('focus',refresh);};},[requestId,accessToken,!!data?.binding,disabled,busy]);
  async function action(kind:string){if(busy||disabled)return;if(kind==='gate'&&!window.confirm('Подтверждаете, что проверенные короба фактически загружены в автомобиль? Это не подтверждение приёмки WB.'))return;setBusy(true);setError('');try{setData(await call(kind,kind==='bind'?{connectionId:connection,input}:undefined));}catch(e){setError(e instanceof Error?e.message:'Ошибка операции');}finally{setBusy(false);}}
  const b=data?.binding;const date=(s:string)=>new Date(s).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'});
- return <section className="card" aria-label="Поставка ФБО WB" style={{padding:16,marginBlock:16}}><h3>Поставка WB · передача и приёмка</h3>
+ return <section className="wb-supply-content" aria-label="Поставка ФБО WB">
  {!data&&!error&&<p>Загружаю привязку…</p>}{error&&<p role="alert">{error}</p>}
- {data&&!b&&<><p>Привяжите существующую поставку WB для отслеживания приёмки. В заявке {data.plannedQuantity} шт.</p>{data.canWrite?<div><label>Кабинет WB<select value={connection} disabled={busy||disabled} onChange={e=>setConnection(e.target.value)}><option value="">Выберите кабинет</option>{data.connections.map(c=><option key={c.id} value={c.id}>{c.accountName||c.sellerId||'Кабинет WB'}</option>)}</select></label><label>Ссылка или номер поставки WB<input value={input} disabled={busy||disabled} onChange={e=>setInput(e.target.value)} placeholder="41834673 или ссылка из кабинета WB"/></label><button type="button" disabled={busy||disabled||!connection||!input.trim()} onClick={()=>void action('bind')}>Привязать поставку WB</button></div>:<p>Привязку выполняет пользователь с правом изменения заявки.</p>}</>}
+ {data&&!b&&<><p>Привяжите существующую поставку WB для отслеживания приёмки. В заявке {data.plannedQuantity} шт.</p>{data.canWrite?<div className="wb-supply-form"><label>Кабинет WB<select value={connection} disabled={busy||disabled} onChange={e=>setConnection(e.target.value)}><option value="">Выберите кабинет</option>{data.connections.map(c=><option key={c.id} value={c.id}>{c.accountName||c.sellerId||'Кабинет WB'}</option>)}</select></label><label>Ссылка или номер поставки WB<input value={input} disabled={busy||disabled} onChange={e=>setInput(e.target.value)} placeholder="41834673 или ссылка из кабинета WB"/></label><footer><button type="button" onClick={onCancel}>Отмена</button><button className="wb-bind" type="button" disabled={busy||disabled||!connection||!input.trim()} onClick={()=>void action('bind')}>Привязать поставку WB</button></footer></div>:<p>Привязку выполняет пользователь с правом изменения заявки.</p>}</>}
  {b&&<><p><a href={'https://seller.wildberries.ru/supplies-management/all-supplies/supply-detail?supplyId='+encodeURIComponent(b.supplyId)} target="_blank" rel="noreferrer">WB №{b.supplyId}</a> · {b.warehouse} · {b.quantity} шт.</p>
  <p><strong>Передача со склада:</strong> {data?.dispatch?`Отгружено · ${date(data?.dispatch.at)} МСК`:'Не подтверждена'}</p>
  <p><strong>Статус WB:</strong> {[4,5,6].includes(b.statusId)?'Сдано · '+b.status:b.status} · принято {b.acceptedQuantity} из {b.quantity} шт.</p>
