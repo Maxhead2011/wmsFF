@@ -12743,5 +12743,8 @@ export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:st
 }
 
 export type WarehouseProblem={id:string;status:string;clientId:string;isRead:boolean;kind:'box'|'product';boxCode:string|null;title:string;client:string;worker:string;detail:string;createdAt:string};
+export function markWarehouseProblemsRead(accessToken:string,ids:string[]){
+  return request<{readIds:string[]}>('/inventory/warehouse-problems/read-all',{method:'POST',accessToken,body:{ids}});
+}
 export function markWarehouseProblemRead(token:string,id:string){return request<{read:boolean}>(`/inventory/warehouse-problems/${encodeURIComponent(id)}/read`,{accessToken:token,method:'POST'});}
 export function fetchWarehouseProblems(accessToken:string,archive=false,cursor=''){const query=archive?'?archive=true&cursor='+encodeURIComponent(cursor):'';return request<WarehouseProblem[]>('/inventory/warehouse-problems'+query,{accessToken});}
