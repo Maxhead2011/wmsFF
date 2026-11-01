@@ -516,3 +516,7 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
 - receipt-placement-scope.spec.ts проверяет флаг включения и изоляцию клиентского доступа. Отгрузочные короба и клиенты без коробного хранения исключены из ожидания размещения.
 - Оставшиеся этапы размещения: receipt-placement-report.integration.spec.ts (начало, отсрочка, завершение, снятые и выбывшие короба), receipt-placement-concurrency.integration.spec.ts (два сотрудника одновременно), ReceiptPlacementActivityTest (экран ТСД), workflow-browser.cjs (предупреждение и отсрочка).
 - Runtime размещения приёмок: runtime-browser.cjs проверяет действующий граф модулей с тестовыми данными; postgres.cjs — маршруты, два параллельных вызова, предупреждение, отсрочку и неизменность количества на отдельной PostgreSQL; isolated.py — полный запуск Nest.
+
+- receipt-placement-active-list.spec.ts: незавершённые и отложенные остаются, завершённые скрыты, выбранная завершённая доступна. runtime-browser.cjs добавляет завершённую приёмку в ответы фикстуры и проверяет её отсутствие в интерфейсе.
+
+- Active-list validation: API4289 + integration63 (106 environment skips), web594 (2 skips); TypeScript API/web, exact runtime Edge6 and isolated PostgreSQL/full Nest passed.
