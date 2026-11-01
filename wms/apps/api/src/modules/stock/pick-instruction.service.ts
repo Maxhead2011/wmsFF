@@ -17,7 +17,6 @@ import { ClientScopeService } from '../auth/client-scope.service';
 import {
   assertWarehouseAccess,
   effectiveWarehouseId,
-  warehouseScopeWhere,
 } from '../client-requests/client-request-warehouse-scope';
 import {
   renderPickInstructionHtml,
@@ -257,8 +256,10 @@ export class PickInstructionService {
 
   async getActiveRequestBoxOverlaps(user: AuthUser) {
     this.requireBoxOverlapAccess(user);
-    if (effectiveWarehouseId(user, 'read')) {
-      return this.calculateActiveRequestBoxOverlaps(user);
+    // FIX: system:admin grants access across branches, but the selected branch scopes this report.
+    const warehouseId = effectiveWarehouseId(user, 'read') ?? user.activeWarehouseId?.trim();
+    if (warehouseId) {
+      return this.calculateActiveRequestBoxOverlaps(user, warehouseId);
     }
     const now = Date.now();
     const cached = this.activeRequestBoxOverlapCache;
@@ -308,7 +309,7 @@ export class PickInstructionService {
     }
   }
 
-  private async calculateActiveRequestBoxOverlaps(user: AuthUser) {
+  private async calculateActiveRequestBoxOverlaps(user: AuthUser, warehouseId?: string) {
     const activeStatuses = [
       ClientRequestStatus.SUBMITTED,
       ClientRequestStatus.IN_REVIEW,
@@ -319,7 +320,7 @@ export class PickInstructionService {
       where: {
         type: ClientRequestType.OUTBOUND,
         status: { in: activeStatuses },
-        ...warehouseScopeWhere(user),
+        ...(warehouseId ? { warehouseId } : {}),
       },
       select: {
         id: true,
@@ -469,8 +470,16 @@ export class PickInstructionService {
         boxes.set(key, entry);
       }
     }
-    const overlaps = [...boxes.values()]
-      .filter((entry) => entry.requests.length > 1)
+    const shared = [...boxes.values()].filter(entry => entry.requests.length > 1);
+    // A manual plan can retain the code of a box that now belongs to another warehouse.
+    const localBoxes = warehouseId && shared.length ? await this.prisma.box.findMany({
+      where: { warehouseId, clientId: { in: [...new Set(shared.map(entry => entry.clientId))] },
+        code: { in: shared.map(entry => entry.boxCode), mode: 'insensitive' } },
+      select: { clientId: true, code: true },
+    }) : null;
+    const localKeys = localBoxes && new Set(localBoxes.map(box => box.clientId + ':' + normalizeInstructionBoxCode(box.code)));
+    const overlaps = shared
+      .filter(entry => !localKeys || localKeys.has(entry.clientId + ':' + normalizeInstructionBoxCode(entry.boxCode)))
       .sort((left, right) => right.requests.length - left.requests.length || left.boxCode.localeCompare(right.boxCode, 'ru'))
       .map((entry) => ({
         boxCode: entry.boxCode,

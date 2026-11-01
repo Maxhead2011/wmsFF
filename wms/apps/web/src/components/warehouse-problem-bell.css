@@ -10,3 +10,46 @@
 .warehouse-new-signal header{justify-content:space-between;margin-bottom:.55rem}
 .warehouse-new-signal button,.warehouse-signal-actions button{cursor:pointer;padding:.4rem .65rem;border-radius:.4rem;background:white;color:#751a2d;border:1px solid #c7a5aa}
 .warehouse-signal-actions{margin-top:.5rem}
+
+.warehouse-problem-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-block: .8rem .25rem;
+}
+.warehouse-problem-controls > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  min-height: 40px;
+  padding: .45rem .8rem;
+  border: 1px solid #aebfce;
+  border-radius: .6rem;
+  background: #f4f7fa;
+  color: #233d53;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.warehouse-problem-controls > button:is(:hover, [aria-expanded="true"]) {
+  background: #e0eaf4;
+}
+.warehouse-problem-controls > .warehouse-problem-controls__read {
+  border-color: #1955a8;
+  background: #1955a8;
+  color: white;
+}
+.warehouse-problem-controls > .warehouse-problem-controls__read:hover:enabled {
+  background: #124486;
+}
+.warehouse-problem-controls > button:focus-visible {
+  outline: 3px solid #55aafa;
+  outline-offset: 2px;
+}
+.warehouse-problem-controls > button:disabled {
+  background: #e8edf1;
+  color: #536170;
+  border-color: #d1d9e0;
+  cursor: default;
+}

@@ -35,6 +35,7 @@ import { StockBalancesService } from '../stock/stock-balances.service';
 import { StockOperationsService } from '../stock/stock-operations.service';
 import { fboTwoStageEnabled, hasLegacyFboProgress, isFboTwoStageRequest, remainingFboLines, wholeBoxDecision } from './fbo-two-stage-policy';
 import { FboActionDto } from './dto/fbo-action.dto';
+import { preparePickingBoxes, routeBoxSelect } from './fbo-pick-plan-reads';
 import { cacheFboBoxDecision, loadFboRoutePreference, orderFboRequestBoxes } from './fbo-request-route';
 import { loadFboFbsAvailability } from './fbo-fbs-reservations';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
@@ -195,8 +196,7 @@ export class FboTwoStageService {
             where: { clientId: r.clientId, warehouseId: r.warehouseId, status: 'active', balances: { some: {
                         skuId: { in: Object.keys(demand).filter(k => demand[k] > 0) }, status: 'AVAILABLE', quantity: { gt: 0 }
                     } } },
-            include: { balances: true, productMarks: { where: { status: { not: 'SHIPPING' } } },
-                storagePlacement: { include: { pallet: { include: { zone: true } } } }, pallet: true, zone: true }, orderBy: { code: 'asc' },
+            select: routeBoxSelect, orderBy: { code: 'asc' },
         });
         const route = [];
         // FIX: warehouse picking may use confirmed unplaced receipts; cabinet rules stay separate.
@@ -206,10 +206,7 @@ export class FboTwoStageService {
             : await loadFboFbsAvailability(tx, r, indexedStock ? remainingSkuIds : Object.keys(demand));
         const busyBoxes = await this.busyBoxes(tx, boxes.map(b => b.id), r.id, true);
         // FIX: historical stock may have real marks even when the SKU flag was never filled.
-        for (const l of lines)
-            if (boxes.some(b => b.productMarks.some(m => m.skuId === l.skuId && m.status === 'AVAILABLE')))
-                l.requiresKiz = true;
-        boxes.sort((a, b) => (a.storagePlacement?.pallet.code ?? a.pallet?.code ?? '').localeCompare(b.storagePlacement?.pallet.code ?? b.pallet?.code ?? '', 'ru', { numeric: true }) || a.code.localeCompare(b.code, 'ru', { numeric: true }));
+        preparePickingBoxes(boxes, lines);
         // FIX: request-specific remainder preference never modifies confirmed assembly units.
         const preference = await loadFboRoutePreference(tx, r, composition(r));
         const ordered = preference ? orderFboRequestBoxes(boxes.filter(b => !busyBoxes.has(b.id)), demand,

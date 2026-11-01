@@ -213,9 +213,12 @@ export function ClientRequestsPanel({
   const [requests, setRequests] = useState<LoadState<ClientRequestSummary>>({ status: 'idle', data: [] });
   const [clients, setClients] = useState<LoadState<ClientSummary>>({ status: 'idle', data: [] });
   const [balanceReviews, setBalanceReviews] = useState<LoadState<PickWaveBalanceReview>>({ status: 'idle', data: [] });
+  const overlapScope = JSON.stringify([session.user.id, session.user.activeWarehouseId]);
+  const [overlapRefresh, setOverlapRefresh] = useState(0);
   const [boxOverlaps, setBoxOverlaps] = useState<{
     status: 'idle' | 'loading' | 'ready' | 'error';
     data: ClientRequestBoxOverlapStatistics | null;
+    scope?: string;
     error?: string;
   }>({ status: 'idle', data: null });
   const [error, setError] = useState<string | null>(null);
@@ -399,9 +402,23 @@ export function ClientRequestsPanel({
 
   useEffect(() => {
     if (canRead) {
-      void loadData();
+      void loadData(false);
     }
   }, [canRead, showArchive, appliedArchiveBoxSearch]);
+
+  useEffect(() => {
+    if (!canRead || !canViewBoxOverlaps || showArchive) return;
+    let active = true;
+    setBoxOverlaps(previous => ({status:'loading', scope:overlapScope,
+      data:previous.scope === overlapScope ? previous.data : null}));
+    void fetchClientRequestBoxOverlaps(session.accessToken).then(
+      data => { if (active) setBoxOverlaps({status:'ready', scope:overlapScope, data}); },
+      error => { if (active) setBoxOverlaps(previous => ({status:'error', scope:overlapScope,
+        data:previous.scope === overlapScope ? previous.data : null, error:errorMessage(error)})); },
+    );
+    return () => { active = false; };
+  }, [canRead, canViewBoxOverlaps, showArchive, overlapScope, overlapRefresh, session.accessToken]);
+
 
   useEffect(() => {
     if (!focusRequestId) return;
@@ -479,23 +496,12 @@ export function ClientRequestsPanel({
     return null;
   }
 
-  async function loadData() {
+  async function loadData(refreshOverlaps = true) {
     setError(null);
     setRequests((current) => ({ ...current, status: 'loading', error: undefined }));
     setClients((current) => ({ ...current, status: 'loading', error: undefined }));
     setBalanceReviews((current) => ({ ...current, status: 'loading', error: undefined }));
-    if (canViewBoxOverlaps) {
-      setBoxOverlaps((current) => ({ ...current, status: 'loading', error: undefined }));
-      void fetchClientRequestBoxOverlaps(session.accessToken)
-        .then((data) => setBoxOverlaps({ status: 'ready', data }))
-        .catch((caught) =>
-          setBoxOverlaps((current) => ({
-            ...current,
-            status: 'error',
-            error: errorMessage(caught),
-          })),
-        );
-    }
+    if (refreshOverlaps) setOverlapRefresh(value => value + 1);
 
     try {
       const [nextRequests, nextClients, nextBalanceReviews] = await Promise.all([
@@ -2013,7 +2019,7 @@ export function ClientRequestsPanel({
         />
       ) : null}
 
-      {!showArchive && canViewBoxOverlaps ? <BoxOverlapStatistics state={boxOverlaps} /> : null}
+      {!showArchive && canViewBoxOverlaps && boxOverlaps.scope === overlapScope ? <BoxOverlapStatistics state={boxOverlaps} /> : null}
 
       {!showArchive && balanceReviews.status === 'ready' ? (
         <PickWaveBalanceReviewPanel
