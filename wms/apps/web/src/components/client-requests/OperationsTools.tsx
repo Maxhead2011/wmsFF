@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import './operations-tools.css';
 import type { ClientRequestSummary } from '../../lib/api';
 
 type Row = {kind:string;id:string;label:string;detail:string};
@@ -32,13 +33,13 @@ export function OperationsTools({token,userId,permissions,onOpen}:{token:string;
  async function attention(){const n=epoch.current;const data=await api('/operations-tools/attention');if(n===epoch.current){setCases(data);setSearched(true);}}
  async function open(id:string){const n=epoch.current;const data=await api('/client-requests/'+encodeURIComponent(id));if(n===epoch.current)onOpen?.(data);}
  if(!enabled)return null;
- return <details className="operations-tools" style={{border:'1px solid var(--border-color, #d8dfe5)',borderRadius:14,padding:16,marginBottom:16}}>
-  <summary style={{fontWeight:700,cursor:'pointer'}}>Проверки и поиск</summary>
-  <div role="tablist" aria-label="Инструменты заявок" style={{display:'flex',flexWrap:'wrap',gap:8,margin:'12px 0'}}>
+ return <details className="operations-tools request-fold">
+  <summary>Проверки и поиск</summary>
+  <div role="tablist" aria-label="Инструменты заявок">
    {[['readiness','Готовность заявки'],['search','Точный поиск'],['attention','Требует внимания']].map(([id,label])=><button type="button" role="tab" aria-selected={tab===id} key={id} disabled={busy||(id==='search'&&!allow('stock:read'))} onClick={()=>{setTab(id);setRows([]);setCheck(null);setBox(null);setSearched(false);setError('');}}>{label}</button>)}
   </div>
-  {tab!=='attention'?<form onSubmit={e=>{e.preventDefault();void act(search);}} style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-   <label style={{flex:'1 1 240px'}}>{tab==='readiness'?'Номер заявки':'Точный номер заявки, короба, палеты, ШК или КИЗ'}<input value={query} onChange={e=>setQuery(e.target.value)} maxLength={512} style={{width:'100%'}}/></label>
+  {tab!=='attention'?<form onSubmit={e=>{e.preventDefault();void act(search);}}>
+   <label>{tab==='readiness'?'Номер заявки':'Точный номер заявки, короба, палеты, ШК или КИЗ'}<input value={query} onChange={e=>setQuery(e.target.value)} maxLength={512}/></label>
    <button disabled={busy||!query.trim()||(tab==='search'&&!allow('stock:read'))}>Проверить</button>
   </form>:<><p>Случаи фоновой сверки. Исправление выполняется через существующий экран заявки с обычными проверками.</p><button type="button" disabled={busy} onClick={()=>void act(attention)}>Обновить список</button></>}
   {busy&&<p role="status">Загрузка…</p>}{error&&<p role="alert">{error}</p>}
