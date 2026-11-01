@@ -1,3 +1,5 @@
+Published PR835: warehouse problem toast, personal acknowledgement and paginated archive, scoped box movement history and exact inventory session. Exact 3 API and 3 web files. Actual public browser6/bootstrap5, isolated PostgreSQL and full API health verified; LOGOFF 250 unchanged.
+
 Warehouse problem navigation: separate portal alert, durable personal acknowledgement and collapsed paginated archive for read/completed/cancelled signals; missing box opens scoped turnover history, missing product opens exact inventory session. Test: warehouse-problem-bell.spec.ts. Prepared only.
 
 Published PR820, LOGOFF 250: WB FBO shortage preview, corrected quantities, missing box alerts and scanned box recount; FBS/FBO red notifications for administrators and owners. Signed APK, isolated API/DB, public web and single entry verified. Source parity false.
