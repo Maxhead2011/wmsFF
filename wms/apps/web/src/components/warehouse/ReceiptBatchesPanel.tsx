@@ -57,9 +57,8 @@ export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?
 
   return (
     <div className="receipt-batches">
-      {clientId?<ReceiptDirectionsPanel key={clientId} session={session} fixedClientId={clientId}/>:null}
-      <div className="warehouse-drafts__toolbar">
-        {!fixedClientId ? (
+      {/* FIX: choose the client before reviewing their receipts. */}
+      {!fixedClientId && <div className="warehouse-drafts__toolbar">
           <label>
             <span>Клиент</span>
             <select value={clientId} onChange={(event) => setClientId(event.target.value)}>
@@ -67,7 +66,9 @@ export function ReceiptBatchesPanel({ fixedClientId, session }: { fixedClientId?
               {clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}
             </select>
           </label>
-        ) : null}
+      </div>}
+      {clientId?<ReceiptDirectionsPanel key={clientId} session={session} fixedClientId={clientId}/>:null}
+      <div className="warehouse-drafts__toolbar">
         <button className="secondary-button" type="button" onClick={() => void load()} disabled={!clientId || loading}>
           <RefreshCw size={15} aria-hidden="true" />
           <span>{loading ? 'Обновление' : 'Обновить'}</span>
