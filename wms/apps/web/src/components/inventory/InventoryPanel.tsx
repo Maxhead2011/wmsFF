@@ -91,8 +91,11 @@ const modes: Array<{
   },
 ];
 
-export function InventoryPanel({ session }: { session: AuthSession }) {
-  const [mode, setMode] = useState<InventoryMode | null>(null);
+export function InventoryPanel({ session, initialSessionId }: { session: AuthSession;initialSessionId?:string }) {
+  const [mode, setMode] = useState<InventoryMode | null>(initialSessionId?'RECONCILIATION':null);
+  const [focused,setFocused]=useState<InventorySession|null>(null);
+  useEffect(()=>{let active=true;if(initialSessionId)fetchInventorySession(session.accessToken,initialSessionId).then(s=>{if(active)setFocused(s);}).catch(()=>{if(active)setMessage('Не удалось открыть выбранную проверку короба.');});return ()=>{active=false;};},[initialSessionId,session.accessToken]);
+
   const [dashboard, setDashboard] = useState<InventoryDashboard | null>(null);
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -260,6 +263,9 @@ export function InventoryPanel({ session }: { session: AuthSession }) {
           </div>
 
           {mode === 'RECONCILIATION' ? (
+            initialSessionId ? <div>{focused ? <><SessionHeader current={focused}/>{!focused.boxes.length && <p>Короб ожидает пересчёта.</p>}
+              <Reconciliation dashboard={{...dashboard,historySessions:[focused],reviewSessions:[focused]}} session={session}
+                onChanged={async()=>{setFocused(await fetchInventorySession(session.accessToken,initialSessionId));await refreshDashboard();}}/></> : <p>Открытие проверки…</p>}</div> :
             <Reconciliation
               dashboard={dashboard}
               session={session}

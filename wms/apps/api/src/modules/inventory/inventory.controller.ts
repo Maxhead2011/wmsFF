@@ -37,8 +37,11 @@ export class InventoryController {
     return this.skuCollections.create(dto, user);
   }
 
+  @Post('warehouse-problems/:id/read')
+  readWarehouseProblem(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.inventory.readWarehouseProblem(id,user);}
+
   @Get('warehouse-problems')
-  warehouseProblems(@CurrentUser() user:AuthUser) { return this.inventory.warehouseProblems(user); }
+  warehouseProblems(@CurrentUser() user:AuthUser,@Query('archive') archive?:string,@Query('cursor') cursor?:string) { return this.inventory.warehouseProblems(user,archive==='true',cursor); }
 
   @Get('dashboard')
   dashboard(@Query('workOnly') workOnly: string | undefined, @CurrentUser() user: AuthUser) {

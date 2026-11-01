@@ -150,17 +150,33 @@ export class InventoryService {
     return this.runSerializableInventoryDecision(tx=>confirmFoundUnit(tx,auditId,dto,user));
   }
 
-  async warehouseProblems(user:AuthUser) {
+  async warehouseProblems(user:AuthUser, archive=false, cursor?:string) {
     if(!user.roleCodes.some(role=>['ADMIN','OWNER','SUPER_ADMIN'].includes(role))) throw new ForbiddenException();
     const warehouseId=this.resolveScopedWarehouseId(user,'read') ?? user.activeWarehouseId;
     if(!warehouseId)return [];
     const clients=await this.prisma.client.findMany({where:{isDemo:Boolean(user.isDemo),id:this.clientScopes.resolveClientFilter(user)},select:{id:true,name:true}});
     const names=new Map(clients.map(c=>[c.id,c.name]));
+    const prefix='warehouse.problem.read.v1:'+user.id+':';
+    const personal=archive ? await this.prisma.systemSetting.findMany({where:{key:{startsWith:prefix}},select:{key:true}}) : [];
     const sessions=await this.prisma.inventorySession.findMany({where:{warehouseId,clientId:{in:[...names.keys()]},type:'BOX_CHECK',
-      status:{in:['ACTIVE','REVIEW']},OR:['[FBS_MISSING_PALLET_BOX]','[FBS_MANDATORY_BOX_CHECK]','[FBO_MISSING_PALLET_BOX]','[FBO_MISSING_STOCK]'].map(marker=>({comment:{startsWith:marker}}))},
-      orderBy:{createdAt:'desc'},select:{id:true,clientId:true,createdByName:true,title:true,comment:true,createdAt:true}});
-    return sessions.map(s=>({id:s.id,title:s.title,client:names.get(s.clientId!),worker:s.createdByName,createdAt:s.createdAt,
+      ...(archive ? {AND:[{OR:[{status:{in:[InventorySessionStatus.COMPLETED,InventorySessionStatus.CANCELLED]}},{id:{in:personal.map(x=>x.key.slice(prefix.length))}}]}]} : {status:{in:[InventorySessionStatus.ACTIVE,InventorySessionStatus.REVIEW]}}),OR:['[FBS_MISSING_PALLET_BOX]','[FBS_MANDATORY_BOX_CHECK]','[FBO_MISSING_PALLET_BOX]','[FBO_MISSING_STOCK]'].map(marker=>({comment:{startsWith:marker}}))},
+      orderBy:[{createdAt:'desc'},{id:'desc'}],...(archive?{take:40,...(cursor?{cursor:{id:cursor},skip:1}:{})}:{}),select:{id:true,status:true,clientId:true,createdByName:true,title:true,comment:true,createdAt:true}});
+    const receipts=await this.prisma.systemSetting.findMany({where:{key:{in:sessions.map(s=>prefix+s.id)}},select:{key:true}});
+    const read=new Set(receipts.map(receipt=>receipt.key));
+    return sessions.map(s=>({id:s.id,clientId:s.clientId,status:s.status,isRead:read.has(prefix+s.id),
+      kind:/^\[(FBS|FBO)_MISSING_PALLET_BOX\]/.test(s.comment??'')?'box':'product',
+      boxCode:s.comment?.match(/Короб:\s*([^;\s]+)/i)?.[1] ?? s.title.match(/\bFFL_[A-Z0-9_-]+/i)?.[0] ?? null,
+      title:s.title,client:names.get(s.clientId!),worker:s.createdByName,createdAt:s.createdAt,
       detail:s.comment?.startsWith('[FBO_MISSING_STOCK]') ? '' : s.comment?.replace(/^\[[^\]]+\]\s*/, '')}));
+  }
+
+  async readWarehouseProblem(id:string,user:AuthUser){
+    // FIX: acknowledge one scoped signal for this person, independent of its inventory status.
+    const rows=await this.warehouseProblems(user);
+    if(!rows.some(row=>row.id===id))throw new NotFoundException('Проблема недоступна.');
+    const key='warehouse.problem.read.v1:'+user.id+':'+id;
+    await this.prisma.systemSetting.upsert({where:{key},create:{key,value:true,updatedByUserId:user.id},update:{}});
+    return {read:true};
   }
 
   async listSessions(type: string | undefined, user: AuthUser) {

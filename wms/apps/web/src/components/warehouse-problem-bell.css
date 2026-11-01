@@ -5,3 +5,8 @@
 .warehouse-problem-bell section header{display:flex;justify-content:space-between;align-items:center}
 .warehouse-problem-bell section header button{color:white;background:transparent;border:none;cursor:pointer}
 .warehouse-problem-bell article{border-top:1px solid #ffffff55;padding:.65rem 0;overflow-wrap:anywhere}
+.warehouse-new-signal{position:fixed;z-index:2147483000;inset:4.75rem 1rem auto auto;width:min(25rem,calc(100vw - 2rem));box-sizing:border-box;max-height:75vh;overflow:auto;padding:1rem;border-radius:.7rem;background:#961d32;color:#fff;box-shadow:0 8px 32px #30101855;font:500 1rem/1.45 system-ui;overflow-wrap:anywhere}
+.warehouse-new-signal header,.warehouse-signal-actions{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+.warehouse-new-signal header{justify-content:space-between;margin-bottom:.55rem}
+.warehouse-new-signal button,.warehouse-signal-actions button{cursor:pointer;padding:.4rem .65rem;border-radius:.4rem;background:white;color:#751a2d;border:1px solid #c7a5aa}
+.warehouse-signal-actions{margin-top:.5rem}

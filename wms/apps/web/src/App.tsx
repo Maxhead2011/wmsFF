@@ -1,3 +1,4 @@
+import type { WarehouseProblem } from './lib/api';
 import { WarehouseProblemBell } from './components/WarehouseProblemBell';
 import {magicEnabled, welcomeStyle} from './components/layout/magicAppearanceState';
 import {MagicWelcome} from './components/layout/MagicWelcome'; // FIX: personalized loading without delay.
@@ -187,6 +188,7 @@ export function App() {
   const [clientNotifications, setClientNotifications] = useState<ClientNotificationSummary[]>([]);
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
   const [modernSidebarCollapsed, setModernSidebarCollapsed] = useState(false);
+  const [problemFocus,setProblemFocus]=useState<{row:WarehouseProblem;scope:string;nonce:number}|null>(null);
   const [focusedRequestId, setFocusedRequestId] = useState<string | null>(null);
   const workspaceContentRef = useRef<HTMLElement | null>(null);
   const modernSearchRef = useRef<HTMLInputElement | null>(null);
@@ -691,7 +693,7 @@ export function App() {
               </label>
             ) : null}
             {session.user.activeWarehouseId && session.user.roleCodes.some(role=>['ADMIN','SUPER_ADMIN','OWNER'].includes(role)) &&
-              <WarehouseProblemBell key={session.user.id+session.user.activeWarehouseId} token={session.accessToken} scope={session.user.id+session.user.activeWarehouseId} />}
+              <WarehouseProblemBell onOpen={row=>{setProblemFocus({row,scope:session.user.id+session.user.activeWarehouseId,nonce:Date.now()});setActiveWorkspaceId(row.kind==='box'?'turnover':'inventory');}} key={session.user.id+session.user.activeWarehouseId} token={session.accessToken} scope={session.user.id+session.user.activeWarehouseId} />}
             <div className="header-notification-center" ref={notificationCenterRef}>
               <button
                 className="modern-header-action"
@@ -827,6 +829,7 @@ export function App() {
               setActiveWorkspaceId('requests');
             },
             () => setFocusedRequestId(null),
+            problemFocus?.scope===session.user.id+session.user.activeWarehouseId?problemFocus:null,
           )} /> : renderWorkspace(
             activeWorkspace.id,
             session,
@@ -842,6 +845,7 @@ export function App() {
               setActiveWorkspaceId('requests');
             },
             () => setFocusedRequestId(null),
+            problemFocus?.scope===session.user.id+session.user.activeWarehouseId?problemFocus:null,
           )}
           </SoulWorkspace>
         </section>
@@ -943,6 +947,7 @@ function renderWorkspace(
   focusedRequestId: string | null,
   openRequestFromFbs: (requestId: string) => void,
   clearFocusedRequest: () => void,
+  problemFocus:{row:WarehouseProblem;nonce:number}|null,
 ) {
   switch (activeWorkspaceId) {
     case 'operations-statistics':
@@ -980,7 +985,7 @@ function renderWorkspace(
     case 'storage-zones':
       return <StorageZonesPanel session={session} />;
     case 'inventory':
-      return <InventoryPanel session={session} />;
+      return <InventoryPanel key={problemFocus?.nonce} session={session} initialSessionId={problemFocus?.row.kind==='product'?problemFocus.row.id:undefined} />;
     case 'pallet-sorting':
       return <PalletSortingPanel session={session} />;
     case 'kiz':
@@ -988,7 +993,7 @@ function renderWorkspace(
     case 'kiz-circulation':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю погашение КИЗ…</div>}><KizCirculationPanel session={session} /></Suspense>;
     case 'turnover':
-      return <TurnoverPanel session={session} />;
+      return <TurnoverPanel key={problemFocus?.nonce} session={session} initialBox={problemFocus?.row.kind==='box'?problemFocus.row:undefined} />;
     case 'requests':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel compactMobile={uiTheme === 'soul'} session={session} onOpenFbsOrders={() => setActiveWorkspaceId('fbs')} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
     case 'order-assembly':
