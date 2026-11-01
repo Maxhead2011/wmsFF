@@ -1,3 +1,5 @@
+PR829. Both Ozon import methods are collapsed inside Excel assembly in Requests. Verified the live request panel and retained link draft across toggles. Web593/2 skipped, TypeScript and Edge passed. Exact web2 overlay on PR820. Baseline 2026-11-01-ozon-under-excel.
+
 PR826, feature/la_panthera. Request list sorts by Russian client names in either direction. Batch status check has a blue button. Both WB FBO assembly entry points open supply binding from the header. Web 593 passed, 2 skipped. API 4295 passed, 156 skipped, plus 3 KIZ tests on dedicated PostgreSQL. Web TypeScript and candidate/public Edge scenarios passed. Web image changed three files; API image and schema retained. Baseline 2026-11-01-request-client-controls.
 
 Published PR824 in feature/la_panthera. Requests header first, three independent disclosures, compact request number and distinct active search mode. Web592 passed/2 skipped, TypeScript passed, candidate/public Edge16 each including mobile layout and existing marketplace buttons. Exact web3 overlay, other containers unchanged. Baseline 2026-11-01-compact-request-tools; source parity false.
