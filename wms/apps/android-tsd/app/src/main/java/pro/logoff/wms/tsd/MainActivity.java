@@ -2843,6 +2843,20 @@ public class MainActivity extends Activity {
         });
     }
 
+    void openReportedFboBox(String sessionId,String boxCode){
+        final TsdSession session=safeSession();
+        if(session==null)return;
+        if(fboTwoStageScreen!=null){fboTwoStageScreen.close();fboTwoStageScreen=null;}
+        activeInventory=null;activeInventoryBox=null;statusMessage="Открываю актуализацию "+boxCode;renderInventoryCountScreen();
+        runBackground(()->{
+            MandatoryFbsAuditLoader.Result opened=MandatoryFbsAuditLoader.load(WmsApiFactory.create(DEFAULT_BASE_URL),session.authorizationHeader(),
+                sessionId,boxCode,java.util.Collections.emptyMap(),ignored->{},this::inventoryHttpError);
+            mainHandler.post(()->{if(!fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
+                activeInventory=opened.session;activeInventoryBox=opened.box;inventoryKizScan.clear();
+                statusMessage="Пересчитайте содержимое короба "+boxCode;renderInventoryCountScreen();});
+        });
+    }
+
     private void renderInventoryCountScreen() {
         screen = Screen.INVENTORY_COUNT;
         inventoryKizScan.syncBox(activeInventoryBox == null ? null : activeInventoryBox.id);
@@ -6300,7 +6314,7 @@ public class MainActivity extends Activity {
 
         fbsBusy = true;
         fbsFeedbackColor = Color.rgb(254, 240, 138);
-        statusMessage = tr("Отправляю сигнал менеджеру…", "Menejerga xabar yuborilmoqda…");
+        statusMessage = tr("Отправляю сигнал администраторам…", "Menejerga xabar yuborilmoqda…");
         renderFbsAssemblyScreen();
         runBackground(() -> {
             Map<String, Object> request = new LinkedHashMap<>();
