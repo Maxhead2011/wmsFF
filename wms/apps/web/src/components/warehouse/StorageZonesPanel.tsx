@@ -1,3 +1,4 @@
+import {ReceiptPlacementPanel} from './ReceiptPlacementPanel';
 import {
   ArrowLeftRight,
   Boxes,
@@ -80,6 +81,7 @@ export function StorageZonesPanel({ session }: { session: AuthSession }) {
         sync,
       });
       setState({ loading: false, data, error: '' });
+      window.dispatchEvent(new Event('storage-layout-changed'));
     } catch (error) {
       setState((current) => ({ ...current, loading: false, error: errorText(error) }));
     }
@@ -327,12 +329,18 @@ export function StorageZonesPanel({ session }: { session: AuthSession }) {
       </header>
 
       {data ? (
-        <div className="storage-zones__metrics">
+        <ReceiptPlacementPanel
+          canManage={session.user.permissionCodes.includes('warehouse:write')||session.user.permissionCodes.includes('system:admin')}
+          token={session.accessToken}
+          warehouseId={session.user.activeWarehouseId}
+          revision={state.data}
+          fallback={<div className="storage-zones__metrics">
           <Metric icon={<Warehouse size={18} />} label="Зон" value={data.summary.zones} />
           <Metric icon={<PackagePlus size={18} />} label="Паллет" value={data.summary.pallets} />
           <Metric icon={<Boxes size={18} />} label="Коробов" value={data.summary.boxes} />
           <Metric icon={<MapPin size={18} />} label="Без зоны" value={data.summary.unassignedPallets} />
-        </div>
+        </div>}
+        />
       ) : null}
 
       {data ? (

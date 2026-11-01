@@ -1,0 +1,93 @@
+.receipt-placement__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.receipt-placement__metrics > div,
+.receipt-placement__metrics > button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+  border: 1px solid #d2dfe0;
+  border-radius: 12px;
+  padding: 16px;
+  background: white;
+  color: #253948;
+  font: inherit;
+}
+.receipt-placement__metrics strong {
+  font-size: 24px;
+}
+.receipt-placement__metrics button {
+  cursor: pointer;
+  background: #fff5db;
+}
+.receipt-placement__dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  box-sizing: border-box;
+  width: min(820px, 94vw);
+  max-height: 85vh;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid #d2dfe0;
+  border-radius: 16px;
+  color: #253948;
+  background: white;
+}
+.receipt-placement__dialog::backdrop {
+  background: #20334466;
+}
+.receipt-placement__dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.receipt-placement__dialog label {
+  display: grid;
+  gap: 6px;
+  margin: 16px 0;
+}
+.receipt-placement__dialog section {
+  border-top: 1px solid #d2dfe0;
+  padding-top: 12px;
+  margin-top: 12px;
+}
+.receipt-placement__dialog li {
+  overflow-wrap: anywhere;
+}
+.receipt-placement__badge {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  background: #fff1cf;
+  color: #875400;
+  border-radius: 50%;
+  margin-left: 6px;
+}
+@media (max-width: 500px) {
+  .receipt-placement__metrics {
+    grid-template-columns: 1fr;
+  }
+}
+.receipt-placement__dialog input,
+.receipt-placement__dialog button {
+  box-sizing: border-box;
+  border: 1px solid #cbd8da;
+  border-radius: 9px;
+  padding: 9px 13px;
+  color: #253948;
+  background: #fff;
+  font: inherit;
+}
+.receipt-placement__dialog input { width: 100%; min-width: 0; }
+.receipt-placement__dialog header button {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+}
+.receipt-placement__dialog h2 { margin: 0; }

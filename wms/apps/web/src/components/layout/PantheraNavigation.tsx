@@ -1,3 +1,4 @@
+import {ReceiptPlacementBadge} from '../warehouse/ReceiptPlacementPanel';
 import { usePantheraFavorites } from './usePantheraFavorites';
 import { useState } from 'react';
 import { Settings, type LucideIcon } from 'lucide-react';
@@ -6,10 +7,10 @@ import {SidebarRequestBadge,type useSidebarRequestCounts} from './SidebarRequest
 
 type Item = {id: string; title: string; icon: LucideIcon};
 type Group = {id:string; title:string; items:Item[]};
-type Props = {groups:Group[]; userId:string; accessToken:string; activeId:string; onOpen:(id:string)=>void; kizUnread:number;counts?:ReturnType<typeof useSidebarRequestCounts>};
+type Props = {warehouseId?:string|null;groups:Group[]; userId:string; accessToken:string; activeId:string; onOpen:(id:string)=>void; kizUnread:number;counts?:ReturnType<typeof useSidebarRequestCounts>};
 
 // FIX: quick links are copies of authorized items; original groups are never reordered.
-export function PantheraNavigation({groups,userId,accessToken,activeId,onOpen,kizUnread,counts=null}:Props) {
+export function PantheraNavigation({groups,userId,accessToken,activeId,onOpen,kizUnread,counts=null,warehouseId}:Props) {
   const {ids,busy,ready,message,save,reload}=usePantheraFavorites(userId,accessToken);
   const [picker,setPicker]=useState(false),[editing,setEditing]=useState(false);
   const [quickTarget,setQuickTarget]=useState<string|null>(null),[dragged,setDragged]=useState<string|null>(null);
@@ -20,6 +21,7 @@ export function PantheraNavigation({groups,userId,accessToken,activeId,onOpen,ki
   function itemButton(item:Item,quick=false){const Icon=item.icon;return <button key={item.id} type="button" className={item.id===activeId?'active':''} onClick={()=>{if(quick&&editing)return;setQuickTarget(quick?item.id:null);onOpen(item.id);}}>
     <Icon size={18} aria-hidden={true}/><span>{item.title}</span>
     <SidebarRequestBadge id={item.id} state={counts}/>
+    {item.id==='storage-zones'&&<ReceiptPlacementBadge token={accessToken} warehouseId={warehouseId}/>}
     {item.id==='kiz'&&kizUnread>0?<strong className="workspace-nav__badge" aria-label={`Непрочитанных проблем КИЗ: ${kizUnread}`}>{kizUnread>99?'99+':kizUnread}</strong>:null}
   </button>;}
   const quickLinks=<section className="workspace-favorites" aria-label="Часто используемые" onContextMenu={event=>{event.preventDefault();if(ready&&!busy)setEditing(true);}}>

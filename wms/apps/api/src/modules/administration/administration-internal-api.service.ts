@@ -319,7 +319,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment'],
-    routeCount: 108, // FIX: include explicit receipt-KIZ administrator review.
+    routeCount: 110, // FIX: receipt placement tasks and actions for TSD.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Печатает два целевых ШК переклейки через станцию и проверяет подтверждение печати.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],
@@ -347,7 +347,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     name: 'Склад и размещение',
     prefixes: ['/warehouse', '/warehouse/storage-locations'],
     // FIX: 30 warehouse handlers plus 12 storage-location handlers.
-    routeCount: 44, // FIX: separate cargo invoice and delivery correction.
+    routeCount: 47, // FIX: receipt placement tasks and actions.
     description: 'Короба, паллет-сорты, зоны, ячейки и физическое размещение товара.',
     logic: ['Создаёт и изменяет складские места.', 'Размещает и перемещает короба.', 'Показывает содержимое и актуальную иерархию хранения.'],
     dependencies: ['Основная БД', 'Складские движения'],

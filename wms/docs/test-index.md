@@ -511,3 +511,7 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
 - Поиск КИЗ: kiz-location.service.spec.ts проверяет сохранение решений по единице и фильтрацию истории WB по филиалу. Браузерный сценарий проверяет выбор переклейки после поиска.
 - Макеты приёмки КИЗ и окна WB проверяются browser.cjs в kiz-review-timeline и wb-binding-window.browser-test.cjs (размер кнопок, привязка, закрытие и сворачивание).
 - Браузерные проверки WB на 390/640/980 px с длинным названием и проверка центровки карточки КИЗ входят в сценарии wb-binding-window и kiz-review-timeline.
+- receipt-placement-report.integration.spec.ts проверяет реальную PostgreSQL: филиалы/клиенты, привязки по коду, удалённые палеты, архивные короба, индекс приёмок и курсор. scripts/releases/receipt-placement/browser.cjs проверяет счётчики, группы, модальное окно и смену области доступа.
+
+- receipt-placement-scope.spec.ts проверяет флаг включения и изоляцию клиентского доступа. Отгрузочные короба и клиенты без коробного хранения исключены из ожидания размещения.
+- Оставшиеся этапы размещения: receipt-placement-report.integration.spec.ts (начало, отсрочка, завершение, снятые и выбывшие короба), receipt-placement-concurrency.integration.spec.ts (два сотрудника одновременно), ReceiptPlacementActivityTest (экран ТСД), workflow-browser.cjs (предупреждение и отсрочка).

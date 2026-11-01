@@ -1,3 +1,5 @@
+import {placementTransaction,placementReceipts,lockPlacementReceipt,recordPlacementAction,assertPlacementReceipt,receiptForPlacementBox,type PlacementReceipt} from './receipt-placement-workflow';
+import { receiptPlacementReport } from './receipt-placement-report';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementType, Prisma, StockStatus } from '@prisma/client';
 import type { AuthUser } from '../auth/auth.types';
@@ -30,6 +32,55 @@ export class StorageLocationsService {
     private readonly balances: StockBalancesService,
     private readonly archivedEmptyBoxDetach?: ArchivedEmptyBoxPalletDetachService,
   ) {}
+
+  async placementReport(user: AuthUser, cursor?: string, summaryOnly = false) {
+    if (process.env.WMS_RECEIPT_PLACEMENT_ENABLED !== 'true') {
+      return { summary: { pallets: 0, boxes: 0, awaiting: 0 }, items: [], nextCursor: null, enabled: false };
+    }
+    const warehouseId = user.activeWarehouseId;
+    if (!warehouseId || (!user.permissionCodes.includes('system:admin') && !user.warehouseIds?.includes(warehouseId))) {
+      throw new ForbiddenException('Выберите доступный филиал.');
+    }
+    const clientIds = user.clientScopeMode === 'ALL' && !user.roleCodes.includes('CLIENT')
+      ? undefined
+      : user.clientIds;
+    const report = await receiptPlacementReport(this.prisma, warehouseId, clientIds, cursor, summaryOnly);
+    return { ...report, enabled: true };
+  }
+
+  async receiptPlacementTasks(user:AuthUser,clientId?:string,document?:string){
+    const {warehouseId,clientIds}=this.placementScope(user);
+    const selected=clientId&&document?{clientId,document}:undefined;
+    if(selected&&clientIds&&!clientIds.includes(selected.clientId))throw new ForbiddenException('Приёмка недоступна.');
+    return {items:await placementReceipts(this.prisma,warehouseId,clientIds,selected,!selected)};
+  }
+
+  async receiptPlacementAction(body:Record<string,unknown>,user:AuthUser){
+    const {warehouseId,clientIds}=this.placementScope(user,true);
+    const receipt=this.selectedPlacementReceipt(body)!;
+    if(!receipt || clientIds&&!clientIds.includes(receipt.clientId))throw new ForbiddenException('Приёмка недоступна.');
+    const action=this.requiredText(body.action,'Укажите действие.');
+    if(!['START','FINISH','DEFER','REFRESH'].includes(action))throw new BadRequestException('Неизвестное действие.');
+    return this.prisma.$transaction(async tx=>{
+      await lockPlacementReceipt(tx,warehouseId,receipt);
+      if(action==='REFRESH'){const [current]=await placementReceipts(tx,warehouseId,[receipt.clientId],receipt);return current??null;}
+      return recordPlacementAction(tx,warehouseId,receipt,action,user);
+    },{timeout:15000});
+  }
+
+  private placementScope(user:AuthUser,write=false){
+    if(process.env.WMS_RECEIPT_PLACEMENT_ENABLED!=='true')throw new BadRequestException('Размещение приёмок пока выключено.');
+    const warehouseId=user.activeWarehouseId;
+    const warehouses=write?user.writableWarehouseIds:user.warehouseIds;
+    if(!warehouseId||!user.permissionCodes.includes('system:admin')&&!warehouses?.includes(warehouseId))throw new ForbiddenException('Выберите доступный филиал.');
+    return {warehouseId,clientIds:user.clientScopeMode==='ALL'&&!user.roleCodes.includes('CLIENT')?undefined:(write?user.writableClientIds:user.clientIds)};
+  }
+
+  private selectedPlacementReceipt(body:Record<string,unknown>):PlacementReceipt|null{
+    if(!body.placementDocument&&!body.placementClientId)return null;
+    if(process.env.WMS_RECEIPT_PLACEMENT_ENABLED!=='true')throw new BadRequestException('Размещение приёмок пока выключено.');
+    return {clientId:this.requiredText(body.placementClientId,'Выберите клиента.'),document:this.requiredText(body.placementDocument,'Выберите приёмку.')};
+  }
 
   async listLayout(
     warehouseId: string | undefined,
@@ -453,7 +504,7 @@ export class StorageLocationsService {
       throw new NotFoundException('Паллета не найдена.');
     }
     this.requirePalletAccess(user, pallet, 'write');
-    return this.placeBox(pallet, code, 'MANUAL', user);
+    return this.placeBox(pallet, code, 'MANUAL', user, false, this.selectedPlacementReceipt(body));
   }
 
   async removeBox(palletId: string, boxCode: string, user: AuthUser) {
@@ -614,7 +665,7 @@ export class StorageLocationsService {
       orderBy: { updatedAt: 'desc' },
     });
     if (!pallet) {
-      return { state: 'SCAN_PALLET', message: 'Отсканируйте номер паллеты.', pallet: null };
+      return { ...(process.env.WMS_RECEIPT_PLACEMENT_ENABLED==='true'?{receiptPlacementEnabled:true}:{}), state: 'SCAN_PALLET', message: 'Отсканируйте номер паллеты.', pallet: null };
     }
     return this.tsdPalletResponse(pallet.id, 'Продолжайте сканировать короба.');
   }
@@ -662,6 +713,7 @@ export class StorageLocationsService {
   }
 
   async scanTsdPalletBox(id: string, body: Record<string, unknown>, user: AuthUser) {
+    const receipt=this.selectedPlacementReceipt(body);
     const scannedCode = this.requiredText(body.boxCode, 'Отсканируйте номер короба.');
     // FIX: storage boxes use their own configured prefixes; ordinary boxes keep recovery rules.
     let createStorageBox = false;
@@ -693,6 +745,10 @@ export class StorageLocationsService {
       throw new BadRequestException(`Короб ${boxCode} относится к другому клиенту.`);
     }
     this.assertBoxWarehouse(box, pallet.warehouseId, boxCode);
+    if(receipt){
+      if(receipt.clientId!==pallet.clientId)throw new BadRequestException('Паллета относится к другому клиенту.');
+      await assertPlacementReceipt(this.prisma,pallet.warehouseId,receipt,boxCode);
+    }
     if (!box) {
       if (createStorageBox) {
         await this.placeBox(pallet, boxCode, 'TSD', user, true);
@@ -735,7 +791,7 @@ export class StorageLocationsService {
       return this.tsdPalletResponse(pallet.id, `Короб ${boxCode} уже добавлен. Повтор не засчитан.`, true);
     }
     const movedFrom = current?.pallet.code ?? null;
-    await this.placeBox(pallet, boxCode, 'TSD', user);
+    await this.placeBox(pallet, boxCode, 'TSD', user, false, receipt);
     return this.tsdPalletResponse(
       pallet.id,
       movedFrom
@@ -917,6 +973,7 @@ export class StorageLocationsService {
     return {
       state: 'SCAN_PALLET',
       message: `Паллета ${pallet.code} завершена: ${pallet.boxes.length} коробов. Отсканируйте следующую паллету.`,
+      ...(process.env.WMS_RECEIPT_PLACEMENT_ENABLED==='true'?{receiptPlacementEnabled:true}:{}),
       pallet: null,
     };
   }
@@ -963,6 +1020,7 @@ export class StorageLocationsService {
     return {
       state: 'SCAN_PALLET',
       message: `Паллета ${pallet.code} удалена. Все ${pallet.boxes.length} коробов отвязаны. Теперь можно отсканировать эту паллету заново.`,
+      ...(process.env.WMS_RECEIPT_PLACEMENT_ENABLED==='true'?{receiptPlacementEnabled:true}:{}),
       pallet: null,
     };
   }
@@ -1172,9 +1230,21 @@ export class StorageLocationsService {
     source: 'MANUAL' | 'TSD',
     user: AuthUser,
     createMissingStorageBox = false,
+    receipt: PlacementReceipt|null = null,
   ) {
     this.requirePalletAccess(user, pallet, 'write');
-    return this.prisma.$transaction(async (tx) => {
+    return placementTransaction(this.prisma, async (tx) => {
+      if(!receipt && process.env.WMS_RECEIPT_PLACEMENT_ENABLED==='true'){
+        const candidate=await receiptForPlacementBox(tx,pallet.warehouseId,pallet.clientId,boxCode);
+        if(candidate){
+          const [task]=await placementReceipts(tx,pallet.warehouseId,[pallet.clientId],candidate);
+          if(task?.boxes.includes(boxCode))receipt=candidate;
+        }
+      }
+      if(receipt){
+        await lockPlacementReceipt(tx,pallet.warehouseId,receipt);
+        await assertPlacementReceipt(tx,pallet.warehouseId,receipt,boxCode);
+      }
       // FIX: the cleanup service locks the same Box row before archiving it.
       const lockedBoxes = await tx.$queryRaw<Array<{
         id: string;
@@ -1239,6 +1309,7 @@ export class StorageLocationsService {
           workerName: user.name,
         },
       });
+      if(receipt)await recordPlacementAction(tx,pallet.warehouseId,receipt,'PLACED',user,boxCode);
       return {
         ...placement,
         warning: box ? null : `Короб ${boxCode} сохранён в размещении, но пока не найден в WMS.`,
@@ -1277,6 +1348,7 @@ export class StorageLocationsService {
       throw new NotFoundException('Паллета не найдена.');
     }
     return {
+      ...(process.env.WMS_RECEIPT_PLACEMENT_ENABLED==='true'?{receiptPlacementEnabled:true}:{}),
       state: recovery ? 'SCAN_BOX_CONTENTS' : 'SCAN_BOX',
       message,
       duplicate,
