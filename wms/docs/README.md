@@ -1,4 +1,4 @@
-Prepared: [forced marketplace check in Requests](request-market-status.md). Scoped fresh WB/Ozon/Lamoda reads and existing delivery guards.
+Published PR821 in `feature/la_panthera`: [marketplace checks and WB supply binding](request-market-status.md). One button beside batch handover checks scoped open marketplace requests; the FBO WB header opens binding during picking. API4295/web592/typecheck, PostgreSQL12/full health and candidate/public Edge10 passed. Exact API5/web2; source parity false. Baseline `2026-11-01-panthera-market-buttons`.
 
 FBO Ozon import decision audit for file and link creation. The request event and audit row retain the selected action and displayed SKU shortages in the creation transaction. Existing requests keep their original history. Correction submission, failure, unknown result and successful application have separate history entries. Own-image WMS_OZON_STOCK_DECISION_AUDIT_ENABLED. API4287/web588, candidate browser10/bootstrap5, isolated PostgreSQL6/full health.
 

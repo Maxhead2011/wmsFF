@@ -1,4 +1,4 @@
-Prepared: request-market-status.spec.ts (scope, partial replies, rebind and normal completion); RequestMarketStatus.test.tsx (global button and partial failures); wb-binding-window.browser-test.cjs (picking-phase popup next to minimize).
+Published PR821 in `feature/la_panthera`: [marketplace checks and WB supply binding](request-market-status.md). One button beside batch handover checks scoped open marketplace requests; the FBO WB header opens binding during picking. API4295/web592/typecheck, PostgreSQL12/full health and candidate/public Edge10 passed. Exact API5/web2; source parity false. Baseline `2026-11-01-panthera-market-buttons`.
 
 ReceiptBatchesPanel places the client picker immediately below the header and before receipt review/date filters. File refresh stays with files. Fixed-client access retains its existing scope. Regression: ReceiptBatchesPanel.spec.tsx.
 
