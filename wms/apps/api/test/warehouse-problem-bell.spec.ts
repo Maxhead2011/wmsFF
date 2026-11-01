@@ -35,3 +35,13 @@ it('archives completed or cancelled checks for the branch and open checks read b
  await service.warehouseProblems(user as never,true,'previous');
  expect(db.inventorySession.findMany.mock.calls[0][0]).toMatchObject({take:40,skip:1,cursor:{id:'previous'},where:{warehouseId:'wh',clientId:{in:['c']},AND:[{OR:[{status:{in:['COMPLETED','CANCELLED']}},{id:{in:['s']}}]}]}});
 });
+it('bulk acknowledgement excludes foreign signals and new arrivals and is safe to retry', async()=>{
+  // TEST: a signal arriving after the click stays unread.
+  const {db,service}=setup();
+  const write=vi.fn();Object.assign(db.systemSetting,{createMany:write});
+  db.inventorySession.findMany.mockResolvedValue([{id:'shown',title:'Первый'},{id:'new-arrival',title:'Новый'}]);
+  const ids=['shown','foreign','shown'];
+  expect(await service.readWarehouseProblems(ids,user as never)).toEqual({readIds:['shown']});
+  await service.readWarehouseProblems(ids,user as never);
+  expect(write).toHaveBeenLastCalledWith({skipDuplicates:true,data:[{key:'warehouse.problem.read.v1:admin-1:shown',value:true,updatedByUserId:'admin-1'}]});
+});

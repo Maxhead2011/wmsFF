@@ -37,6 +37,11 @@ export class InventoryController {
     return this.skuCollections.create(dto, user);
   }
 
+  @Post('warehouse-problems/read-all')
+  readWarehouseProblems(@Body('ids') ids:unknown,@CurrentUser() user:AuthUser){
+    return this.inventory.readWarehouseProblems(ids,user);
+  }
+
   @Post('warehouse-problems/:id/read')
   readWarehouseProblem(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.inventory.readWarehouseProblem(id,user);}
 

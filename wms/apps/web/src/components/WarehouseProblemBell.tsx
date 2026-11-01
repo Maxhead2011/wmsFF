@@ -1,14 +1,19 @@
 import {useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {BellRing,X} from 'lucide-react';
-import {fetchWarehouseProblems,markWarehouseProblemRead,type WarehouseProblem} from '../lib/api';
+import {fetchWarehouseProblems,markWarehouseProblemRead,markWarehouseProblemsRead,type WarehouseProblem} from '../lib/api';
 import './warehouse-problem-bell.css';
+
+const signalTime = new Intl.DateTimeFormat('ru-RU',{
+  timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',
+});
 
 export function WarehouseProblemBell({token,scope,onOpen}:{token:string;scope:string;onOpen:(row:WarehouseProblem)=>void}){
   const [rows,setRows]=useState<WarehouseProblem[]>([]);
   const [open,setOpen]=useState(false);
   const [toast,setToast]=useState<WarehouseProblem|null>(null);
   const [error,setError]=useState('');
+  const [readingAll,setReadingAll]=useState(false);
   const [archiveOpen,setArchiveOpen]=useState(false);
   const [archiveRows,setArchiveRows]=useState<WarehouseProblem[]>([]);
   const [more,setMore]=useState(false);
@@ -53,7 +58,22 @@ export function WarehouseProblemBell({token,scope,onOpen}:{token:string;scope:st
       setRows(list=>list.map(x=>x.id===row.id?{...x,isRead:true}:x));setToast(x=>x?.id===row.id?null:x);setError('');if(archiveOpen)void loadArchive();
     }catch{setError('Не удалось сохранить отметку о прочтении.');}
   }
-  function card(row:WarehouseProblem){return <article key={row.id}><strong>{row.title}</strong><div>Сборщик: {row.worker}</div><div>Клиент: {row.client}</div><div>{row.detail}</div>
+  async function readAll(){
+    const ids=rows.filter(row=>!row.isRead).map(row=>row.id);
+    if(readingAll||!ids.length)return;
+    setReadingAll(true);
+    try {
+      const {readIds}=await markWarehouseProblemsRead(token,ids);
+      const confirmed=new Set(readIds);
+      for(const id of confirmed)acknowledged.current.add(id);
+      setRows(list=>list.map(row=>confirmed.has(row.id)?{...row,isRead:true}:row));
+      setToast(current=>current&&confirmed.has(current.id)?null:current);
+      setError('');
+      if(archiveOpen)await loadArchive();
+    } catch {setError('Не удалось отметить проблемы прочитанными. Повторите попытку.');}
+    finally {setReadingAll(false);}
+  }
+  function card(row:WarehouseProblem){return <article key={row.id}><strong>{row.title}</strong><div><time dateTime={row.createdAt}>{signalTime.format(new Date(row.createdAt))} МСК</time></div><div>Сборщик: {row.worker}</div><div>Клиент: {row.client}</div><div>{row.detail}</div>
     <div className="warehouse-signal-actions"><button type="button" disabled={row.kind==='box'&&!row.boxCode} onClick={()=>{setOpen(false);setToast(null);onOpen(row);}}>{row.kind==='box'?'Открыть товародвижение':'Открыть актуализацию'}</button>
     {row.status==='COMPLETED'?<small>Разобрано</small>:row.status==='CANCELLED'?<small>Проверка отменена</small>:row.isRead?<small>Прочитано · проверка открыта</small>:<button type="button" onClick={()=>void mark(row)}>Пометить прочитанной</button>}</div></article>;}
   const unread=rows.filter(row=>!row.isRead).length;
@@ -62,7 +82,9 @@ export function WarehouseProblemBell({token,scope,onOpen}:{token:string;scope:st
     {error&&<p role="alert">{error}</p>}{unread===0&&!error&&<p>Непрочитанных проблем нет</p>}{rows.filter(row=>!row.isRead).map(card)}
       <button type="button" aria-expanded={archiveOpen} onClick={()=>{setArchiveOpen(!archiveOpen);if(!archiveOpen)void loadArchive();}}>{archiveOpen?'Свернуть архив':'Архив проблем'}</button>
       {archiveOpen&&<div>{archiveRows.map(card)}{archiveBusy&&<p>Загрузка архива…</p>}{!archiveBusy&&!archiveRows.length&&!error&&<p>Архив пуст</p>}
-      {more&&<button type="button" disabled={archiveBusy} onClick={()=>void loadArchive(true)}>Показать ещё</button>}</div>}</section>}
+      {more&&<button type="button" disabled={archiveBusy} onClick={()=>void loadArchive(true)}>Показать ещё</button>}</div>}
+      <footer><button type="button" disabled={readingAll||unread===0} onClick={()=>void readAll()}>{readingAll?'Отмечаю…':'Прочитать все'}</button></footer>
+    </section>}
     {toast&&createPortal(<aside className="warehouse-new-signal" role="alert" aria-label="Новая проблема с товаром"><header><strong>Проблема с товаром</strong><button aria-label="Скрыть уведомление" onClick={()=>setToast(null)}><X size={18}/></button></header>{card(toast)}{error&&<p>{error}</p>}</aside>,document.body)}
   </div>;
 }

@@ -207,7 +207,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'inventory',
     name: 'Инвентаризация и сортировка',
     prefixes: ['/inventory', '/pallet-sorting', '/inventory/kiz-location', '/inventory/kiz-found'],
-    routeCount: 31, // FIX: scoped warehouse problems and per-user acknowledgement.
+    routeCount: 32, // FIX: includes bulk acknowledgement of visible signals.
     description: 'Пересчёты, актуализация, подтверждение найденной единицы по КИЗ и отдельная сортировка паллет-сорта или короба для администратора.',
     logic: ['Фиксирует снимок ожидаемых остатков.', 'Сравнивает факт со снимком.', 'Применяет подтверждённые расхождения через движения склада.', 'Сортировка переносит товар и КИЗ в новые короба без приёмки; списывает недостачу только по свежему подтверждению и перестраивает затронутые FBS-маршруты.'],
     dependencies: ['Основная БД', 'Складские движения'],

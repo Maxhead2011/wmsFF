@@ -170,6 +170,21 @@ export class InventoryService {
       detail:s.comment?.startsWith('[FBO_MISSING_STOCK]') ? '' : s.comment?.replace(/^\[[^\]]+\]\s*/, '')}));
   }
 
+  async readWarehouseProblems(ids: unknown, user: AuthUser) {
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
+      throw new BadRequestException('Передайте список сигналов.');
+    }
+    const visible = await this.warehouseProblems(user);
+    const requested = new Set(ids);
+    // FIX: only acknowledge the displayed snapshot within the current user's read scope.
+    const readIds = visible.filter(row => requested.has(row.id)).map(row => row.id);
+    if (readIds.length) await this.prisma.systemSetting.createMany({
+      data: readIds.map(id => ({key:'warehouse.problem.read.v1:'+user.id+':'+id,value:true,updatedByUserId:user.id})),
+      skipDuplicates:true,
+    });
+    return {readIds};
+  }
+
   async readWarehouseProblem(id:string,user:AuthUser){
     // FIX: acknowledge one scoped signal for this person, independent of its inventory status.
     const rows=await this.warehouseProblems(user);
