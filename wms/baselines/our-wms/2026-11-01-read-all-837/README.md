@@ -1,0 +1,1 @@
+Published PR837: Moscow creation date/time on every warehouse problem and bulk acknowledgement for visible IDs within user/branch scope. Public browser and isolated API/DB verified. Exact API3/web2; LOGOFF 250 unchanged.

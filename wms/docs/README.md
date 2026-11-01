@@ -1,3 +1,5 @@
+Published PR837: Moscow creation date/time on every warehouse problem and bulk acknowledgement for visible IDs within user/branch scope. Public browser and isolated API/DB verified. Exact API3/web2; LOGOFF 250 unchanged.
+
 Published PR835: warehouse problem toast, personal acknowledgement and paginated archive, scoped box movement history and exact inventory session. Exact 3 API and 3 web files. Actual public browser6/bootstrap5, isolated PostgreSQL and full API health verified; LOGOFF 250 unchanged.
 
 Published PR820, LOGOFF 250: WB FBO shortage preview, corrected quantities, missing box alerts and scanned box recount; FBS/FBO red notifications for administrators and owners. Signed APK, isolated API/DB, public web and single entry verified. Source parity false.

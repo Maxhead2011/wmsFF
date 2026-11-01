@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "/assets/warehouse-read-all-20261101.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "/assets/warehouse-read-all-20261101.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "/assets/warehouse-read-all-20261101.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "/assets/warehouse-read-all-20261101.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "/assets/warehouse-read-all-20261101.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}
