@@ -20,8 +20,8 @@ export function KizReviewCard({row,disabled,onDecision,onInspect}:{row:KizReview
   const scope=row.snapshot.scope;
   return <details className="kiz-queue kiz-review-case">
     <summary>
-    <h4>{row.snapshot.productName} · {scope==='RECEIPT'?'Приёмка':`${scope?scope+' · ':''}заявка №${String(row.snapshot.requestNumber).padStart(6,'0')}`}</h4>
-      <span>{new Date(row.createdAt).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})} · {row.status==='APPROVED'?'Решение принято':row.active?'Требует проверки':row.status==='CLOSED'?'Закрыто':'Неактуально'}</span>
+    <h4>{row.snapshot.productName} · {scope==='RECEIPT'?'Приёмка':scope==='UNIT'?'Единица на складе':`${scope?scope+' · ':''}заявка №${String(row.snapshot.requestNumber).padStart(6,'0')}`}</h4>
+      <span>{row.createdAt && scanDate(row.createdAt)+' · '}{row.status==='APPROVED'?'Решение принято':row.active?'Требует проверки':row.status==='CLOSED'?'Закрыто':'Неактуально'}</span>
     </summary>
     <div className="kiz-review-case__body">
     {scope==='RECEIPT'&&<ReceiptScanTimeline row={row}/>}
@@ -29,7 +29,7 @@ export function KizReviewCard({row,disabled,onDecision,onInspect}:{row:KizReview
     <p>КИЗ: {row.kizIdentity} · ШК: {row.snapshot.barcode??'—'}</p>
     {row.snapshot.receiptDuplicateUnconfirmed&&<p role="status">Повторный скан на ТСД. При передаче обращения первая единица ещё не была зарегистрирована в WMS. Наличие двух физических товаров с одинаковым КИЗом не подтверждено.</p>}
     <p>{row.decision==='RELABEL'?(row.physicalReuseAllowed?'WB сообщает о прежней продаже. После физической проверки можно разрешить этот КИЗ либо переклейку.':'Подтверждено использование: нужна переклейка.'):'История использования требует проверки администратора.'}</p>
-    <p>Зарегистрировано в ВМС: {new Date(row.createdAt).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})} МСК · обращений с ТСД: {row.attempts}</p>
+    {scope!=='UNIT'&&<p>Зарегистрировано в ВМС: {new Date(row.createdAt).toLocaleString('ru-RU',{timeZone:'Europe/Moscow'})} МСК · обращений с ТСД: {row.attempts}</p>}
     {scope==='RECEIPT'&&<p>Товар отложен. Решение не добавляет повторный приход. Возврат оформляется отдельно.</p>}
     {!row.active&&row.status!=='CLOSED'&&<p>Задание изменилось или единица уже принята. Нужно новое обращение из текущей сборки.</p>}
     {row.status==='APPROVED'&&<p>Разрешено: {row.resolution==='RELABEL'?'переклейка':'использование'}. {row.decidedByName} · {row.reason}</p>}
@@ -37,7 +37,7 @@ export function KizReviewCard({row,disabled,onDecision,onInspect}:{row:KizReview
     <button className="secondary-button" type="button" onClick={onInspect}>Посмотреть историю КИЗа</button>
     <div className="kiz-review-actions"><button type="button" disabled={blocked||scope==='RECEIPT'||(row.decision==='RELABEL'&&!row.physicalReuseAllowed)} onClick={()=>onDecision('REUSE')}>Разрешить использовать</button>
     <button type="button" disabled={blocked||(!scope&&row.decision!=='RELABEL')} onClick={()=>onDecision('RELABEL')}>Разрешить переклейку</button>
-    {scope&&<button type="button" disabled={blocked} onClick={()=>onDecision('REJECT')}>Отказать</button>}
+    {scope&&scope!=='UNIT'&&<button type="button" disabled={blocked} onClick={()=>onDecision('REJECT')}>Отказать</button>}
     {scope==='RECEIPT'&&<button type="button" disabled={blocked} onClick={()=>onDecision('CLOSE')}>Закрыть обращение</button>}
     </div>
   </div></details>;

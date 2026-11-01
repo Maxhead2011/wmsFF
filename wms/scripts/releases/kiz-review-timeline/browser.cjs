@@ -14,7 +14,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
  if(p==='/')return route.fulfill({contentType:'text/html',body:'<div id="root"></div>'});
  if(p.endsWith('/reviews'))return route.fulfill({json:{items:closed===(u.searchParams.get('status')==='CLOSED')?[closed?{...row,status:'CLOSED',resolution:'CLOSE',active:false,reason:'Ошибка сканирования',decidedByName:'Test Admin'}:row]:[],nextCursor:null}});
  if(p.endsWith('/kiz-found'))return route.fulfill({json:[]});
- if(p.endsWith('/check'))return route.fulfill({json:{found:false,matches:[]}});
+ if(p.endsWith('/check'))return route.fulfill({json:{found:true,identity:'TEST',matches:[],reviews:[{id:'unit:m',kizIdentity:'TEST',status:'OPEN',decision:'REVIEW',active:true,snapshot:{scope:'UNIT',productName:'Проверочная единица'}}]}});
  if(p.endsWith('/decision')){const b=route.request().postDataJSON();assert.equal(b.resolution,'CLOSE');assert.equal(b.reason,'Ошибка сканирования');assert(b.confirmed);closed=true;writes++;return route.fulfill({json:{status:'CLOSED'}});}
  return route.abort();});
  await page.goto('https://fixture.test/');await page.addScriptTag({content:script});await page.addStyleTag({content:fs.readFileSync(web+'/src/components/kiz/kiz.css','utf8')});
@@ -22,6 +22,12 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
  await page.getByText('Повтор в другом коробе',{exact:true}).waitFor();assert.equal(await page.getByRole('heading',{name:'КИЗы, найденные после отгрузки'}).count(),1);
  const history=page.getByRole('button',{name:'Посмотреть историю КИЗа'});await history.click();let modal=page.getByRole('dialog',{name:'История КИЗа'});await modal.getByText(/BOX-1/).waitFor();await modal.getByText(/BOX-2/).waitFor();await page.keyboard.press('Escape');assert(await history.evaluate(n=>document.activeElement===n));
  await page.getByRole('button',{name:'Закрыть обращение',exact:true}).click();modal=page.getByRole('dialog');await modal.getByRole('checkbox').check();await modal.getByRole('button',{name:'Подтвердить решение'}).click();await page.getByText(/Обращение закрыто/).waitFor();assert.equal(writes,1);
- await page.getByRole('button',{name:'Закрытые ошибки сканирования'}).click();await page.locator('details.kiz-review-case > summary').click();await page.getByText(/Test Admin/).waitFor();assert.deepEqual(errors,[]);console.log('PASS timeline, single found panel, modal, focus return, close and archive');
+ await page.getByRole('button',{name:'Закрытые ошибки сканирования'}).click();await page.locator('details.kiz-review-case > summary').click();await page.getByText(/Test Admin/).waitFor();await page.getByRole('button',{name:'На проверке',exact:true}).click();
+ await page.getByLabel('КИЗ',{exact:true}).fill('TEST');await page.getByRole('button',{name:'Проверить',exact:true}).click();
+ const unit=page.locator('details').filter({hasText:'Проверочная единица'});await unit.locator('summary').click();
+ assert(await unit.getByRole('button',{name:'Разрешить использовать'}).isEnabled());
+ await unit.getByRole('button',{name:'Разрешить переклейку'}).click();
+ await page.getByRole('dialog').getByRole('button',{name:'Отмена'}).click();
+ assert.deepEqual(errors,[]);console.log('PASS timeline, single found panel, modal, focus return, close and archive');
  }finally{await browser.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});

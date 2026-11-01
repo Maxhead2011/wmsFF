@@ -5,7 +5,7 @@ import {KizFoundPanel} from './KizFoundPanel';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import {decideKizReview,fetchKizReviewQueue,type AuthSession,type KizReviewCase} from '../../lib/api';
 
-export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onInspect:(kiz:string,row:KizReviewCase)=>void}) {
+export function KizReviewQueuePanel({session,onInspect,lookupRows=[],onUnitDecision}:{lookupRows?:KizReviewCase[];onUnitDecision?:(identity:string)=>void;session:AuthSession;onInspect:(kiz:string,row:KizReviewCase)=>void}) {
   const [items,setItems]=useState<KizReviewCase[]>([]),[cursor,setCursor]=useState<string|null>(null);
   const [error,setError]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true);
   const [closed,setClosed]=useState(false);
@@ -32,8 +32,8 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
     <p>{import.meta.env.VITE_KIZ_CLIENT_GUARD_ENABLED==='true'?'Нерешённые обращения приёмки и сборки остаются здесь до разбора.':'Обращения за последние 7 дней.'} Решение действует только для указанной единицы и задания.</p>
     <button className="secondary-button" type="button" disabled={saving} onClick={()=>void load()}>Обновить обращения</button>
     {loading&&<p>Загружаю обращения…</p>}{error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
-    {!loading&&!error&&!items.length&&<p>Обращений на проверку нет.</p>}
-    {items.map(row=><KizReviewCard key={row.id} row={row} disabled={saving} onInspect={()=>onInspect(row.kizIdentity,row)}
+    {!loading&&!error&&!items.length&&(closed||!lookupRows.length)&&<p>Обращений на проверку нет.</p>}
+    {[...(!closed?lookupRows.filter(r=>!items.some(i=>i.id===r.id)):[]),...items].map(row=><KizReviewCard key={row.id} row={row} disabled={saving} onInspect={()=>onInspect(row.kizIdentity,row)}
       onDecision={resolution=>{setSelected({row,resolution});setReason('');setConfirmed(false);setNotice('');}}/>)}
     {cursor&&<button type="button" onClick={()=>void load(cursor)}>Показать ещё</button>}
     {selected&&<dialog className="kiz-history-dialog" aria-label="Решение по обращению" ref={decisionDialog} onCancel={e=>{if(saving)e.preventDefault();else setSelected(null);}}><form className="kiz-queue" onSubmit={async e=>{
@@ -41,11 +41,12 @@ export function KizReviewQueuePanel({session,onInspect}:{session:AuthSession;onI
       try{await decideKizReview(session.accessToken,selected.row.id,selected.resolution,selected.resolution==='CLOSE'?['Ошибка сканирования',reason.trim()].filter(Boolean).join(' · '):reason.trim(),confirmed);
         // FIX: refresh the global badge only after a successful decision.
         window.dispatchEvent(new Event('kiz-issues-changed'));
+        if(selected.row.id.startsWith('unit:'))onUnitDecision?.(selected.row.kizIdentity);
         if(!live.current)return;setSelected(null);setNotice(selected.resolution==='CLOSE'?'Обращение закрыто: ошибка сканирования.':selected.resolution==='REJECT'?'Отказ сохранён. Использование КИЗ запрещено.':selected.row.snapshot.scope==='RECEIPT'?'Решение сохранено. Повторный приход не создан.':'Решение сохранено. Сборщик может повторить сканирование КИЗа.');await load();
       }catch(e){if(live.current)setError(e instanceof Error?e.message:'Решение не подтверждено. Повторите отправку.');}
       finally{lock.current=false;if(live.current)setSaving(false);}
     }}>
-      <h4>{selected.resolution==='CLOSE'?'Закрыть обращение':selected.resolution==='REUSE'?'Разрешить использовать':selected.resolution==='RELABEL'?'Разрешить переклейку':'Отказать'} · {selected.row.snapshot.scope==='RECEIPT'?'приёмка':selected.row.snapshot.scope?`заявка №${selected.row.snapshot.requestNumber}`:`заказ ${selected.row.snapshot.orderId}`}</h4>
+      <h4>{selected.resolution==='CLOSE'?'Закрыть обращение':selected.resolution==='REUSE'?'Разрешить использовать':selected.resolution==='RELABEL'?'Разрешить переклейку':'Отказать'} · {selected.row.snapshot.scope==='RECEIPT'?'приёмка':selected.row.snapshot.scope==='UNIT'?'единица на складе':selected.row.snapshot.scope?`заявка №${selected.row.snapshot.requestNumber}`:`заказ ${selected.row.snapshot.orderId}`}</h4>
       <p>КИЗ: {selected.row.kizIdentity}</p>
       {selected.resolution==='REUSE'&&selected.row.physicalReuseAllowed&&<p>Подтвердите именно эту физическую единицу. Прежняя привязка останется в истории как спорная; разрешение действует только для этого задания.</p>}
       <label>{selected.resolution==='CLOSE'?'Ошибка сканирования · комментарий (необязательно)':'Основание решения'}<textarea required={selected.resolution!=='CLOSE'} minLength={selected.resolution==='CLOSE'?0:5} maxLength={selected.resolution==='CLOSE'?950:1000} value={reason} disabled={saving} onChange={e=>setReason(e.target.value)}/></label>

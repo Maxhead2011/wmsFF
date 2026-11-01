@@ -1,3 +1,4 @@
+import {MarketStatusBatch} from './MarketStatusBatch';
 import { fetchWorkspaceClients } from '../../lib/marketplaceWorkspace';
 import {RequestRemovalProvider} from './RequestRemoval';
 import { OperationsTools } from './OperationsTools';
@@ -331,7 +332,11 @@ export function ClientRequestsPanel({
     }),
     [requests, requestSortDirection, requestSortField, showArchive, fboOnly, requestStatusFilter],
   );
-  const batch = useRequestBatch({items: displayedRequests.data, enabled: !showArchive && canChangeStatus, token: session.accessToken, fetchSelection: fetchClientRequestManualBoxSelection, updateStatus: updateClientRequestStatus, reload: loadData});
+  const [checkingMarkets,setCheckingMarkets]=useState(false);
+  const marketControl = canWrite && !fboOnly && import.meta.env.VITE_MARKETPLACE_WORKSPACES_ENABLED==='true'
+    ? (busy:boolean)=><MarketStatusBatch key={session.user.id+String(session.user.activeWarehouseId)} token={session.accessToken}
+        reload={loadData} disabled={busy} onBusy={setCheckingMarkets}/> : undefined;
+  const batch = useRequestBatch({checkingMarkets,marketControl,items: displayedRequests.data, enabled: !showArchive && canChangeStatus, token: session.accessToken, fetchSelection: fetchClientRequestManualBoxSelection, updateStatus: updateClientRequestStatus, reload: loadData});
 
   const fbsTailEligibleRequests = useMemo(
     () =>
@@ -1944,16 +1949,6 @@ export function ClientRequestsPanel({
 
   return (
     <section ref={onlineRoot} className="client-requests-panel" aria-label="Клиентские заявки">
-      <OperationsTools token={session.accessToken} userId={session.user.id} permissions={session.user.permissionCodes} onOpen={canPickOutbound ? (request)=>void openOnlineExecution(request) : undefined} />
-      {returnReceipt ? <FbsReturnReceiptDialog key={returnReceipt.assemblyId}
-        orderId={returnReceipt.orderId} productName={returnReceipt.productName} requiresKiz={returnReceipt.requiresKiz}
-        busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
-        onClose={() => setReturnReceipt(null)}
-        onSubmit={scans => resolveOnlineFbsSyncConflict(returnReceipt.request, returnReceipt.assemblyId, 'RETURN_TO_STOCK', scans)} /> : null}
-      {managerDecision ? <FbsManagerDecisionDialog
-        orderCount={managerDecision.assemblyIds.length} busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
-        onClose={() => setManagerDecision(null)}
-        onSubmit={decision => resolveOnlineFbsSyncConflicts(managerDecision.request, managerDecision.assemblyIds, 'MANAGER_CONFIRMED', decision)} /> : null}
       <div className="section-heading client-requests-panel__heading">
         <div>
           <p className="eyebrow">Клиентские заявки</p>
@@ -2003,6 +1998,79 @@ export function ClientRequestsPanel({
         </div>
       </div>
 
+      <OperationsTools token={session.accessToken} userId={session.user.id} permissions={session.user.permissionCodes} onOpen={canPickOutbound ? (request)=>void openOnlineExecution(request) : undefined} />
+      {!showArchive && canWrite && clients.status === 'ready' && (<details className="client-request-excel-collapse request-fold"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
+          <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} outboundOnly={fboOnly} />
+        </details>)}
+      {!showArchive && canWrite && fbsTailEligibleRequests.length > 0 ? (
+        <details className="request-fold"><summary>Новая заявка из хвостов FBS</summary>
+        <section
+          className="client-request-fbs-tails"
+          aria-label="Объединение необработанных FBS-заказов"
+        >
+          <div className="client-request-fbs-tails__copy">
+            <ArrowRightLeft size={20} aria-hidden="true" />
+            <div>
+
+              <span>
+                Выберите клиента, отметьте незавершённые заявки в таблице и
+                перенесите их необработанные заказы в одну новую заявку.
+              </span>
+            </div>
+          </div>
+          <div className="client-request-fbs-tails__actions">
+            <label>
+              <span>Клиент</span>
+              <select
+                value={fbsTailClientId}
+                onChange={(event) => {
+                  setFbsTailClientId(event.target.value);
+                  setSelectedFbsTailRequestIds(new Set());
+                  setFbsTailMergePreview(null);
+                }}
+                disabled={isPreviewingFbsTails || isMergingFbsTails}
+              >
+                <option value="">Выберите клиента</option>
+                {fbsTailClients.map((client) => (
+                  <option value={client.id} key={client.id}>
+                    {client.code} · {client.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="client-request-fbs-tails__selected">
+              Выбрано заявок: <strong>{selectedFbsTailRequests.length}</strong>
+            </span>
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => void openFbsRequestTailsPreview()}
+              disabled={
+                selectedFbsTailRequests.length === 0 ||
+                isPreviewingFbsTails ||
+                isMergingFbsTails
+              }
+            >
+              <ClipboardList size={16} aria-hidden="true" />
+              <span>
+                {isPreviewingFbsTails
+                  ? 'Проверяю состав…'
+                  : 'Показать, что будет перенесено'}
+              </span>
+            </button>
+          </div>
+        </section></details>
+      ) : null}
+
+      {returnReceipt ? <FbsReturnReceiptDialog key={returnReceipt.assemblyId}
+        orderId={returnReceipt.orderId} productName={returnReceipt.productName} requiresKiz={returnReceipt.requiresKiz}
+        busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
+        onClose={() => setReturnReceipt(null)}
+        onSubmit={scans => resolveOnlineFbsSyncConflict(returnReceipt.request, returnReceipt.assemblyId, 'RETURN_TO_STOCK', scans)} /> : null}
+      {managerDecision ? <FbsManagerDecisionDialog
+        orderCount={managerDecision.assemblyIds.length} busy={onlineFbsSyncResolution.assemblyId !== null} error={onlineFbsSyncResolution.error}
+        onClose={() => setManagerDecision(null)}
+        onSubmit={decision => resolveOnlineFbsSyncConflicts(managerDecision.request, managerDecision.assemblyIds, 'MANAGER_CONFIRMED', decision)} /> : null}
       {!showArchive && fbsSynchronizationAudit ? (
         <FbsSynchronizationAuditPanel
           audit={fbsSynchronizationAudit}
@@ -2024,11 +2092,7 @@ export function ClientRequestsPanel({
         />
       ) : null}
 
-      {!showArchive && canWrite && clients.status === 'ready' ? (
-        <>{!fboOnly && <OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/>}<details className="client-request-excel-collapse"><summary>Сборка из Excel</summary><ClientRequestXlsxImportForm clients={visibleClients} session={session} onCreated={acceptCreated} />
-          <ClientRequestCreateForm clients={visibleClients} session={session} onCreated={acceptCreated} outboundOnly={fboOnly} />
-        </details></>
-      ) : null}
+      {!showArchive && canWrite && clients.status === 'ready' && !fboOnly && <OzonCustomerImport clients={visibleClients} session={session} onCreated={()=>void loadData()}/>}
 
       {error ? <p className="form-error">{error}</p> : null}
       {actionMessage ? <p className="form-success">{actionMessage}</p> : null}
@@ -2079,65 +2143,6 @@ export function ClientRequestsPanel({
             </span>
           ) : null}
         </form>
-      ) : null}
-
-      {!showArchive && canWrite && fbsTailEligibleRequests.length > 0 ? (
-        <section
-          className="client-request-fbs-tails"
-          aria-label="Объединение необработанных FBS-заказов"
-        >
-          <div className="client-request-fbs-tails__copy">
-            <ArrowRightLeft size={20} aria-hidden="true" />
-            <div>
-              <strong>Новая заявка из хвостов FBS</strong>
-              <span>
-                Выберите клиента, отметьте незавершённые заявки в таблице и
-                перенесите их необработанные заказы в одну новую заявку.
-              </span>
-            </div>
-          </div>
-          <div className="client-request-fbs-tails__actions">
-            <label>
-              <span>Клиент</span>
-              <select
-                value={fbsTailClientId}
-                onChange={(event) => {
-                  setFbsTailClientId(event.target.value);
-                  setSelectedFbsTailRequestIds(new Set());
-                  setFbsTailMergePreview(null);
-                }}
-                disabled={isPreviewingFbsTails || isMergingFbsTails}
-              >
-                <option value="">Выберите клиента</option>
-                {fbsTailClients.map((client) => (
-                  <option value={client.id} key={client.id}>
-                    {client.code} · {client.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <span className="client-request-fbs-tails__selected">
-              Выбрано заявок: <strong>{selectedFbsTailRequests.length}</strong>
-            </span>
-            <button
-              className="primary-button"
-              type="button"
-              onClick={() => void openFbsRequestTailsPreview()}
-              disabled={
-                selectedFbsTailRequests.length === 0 ||
-                isPreviewingFbsTails ||
-                isMergingFbsTails
-              }
-            >
-              <ClipboardList size={16} aria-hidden="true" />
-              <span>
-                {isPreviewingFbsTails
-                  ? 'Проверяю состав…'
-                  : 'Показать, что будет перенесено'}
-              </span>
-            </button>
-          </div>
-        </section>
       ) : null}
 
       <div className="client-request-sortbar" aria-label="Сортировка заявок">

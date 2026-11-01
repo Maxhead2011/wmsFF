@@ -23,6 +23,24 @@ beforeEach(() => vi.stubEnv('WMS_KIZ_LOCATION_CHECK_ENABLED', 'true'));
 afterEach(() => vi.unstubAllEnvs());
 
 describe('administrator KIZ location check (read only)', () => {
+  it('keeps published review decisions and only the selected warehouse history in lookup', async () => {
+    // TEST: review actions and scoped WB history must coexist in the lookup response.
+    vi.stubEnv('WMS_KIZ_REUSE_EVIDENCE_ENABLED', 'true');
+    vi.stubEnv('WMS_KIZ_REVIEW_QUEUE_ENABLED', 'true');
+    const { service } = setup();
+    const history = [{ orderId: 'ours', request: { warehouseId: 'wh' } },
+      { orderId: 'other', request: { warehouseId: 'other' } }];
+    const choices = vi.fn().mockResolvedValue([{ id: 'unit:mark', decision: 'REVIEW' }]);
+    vi.spyOn(service as any, 'historyProvider').mockReturnValue({
+      inspectKizReuse: vi.fn().mockResolvedValue({ history, orders: [{orderId:'ours'}, {orderId:'other'}], decision:'REVIEW' }),
+      kizReuseMessage: () => 'Review'
+    });
+    vi.spyOn(service as any, 'reviewQueue').mockReturnValue({ unitChoices: choices });
+    const result = await service.lookup(full, user);
+    expect(choices).toHaveBeenCalledWith(code, user);
+    expect(result.reviews).toEqual([{ id:'unit:mark', decision:'REVIEW' }]);
+    expect(result.matches[0].reuse).toMatchObject({ history:[history[0]], orders:[{orderId:'ours'}] });
+  });
   it('offers a physical-found review for a shipped mark without a box, without restoring stock', async () => {
     // TEST: a historical shipment must not lose all actions merely because boxId is null.
     vi.stubEnv('WMS_KIZ_FOUND_REVIEW_ENABLED', 'true');

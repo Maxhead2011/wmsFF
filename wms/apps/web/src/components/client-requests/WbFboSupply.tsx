@@ -1,4 +1,21 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
+
+// FIX: binding is available from the assembly header at every phase, including picking.
+export function WbSupplyWindow({requestId,accessToken}:{requestId:string;accessToken:string}) {
+ const dialog=useRef<HTMLDialogElement>(null);
+ const [open,setOpen]=useState(false);
+ return <>
+   <button type="button" className="secondary-button" aria-haspopup="dialog"
+     onClick={()=>{dialog.current?.showModal();setOpen(true);}}>Поставка ВБ</button>
+   <dialog ref={dialog} aria-label="Поставка ВБ" onClose={()=>setOpen(false)}
+     onKeyDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()}
+     style={{width:'min(640px,92vw)',maxHeight:'85vh',overflow:'auto',border:'1px solid #cbdadb',borderRadius:12,padding:20}}>
+     {open&&<><header style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+       <strong>Поставка ВБ</strong><button type="button" autoFocus onClick={()=>dialog.current?.close()}>Закрыть окно</button>
+     </header><WbFboSupply key={requestId} requestId={requestId} accessToken={accessToken}/></>}
+   </dialog>
+ </>;
+}
 type View={dispatch?:{at:string}|null;plannedQuantity:number;canWrite:boolean;canGate:boolean;connections:Array<{id:string;accountName:string|null;sellerId:string|null}>;binding:null|{supplyId:string;statusId:number;status:string;warehouse:string;date:string|null;quantity:number;acceptedQuantity:number;checkedAt:string;lastError?:string;gate?:{at:string}}};
 export function WbFboSupply({requestId,accessToken,disabled=false}:{requestId:string;accessToken:string;disabled?:boolean}){
  const [data,setData]=useState<View|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[input,setInput]=useState(''),[connection,setConnection]=useState('');

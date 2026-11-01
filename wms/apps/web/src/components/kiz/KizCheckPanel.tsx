@@ -41,7 +41,9 @@ export function KizCheckPanel({ session }: { session: AuthSession }) {
   </>;
   return <section className="kiz-panel">
     <h2>Проверка КИЗов</h2>
-    {import.meta.env.VITE_KIZ_REVIEW_QUEUE_ENABLED==='true'&&<KizReviewQueuePanel session={session} onInspect={async (kiz,row)=>{
+    {import.meta.env.VITE_KIZ_REVIEW_QUEUE_ENABLED==='true'&&<KizReviewQueuePanel session={session} lookupRows={result?.reviews} onUnitDecision={identity=>{
+      setResult(current=>current?.identity===identity?{...current,reviews:undefined}:current);
+    }} onInspect={async (kiz,row)=>{
       if(lock.current)return;lock.current=true;setReview(row);setFromQueue(true);historyDialog.current?.showModal();setScan(kiz);setBusy(true);setError('');setResult(null);
       try{setResult(await checkKizHistory(session.accessToken,kiz));}catch(e){setError(e instanceof Error?e.message:'Не удалось проверить КИЗ.');}
       finally{lock.current=false;setBusy(false);}

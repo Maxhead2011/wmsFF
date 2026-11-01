@@ -1,3 +1,7 @@
+Published PR824 in feature/la_panthera. Requests header first, three independent disclosures, compact request number and distinct active search mode. Web592 passed/2 skipped, TypeScript passed, candidate/public Edge16 each including mobile layout and existing marketplace buttons. Exact web3 overlay, other containers unchanged. Baseline 2026-11-01-compact-request-tools; source parity false.
+
+Published PR821 in `feature/la_panthera`: [marketplace checks and WB supply binding](request-market-status.md). One button beside batch handover checks scoped open marketplace requests; the FBO WB header opens binding during picking. API4295/web592/typecheck, PostgreSQL12/full health and candidate/public Edge10 passed. Exact API5/web2; source parity false. Baseline `2026-11-01-panthera-market-buttons`.
+
 FBO Ozon import decision audit for file and link creation. The request event and audit row retain the selected action and displayed SKU shortages in the creation transaction. Existing requests keep their original history. Correction submission, failure, unknown result and successful application have separate history entries. Own-image WMS_OZON_STOCK_DECISION_AUDIT_ENABLED. API4287/web588, candidate browser10/bootstrap5, isolated PostgreSQL6/full health.
 
 Compact request places: ClientRequestsTable.packagesSummary shows the number of packages and sum of their item quantities. The existing Online action provides details. Web regression suite 588 passed/2 skipped; deployed-module fixtures 0/1/159 places. Own-WMS web-only release.
