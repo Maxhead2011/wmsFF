@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {batchDonePayload, canBatchComplete, compareRequestStatus, missingSourceOnly, batchStockSources, runRequestBatch} from './requestBatch';
+import {batchDonePayload, canBatchComplete, compareRequestStatus, compareRequestClient, missingSourceOnly, batchStockSources, runRequestBatch} from './requestBatch';
 // TEST: never erase a known box, even if its balance is zero or insufficient.
 describe('request batch safety',()=>{
  it('selects noBox only without any known source',()=>{
@@ -35,4 +35,11 @@ it('uses the sole source, preserving shortages and ambiguous choices',()=>{
  expect(()=>batchStockSources([{...item,boxes:[{boxCode:'REAL',availableQuantity:1}]}] as any)).toThrow();
  expect(()=>batchStockSources([{...item,boxes:[...item.boxes,{boxCode:'SECOND',availableQuantity:5}]}] as any)).toThrow();
  expect(batchStockSources([{...item,selectedQuantity:2}] as any)).toEqual([]);
+});
+
+// TEST: order by the visible client name in Russian and keep ties deterministic.
+it('sorts clients alphabetically, with numeric suffixes and stable request numbers', () => {
+  const rows = [['Яков', 2], ['Анна 10', 3], ['Анна 2', 5], ['анна 2', 1]]
+    .map(([name, number]) => ({client: {name}, number}));
+  expect([...rows].sort(compareRequestClient as any).map(row => row.number)).toEqual([1, 5, 3, 2]);
 });

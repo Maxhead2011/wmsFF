@@ -38,7 +38,7 @@ export function MarketStatusBatch({token,reload,disabled,onBusy}:{token:string;r
   }
   const problems=rows.filter(r=>r.kind==='error');
   return <>
-    <button type="button" className="secondary-button" style={{marginInlineStart:'auto'}} disabled={disabled||running}
+    <button type="button" className="primary-button" style={{marginInlineStart:'auto', backgroundColor:'#1754ad', color:'#fff'}} disabled={disabled||running}
       onClick={()=>void run()}><RefreshCw size={16} aria-hidden="true"/> {running?'Проверяю '+rows.length+' из '+total+'…':'Проверить статусы всех заявок'}</button>
     {error&&<p role="alert">{error}</p>}
     {finished&&<div style={{flexBasis:'100%'}}><p role="status">{total?'Проверено заявок: '+rows.length:'Открытых заявок для проверки нет'} · {finished} МСК</p>

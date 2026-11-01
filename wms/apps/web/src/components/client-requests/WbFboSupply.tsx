@@ -5,7 +5,7 @@ export function WbSupplyWindow({requestId,accessToken}:{requestId:string;accessT
  const dialog=useRef<HTMLDialogElement>(null);
  const [open,setOpen]=useState(false);
  return <>
-   <button type="button" className="secondary-button" aria-haspopup="dialog"
+   <button type="button" className="primary-button" title="Открыть привязку поставки Wildberries" aria-haspopup="dialog"
      onClick={()=>{dialog.current?.showModal();setOpen(true);}}>Поставка ВБ</button>
    <dialog ref={dialog} aria-label="Поставка ВБ" onClose={()=>setOpen(false)}
      onKeyDown={event=>event.stopPropagation()} onClick={event=>event.stopPropagation()}
