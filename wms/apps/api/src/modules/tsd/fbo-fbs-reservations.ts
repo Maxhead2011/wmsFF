@@ -1,3 +1,4 @@
+import {missingStockHolds} from '../../common/stock/fbo-missing-stock';
 import { receiptRules, receiptAllows, receiptOrderKey, receiptUnassignedOrders, type ReceiptRule } from '../warehouse/receipt-channel-policy';
 import { ConflictException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
@@ -106,5 +107,11 @@ export async function loadFboFbsAvailability(tx: Prisma.TransactionClient,
   const receiptBoxIds = [...new Set(balances.flatMap(b => b.boxId ? [b.boxId] : []))];
   const rules=await receiptRules(tx,request.clientId,request.warehouseId,receiptBoxIds);
   const missing=rules.size?await receiptUnassignedOrders(tx,request.clientId,request.warehouseId,new Set(tasks.map(receiptOrderKey))):[];
+  const holds=await missingStockHolds(tx,request.clientId,request.warehouseId,skuIds);
+  for(const b of balances){
+    const box=b.boxId?holds.get(b.boxId):undefined;
+    const held=Math.min(box?.get(b.skuId)??0,b.quantity);
+    if(held){b.quantity-=held;box!.set(b.skuId,box!.get(b.skuId)!-held);}
+  }
   return new FboFbsAvailability(balances, [...pending,...missing], rules);
 }

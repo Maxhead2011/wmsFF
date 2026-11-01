@@ -1,3 +1,4 @@
+import {missingStockHolds} from './fbo-missing-stock';
 import { Prisma, StockStatus } from '@prisma/client';
 import { ConflictException } from '@nestjs/common';
 import { assertClientKizUse, finishClientKizUse } from '../kiz-client-review';
@@ -98,9 +99,11 @@ export async function wbReservationQuantities(db: Prisma.TransactionClient, clie
       requestGroups.set(skuId, group);
     }
   }
+  const holds=await missingStockHolds(db,clientId,warehouseId,skuIds);
   return new Map(skuIds.map(skuId => {
     const ceiling = Number.MAX_SAFE_INTEGER;
-    return [skuId, ceiling - calculateWbFreeStock(ceiling, taskGroups.get(skuId) ?? [], requestGroups.get(skuId) ?? [])] as const;
+    const held=[...holds.values()].reduce((n,box)=>n+(box.get(skuId)??0),0);
+    return [skuId, held + (ceiling - calculateWbFreeStock(ceiling, taskGroups.get(skuId) ?? [], requestGroups.get(skuId) ?? []))] as const;
   }));
 }
 

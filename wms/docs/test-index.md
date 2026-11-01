@@ -1,4 +1,10 @@
+Release candidate PR820: FBO shortage preview, atomic reservation, LOGOFF 250 missing box and missing item actions, warehouse-scoped administrator/owner red bell. Candidate tested against current production images, synthetic PostgreSQL, full API boot, actual web alerts and single entry. scripts/releases/fbo-deficit-20261101/.
+
+Warehouse problem bell: FBS/FBO missing box signals scoped to active branch and ADMIN/OWNER; FBO product missing opens the reported box for recount. Tests: warehouse-problem-bell.spec.ts. Draft PR820, not deployed.
+
 ReceiptBatchesPanel places the client picker immediately below the header and before receipt review/date filters. File refresh stays with files. Fixed-client access retains its existing scope. Regression: ReceiptBatchesPanel.spec.tsx.
+
+Prepared on fix/fbo-client-deficit-actions: WB FBO Excel availability and serializable creation check, explicit adjustment/exclusion, stock decision audit, LOGOFF TSD missing-unit report and BOX_CHECK holds. Own WMS flag WMS_FBO_EXCEL_PICK_CHECK_ENABLED. Tests: fbo-picking-capacity, fbo-missing-stock, DeficitActions. Not deployed.
 
 FBO Ozon import decision audit for file and link creation. The request event and audit row retain the selected action and displayed SKU shortages in the creation transaction. Existing requests keep their original history. Correction submission, failure, unknown result and successful application have separate history entries. Own-image WMS_OZON_STOCK_DECISION_AUDIT_ENABLED. API4287/web588, candidate browser10/bootstrap5, isolated PostgreSQL6/full health.
 

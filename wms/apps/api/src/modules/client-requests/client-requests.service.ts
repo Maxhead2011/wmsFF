@@ -1,8 +1,9 @@
+import {fboPickingCapacity} from '../tsd/fbo-picking-capacity';
 import {wbDispatchContexts,assertFboProcessChange} from './wb-fbo-dispatch';
 import { requestStoreContexts } from '../clients/request-store-context';
 import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MarketplaceType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
@@ -407,6 +408,8 @@ export class ClientRequestsService {
     const pendingBySku = wbOrderStockLifecycleEnabled()
       ? await this.pendingPlacementBySkuId(dto.clientId, skuIds, warehouseId)
       : new Map<string, number>();
+    const capacity = dto.fboExcel && process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED === 'true'
+      ? await fboPickingCapacity(this.prisma,dto.clientId,warehouseId,skuIds) : null;
     const consumedBySku = new Map<string, number>();
     const lines = resolved.map((line) => {
       if (!line.skuId) {
@@ -426,7 +429,7 @@ export class ClientRequestsService {
       const reservation = reservationsBySkuId.get(line.skuId);
       const reservedQuantity = reservation?.quantity ?? 0;
       const consumed = consumedBySku.get(line.skuId) ?? 0;
-      const availableQuantity = Math.max(0, stockQuantity - reservedQuantity - consumed);
+      const availableQuantity = Math.max(0, Math.min(stockQuantity - reservedQuantity, capacity ? capacity.get(line.skuId) ?? 0 : Infinity) - consumed);
       const readyQuantity = Math.max(0, placedQuantity - reservedQuantity - consumed);
       const pendingPlacementQuantity = Math.max(0, availableQuantity - readyQuantity);
       if (wbOrderStockLifecycleEnabled()) consumedBySku.set(line.skuId, consumed + line.requestedQuantity);
@@ -473,7 +476,15 @@ export class ClientRequestsService {
     const destinationCity = normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
 
     // Русский комментарий: клиентская заявка всегда стартует как SUBMITTED; статусы меняет отдельный workflow.
+    const guard = (dto.fboExcel || dto.comment?.startsWith('Создано из Excel:')) && dto.type === 'OUTBOUND' && process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED === 'true';
     const created = await this.prisma.$transaction(async (tx) => {
+      // FIX: read availability and write the reserving request in one serializable transaction.
+      const checker = guard ? new ClientRequestsService(tx as PrismaService,this.clientScopes,this.stockOperations) : null;
+      const availability = await checker?.previewAvailability({...dto,warehouseId},user);
+      if (availability && (!availability.canCommit || !availability.lines.length)) throw new BadRequestException({
+        message:'Доступный остаток изменился. Проверьте состав повторно.',
+        shortages:availability.lines.filter(l=>!l.canFulfill).map(l=>({barcode:l.barcode,requested:l.requestedQuantity,available:l.availableQuantity}))
+      });
       const request = await tx.clientRequest.create({
         data: {
           clientId: dto.clientId,
@@ -516,7 +527,13 @@ export class ClientRequestsService {
         },
       });
 
+      if(availability) await tx.auditLog.create({data:{entity:'ClientRequest',entityId:request.id,userId:user.id,action:'FBO_EXCEL_STOCK_CHECK',payload:{clientDecisions:(dto.fboDecisions??[]).map(d=>({barcode:d.barcode,originalQuantity:d.originalQuantity,finalQuantity:d.finalQuantity})),lines:availability.lines.map(l=>({skuId:l.skuId,barcode:l.barcode,requested:l.requestedQuantity,available:l.availableQuantity,reserved:l.reservedQuantity,stock:l.stockQuantity}))} as Prisma.InputJsonValue}});
       return request;
+    },guard?{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,timeout:30000}:undefined).catch((error:unknown)=>{
+      if(guard && error instanceof Prisma.PrismaClientKnownRequestError && error.code==='P2034'){
+        throw new ConflictException('Остаток изменился во время создания заявки. Повторите проверку файла.');
+      }
+      throw error;
     });
 
     void this.telegram?.notifyFulfillment(

@@ -2599,6 +2599,8 @@ export type TsdAssemblyPlan = {
 };
 
 export type CreateClientRequestPayload = {
+  fboExcel?: boolean;
+  fboDecisions?: {barcode:string; originalQuantity:number; finalQuantity:number}[];
   clientId: string;
   warehouseId?: string;
   type: ClientRequestType;
@@ -12739,3 +12741,6 @@ export function saveSkuStores(accessToken:string,clientId:string,skuId:string,st
 export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
  return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
 }
+
+export type WarehouseProblem={id:string;title:string;client:string;worker:string;detail:string;createdAt:string};
+export function fetchWarehouseProblems(accessToken:string){return request<WarehouseProblem[]>('/inventory/warehouse-problems',{accessToken});}

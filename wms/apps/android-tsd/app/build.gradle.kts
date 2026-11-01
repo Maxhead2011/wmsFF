@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 249 // FIX: display store context while preserving shared physical inventory.
-            versionName = "0.1.249-client-stores"
+            versionCode = 250 // FIX: display store context while preserving shared physical inventory.
+            versionName = "0.1.250-fbo-deficit"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

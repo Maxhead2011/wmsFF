@@ -1,0 +1,12 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict'),r=path.resolve(process.argv[2]),w=path.resolve(__dirname,'../../..');
+const esbuild=require('module').createRequire(require.resolve(w+'/apps/web/node_modules/vite/package.json'))('esbuild');
+let body=fs.readFileSync(w+'/apps/web/src/components/WarehouseProblemBell.tsx','utf8').replace(/^import .*;\r?\n/gm,'');
+body='const useState=x.useState,useEffect=x.useEffect;function fetchWarehouseProblems(accessToken){return z("/inventory/warehouse-problems",{accessToken})} import {BellRing,X} from "lucide-react";'+body;
+(async()=>{const b=await esbuild.build({stdin:{contents:body,loader:'tsx',resolveDir:w+'/apps/web'},bundle:true,write:false,format:'iife',globalName:'__WarehouseProblems',minify:true,jsx:'transform',jsxFactory:'x.createElement',plugins:[{name:'existing-react',setup(build){build.onResolve({filter:/^react$/},()=>({path:'react',namespace:'existing'}));build.onLoad({filter:/.*/,namespace:'existing'},()=>({contents:'module.exports=x'}));}}]});
+const base='receipts-picker-20261101.js',next='warehouse-problems-20261101.js';
+let core=fs.readFileSync(r+'/web-base/assets/'+base,'utf8');const a='e.jsxs("div",{className:`header-notification-center ';assert.equal(core.split(a).length,2);
+core=core.replace(a,()=> 't.user.activeWarehouseId&&t.user.roleCodes.some(r=>["ADMIN","SUPER_ADMIN","OWNER"].includes(r))&&e.jsx(__WarehouseProblems.WarehouseProblemBell,{token:t.accessToken,scope:t.user.id+t.user.activeWarehouseId},t.user.id+t.user.activeWarehouseId),'+a);
+fs.writeFileSync(r+'/web-payload/assets/'+next,core+'\n'+b.outputFiles[0].text);fs.copyFileSync(w+'/apps/web/src/components/warehouse-problem-bell.css',r+'/web-payload/assets/warehouse-problems-20261101.css');
+let h=fs.readFileSync(r+'/web-payload/index.html','utf8');const match=h.match(/<script type="importmap">(.*?)<\/script>/s),m=JSON.parse(match[1]);for(const k of Object.keys(m.imports))if(m.imports[k]==='/assets/'+base)m.imports[k]='/assets/'+next;m.imports['/assets/'+base]='/assets/'+next;
+h=h.replace(match[1],()=>JSON.stringify(m)).replace('type="module" crossorigin src="/assets/'+base,'type="module" crossorigin src="/assets/'+next).replace('</head>','<link rel="stylesheet" href="/assets/warehouse-problems-20261101.css"></head>');assert.equal((h.match(/type="module" crossorigin src=/g)||[]).length,1);fs.writeFileSync(r+'/web-payload/index.html',h);
+})().catch(e=>{console.error(e);process.exitCode=1});

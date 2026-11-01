@@ -1,3 +1,4 @@
+import { IsBoolean } from 'class-validator';
 import { ClientRequestPriority, ClientRequestType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -34,7 +35,23 @@ export class CreateClientRequestItemDto {
   comment?: string;
 }
 
+export class FboExcelDecisionDto {
+  @IsString()
+  barcode!: string;
+  @IsInt() @Min(1)
+  originalQuantity!: number;
+  @IsInt() @Min(0)
+  finalQuantity!: number;
+}
+
 export class CreateClientRequestDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(1000)
+  @ValidateNested({each:true}) @Type(()=>FboExcelDecisionDto)
+  fboDecisions?: FboExcelDecisionDto[];
+
+  @IsOptional()
+  @IsBoolean()
+  fboExcel?: boolean;
   @IsString()
   clientId!: string;
 

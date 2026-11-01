@@ -37,6 +37,9 @@ export class InventoryController {
     return this.skuCollections.create(dto, user);
   }
 
+  @Get('warehouse-problems')
+  warehouseProblems(@CurrentUser() user:AuthUser) { return this.inventory.warehouseProblems(user); }
+
   @Get('dashboard')
   dashboard(@Query('workOnly') workOnly: string | undefined, @CurrentUser() user: AuthUser) {
     return this.inventory.dashboard(user, workOnly === 'true');

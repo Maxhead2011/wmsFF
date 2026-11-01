@@ -1,3 +1,4 @@
+import { WarehouseProblemBell } from './components/WarehouseProblemBell';
 import {magicEnabled, welcomeStyle} from './components/layout/magicAppearanceState';
 import {MagicWelcome} from './components/layout/MagicWelcome'; // FIX: personalized loading without delay.
 import {ThemeStyleSwitcher} from './components/layout/ThemeStyleSwitcher'; // FIX: independent user appearance.
@@ -689,6 +690,8 @@ export function App() {
                 </select>
               </label>
             ) : null}
+            {session.user.activeWarehouseId && session.user.roleCodes.some(role=>['ADMIN','SUPER_ADMIN','OWNER'].includes(role)) &&
+              <WarehouseProblemBell key={session.user.id+session.user.activeWarehouseId} token={session.accessToken} scope={session.user.id+session.user.activeWarehouseId} />}
             <div className="header-notification-center" ref={notificationCenterRef}>
               <button
                 className="modern-header-action"

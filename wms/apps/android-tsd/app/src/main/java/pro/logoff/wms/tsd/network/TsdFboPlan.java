@@ -28,7 +28,7 @@ public class TsdFboPlan {
     public boolean parallelPackingSupported;
     public boolean localRouteEnabled;
     // FIX: absence keeps old servers and sold applications on the original scanner flow.
-    public boolean alternativePickingSupported;
+    public boolean alternativePickingSupported, missingStockReportingSupported;
     public String requestId, title, phase;
     public int needed, picked, packed, looseRemaining, shortage;
     // FIX: accepted stock may be reserved while its storage location is still pending.
