@@ -1,3 +1,8 @@
+import {
+  placementReceipts,
+  recordPlacementAction,
+  assertPlacementReceipt,
+} from "../src/modules/warehouse/receipt-placement-workflow";
 import { expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -143,6 +148,120 @@ it.skipIf(!url)(
               )
             ).items,
           ).toEqual([]);
+          // TEST: two managers share placement progress, and a repeated completion is idempotent.
+          await tx.systemSetting.update({
+            where: { key },
+            data: {
+              value: {
+                clientId: client,
+                warehouseId: warehouse,
+                series: "SERIES:2026:FFL_CONFIRMED",
+              },
+            },
+          });
+          const actorId = randomUUID();
+          await tx.user.create({
+            data: {
+              id: actorId,
+              email: actorId + "@test.invalid",
+              name: "Manager",
+              passwordHash: "test",
+            },
+          });
+          const actor = { id: actorId, name: "Manager" },
+            receipt = {
+              clientId: client,
+              document: "SERIES:2026:FFL_CONFIRMED",
+            };
+          expect(
+            (await placementReceipts(tx, warehouse, [client], receipt, true))[0]
+              .requests,
+          ).toEqual([]);
+          const started = await recordPlacementAction(
+            tx,
+            warehouse,
+            receipt,
+            "START",
+            actor,
+          );
+          expect(started.remaining).toEqual(["FFL_TEST_01"]);
+          await expect(
+            assertPlacementReceipt(tx, warehouse, receipt, "FFL_OTHER"),
+          ).rejects.toThrow("не относится");
+          const unfinished = await recordPlacementAction(
+            tx,
+            warehouse,
+            receipt,
+            "FINISH",
+            actor,
+          );
+          expect(unfinished.canFinish).toBe(false);
+          expect(
+            (
+              await recordPlacementAction(
+                tx,
+                warehouse,
+                receipt,
+                "DEFER",
+                actor,
+              )
+            ).status,
+          ).toBe("DEFERRED");
+          const secondPallet = randomUUID();
+          await tx.storagePallet.create({
+            data: {
+              id: secondPallet,
+              clientId: client,
+              warehouseId: warehouse,
+              code: secondPallet,
+              status: "OPEN",
+              source: "TEST",
+            },
+          });
+          await tx.storagePalletBox.create({
+            data: {
+              palletId: secondPallet,
+              boxId: boxes[1],
+              boxCode: "FFL_TEST_01",
+            },
+          });
+          expect(
+            (
+              await recordPlacementAction(
+                tx,
+                warehouse,
+                receipt,
+                "PLACED",
+                actor,
+                "FFL_TEST_01",
+              )
+            ).status,
+          ).toBe("COMPLETED");
+          const auditBefore = await tx.auditLog.count({
+            where: { entity: "ReceiptPlacement" },
+          });
+          await recordPlacementAction(tx, warehouse, receipt, "FINISH", actor);
+          expect(
+            await tx.auditLog.count({ where: { entity: "ReceiptPlacement" } }),
+          ).toBe(auditBefore);
+          await tx.storagePalletBox.deleteMany({ where: { boxId: boxes[1] } });
+          expect(
+            (await placementReceipts(tx, warehouse, [client], receipt))[0]
+              .previouslyPlaced,
+          ).toEqual(["FFL_TEST_01"]);
+          await tx.stockBalance.updateMany({
+            where: { boxId: boxes[1] },
+            data: { quantity: 0 },
+          });
+          const consumed = (
+            await placementReceipts(tx, warehouse, [client], receipt)
+          )[0];
+          expect(consumed.status).toBe("COMPLETED");
+          expect(consumed.excluded).toEqual(["FFL_TEST_01"]);
+          await tx.stockBalance.updateMany({
+            where: { boxId: boxes[1] },
+            data: { quantity: 1 },
+          });
           await tx.stockBalance.updateMany({
             where: { boxId: boxes[0] },
             data: { status: "SHIPPING" },

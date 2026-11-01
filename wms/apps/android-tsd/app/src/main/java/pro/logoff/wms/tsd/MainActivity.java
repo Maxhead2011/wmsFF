@@ -98,6 +98,8 @@ import pro.logoff.wms.tsd.network.TsdRelabelPrintJob;
 import pro.logoff.wms.tsd.network.TsdPrintStation;
 import pro.logoff.wms.tsd.network.TsdSearchBoxTask;
 import pro.logoff.wms.tsd.network.TsdStoragePalletResponse;
+import pro.logoff.wms.tsd.network.TsdReceiptPlacementTask;
+import pro.logoff.wms.tsd.network.TsdReceiptPlacementTasks;
 import pro.logoff.wms.tsd.network.TsdTransferResponse;
 import pro.logoff.wms.tsd.network.TsdLoginRequest;
 import pro.logoff.wms.tsd.network.TsdLoginResponse;
@@ -577,6 +579,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if(screen==Screen.STORAGE_PALLET && placementTask!=null){receiptPlacementAction(placementTask,"FINISH");return;}
         if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.close(); kizSearchScreen=null;renderKizMenu();return; }
         if (screen == Screen.FBO_PICK_MENU) { renderFboMenu(); return; }
         if (screen == Screen.FBS_REQUESTS && "logoff".equals(BuildConfig.FLAVOR)) { renderFbsMenu(); return; }
@@ -1340,7 +1343,82 @@ public class MainActivity extends Activity {
         return "uz".equals(uiLanguage) ? uzbek : russian;
     }
 
+    private boolean receiptPlacementMode;
+    private TsdReceiptPlacementTask placementTask;
+    private List<TsdReceiptPlacementTask> placementTasks = new ArrayList<>();
+    private boolean placementRefreshScheduled;
+    private long placementActionSequence;
+    private boolean placementActionBusy;
+
+    private void loadReceiptPlacementTasks() {
+        TsdSession session=safeSession(); if(session==null)return;
+        placementActionSequence++;receiptPlacementMode=true; statusMessage="Загружаю приёмки…";renderStoragePalletAssemblyScreen();
+        runBackground(()->{
+            Response<TsdReceiptPlacementTasks> response=WmsApiFactory.create(DEFAULT_BASE_URL).receiptPlacementTasks(session.authorizationHeader()).execute();
+            if(!response.isSuccessful()||response.body()==null)throw new IOException(inventoryHttpError(response));
+            mainHandler.post(()->{
+                if(screen!=Screen.STORAGE_PALLET||!fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
+                placementTasks=response.body().items==null?new ArrayList<>():response.body().items;
+                statusMessage="";renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
+    private void receiptPlacementAction(TsdReceiptPlacementTask task,String action) {
+        TsdSession session=safeSession(); if(session==null)return;
+        if(placementActionBusy)return;
+        placementActionBusy=true;
+        final long sequence=++placementActionSequence;
+        Map<String,Object> body=new LinkedHashMap<>();
+        body.put("placementClientId",task.clientId);body.put("placementDocument",task.document);body.put("action",action);
+        runBackground(()->{
+          try {
+            TsdReceiptPlacementTask loaded;
+            if("REFRESH".equals(action)){
+                Response<TsdReceiptPlacementTasks> response=WmsApiFactory.create(DEFAULT_BASE_URL).receiptPlacementTask(session.authorizationHeader(),task.clientId,task.document).execute();
+                if(!response.isSuccessful()||response.body()==null)throw new IOException(inventoryHttpError(response));
+                if(response.body().items==null||response.body().items.isEmpty())throw new IOException("Приёмка больше не доступна. Обновите список.");
+                loaded=response.body().items.get(0);
+            }else{
+                Response<TsdReceiptPlacementTask> response=WmsApiFactory.create(DEFAULT_BASE_URL).receiptPlacementAction(session.authorizationHeader(),body).execute();
+                if(!response.isSuccessful()||response.body()==null)throw new IOException(inventoryHttpError(response));
+                loaded=response.body();
+            }
+            mainHandler.post(()->{
+                if(sequence!=placementActionSequence||screen!=Screen.STORAGE_PALLET||!fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
+                if("DEFER".equals(action)){placementTask=null;receiptPlacementMode=false;statusMessage="Размещение отложено. Приёмка остаётся в списке.";renderStoragePalletAssemblyScreen();return;}
+                if("REFRESH".equals(action)&&(placementTask==null||!task.id.equals(placementTask.id)))return;
+                placementTask=loaded;storagePalletClientId=loaded.clientId;receiptPlacementMode=true;
+                renderStoragePalletAssemblyScreen();
+                if("FINISH".equals(action)){
+                    if(!loaded.canFinish){
+                        new TsdUi.DialogBuilder(this).setTitle("Не все короба приёмки размещены")
+                            .setMessage((loaded.receiving?"Приёмка ещё не завершена.\n":"")+"Осталось: "+loaded.remaining.size()+"\n"+android.text.TextUtils.join("\n",loaded.remaining))
+                            .setPositiveButton("Продолжить размещение",(dialog,which)->{})
+                            .setNegativeButton("Отложить",(dialog,which)->receiptPlacementAction(loaded,"DEFER")).show();
+                    }else{
+                        new TsdUi.DialogBuilder(this).setTitle("Размещение завершено").setMessage(loaded.client+" · "+loaded.total+" коробов")
+                            .setPositiveButton("Готово",(dialog,which)->{placementTask=null;receiptPlacementMode=false;renderStoragePalletAssemblyScreen();}).show();
+                    }
+                }
+            });
+          } finally {
+            mainHandler.post(()->{if(sequence==placementActionSequence){placementActionBusy=false;schedulePlacementRefresh();}});
+          }
+        });
+    }
+
+    private void schedulePlacementRefresh(){
+        if(placementRefreshScheduled||placementTask==null)return;
+        placementRefreshScheduled=true;
+        mainHandler.postDelayed(()->{
+            placementRefreshScheduled=false;
+            if(screen==Screen.STORAGE_PALLET&&placementTask!=null)receiptPlacementAction(placementTask,"REFRESH");
+        },10000);
+    }
+
     private void openStoragePalletAssembly() {
+        placementActionSequence++;placementActionBusy=false;placementTask=null;receiptPlacementMode=false;placementTasks.clear();
         storagePalletAssembly = null;
         clearStoragePalletRecovery();
         storagePalletClientId = "";
@@ -1383,6 +1461,30 @@ public class MainActivity extends Activity {
 
         TsdStoragePalletResponse.Pallet pallet =
             storagePalletAssembly == null ? null : storagePalletAssembly.pallet;
+        if("logoff".equals(BuildConfig.FLAVOR)&&storagePalletAssembly!=null&&storagePalletAssembly.receiptPlacementEnabled){
+            if(receiptPlacementMode&&placementTask==null){
+                root.addView(title("Разместить приёмку на палетах"));
+                for(TsdReceiptPlacementTask task:placementTasks){
+                    if(task.remaining==null||task.remaining.isEmpty())continue;
+                    root.addView(primaryMenuButton(task.client+" · "+task.document.replaceFirst("^SERIES:[0-9]{4}:","")+"\nРазмещено "+task.placed+" из "+task.total,view->{
+                        if(pallet!=null&&pallet.client!=null&&!task.clientId.equals(pallet.client.id)){
+                            statusMessage="Сначала закройте палету другого клиента.";receiptPlacementMode=false;renderStoragePalletAssemblyScreen();return;
+                        }
+                        receiptPlacementAction(task,"START");
+                    }));
+                }
+                root.addView(secondaryButton("Обновить приёмки",view->loadReceiptPlacementTasks()));
+                root.addView(secondaryButton("Обычное размещение",view->{receiptPlacementMode=false;renderStoragePalletAssemblyScreen();}));
+                if(!statusMessage.isEmpty())root.addView(messageView(statusMessage));
+                setScrollableContent(root);return;
+            }
+            if(placementTask==null)root.addView(primaryMenuButton("Разместить приёмку на палетах",view->loadReceiptPlacementTasks()));
+            else{
+                root.addView(feedbackView(placementTask.client+" · "+placementTask.document.replaceFirst("^SERIES:[0-9]{4}:","")+"\nРазмещено "+placementTask.placed+" из "+placementTask.total+" · осталось "+(placementTask.remaining==null?0:placementTask.remaining.size()),Color.rgb(220,252,231)));
+                root.addView(secondaryButton("Завершить размещение",view->receiptPlacementAction(placementTask,"FINISH")));
+                schedulePlacementRefresh();
+            }
+        }
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
@@ -1407,6 +1509,7 @@ public class MainActivity extends Activity {
             }
             clientAdapter.notifyDataSetChanged();
             clientSpinner.setSelection(selected);
+            clientSpinner.setEnabled(placementTask==null);
             root.addView(clientSpinner);
 
             storagePalletScanInput = input(tr("Сканируйте ШК паллеты", "Pallet shtrix-kodini skanerlang"));
@@ -1463,7 +1566,7 @@ public class MainActivity extends Activity {
                 }
             }
         }
-        root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> renderMainScreen()));
+        root.addView(secondaryButton(tr("Назад", "Orqaga"), view -> {if(placementTask!=null)receiptPlacementAction(placementTask,"FINISH");else renderMainScreen();}));
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
@@ -1502,16 +1605,20 @@ public class MainActivity extends Activity {
         request.put("deviceCode", session.deviceCode);
         if (pallet == null) {
             int selected = clientSpinner == null ? 0 : clientSpinner.getSelectedItemPosition();
-            if (selected <= 0 || selected > clients.size()) {
+            if (placementTask==null && (selected <= 0 || selected > clients.size())) {
                 statusMessage = tr("Выберите клиента паллет-сорта.", "Pallet-sort mijozini tanlang.");
                 renderStoragePalletAssemblyScreen();
                 return;
             }
-            storagePalletClientId = clients.get(selected - 1).id;
+            storagePalletClientId = placementTask==null ? clients.get(selected - 1).id : placementTask.clientId;
             request.put("clientId", storagePalletClientId);
             request.put("palletCode", code);
         } else {
             request.put("boxCode", code);
+        }
+        if(placementTask!=null&&pallet!=null){
+            request.put("placementClientId",placementTask.clientId);
+            request.put("placementDocument",placementTask.document);
         }
         statusMessage = tr("Сохраняю…", "Saqlanmoqda…");
         renderStoragePalletAssemblyScreen();
@@ -1528,6 +1635,7 @@ public class MainActivity extends Activity {
                 online = true;
                 storagePalletAssembly = loaded;
                 prepareStoragePalletRecovery(loaded);
+                if(placementTask!=null)receiptPlacementAction(placementTask,"REFRESH");
                 statusMessage = safeText(loaded.message);
                 renderStoragePalletAssemblyScreen();
             });

@@ -11,6 +11,15 @@ import { StorageLocationsService } from './storage-locations.service';
 export class StorageLocationsController {
   constructor(private readonly storage: StorageLocationsService) {}
 
+  @Get('receipt-placement')
+  receiptPlacementTasks(@CurrentUser() user:AuthUser){return this.storage.receiptPlacementTasks(user);}
+
+  @Post('receipt-placement/action')
+  @RequirePermissions('warehouse:write')
+  receiptPlacementAction(@Body() body:Record<string,unknown>,@CurrentUser() user:AuthUser){
+    return this.storage.receiptPlacementAction(body,user);
+  }
+
   @Get('placement-report')
   placementReport(@CurrentUser() user: AuthUser,@Query('cursor') cursor?:string,@Query('summaryOnly') summaryOnly?:string) {
     return this.storage.placementReport(user,cursor,summaryOnly==='true');

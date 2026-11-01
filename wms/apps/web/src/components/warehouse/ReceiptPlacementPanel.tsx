@@ -1,3 +1,4 @@
+import { ReceiptPlacementTasks } from "./ReceiptPlacementTasks";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import "./receipt-placement.css";
 type Row = {
@@ -36,11 +37,13 @@ export function ReceiptPlacementPanel({
   warehouseId,
   revision,
   fallback,
+  canManage = false,
 }: {
   token: string;
   warehouseId?: string | null;
   revision?: unknown;
   fallback?: ReactNode;
+  canManage?: boolean;
 }) {
   const [report, setReport] = useState<Report | null>(null),
     [error, setError] = useState(""),
@@ -115,6 +118,11 @@ export function ReceiptPlacementPanel({
           <span>Ожидают размещения</span>
         </button>
       </div>
+      <ReceiptPlacementTasks
+        token={token}
+        warehouseId={warehouseId}
+        canManage={canManage}
+      />
       <dialog
         ref={dialog}
         className="receipt-placement__dialog"

@@ -122,6 +122,18 @@ export class TsdDeviceController {
     return this.storageLocations.getCurrentTsdPallet(deviceCode || user.deviceCode, user);
   }
 
+  @Get('receipt-placement')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  receiptPlacementTasks(@CurrentUser() user:AuthUser,@Query('placementClientId') clientId?:string,@Query('placementDocument') document?:string){return this.storageLocations.receiptPlacementTasks(user,clientId,document);}
+
+  @Post('receipt-placement/action')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  receiptPlacementAction(@Body() body:Record<string,unknown>,@CurrentUser() user:AuthUser){
+    return this.storageLocations.receiptPlacementAction(body,user);
+  }
+
   @Post('storage-pallet/open')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')
