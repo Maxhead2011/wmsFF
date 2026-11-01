@@ -1,3 +1,4 @@
+import {MarketStatusBatch} from './MarketStatusBatch';
 import { fetchWorkspaceClients } from '../../lib/marketplaceWorkspace';
 import {RequestRemovalProvider} from './RequestRemoval';
 import { OperationsTools } from './OperationsTools';
@@ -331,7 +332,11 @@ export function ClientRequestsPanel({
     }),
     [requests, requestSortDirection, requestSortField, showArchive, fboOnly, requestStatusFilter],
   );
-  const batch = useRequestBatch({items: displayedRequests.data, enabled: !showArchive && canChangeStatus, token: session.accessToken, fetchSelection: fetchClientRequestManualBoxSelection, updateStatus: updateClientRequestStatus, reload: loadData});
+  const [checkingMarkets,setCheckingMarkets]=useState(false);
+  const marketControl = canWrite && !fboOnly && import.meta.env.VITE_MARKETPLACE_WORKSPACES_ENABLED==='true'
+    ? (busy:boolean)=><MarketStatusBatch key={session.user.id+String(session.user.activeWarehouseId)} token={session.accessToken}
+        reload={loadData} disabled={busy} onBusy={setCheckingMarkets}/> : undefined;
+  const batch = useRequestBatch({checkingMarkets,marketControl,items: displayedRequests.data, enabled: !showArchive && canChangeStatus, token: session.accessToken, fetchSelection: fetchClientRequestManualBoxSelection, updateStatus: updateClientRequestStatus, reload: loadData});
 
   const fbsTailEligibleRequests = useMemo(
     () =>
