@@ -70,3 +70,23 @@ describe('WB binding after a partial FBO pick closes',()=>{
   await expect(svc.bind('r','c','41663060',{} as never)).rejects.toThrow('429');expect(db.$transaction).not.toHaveBeenCalled();
  });
 });
+
+// TEST: #2564, WB gate confirmation is sufficient despite a later rate limit.
+describe('confirmed WB handover after a partial pick',()=>{
+ afterEach(()=>vi.unstubAllEnvs());
+ it.each([true,false])('rate-limited refresh finalizes only matching packed quantity %s',async matching=>{
+  vi.stubEnv('WMS_WB_FBO_ACTUAL_BINDING_ENABLED','true');
+  let binding:any={connectionId:'c',supplyId:'41852721',statusId:6,status:'Отгружено на воротах WB',quantity:1290,checkedAt:'2026-11-01T15:41:10Z'};
+  const db:any={systemSetting:{findUnique:vi.fn(async({where}:any)=>where.key.includes('dispatch')?{value:{at:'today'}}:{value:binding}),update:vi.fn(async({data}:any)=>binding=data.value)},fboAssemblyUnit:{groupBy:vi.fn(async()=>[{state:'PACKED',_count:matching?1290:1289}])},$queryRaw:vi.fn(),$transaction:async(fn:any)=>fn(db)};
+  const stock={shipClientRequest:vi.fn()};
+  const service=new WbFboSupplyService(db,{} as never,stock as never);
+  vi.spyOn(service as any,'load').mockResolvedValue({id:'r',clientId:'c',status:'PACKED',items:[{quantity:1315}],fboAssembly:{phase:'COMPLETED'}});
+  vi.spyOn(service as any,'connection').mockResolvedValue({});
+  vi.spyOn(service,'remote').mockRejectedValue(new Error('HTTP 429'));
+  vi.spyOn(service,'view').mockResolvedValue({} as never);
+  await service.refresh('r',{id:'u',permissionCodes:['client-requests:write']} as never);
+  expect(stock.shipClientRequest).toHaveBeenCalledTimes(matching?1:0);
+  expect(binding.checkedAt).toBe('2026-11-01T15:41:10Z');
+  expect(binding.lastError).toContain('429');
+ });
+});
