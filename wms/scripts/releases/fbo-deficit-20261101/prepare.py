@@ -36,7 +36,7 @@ anchor='if (require("./fbo-unboxed-picking").unboxedFboEnabled() && r.client.sto
 s=once(s,anchor,between(c,"if (dto.action === 'REPORT_MISSING_BOX') {",'else if ((0, fbo_unboxed_picking_1.unboxedFboEnabled)').replace('client_1.InventorySessionStatus.', 'require("@prisma/client").InventorySessionStatus.').replace('client_2.InventorySessionStatus.', 'require("@prisma/client").InventorySessionStatus.').replace('fbo_missing_stock_1.', 'require("../../common/stock/fbo-missing-stock").')+'else '+anchor)
 k=s.index('dto.action, dto.sourceBoxCode');s=s[:k]+s[k:].replace('dto.action, dto.sourceBoxCode',"dto.action, ...(dto.action==='REPORT_MISSING'?[dto.missingQuantity]:[]), dto.sourceBoxCode",1)
 save(rel,s)
-h=(r/'web-base/index.html').read_text(encoding='utf8');match=re.search(r'<script type="importmap">(.*?)</script>',h,re.S);m=json.loads(match[1]);old='/assets/compact-places-20261101.js';new='/assets/fbo-deficit-20261101.js'
+h=(r/'web-base/index.html').read_text(encoding='utf8');match=re.search(r'<script type="importmap">(.*?)</script>',h,re.S);m=json.loads(match[1]);old=m['imports']['/assets/request-removal-requests-20261024.js'];new='/assets/fbo-deficit-20261101.js'
 s=(r/'web-base'/old[1:]).read_text(encoding='utf8')
 s=once(s,'if(!ae||!G||j.length===0)','if(!ae||!G||j.length===0||j.length!==te.length)')
 s=once(s,'title:y||G.title,comment:`Создано из Excel:', '''title:y||G.title,fboExcel:true,fboDecisions:G.lines.flatMap((l,i)=>{const key=`${l.barcode??l.originalName??l.internalSku??i}-${i}`;const n=j.find(x=>x.key===key)?.requestedQuantity??0;return n===l.requestedQuantity?[]:[{barcode:l.barcode??"",originalQuantity:l.requestedQuantity,finalQuantity:n}]}),comment:`Создано из Excel:''')

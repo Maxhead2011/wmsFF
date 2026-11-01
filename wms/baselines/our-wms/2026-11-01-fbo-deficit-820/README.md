@@ -1,0 +1,1 @@
+Published PR820, LOGOFF 250: WB FBO shortage preview, corrected quantities, missing box alerts and scanned box recount; FBS/FBO red notifications for administrators and owners. Signed APK, isolated API/DB, public web and single entry verified. Source parity false.

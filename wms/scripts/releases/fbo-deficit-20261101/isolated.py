@@ -9,7 +9,7 @@ run('network','create','--internal',network)
 try:
  run('run','-d','--name',pg,'--network',network,'--memory','512m','-e','POSTGRES_PASSWORD=isolated-test','-e','POSTGRES_DB=client_stores_test','postgres:16-alpine')
  for n in range(30):
-  if subprocess.run(['docker','exec',pg,'pg_isready','-U','postgres'],capture_output=True).returncode==0:break
+  if subprocess.run(['docker','exec',pg,'pg_isready','-h','127.0.0.1','-U','postgres'],capture_output=True).returncode==0:break
   time.sleep(1)
  run('exec',pg,'createdb','-U','postgres','client_stores_analytics_test')
  env=['--network',network,'--memory','1g','-e',f'DATABASE_URL=postgresql://postgres:isolated-test@{pg}:5432/client_stores_test','-e',f'ANALYTICS_DATABASE_URL=postgresql://postgres:isolated-test@{pg}:5432/client_stores_analytics_test','-e','NODE_ENV=test','-e','NODE_PATH=/app/apps/api/node_modules:/app/node_modules','-e','WMS_LAMODA_SECRET_KEY='+base64.b64encode(bytes(range(32))).decode(),'-e','WMS_RECEIPT_CHANNELS_ENABLED=false','-v',str(r)+':/release:ro','-w','/app/apps/api']

@@ -1,0 +1,7 @@
+.workspace-branch-select:has(~ .warehouse-problem-bell){flex:0 1 17rem;min-width:0;max-width:17rem}
+.warehouse-problem-bell{position:relative;flex:none}
+.warehouse-problem-bell>button{display:flex;align-items:center;gap:.3rem;color:#ad1731;background:#fff1f2;border:1px solid #df9ba6;border-radius:.5rem;padding:.55rem;cursor:pointer}
+.warehouse-problem-bell section{position:absolute;z-index:100;inset-inline-end:0;top:calc(100% + .5rem);width:min(24rem,85vw);max-height:65vh;overflow:auto;background:#8d162b;color:white;border-radius:.65rem;padding:1rem;box-shadow:0 6px 28px #26071144}
+.warehouse-problem-bell section header{display:flex;justify-content:space-between;align-items:center}
+.warehouse-problem-bell section header button{color:white;background:transparent;border:none;cursor:pointer}
+.warehouse-problem-bell article{border-top:1px solid #ffffff55;padding:.65rem 0;overflow-wrap:anywhere}
