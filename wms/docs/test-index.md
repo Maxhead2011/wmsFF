@@ -1,3 +1,5 @@
+Request actions in a compact two-column grid with a reduced-motion-aware online indicator. Full-width open menus and wrapped status notes. Browser regression in scripts/releases/request-grid-20261101/browser.cjs.
+
 Compact request places: ClientRequestsTable.packagesSummary shows the number of packages and sum of their item quantities. The existing Online action provides details. Web regression suite 588 passed/2 skipped; deployed-module fixtures 0/1/159 places. Own-WMS web-only release.
 
 Published PR813 / 2026-10-31: [Cargo pickup invoices](cargo-pickup-invoices.md). Separate dated cargo invoice alongside independent PRR billing; delivery selection/cost, audited correction, transactional source links, concurrency and cancellation guards. API4280/web587 (156/2 skipped), focused18, TypeScript, isolated PostgreSQL8/full health, browser6/bootstrap5/public5 passed. Exact API5/web2; own-image flag enabled. Live routes/flag verified, no production cargo charges created. Schema/APK/sold unchanged. Baseline2026-10-31-cargo-pickup, sourceParityVerified=false.
