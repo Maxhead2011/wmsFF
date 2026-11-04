@@ -526,3 +526,5 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
 - request-market-status.spec.ts и fbo-delivery-sync.spec.ts: ручные цели, ФБС, ФБО при остановленном фоне, отказ без отдельного разрешения, demo и неизменность фонового флага. scripts/releases/manual-market-status/runtime.cjs проверяет точный серверный пакет без бизнес-записей.
 
 - Manual status fix: API4294, targeted42, API TypeScript and exact runtime6 pass. Dedicated PostgreSQL suite unavailable on this host; standalone integration API scope tests11 pass, database-dependent integration cases skipped. Read-only current-data probe: old handler404, candidate returns38 scoped targets with background disabled; no business writes.
+
+- PR858 published: manual status capability, exact API2 baseline 2026-11-04-manual-market-status, runtime6 and live38 targets verified; background remains paused.
