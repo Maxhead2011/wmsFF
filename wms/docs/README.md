@@ -1,3 +1,5 @@
+Подготовлено к выпуску: [автоматические статусы связанных WB FBS-заказов](wb-linked-status-refresh.md).
+
 PR831. WB request rows use LegacyWbBi. Its header now opens supply binding. Browser verification starts from the Requests list on published assets with actual request 2565 plan and fixture API responses. Web 593 passed/2 skipped, TypeScript passed. Baseline 2026-11-01-wb-request-entry.
 
 PR829. Both Ozon import methods are collapsed inside Excel assembly in Requests. Verified the live request panel and retained link draft across toggles. Web593/2 skipped, TypeScript and Edge passed. Exact web2 overlay on PR820. Baseline 2026-11-01-ozon-under-excel.

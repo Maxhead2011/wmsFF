@@ -1,3 +1,4 @@
+import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
 import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { closeWbPackedRequest, wbPackedAutoDoneEnabled } from './wb-packed-auto-done';
 import { closeOzonPackedRequest, ozonPackedAutoDoneEnabled } from './ozon-packed-auto-done';
@@ -719,7 +720,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  private stopLinkedWbRefresh?: () => Promise<void>;
   onModuleInit() {
+    if (process.env.WMS_WB_LINKED_STATUS_REFRESH === 'true' && process.env.WMS_EMERGENCY_MANUAL_MODE !== 'true') {
+      const warn = (message:string) => this.logger.warn(message);
+      this.stopLinkedWbRefresh = startLinkedWbRefresh(stopped => refreshLinkedWbStatuses(this.prisma,
+        (key,ids) => runWithWildberriesRequestPriority('background', () => this.readWbStatusesForConnection(key,ids)),
+        fbsOrderCategory,warn,stopped),warn);
+    }
     // FIX: sold installations without the lifecycle flag never access the new queue.
     if (wbOrderStockLifecycleEnabled()) {
       this.printBillingWorker = new FbsPrintBillingWorker(this.prisma,
@@ -742,6 +750,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   }
 
   async onModuleDestroy() {
+    await this.stopLinkedWbRefresh?.();
     this.fbsBackgroundRefreshStopped = true;
     if (this.fbsRefreshTimer) {
       clearTimeout(this.fbsRefreshTimer);
