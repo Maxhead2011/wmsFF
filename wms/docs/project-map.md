@@ -553,3 +553,5 @@ FBS controller/module, web `fbs/store-filter.ts`, `FbsPanel.tsx`, `lib/api.ts`.
 - PR852 published: active placement list, public runtime6 and read-only list verified; baseline 2026-11-01-placement-active-list.
 
 - RequestMarketStatusController использует отдельный WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED. Явный ручной вызов FboDeliverySyncService.reconcile не зависит от остановки фонового обработчика; планировщик по-прежнему требует WMS_FBO_DELIVERY_SYNC_ENABLED.
+
+- PR858 published: manual status capability, exact API2 baseline 2026-11-04-manual-market-status, runtime6 and live38 targets verified; background remains paused.
