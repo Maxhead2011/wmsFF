@@ -21,7 +21,7 @@ function setup() {
   const connections={readWbStatusesForConnection:vi.fn()};
   const ctl=new RequestMarketStatusController(db,scopes as any,connections as any,ozon as any,wb as any,delivery as any);
   const check=()=>ctl.check('r',{roleCodes:['OWNER'],permissionCodes:['system:admin']} as any);
-  return {row,db,scopes,ozon,wb,delivery,connections,check};
+  return {row,db,scopes,ozon,wb,delivery,connections,check,ctl};
 }
 afterEach(()=>vi.unstubAllEnvs());
 describe('manual request status check',()=>{
@@ -62,6 +62,23 @@ describe('manual request status check',()=>{
     const {check,row,wb,delivery}=setup();row.fbsOrderLinks=[];row.fboAssembly={phase:'COMPLETED'};
     wb.refresh.mockResolvedValue({binding:{statusId:6,status:'Сдано'},dispatch:null});
     expect((await check()).message).toContain('загрузки');expect(wb.refresh.mock.calls[0][2]).toBe(true);
-    expect(delivery.reconcile).toHaveBeenCalledWith('r',undefined,row);
+    expect(delivery.reconcile).toHaveBeenCalledWith('r',undefined,row,true);
   });
+});
+
+// TEST: manual status checks must work independently of paused background workers.
+it('reads targets with background paused and explicit manual permission enabled',async()=>{
+ vi.stubEnv('WMS_FBO_DELIVERY_SYNC_ENABLED','false');vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','true');
+ const db:any={clientRequest:{findMany:vi.fn(async()=>[{id:'r',number:1,clientId:'c'}])}};
+ const ctl=new RequestMarketStatusController(db,{resolveClientFilter:()=>undefined} as any,{} as any,{} as any,{} as any,{} as any);
+ expect(await ctl.targets({roleCodes:['OWNER'],permissionCodes:['system:admin'],clientScopeMode:'ALL'} as any)).toEqual([{id:'r',number:1}]);
+});
+it('checks FBS manually with background paused without changing its flag',async()=>{
+ const f=setup();vi.stubEnv('WMS_FBO_DELIVERY_SYNC_ENABLED','false');vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','true');
+ expect((await f.check()).status).toBe('DONE');expect(process.env.WMS_FBO_DELIVERY_SYNC_ENABLED).toBe('false');
+});
+it('keeps manual checks disabled on other installations and rejects demo access',async()=>{
+ const f=setup();vi.stubEnv('WMS_FBO_DELIVERY_SYNC_ENABLED','false');vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','false');
+ await expect(f.check()).rejects.toThrow();expect(f.ozon.call).not.toHaveBeenCalled();
+ vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','true');await expect(f.ctl.check('r',{isDemo:true} as any)).rejects.toThrow();
 });

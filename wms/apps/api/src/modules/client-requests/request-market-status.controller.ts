@@ -31,7 +31,8 @@ export class RequestMarketStatusController {
   // FIX: force a scoped read from the marketplace, then apply the ordinary completion policy.
   @Get('market-status/targets')
   async targets(@CurrentUser() user:AuthUser) {
-    if (process.env.WMS_FBO_DELIVERY_SYNC_ENABLED !== 'true') throw new NotFoundException();
+    // FIX: manual capability is independent of the background worker switch.
+    if (process.env.WMS_FBO_DELIVERY_SYNC_ENABLED !== 'true' && process.env.WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED !== 'true') throw new NotFoundException();
     if (user.isDemo) throw new ForbiddenException();
     const rows = await this.db.clientRequest.findMany({where:{
       type:'OUTBOUND',status:{notIn:['DONE','CANCELLED','REJECTED']},client:{isDemo:false},
@@ -46,7 +47,8 @@ export class RequestMarketStatusController {
 
   @Post(':id/market-status')
   async check(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    if (process.env.WMS_FBO_DELIVERY_SYNC_ENABLED !== 'true') throw new NotFoundException();
+    // FIX: manual capability is independent of the background worker switch.
+    if (process.env.WMS_FBO_DELIVERY_SYNC_ENABLED !== 'true' && process.env.WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED !== 'true') throw new NotFoundException();
     if (user.isDemo) throw new ForbiddenException();
     const r = await this.db.clientRequest.findUnique({where:{id}, include:{
       client:{select:{isDemo:true}}, fbsOrderLinks:true, ozonShipment:{select:{requestId:true}},
@@ -90,12 +92,12 @@ export class RequestMarketStatusController {
     } else if (r.ozonShipment) {
       const view = await this.ozon.refresh(id,user);
       message = 'Ozon · '+(view.link ? supplyOrders(view.link).map(o=>o.orderNumber+' '+o.state).join(', ') : 'поставка не привязана');
-      await this.delivery.reconcile(id,undefined,r);
+      await this.delivery.reconcile(id,undefined,r,true);
     } else if (r.fboAssembly && !r.yandexFbyShipment) {
       const view = await this.wb.refresh(id,user,true);
       if (view.binding?.lastError) throw new BadGatewayException(view.binding.lastError);
       message = 'WB · '+(view.binding?.status??'поставка не привязана');
-      await this.delivery.reconcile(id,undefined,r);
+      await this.delivery.reconcile(id,undefined,r,true);
       if (view.binding && [4,5,6].includes(view.binding.statusId) && !view.dispatch)
         message += ' · В WMS требуется отметка загрузки в автомобиль';
     } else throw new ConflictException('У заявки нет поддерживаемой привязки к маркетплейсу.');
