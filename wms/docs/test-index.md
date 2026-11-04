@@ -1,3 +1,5 @@
+Request action menus follow the selected font and collapse to one column when narrow. Edge regression: apps/web/test/request-menu-font-wrap.ps1.
+
 PR831. WB request rows use LegacyWbBi. Its header now opens supply binding. Browser verification starts from the Requests list on published assets with actual request 2565 plan and fixture API responses. Web 593 passed/2 skipped, TypeScript passed. Baseline 2026-11-01-wb-request-entry.
 
 PR829. Both Ozon import methods are collapsed inside Excel assembly in Requests. Verified the live request panel and retained link draft across toggles. Web593/2 skipped, TypeScript and Edge passed. Exact web2 overlay on PR820. Baseline 2026-11-01-ozon-under-excel.
