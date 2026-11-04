@@ -1,3 +1,5 @@
+Request action menus follow the selected font and collapse to one column when narrow. Edge regression: apps/web/test/request-menu-font-wrap.ps1.
+
 Опубликован PR860 (04.11.2026): автоматический опрос WB по номерам заказов незакрытых FBS-заявок. WMS_WB_LINKED_STATUS_REFRESH=true только в нашей WMS. Проверены работающий API и точная замена двух модулей относительно PR858; остальные контейнеры сохранены. База: 2026-11-04-wb-linked-status.
 
 PR831. WB request rows use LegacyWbBi. Its header now opens supply binding. Browser verification starts from the Requests list on published assets with actual request 2565 plan and fixture API responses. Web 593 passed/2 skipped, TypeScript passed. Baseline 2026-11-01-wb-request-entry.
