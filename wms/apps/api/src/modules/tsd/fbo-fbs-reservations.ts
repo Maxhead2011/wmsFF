@@ -58,6 +58,7 @@ export class FboFbsAvailability {
 // FIX: run inside the existing serializable pick transaction, before any stock/KIZ writes.
 export async function loadFboFbsAvailability(tx: Prisma.TransactionClient,
   request: { clientId: string; warehouseId: string | null }, skuIds: string[]) {
+  const checkBlockedReturns = (process.env.WMS_FBO_BLOCKED_RETURN_CLIENT_IDS ?? '').split(',').includes(request.clientId);
   const balances = await tx.stockBalance.findMany({ where: { clientId: request.clientId,
     warehouseId: request.warehouseId, skuId: { in: skuIds }, status: 'AVAILABLE', quantity: { gt: 0 },
     box: { status: 'active', clientId: request.clientId, warehouseId: request.warehouseId } },
@@ -96,7 +97,23 @@ export async function loadFboFbsAvailability(tx: Prisma.TransactionClient,
     lastCategory:{in:['shipped','archive']},lastSupplierStatus:'complete',request:{fbsEmergencyAssemblyAt:null}},
     select:{connectionId:true,orderId:true}}) : [];
   const shippedOrders = new Set(shipped.map(l=>`${l.connectionId}:${l.orderId}`));
-  const pending = tasks.filter(t => t.status === 'RETURN_REQUIRED' ||
+  // FIX: a closed single-unit return with an unboxed BLOCKED mark already has
+  // a specific unavailable unit. Keep the return task, release unrelated stock.
+  const candidates = tasks.filter(t => checkBlockedReturns && !open.has(t.requestId)
+    && t.status === 'RETURN_REQUIRED' && t.itemCount === 1 && t.kiz && !t.sourceSkuId);
+  const doneRequests = candidates.length ? await tx.clientRequest.findMany({
+    where: { id: { in: candidates.map(t => t.requestId) }, clientId: request.clientId,
+      warehouseId: request.warehouseId, status: 'DONE' }, select: { id: true },
+  }) : [];
+  const doneIds = new Set(doneRequests.map(r => r.id));
+  const blocked = doneIds.size ? await tx.productMark.findMany({
+    where: { clientId: request.clientId, boxId: null, status: 'BLOCKED',
+      value: { in: candidates.map(t => t.kiz!) }, skuId: { in: skuIds } },
+    select: { skuId: true, value: true },
+  }) : [];
+  const blockedKeys = new Set(blocked.map(m => key(m.skuId, m.value)));
+  const excluded = new Set(candidates.filter(t => doneIds.has(t.requestId) && blockedKeys.has(key(t.skuId!, t.kiz!))).map(t => t.id));
+  const pending = tasks.filter(t => !excluded.has(t.id)).filter(t => t.status === 'RETURN_REQUIRED' ||
     (t.status === 'IN_PROGRESS' && !!(t.sourceBarcode || t.barcode || t.kiz || t.relabelConfirmedAt)) ||
     (open.has(t.requestId) && !shippedOrders.has(`${t.connectionId}:${t.orderId}`)))
     .map(t => ({...t,itemCount:Math.max(1,t.itemCount)-Math.max(0,picked.get(t.id) ?? 0)}))

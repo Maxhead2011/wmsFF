@@ -28,3 +28,24 @@ it.each([null, new Date()])('uses the physical article at relabel stage %s', rel
   expect(available.free('box','source')).toBe(relabelConfirmedAt ? 2 : 1);
   expect(available.free('box','sku')).toBe(relabelConfirmedAt ? 1 : 2);
 });
+
+// TEST: a closed single-unit return for a blocked mark must not reserve a different mark.
+it.each([[true, true, 1], [false, true, 0], [true, false, 0]] as const)(
+  'isolates blocked returns (enabled=%s, blocked=%s)', async (enabled, blocked, expected) => {
+    const { loadFboFbsAvailability } = await import('../src/modules/tsd/fbo-fbs-reservations');
+    const { vi } = await import('vitest');
+    vi.stubEnv('WMS_FBO_BLOCKED_RETURN_CLIENT_IDS', enabled ? 'client' : '');
+    vi.stubEnv('WMS_RECEIPT_CHANNELS_ENABLED', 'false');
+    const empty = { findMany: async () => [] };
+    const tx = {
+      stockBalance: { findMany: async () => [{ boxId: 'new', skuId: 'sku', quantity: 1 }] },
+      clientRequest: { findMany: async (args: { where: { status?: unknown } }) => args.where.status === 'DONE' ? [{ id: 'done' }] : [] }, stockMovement: empty, fbsOrderRequestLink: empty, systemSetting: empty,
+      fbsTsdAssembly: { findMany: async () => [{ ...reservation, id: 'task', requestId: 'done',
+        request: { status: 'DONE' }, status: 'RETURN_REQUIRED', kiz: 'old', itemCount: 1 }] },
+      productMark: { findMany: async () => blocked ? [{ value: 'old', skuId: 'sku' }] : [] },
+    };
+    try {
+      const availability = await loadFboFbsAvailability(tx as never, { clientId: 'client', warehouseId: 'warehouse' }, ['sku']);
+      expect(availability.free('new', 'sku')).toBe(expected);
+    } finally { vi.unstubAllEnvs(); }
+  });

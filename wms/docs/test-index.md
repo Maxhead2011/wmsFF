@@ -1,3 +1,5 @@
+FBO stock availability: gated exact blocked-mark returns in completed FBS requests. Regression: apps/api/test/fbo-fbs-reservations.spec.ts.
+
 Request action menus follow the selected font and collapse to one column when narrow. Edge regression: apps/web/test/request-menu-font-wrap.ps1.
 
 Опубликован PR860 (04.11.2026): автоматический опрос WB по номерам заказов незакрытых FBS-заявок. WMS_WB_LINKED_STATUS_REFRESH=true только в нашей WMS. Проверены работающий API и точная замена двух модулей относительно PR858; остальные контейнеры сохранены. База: 2026-11-04-wb-linked-status.
