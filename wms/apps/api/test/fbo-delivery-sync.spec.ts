@@ -33,3 +33,15 @@ it('runs after startup with browser closed and stops on shutdown',async()=>{vi.u
 it('does not treat historical FBS requests as FBO',async()=>{const f=fixture();f.r.title='FBS historical';expect(await f.svc.reconcile('r')).toBe('SKIPPED');expect(f.ozon.call).not.toHaveBeenCalled();});
 it('respects administrator removal',async()=>{vi.stubEnv('WMS_REQUEST_REMOVAL_ENABLED','true');const f=fixture();f.db.auditLog.findFirst.mockResolvedValue({id:'removed'});await expect(f.svc.reconcile('r')).rejects.toThrow();expect(f.stock.shipClientRequest).not.toHaveBeenCalled();});
 it('rejects invalid WB supply identity without HTTP',async()=>{const f=fixture();f.r.ozonShipment=null;f.settings.set('wb-fbo-tracking:v1:r',{connectionId:'c',supplyId:'../other'});f.settings.set('wb-fbo-dispatch:v1:r',{at:'now'});await expect(f.svc.reconcile('r')).rejects.toThrow();expect(f.wb.remote).not.toHaveBeenCalled();});
+
+// TEST: explicit manual reconciliation cannot wake the scheduler or bypass the opt-in.
+it('reconciles an explicit manual FBO request while the worker stays paused',async()=>{
+ vi.stubEnv('WMS_FBO_DELIVERY_SYNC_ENABLED','false');vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','true');
+ const f=fixture();f.svc.onModuleInit();await f.svc.tick();expect(f.db.clientRequest.findMany).not.toHaveBeenCalled();
+ expect(await f.svc.reconcile('r',undefined,{clientId:'client',warehouseId:'w'},true)).toBe('DONE');
+ expect(process.env.WMS_FBO_DELIVERY_SYNC_ENABLED).toBe('false');f.svc.onModuleDestroy();
+});
+it('does not grant a manual bypass when the installation has not opted in',async()=>{
+ vi.stubEnv('WMS_FBO_DELIVERY_SYNC_ENABLED','false');vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','false');const f=fixture();
+ expect(await f.svc.reconcile('r',undefined,undefined,true)).toBe('DISABLED');expect(f.ozon.call).not.toHaveBeenCalled();
+});

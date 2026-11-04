@@ -78,8 +78,10 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
    market==='OZON'?link:[link.connectionId,link.supplyId],dispatch]);
   return {r,link,market,connection,dispatch,version};
  }
- async reconcile(id:string,initial?:any,scope?:{clientId:string;warehouseId:string|null}){
-  if(!fboDeliveryEnabled())return 'DISABLED';
+ async reconcile(id:string,initial?:any,scope?:{clientId:string;warehouseId:string|null},manual=false){
+  // FIX: only explicit manual calls may use the separate own-installation opt-in.
+  const enabled=()=>fboDeliveryEnabled()||(manual&&process.env.WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED==='true');
+  if(!enabled())return 'DISABLED';
   const c=initial??await this.context(id);if(!c||c.r.status==='DONE')return 'SKIPPED';
   if(scope&&(c.r.clientId!==scope.clientId||c.r.warehouseId!==scope.warehouseId))throw new ConflictException('Заявка сменила клиента или филиал. Обновите список.');
   let evidence:any,accepted=false;
@@ -98,7 +100,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
   // System operation has no human actor; undefined leaves the assignee unchanged and writes nullable audit actors.
   const user:AuthUser={id:undefined as unknown as string,email:'',name:'Автоматическая сверка сдачи ФБО',roleCodes:[],permissionCodes:['client-requests:write'],clientScopeMode:'LIMITED',clientIds:[c.r.clientId],writableClientIds:[c.r.clientId],activeWarehouseId:c.r.warehouseId,warehouseIds:[c.r.warehouseId],writableWarehouseIds:[c.r.warehouseId]};
   await this.stock.shipClientRequest({requestId:id,idempotencyKey:`ship-request:${id}`,comment:`Автоматически подтверждена сдача ФБО ${c.market==='OZON'?'Ozon':'WB'}.`},user,async(tx)=>{
-   if(!fboDeliveryEnabled()||Date.now()-checkedAt>4*60_000)throw new ConflictException('Проверка сдачи устарела.');
+   if(!enabled()||Date.now()-checkedAt>4*60_000)throw new ConflictException('Проверка сдачи устарела.');
    const fresh=await this.context(id,tx);
    if(!fresh||fresh.version!==c.version)throw new ConflictException('Привязка или состав поставки изменились.');
    if(fresh.r.status==='DONE')return;

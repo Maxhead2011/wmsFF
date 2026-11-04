@@ -39,3 +39,5 @@ API: `POST /api/v1/client-requests/:id/market-status`. Проверяются д
 ФБО нашей WMS. Схема базы данных не меняется.
 
 Validation: API 4295 passed/156 skipped, web 592 passed/2 skipped. Dedicated KIZ integration suite excluded without its isolated DB URL. Both TypeScript checks passed. Edge fixture verifies header order, binding while PICKING, and return to the same open assembly.
+
+Ручная сверка нашей ВМС может отдельно включаться через WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED=true при остановленной фоновой сверке. Это разрешение не запускает таймеры. Штатные ограничения на сдачу и права доступа сохраняются.
