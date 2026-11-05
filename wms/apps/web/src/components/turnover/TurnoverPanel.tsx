@@ -1894,6 +1894,14 @@ function optionDataString(option: KnownValueOption, key: string) {
   return value === null || value === undefined ? '' : String(value);
 }
 
+// FIX: concise search suggestions for the two Lukin accounts and Kubrin only.
+// Keep full product names in option data and catalog cards.
+const conciseProductSuggestionClients = new Set([
+  'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9',
+  '68cbb87b-5f53-4123-8b08-62ef372059b5',
+  'c401202c-be57-4310-9939-2ea36767da37',
+]);
+
 function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSuggestions['products']): KnownValueOption[] {
   return uniqueOptions([
     ...items.map((item) => ({
@@ -1915,7 +1923,9 @@ function buildProductOptions(items: TurnoverSkuReport[], products: TurnoverSugge
     ...products.map((product) => ({
       value: productSearchOptionLabel(product),
       label: productSearchOptionLabel(product),
-      description: `${product.name} · остаток ${formatNumber(product.quantity)} шт`,
+      description: conciseProductSuggestionClients.has(product.client.id)
+        ? `Остаток ${formatNumber(product.quantity)} шт`
+        : `${product.name} · остаток ${formatNumber(product.quantity)} шт`,
       data: {
         skuId: product.skuId,
         name: product.name,

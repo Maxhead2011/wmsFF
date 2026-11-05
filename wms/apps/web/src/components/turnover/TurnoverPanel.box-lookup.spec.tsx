@@ -157,3 +157,27 @@ describe('selected turnover product', () => {
     expect(fetchTurnoverReport).toHaveBeenLastCalledWith('token',expect.objectContaining({skuId:undefined,search:'Другой костюм'}));
   });
 });
+
+// TEST: only the requested clients omit generic names from product suggestions.
+describe('concise product suggestions', () => {
+  beforeEach(() => { hooks.values=[]; hooks.effects=[]; hooks.ref.current=0; vi.clearAllMocks(); });
+  it.each([
+    ['c76b78f9-1b83-4e9b-bee3-bc28336ee1c9', false],
+    ['68cbb87b-5f53-4123-8b08-62ef372059b5', false],
+    ['c401202c-be57-4310-9939-2ea36767da37', false],
+    ['another-client', true],
+  ])('preserves identity and stock for %s', (clientId, showName) => {
+    const product={skuId:'sku',client:{id:clientId,name:'Client',code:'CL'},name:'Общее название товара',article:'Реглан_синий',internalSku:'SKU',size:'S / 44',barcode:'2047945569214',quantity:5};
+    hooks.values[0]='movement';
+    hooks.values[4]={status:'ready',data:{products:[product],barcodes:[],kiz:[],boxes:[]}};
+    hooks.cursor=0;
+    const tree=TurnoverPanel({session:{accessToken:'token',user:{id:'u',roleCodes:[],permissionCodes:[]}} as any});
+    const option=elements(tree).find(n=>n.props?.label==='Поиск по товару').props.options[0];
+    expect(option.description.includes(product.name)).toBe(showName);
+    expect(option.description).toContain('5 шт');
+    expect(option.label).toContain('Реглан_синий-S / 44');
+    expect(option.label).toContain(product.barcode);
+    expect(option.data.name).toBe(product.name);
+    expect(option.data.skuId).toBe('sku');
+  });
+});

@@ -1,3 +1,5 @@
+TurnoverPanel.box-lookup.spec.tsx: concise product suggestions — три целевых клиента и контроль другого клиента; проверяет отсутствие общего названия, сохранение артикула, размера, ШК, остатка, SKU и имени в данных. До исправления три целевых случая падали.
+
 Опубликован PR868 (05.11.2026): поиск выбранного товара в товародвижении по SKU без составной подписи в search. Точный web2 overlay; API, данные, остальные контейнеры и проданная WMS сохранены. Web595 passed/2 skipped, TypeScript; браузер3 и bootstrap5 проверены до и после публикации. База 2026-11-05-turnover-search; sourceParityVerified=false.
 
 PR868 release checks: exact runtime overlay in scripts/releases/turnover-search-20261105; real browser selection/edit3 and shared bootstrap5 passed. Web595 passed,2 skipped; TypeScript passed. API candidate unchanged against pinned baseline.
