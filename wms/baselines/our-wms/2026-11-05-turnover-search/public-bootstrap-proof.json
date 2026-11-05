@@ -1,0 +1,37 @@
+{
+  "passed": 5,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    },
+    {
+      "label": "Заявки",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    },
+    {
+      "label": "FBS",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    },
+    {
+      "label": "FBO",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}
