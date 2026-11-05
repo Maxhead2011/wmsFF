@@ -1,6 +1,6 @@
 # FBS: производство отрезов под заказ
 
-Статус 05.11.2026: реализация в `feature/fbs-fabric-cut-flow`, **не опубликовано и не включено**.
+Статус 05.11.2026: PR866 в `feature/la_panthera` готовит **отключённую серверную основу**. Не является выпуском рабочего сценария нарезки на ТСД.
 Проверенная серверная база — PR864, baseline `2026-11-05-wb-fbo-pause`; image ID API/web совпали с манифестом при чтении сервера.
 
 ## Готовые изолированные модули
@@ -20,7 +20,7 @@
 - Пять PostgreSQL test cases проверяют повтор, rollback, конкуренцию подтверждений/резервов и атомарную запись PACKING/аудита. Только отдельная локальная БД localhost:55469/kiz_duplicate_tests; production не используется для тестовых записей.
 - `scripts/releases/fbs-fabric-cut/patch-material-writers.py` готовит три runtime-only модуля из проверенных SHA256 PR864. Четыре регрессии воспроизведены на старом snapshot; все шесть проверок проходят на кандидате. Защищены зарезервированные метры, credits привязаны к task/request/connection/order, учтена история хранения. Это ещё не полный release candidate.
 
-## Обязательно закончить до выпуска
+## Обязательно закончить до включения рабочего сценария
 
 Запись PACKING подключена к отдельному серверному подтверждению. **Выдача задания и экран Android ещё не подключены**. Runtime-защита подготовлена отдельно и на сервере не установлена. Сквозной рабочий сценарий не завершён.
 
@@ -42,4 +42,12 @@
 
 Итоговые проверки текущего промежуточного состояния: 4408 passed / 9 skipped в общем наборе без integration-файлов; отдельно integration 57 passed / 107 skipped. Все 105 проверок fabric-fbs, включая PostgreSQL и runtime-кандидат, прошли. Финальный API build и git diff --check прошли. Это не подтверждает ещё отсутствующий сквозной сценарий Android/выдачи.
 
-Логи: `D:/WMSFF/_Kof/work/fbs-fabric-unit-final2.log`, `D:/WMSFF/_Kof/work/fbs-fabric-integration-final.log`. RED runtime: `D:/WMSFF/_Kof/work/fabric-runtime-writers-red.log`. APK не менялся. Рабочая ветка `feature/fbs-fabric-cut-flow`, будущая цель PR `feature/la_panthera`. PR и публикация не выполнялись.
+Логи: `D:/WMSFF/_Kof/work/fbs-fabric-unit-final2.log`, `D:/WMSFF/_Kof/work/fbs-fabric-integration-final.log`. RED runtime: `D:/WMSFF/_Kof/work/fabric-runtime-writers-red.log`. APK не менялся. Рабочая ветка `feature/fbs-fabric-cut-flow`, PR866 в `feature/la_panthera`.
+
+## Отдельный отключённый выпуск
+
+Пакет содержит восемь новых fabric-fbs helpers и точечные дополнения четырёх существующих JS-модулей: API handler, controller, capability decorator и справочник API. `prepare-disabled.py` сохраняет существующую runtime-функцию `withFbsTsdCapability`; полная замена локальным dist запрещена. Счётчик runtime справочника увеличивается на один (107 → 108), без переноса отличающегося локального значения.
+
+`WMS_FBS_FABRIC_CUT_ENABLED=false` задан в образе. Очередь, Android, настройки клиентов, остатки и материал writers не изменяются этим пакетом. Проданная WMS не публикуется. Нельзя включать флаг до завершения списка выше.
+
+Кандидат от PR864 прошёл `check-candidate` (ровно 12 JS). Реальные модули кандидата прошли 18 существующих проверок capability/переклейки и `disabled-runtime.cjs`: загрузка модулей, metadata маршрута, сохранение личности, отказ старым ТСД и отказ до чтения/записи БД при отключении. `release-disabled.py` проверяет image, полный состав файлов и неизменность compose перед заменой только API; при ошибке возвращает старый образ. Факт публикации фиксируется отдельно в current-production.
