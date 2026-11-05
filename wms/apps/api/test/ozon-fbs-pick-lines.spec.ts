@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'reflect-metadata';
 import { createRequire } from 'node:module';
 import type { OzonPickState } from '../src/modules/marketplace-connections/ozon-fbs-pick-lines';
+import { reserveFabricOrder } from '../src/modules/warehouse/fabric-fbs-order';
 // TEST: identical scenarios run against source and the actual patched production artifact.
 const load = createRequire(import.meta.url);
 const entry = process.env.OZON_LINES_RUNTIME;
@@ -119,6 +120,30 @@ function fixture() {
 }
 
 describe('Ozon multi-line workflow', () => {
+  // TEST: only the manufactured line skips box selection; ordinary goods retain their source proof.
+  it('scans manufactured and ordinary lines separately in one mixed order', async () => {
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','true');
+    const f=fixture();await f.action('view');f.task.sourceArticle='__FABRIC_FBS__';
+    const owner={marketplace:'OZON',connectionId:f.task.connectionId,orderId:f.task.orderId,requestId:f.task.requestId};
+    let ledger=reserveFabricOrder({rolls:[{id:'roll',warehouseId:'warehouse',material:'SATIN',color:'white',remainingMm:10000,cutMm:0,createdAt:'2026-11-05'}]},owner,
+      [{lineId:'item0',skuId:'sku0',warehouseId:'warehouse',material:'SATIN',color:'white',lengthMm:3000,units:1}]);
+    const originalRaw=f.db.$queryRaw.getMockImplementation();
+    f.db.$queryRaw.mockImplementation(async(sql:any,...args:any[])=>sql.join('').includes('advisory')?[{locked:true}]:originalRaw(sql,...args));
+    f.db.clientRequest.findUnique.mockResolvedValue({id:'request',clientId:'client',warehouseId:'warehouse',status:'IN_WORK'});
+    f.db.systemSetting={findUnique:vi.fn(async()=>({value:ledger})),update:vi.fn(async({data}:any)=>{ledger=data.value;})};
+    f.db.stockMovement={findUnique:vi.fn().mockResolvedValue(null),create:vi.fn()};
+    f.db.stockBalance.upsert=vi.fn();f.db.auditLog={create:vi.fn()};
+    expect((await f.action('view')).state).toBe('SCAN_BARCODE');
+    expect(f.saved!.lines[0].picks).toHaveLength(0);
+    await expect(f.source(0)).rejects.toThrow('рулона');
+    const next=await f.scan(barcodeA,0);expect(next.state).toBe('SCAN_BOX');
+    expect(ledger.rolls[0].remainingMm).toBe(7000);
+    await f.scan(barcodeA,0);expect(f.db.stockMovement.create).toHaveBeenCalledTimes(1);
+    await expect(f.scan(barcodeB,1)).rejects.toThrow('Сначала');
+    await f.source(1);await f.scan(barcodeB,1);await f.action('complete');
+    expect(f.task.status).toBe('COMPLETED');expect(f.task.sourceBoxPending).toBe(true);
+    expect(f.service.submitOzonFbsTask).toHaveBeenCalledTimes(1);
+  });
   it('concurrent first opens do not split request quantities twice', async () => {
     const f = fixture();
     await Promise.all([f.action('view'), f.action('view')]);

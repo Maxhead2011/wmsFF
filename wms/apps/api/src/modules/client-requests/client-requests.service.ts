@@ -1,4 +1,5 @@
 import {wbDispatchContexts,assertFboProcessChange} from './wb-fbo-dispatch';
+import { releaseCancelledFabricRequest } from '../warehouse/fabric-fbs-task-release';
 import { requestStoreContexts } from '../clients/request-store-context';
 import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
@@ -1512,6 +1513,8 @@ export class ClientRequestsService {
       ? await this.finalizeOutboundByManualStatus(request, dto, user)
       : await this.prisma.$transaction(async (tx) => {
       await lockRequestNotRemoved(tx,id);
+      if (dto.status===ClientRequestStatus.CANCELLED || dto.status===ClientRequestStatus.REJECTED)
+        await releaseCancelledFabricRequest(tx,id);
       const updated = await tx.clientRequest.update({
         where: { id },
         data: {
@@ -1860,6 +1863,7 @@ export class ClientRequestsService {
 
     const notifyClient = await isClientNotificationEnabled(this.prisma, request.clientId, ClientNotificationEvent.REQUEST_STATUS_CHANGED);
     const updated = await this.prisma.$transaction(async (tx) => {
+      await releaseCancelledFabricRequest(tx,id);
       const updated = await tx.clientRequest.update({
         where: { id },
         data: {

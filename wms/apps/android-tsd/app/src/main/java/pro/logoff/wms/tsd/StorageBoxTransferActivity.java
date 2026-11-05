@@ -36,6 +36,8 @@ import retrofit2.Response;
 public final class StorageBoxTransferActivity extends Activity {
     public static final String AUTO_SOURCE = "autoSourceByKiz";
     public static final String INITIAL_SOURCE = "reconcileSourceBox";
+    private String activeBaseUrl = BuildConfig.API_BASE_URL;
+    private String serverProfile = ServerSettings.MAIN;
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int GREEN = Color.rgb(22, 163, 74);
     private static final int TEXT = Color.rgb(30, 41, 59);
@@ -54,6 +56,17 @@ public final class StorageBoxTransferActivity extends Activity {
     private boolean recountEnabled;
     private StorageKizRecountState recount;
     private boolean recountPending;
+
+    @Override
+    protected void attachBaseContext(android.content.Context base) {
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            serverProfile = ServerSettings.selected(base);
+            activeBaseUrl = ServerSettings.baseUrl(serverProfile);
+            super.attachBaseContext(new ServerScopedContext(base, serverProfile));
+        } else {
+            super.attachBaseContext(base);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,6 +89,7 @@ public final class StorageBoxTransferActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if ("logoff".equals(BuildConfig.FLAVOR) && !serverProfile.equals(ServerSettings.selected(this))) { finish(); return; }
         TsdSession current = new TsdSessionStore(this).load();
         if (session != null && !session.hasSameAccessToken(current)) {
             // FIX: never continue another employee's unfinished unit after account change.
@@ -228,7 +242,7 @@ public final class StorageBoxTransferActivity extends Activity {
 
     private void inspectSource(String code) {
         String authorization = session.authorizationHeader();
-        runRequest(() -> WmsApiFactory.create(BuildConfig.API_BASE_URL)
+        runRequest(() -> WmsApiFactory.create(activeBaseUrl)
             .inspectTransferSource(authorization, code).execute(), response -> {
                 state.sourceAccepted(response.sourceBox.code);
                 sourceBox = response.sourceBox;
@@ -245,7 +259,7 @@ public final class StorageBoxTransferActivity extends Activity {
         request.put("fromBoxCode", state.sourceCode());
         request.put("scanCode", scanned);
         if (isKiz) request.put("barcode", state.barcode());
-        runRequest(() -> WmsApiFactory.create(BuildConfig.API_BASE_URL)
+        runRequest(() -> WmsApiFactory.create(activeBaseUrl)
             .inspectTransferItem(authorization, request).execute(), response -> {
                 currentItem = response.item;
                 if (isKiz) {
@@ -279,7 +293,7 @@ public final class StorageBoxTransferActivity extends Activity {
         request.put("barcode", state.barcode());
         request.put("scanCode", state.scanCode());
         request.put("idempotencyKey", state.operationKey());
-        runRequest(() -> WmsApiFactory.create(BuildConfig.API_BASE_URL)
+        runRequest(() -> WmsApiFactory.create(activeBaseUrl)
             .executeTransfer(authorization, request).execute(), response -> {
                 message = response.message + (response.sourceBoxArchived
                     ? " Исходный короб пуст и отправлен в архив."
@@ -314,7 +328,7 @@ public final class StorageBoxTransferActivity extends Activity {
                 recountPending = true;
             } catch (Exception error) { message = error.getMessage(); render(); return; }
         }
-        WmsApi api = WmsApiFactory.create(BuildConfig.API_BASE_URL);
+        WmsApi api = WmsApiFactory.create(activeBaseUrl);
         runRequest(() -> (confirm ? api.confirmKizRecount(session.authorizationHeader(), request)
             : api.previewKizRecount(session.authorizationHeader(), request)).execute(), response -> {
                 message = response.message;

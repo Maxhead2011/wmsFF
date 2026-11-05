@@ -19,10 +19,22 @@ function fixture() {
   service.loadOwnedFbsTsdAssembly = vi.fn().mockResolvedValue(task);
   service.requireCurrentFbsTsdLease = vi.fn();
   service.fbsTsdDeviceCode = () => 'terminal';
+  service.formatFbsTsdAssembly = vi.fn().mockResolvedValue({ state: 'SCAN_BARCODE', task });
   service.inventoryLock = { assertStockMovementsAllowed: vi.fn() };
   return { service, user, task, tx, body: { lineId: 'line', confirmedUnits: 2, operationId: 'stable-retry-id' } };
 }
 describe('fabric confirmation API boundary', () => {
+  // TEST: the new fabric hook must preserve ordinary already-accepted scan retries.
+  it('preserves a normal accepted WB scan response without revalidating the payload',async()=>{
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','false');
+    const task={id:'ordinary',marketplace:'WILDBERRIES',status:'IN_PROGRESS',boxId:'box',barcode:'1234567890123'};
+    const service:any=Object.create(MarketplaceConnectionsService.prototype);
+    service.loadOwnedFbsTsdAssembly=vi.fn().mockResolvedValue(task);
+    service.requireFbsOrderStillCollectable=vi.fn();
+    service.assertFbsTsdLeaseVersion=vi.fn().mockResolvedValue(task);
+    service.formatFbsTsdAssembly=vi.fn().mockResolvedValue({state:'READY_TO_COMPLETE'});
+    await expect(service.scanFbsTsdBarcode(task.id,{},{})).resolves.toEqual({state:'READY_TO_COMPLETE'});
+  });
   // TEST: verify the real Nest endpoint metadata and capability parameter factory.
   it('uses a separate POST route and forwards capability without altering identity', () => {
     const handler = TsdDeviceController.prototype.confirmFbsFabricCut;
@@ -36,33 +48,11 @@ describe('fabric confirmation API boundary', () => {
     expect(result).toEqual({ id: 'worker', tsdPhysicalPickConfirmation: true, tsdFabricCutConfirmation: true });
     expect(user).toEqual({ id: 'worker' });
   });
-  it('derives client and order ownership from the task, not caller input', async () => {
-    const f = fixture();
-    await f.service.confirmFbsTsdFabricCut('task', { ...f.body, clientId: 'foreign', orderId: 'foreign' }, f.user);
-    expect(confirmation).toHaveBeenCalledWith(f.tx, expect.objectContaining({ clientId: 'client',
-      owner: { marketplace: 'OZON', connectionId: 'connection', orderId: 'order', requestId: 'request' } }),
-    { userId: 'worker', deviceCode: 'terminal' }, expect.any(Function));
-  });
-  it('checks the inventory lock before any production transaction', async () => {
-    const f = fixture(); f.service.inventoryLock.assertStockMovementsAllowed.mockRejectedValue(new Error('Inventory locked'));
-    await expect(f.service.confirmFbsTsdFabricCut('task', f.body, f.user)).rejects.toThrow('Inventory locked');
+  // TEST: legacy clients cannot debit metres through the abandoned separate button.
+  it.each(['true','false'])('rejects separate cut confirmation without any mutation, enabled=%s',async enabled=>{
+    const f=fixture();vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED',enabled);
+    await expect(f.service.confirmFbsTsdFabricCut('task',f.body,f.user)).rejects.toThrow('Отсканируйте ШК');
     expect(confirmation).not.toHaveBeenCalled();
-  });
-  it('rejects a different active branch', async () => {
-    const f = fixture(); f.user.activeWarehouseId = 'other';
-    await expect(f.service.confirmFbsTsdFabricCut('task', f.body, f.user)).rejects.toThrow('филиал');
-    expect(confirmation).not.toHaveBeenCalled();
-  });
-  it.each([0, -1, 1.5, '2', undefined])('rejects invalid absolute quantity %s', async confirmedUnits => {
-    const f = fixture();
-    await expect(f.service.confirmFbsTsdFabricCut('task', { ...f.body, confirmedUnits }, f.user)).rejects.toThrow('количество');
-    expect(confirmation).not.toHaveBeenCalled();
-  });
-  it('rejects old terminals and disabled installations', async () => {
-    const f = fixture();
-    await expect(f.service.confirmFbsTsdFabricCut('task', f.body, { ...f.user, tsdFabricCutConfirmation: false })).rejects.toThrow('не включена');
-    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED', 'false');
-    await expect(f.service.confirmFbsTsdFabricCut('task', f.body, f.user)).rejects.toThrow('не включена');
-    expect(confirmation).not.toHaveBeenCalled();
+    expect(f.service.loadOwnedFbsTsdAssembly).not.toHaveBeenCalled();
   });
 });

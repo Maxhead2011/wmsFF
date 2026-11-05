@@ -131,7 +131,9 @@ public class MainActivity extends Activity {
     private static final int BLUETOOTH_PRINTER_PERMISSION_REQUEST = 4202;
     private static final String UPDATE_INSTALL_ACTION = BuildConfig.APPLICATION_ID + ".UPDATE_INSTALL_STATUS";
     private static final String DEFAULT_BASE_URL = BuildConfig.API_BASE_URL;
-    private static final String APK_URL = BuildConfig.APK_URL;
+    private String activeBaseUrl = DEFAULT_BASE_URL;
+    private String serverProfile = ServerSettings.MAIN;
+    private String activeApkUrl = BuildConfig.APK_URL;
     private static final int RED = Color.rgb(215, 25, 32);
     private static final int BOX_FOUND_GREEN = Color.rgb(187, 247, 208);
     private static final int BOX_DUPLICATE_BLUE = Color.rgb(191, 219, 254);
@@ -376,6 +378,18 @@ public class MainActivity extends Activity {
             showUpdateStatus("Не удалось установить обновление: " + detail + ".", true);
         }
     };
+
+    @Override
+    protected void attachBaseContext(Context base) {
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            serverProfile = ServerSettings.selected(base);
+            activeBaseUrl = ServerSettings.baseUrl(serverProfile);
+            activeApkUrl = activeBaseUrl + ServerSettings.apkPath(base.getPackageName());
+            super.attachBaseContext(new ServerScopedContext(base, serverProfile));
+        } else {
+            super.attachBaseContext(base);
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -716,7 +730,7 @@ public class MainActivity extends Activity {
             root.addView(primaryMenuButton("Сортировка и перемещение", view -> {
                 screen = Screen.PALLET_SORTING;
                 if (palletSortingScreen != null) palletSortingScreen.close();
-                palletSortingScreen = new PalletSortingScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
+                palletSortingScreen = new PalletSortingScreen(this, session, WmsApiFactory.create(activeBaseUrl), () -> {
                     palletSortingScreen = null;
                     renderMigrationMenu();
                 });
@@ -730,7 +744,7 @@ public class MainActivity extends Activity {
         screen=Screen.KIZ_MENU;LinearLayout root=baseRoot();root.addView(header());root.addView(title("КИЗЫ"));
         if(KizSearchPolicy.canOpen(BuildConfig.FLAVOR,session))root.addView(primaryMenuButton("Поиск КИЗ",v->{
             screen=Screen.KIZ_SEARCH;if(kizSearchScreen!=null)kizSearchScreen.close();
-            kizSearchScreen=new KizSearchScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),()->{kizSearchScreen=null;renderKizMenu();});
+            kizSearchScreen=new KizSearchScreen(this,session,WmsApiFactory.create(activeBaseUrl),()->{kizSearchScreen=null;renderKizMenu();});
         }));
         if(KizLocationPolicy.canOpen(BuildConfig.FLAVOR,session))root.addView(primaryMenuButton("Проверка КИЗ",v->openKizLocation()));
         root.addView(secondaryButton("Назад",v->renderMainScreen()));setScrollableContent(root);
@@ -741,7 +755,7 @@ public class MainActivity extends Activity {
         if (!KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session)) return;
         if (kizLocationScreen != null) kizLocationScreen.close();
         screen = Screen.KIZ_LOCATION;
-        kizLocationScreen = new KizLocationScreen(this, session, WmsApiFactory.create(DEFAULT_BASE_URL), () -> {
+        kizLocationScreen = new KizLocationScreen(this, session, WmsApiFactory.create(activeBaseUrl), () -> {
             kizLocationScreen = null;
             renderMainScreen();
         });
@@ -1051,7 +1065,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Открываю исходный короб…", "Manba quti ochilmoqda…");
         renderStockTransferScreen();
         runBackground(() -> {
-            Response<TsdTransferResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdTransferResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .inspectTransferSource(session.authorizationHeader(), boxCode)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1094,7 +1108,7 @@ public class MainActivity extends Activity {
                 payload.put("skuId", pendingKizItem.skuId);
                 payload.put("bindMissingKiz", true);
             }
-            Response<TsdTransferResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdTransferResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .inspectTransferItem(session.authorizationHeader(), payload)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1208,7 +1222,7 @@ public class MainActivity extends Activity {
                 scanCodes.size() + tr(" ед.…", " dona…");
         renderStockTransferScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("fromBoxCode", sourceBoxCode);
             payload.put("toBoxCode", targetBoxCode);
@@ -1297,7 +1311,12 @@ public class MainActivity extends Activity {
         root.addView(secondaryButton(tr("Сохранить язык", "Tilni saqlash"), view -> saveLanguage()));
 
         baseUrlInput = input(tr("Адрес WMS", "WMS manzili"));
-        baseUrlInput.setText(DEFAULT_BASE_URL);
+        baseUrlInput.setText(activeBaseUrl);
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            renderServerChooser(root, session);
+            baseUrlInput.setFocusable(false);
+            baseUrlInput.setCursorVisible(false);
+        }
         deviceCodeInput = input(tr("Логин сотрудника", "Xodim logini"));
         deviceSecretInput = input(tr("Пароль", "Parol"));
         deviceSecretInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
@@ -1323,6 +1342,41 @@ public class MainActivity extends Activity {
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
+    }
+
+    private void renderServerChooser(LinearLayout root, TsdSession session) {
+        root.addView(label("Сервер WMS"));
+        Spinner servers = new Spinner(this);
+        servers.setContentDescription("Сервер WMS");
+        ArrayAdapter<String> adapter = new TsdUi.StringAdapter(this,
+            android.R.layout.simple_spinner_item, ServerSettings.NAMES);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        servers.setAdapter(adapter);
+        final int selected = ServerSettings.BACKUP.equals(serverProfile) ? 1 : 0;
+        servers.setSelection(selected);
+        servers.setEnabled(session == null);
+        root.addView(servers);
+        root.addView(messageView(session == null
+            ? "Сессия, черновики и очередь каждого сервера хранятся отдельно. Переключение не переносит данные между серверами."
+            : "Для смены сервера завершите текущую операцию и выйдите из учётной записи."));
+        servers.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                if (position == selected) return;
+                servers.setSelection(selected);
+                if (safeSession() != null) return;
+                final String target = position == 1 ? ServerSettings.BACKUP : ServerSettings.MAIN;
+                new TsdUi.DialogBuilder(MainActivity.this).setTitle("Сменить сервер WMS?")
+                    .setMessage(ServerSettings.name(target) + "\n" + ServerSettings.baseUrl(target)
+                        + "\nНесинхронизированные операции останутся на прежнем сервере. Для выбранного сервера используется отдельный вход.")
+                    .setNegativeButton("Отмена", (dialog, which) -> {})
+                    .setPositiveButton("Переключить", (dialog, which) -> {
+                        if (safeSession() != null) return;
+                        ServerSettings.select(MainActivity.this, target);
+                        recreate();
+                    }).show();
+            }
+        });
     }
 
     private void saveLanguage() {
@@ -1354,7 +1408,7 @@ public class MainActivity extends Activity {
         TsdSession session=safeSession(); if(session==null)return;
         placementActionSequence++;receiptPlacementMode=true; statusMessage="Загружаю приёмки…";renderStoragePalletAssemblyScreen();
         runBackground(()->{
-            Response<TsdReceiptPlacementTasks> response=WmsApiFactory.create(DEFAULT_BASE_URL).receiptPlacementTasks(session.authorizationHeader()).execute();
+            Response<TsdReceiptPlacementTasks> response=WmsApiFactory.create(activeBaseUrl).receiptPlacementTasks(session.authorizationHeader()).execute();
             if(!response.isSuccessful()||response.body()==null)throw new IOException(inventoryHttpError(response));
             mainHandler.post(()->{
                 if(screen!=Screen.STORAGE_PALLET||!fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
@@ -1375,12 +1429,12 @@ public class MainActivity extends Activity {
           try {
             TsdReceiptPlacementTask loaded;
             if("REFRESH".equals(action)){
-                Response<TsdReceiptPlacementTasks> response=WmsApiFactory.create(DEFAULT_BASE_URL).receiptPlacementTask(session.authorizationHeader(),task.clientId,task.document).execute();
+                Response<TsdReceiptPlacementTasks> response=WmsApiFactory.create(activeBaseUrl).receiptPlacementTask(session.authorizationHeader(),task.clientId,task.document).execute();
                 if(!response.isSuccessful()||response.body()==null)throw new IOException(inventoryHttpError(response));
                 if(response.body().items==null||response.body().items.isEmpty())throw new IOException("Приёмка больше не доступна. Обновите список.");
                 loaded=response.body().items.get(0);
             }else{
-                Response<TsdReceiptPlacementTask> response=WmsApiFactory.create(DEFAULT_BASE_URL).receiptPlacementAction(session.authorizationHeader(),body).execute();
+                Response<TsdReceiptPlacementTask> response=WmsApiFactory.create(activeBaseUrl).receiptPlacementAction(session.authorizationHeader(),body).execute();
                 if(!response.isSuccessful()||response.body()==null)throw new IOException(inventoryHttpError(response));
                 loaded=response.body();
             }
@@ -1430,7 +1484,7 @@ public class MainActivity extends Activity {
             return;
         }
         runBackground(() -> {
-            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .currentStoragePallet(session.authorizationHeader(), session.deviceCode)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1623,7 +1677,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Сохраняю…", "Saqlanmoqda…");
         renderStoragePalletAssemblyScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdStoragePalletResponse> response = pallet == null
                 ? api.openStoragePallet(session.authorizationHeader(), request).execute()
                 : api.scanStoragePalletBox(session.authorizationHeader(), pallet.id, request).execute();
@@ -1716,7 +1770,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Проверяю товар…", "Tovar tekshirilmoqda…");
         renderStoragePalletAssemblyScreen();
         runBackground(() -> {
-            Response<TsdSkuInfo> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdSkuInfo> response = WmsApiFactory.create(activeBaseUrl)
                 .findSkuByBarcode(session.authorizationHeader(), pallet.client.id, barcode)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1777,7 +1831,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Восстанавливаю короб и остатки…", "Quti va qoldiqlar tiklanmoqda…");
         renderStoragePalletAssemblyScreen();
         runBackground(() -> {
-            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .restoreStoragePalletBox(session.authorizationHeader(), palletId, request)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1834,7 +1888,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Завершаю паллету…", "Pallet yakunlanmoqda…");
         renderStoragePalletAssemblyScreen();
         runBackground(() -> {
-            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .closeStoragePallet(session.authorizationHeader(), pallet.id)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1875,7 +1929,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Удаляю паллету…", "Pallet o‘chirilmoqda…");
         renderStoragePalletAssemblyScreen();
         runBackground(() -> {
-            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdStoragePalletResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .deleteStoragePallet(session.authorizationHeader(), pallet.id)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -1955,7 +2009,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Загружаю заявки…", "Arizalar yuklanmoqda…");
         renderSkuCollectionScreen();
         runBackground(() -> {
-            Response<List<TsdSkuCollection>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<List<TsdSkuCollection>> response = WmsApiFactory.create(activeBaseUrl)
                 .listSkuCollections(session.authorizationHeader())
                 .execute();
             if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
@@ -2138,7 +2192,7 @@ public class MainActivity extends Activity {
         String id = activeSkuCollection.id;
         skuCollectionBusy = true; renderSkuCollectionScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdSkuSortingSource> response = api.openSkuSortingSource(session.authorizationHeader(), id, body).execute();
             if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
             Response<TsdInventoryDashboard> dashboard = api.inventoryDashboard(session.authorizationHeader(), false).execute();
@@ -2165,7 +2219,7 @@ public class MainActivity extends Activity {
         inventoryRequestBusy = true;
         renderInventoryCountScreen();
         runBackground(() -> {
-            Response<TsdSkuCollection> response = WmsApiFactory.create(DEFAULT_BASE_URL).readySkuSorting(session.authorizationHeader(), requestId, body).execute();
+            Response<TsdSkuCollection> response = WmsApiFactory.create(activeBaseUrl).readySkuSorting(session.authorizationHeader(), requestId, body).execute();
             if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
             mainHandler.post(() -> {
                 inventoryRequestBusy = false; activeSkuCollection = response.body();
@@ -2224,7 +2278,7 @@ public class MainActivity extends Activity {
         boolean legacy = skuSortingState.legacy();
         skuCollectionBusy = true; statusMessage = "Проверяю…"; renderSkuCollectionScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             if ("KIZ".equals(stage)) {
                 Response<Map<String, Object>> response = api.checkSkuSorting(session.authorizationHeader(), id, body).execute();
                 if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
@@ -2259,7 +2313,7 @@ public class MainActivity extends Activity {
             statusMessage = "Открываю сортировку…";
             renderSkuCollectionScreen();
             runBackground(() -> {
-                Response<TsdSkuCollection> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<TsdSkuCollection> response = WmsApiFactory.create(activeBaseUrl)
                     .startSkuSorting(session.authorizationHeader(), request.id).execute();
                 if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
                 mainHandler.post(() -> {
@@ -2307,7 +2361,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Сохраняю товар…", "Tovar saqlanmoqda…");
         renderSkuCollectionScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdSkuCollection> response = receiving
                 ? api.receiveSkuCollection(session.authorizationHeader(), requestId, payload).execute()
                 : api.pickSkuCollection(session.authorizationHeader(), requestId, payload).execute();
@@ -2512,7 +2566,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Открываю проверку короба…", "Quti tekshiruvi ochilmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Map<String,Object> request = new LinkedHashMap<>();
             request.put("type", "BOX_CHECK"); request.put("clientId", client);
             request.put("title", auditTask.isEmpty() ? "Обязательная проверка после сборки FBS · " + box : "Проверка КИЗ FBS · " + box + " · " + auditTask);
@@ -2556,7 +2610,7 @@ public class MainActivity extends Activity {
         screen = Screen.INVENTORY_COUNT;
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("type", "BOX_CHECK");
             request.put("clientId", mandatoryFbsAuditClientId);
@@ -2646,7 +2700,7 @@ public class MainActivity extends Activity {
         screen = Screen.INVENTORY_COUNT;
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryDashboard> dashboardResponse = api.inventoryDashboard(
                 session.authorizationHeader(),
                 true
@@ -2703,7 +2757,7 @@ public class MainActivity extends Activity {
             return;
         }
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException("HTTP " + response.code());
@@ -2735,7 +2789,7 @@ public class MainActivity extends Activity {
             return;
         }
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryDashboard> response = api.inventoryDashboard(session.authorizationHeader(), true).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException("HTTP " + response.code());
@@ -2911,7 +2965,7 @@ public class MainActivity extends Activity {
             if (!"FULL".equals(inventoryType)) {
                 request.put("clientId", inventoryClientId);
             }
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventorySession> response = api.startInventory(session.authorizationHeader(), request).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException(inventoryHttpError(response));
@@ -2935,7 +2989,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Открываю инвентаризацию…", "Inventarizatsiya ochilmoqda…");
         renderInventoryStartScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventorySession> response = api.getInventory(session.authorizationHeader(), id, true).execute();
             if (!response.isSuccessful() || response.body() == null) {
                 throw new IOException(inventoryHttpError(response));
@@ -2957,7 +3011,7 @@ public class MainActivity extends Activity {
         if(fboTwoStageScreen!=null){fboTwoStageScreen.close();fboTwoStageScreen=null;}
         activeInventory=null;activeInventoryBox=null;statusMessage="Открываю актуализацию "+boxCode;renderInventoryCountScreen();
         runBackground(()->{
-            MandatoryFbsAuditLoader.Result opened=MandatoryFbsAuditLoader.load(WmsApiFactory.create(DEFAULT_BASE_URL),session.authorizationHeader(),
+            MandatoryFbsAuditLoader.Result opened=MandatoryFbsAuditLoader.load(WmsApiFactory.create(activeBaseUrl),session.authorizationHeader(),
                 sessionId,boxCode,java.util.Collections.emptyMap(),ignored->{},this::inventoryHttpError);
             mainHandler.post(()->{if(!fbsSessionOwnerKey(session).equals(fbsSessionOwnerKey(safeSession())))return;
                 activeInventory=opened.session;activeInventoryBox=opened.box;inventoryKizScan.clear();
@@ -3305,7 +3359,7 @@ public class MainActivity extends Activity {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("action", action);
             request.put("comment", "Решение принято администратором на ТСД");
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryBox> response = api.resolveInventoryBox(
                 session.authorizationHeader(),
                 boxId,
@@ -3349,7 +3403,7 @@ public class MainActivity extends Activity {
         runBackground(() -> {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("boxCode", boxCode);
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryBox> response = api.openInventoryBox(
                 session.authorizationHeader(),
                 activeInventory.id,
@@ -3425,7 +3479,7 @@ public class MainActivity extends Activity {
             if (mandatoryFbsAuditActive) {
                 request.put("requireKiz", false);
             }
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryLine> response = api.scanInventoryItem(
                 session.authorizationHeader(),
                 auditBoxId,
@@ -3493,7 +3547,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Закрываю проверку и возвращаюсь в FBS…", "Tekshiruv yopilmoqda va FBSga qaytilmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventorySession> response = api.finishInventory(
                 session.authorizationHeader(),
                 activeInventory.id
@@ -3594,7 +3648,7 @@ public class MainActivity extends Activity {
                 runBackground(() -> {
                     Map<String, Object> data = proposal == null ? FbsKizRelabelRequest.prepare(value)
                         : FbsKizRelabelRequest.confirm(value, proposal.id, true);
-                    Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                    Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(activeBaseUrl)
                         .scanFbsKiz(session.authorizationHeader(), taskId, data).execute();
                     TsdFbsAssemblyResponse updated = response.body();
                     String failure = response.isSuccessful() && updated != null ? ""
@@ -3625,7 +3679,7 @@ public class MainActivity extends Activity {
         runBackground(() -> {
             Map<String, Object> request = new LinkedHashMap<>();
             request.put("sessionId", auditId);
-            Response<Map<String, Object>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<Map<String, Object>> response = WmsApiFactory.create(activeBaseUrl)
                 .validateFbsStockAudit(session.authorizationHeader(), taskId, request).execute();
             String failure = response.isSuccessful() ? "" : responseErrorMessage(response,
                 tr("Нужен разбор администратора. Проверка не завершена.", "Administrator tekshiruvi kerak."));
@@ -3661,7 +3715,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Сверяю короб…", "Quti solishtirilmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventoryBox> response = api.finishInventoryBox(
                 session.authorizationHeader(),
                 boxId
@@ -3769,7 +3823,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Перемещаю остаток…", "Qoldiq ko‘chirilmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<Map<String, Object>> response = api.transferWholeBox(
                 session.authorizationHeader(),
                 request
@@ -3814,7 +3868,7 @@ public class MainActivity extends Activity {
         String sessionId = activeInventory.id;
         String boxId = keepBox && activeInventoryBox != null ? activeInventoryBox.id : "";
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventorySession> response = api.getInventory(
                 session.authorizationHeader(),
                 sessionId,
@@ -3859,7 +3913,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Завершаю инвентаризацию…", "Inventarizatsiya yakunlanmoqda…");
         renderInventoryCountScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdInventorySession> response = api.finishInventory(
                 session.authorizationHeader(),
                 activeInventory.id
@@ -4259,7 +4313,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Загружаю поставки FBO Ozon...", "Ozon FBO yetkazib berishlari yuklanmoqda...");
         renderOzonFboPlansScreen();
         runBackground(() -> {
-            Response<TsdOzonFboOverview> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdOzonFboOverview> response = WmsApiFactory.create(activeBaseUrl)
                 .listOzonFboPlans(session.authorizationHeader(), clientId)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -4333,7 +4387,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Загружаю короба...", "Qutilar yuklanmoqda...");
         renderOzonFboBoxesScreen();
         runBackground(() -> {
-            Response<TsdOzonFboPlan> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdOzonFboPlan> response = WmsApiFactory.create(activeBaseUrl)
                 .getOzonFboPlan(session.authorizationHeader(), planId)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -4508,7 +4562,7 @@ public class MainActivity extends Activity {
         Map<String, String> body = new LinkedHashMap<>();
         body.put("code", code);
         runBackground(() -> {
-            Response<TsdOzonFboPlan.Box> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdOzonFboPlan.Box> response = WmsApiFactory.create(activeBaseUrl)
                 .scanOzonFboBox(session.authorizationHeader(), ozonFboBox.id, body)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -4540,7 +4594,7 @@ public class MainActivity extends Activity {
         String closedCode = nonEmpty(ozonFboBox.boxCode, "Короб WMS");
         ozonFboBusy = true;
         runBackground(() -> {
-            Response<TsdOzonFboPlan> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdOzonFboPlan> response = WmsApiFactory.create(activeBaseUrl)
                 .closeOzonFboBox(session.authorizationHeader(), ozonFboBox.id)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -4635,7 +4689,7 @@ public class MainActivity extends Activity {
         fbsRequestsBusy = true;
         renderFbsRequestSelectionScreen();
         runBackground(() -> {
-            Response<TsdFbsRequestsResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdFbsRequestsResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .listFbsAssemblyRequests(
                     session.authorizationHeader(),
                     session.deviceCode,
@@ -4815,7 +4869,7 @@ public class MainActivity extends Activity {
         renderFbsAssemblyScreen();
         final String voiceRequest=selectedFbsRequestId, voiceSession=fbsSessionOwnerKey(session);
         runBackground(() -> {
-            Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdFbsAssemblyResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .nextFbsAssembly(session.authorizationHeader(), session.deviceCode, voiceRequest)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -5991,7 +6045,7 @@ public class MainActivity extends Activity {
         renderFbsAssemblyScreen();
         runBackground(() -> {
             try {
-                Response<List<TsdPrintStation>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<List<TsdPrintStation>> response = WmsApiFactory.create(activeBaseUrl)
                     .fbsRelabelPrintStations(session.authorizationHeader(), taskId).execute();
                 String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось найти печатную станцию.");
                 List<TsdPrintStation> stations = response.body();
@@ -6047,7 +6101,7 @@ public class MainActivity extends Activity {
                 body.put("printId", printId);
                 body.put("stationId", station.id);
                 body.put("newBarcode", barcode);
-                Response<TsdRelabelPrintJob> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<TsdRelabelPrintJob> response = WmsApiFactory.create(activeBaseUrl)
                     .fbsPrintRelabelTarget(session.authorizationHeader(), taskId, body).execute();
                 String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось отправить ШК на печать.");
                 TsdRelabelPrintJob job = response.body();
@@ -6087,7 +6141,7 @@ public class MainActivity extends Activity {
         fbsRelabelPrintBusy = true;
         runBackground(() -> {
             try {
-                Response<TsdRelabelPrintJob> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<TsdRelabelPrintJob> response = WmsApiFactory.create(activeBaseUrl)
                     .fbsRelabelPrintStatus(session.authorizationHeader(), taskId, printId).execute();
                 String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось проверить печать.");
                 TsdRelabelPrintJob job = response.body();
@@ -6430,7 +6484,7 @@ public class MainActivity extends Activity {
             request.put("clientId", clientId);
             request.put("title", title);
             request.put("comment", comment);
-            Response<TsdInventorySession> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdInventorySession> response = WmsApiFactory.create(activeBaseUrl)
                 .startInventory(session.authorizationHeader(), request)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -6520,7 +6574,7 @@ public class MainActivity extends Activity {
         renderFbsAssemblyScreen();
         String taskId = currentTask.id;
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Map<String, Object> payload = new LinkedHashMap<>(command.payload);
             Response<TsdFbsAssemblyResponse> response;
             if ("scan-any".equals(action)) {
@@ -6824,7 +6878,7 @@ public class MainActivity extends Activity {
         fbsCargoBusy = true;
         renderFbsCargoPackingScreen();
         runBackground(() -> {
-            Response<TsdFbsCargoPackingResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+            Response<TsdFbsCargoPackingResponse> response = WmsApiFactory.create(activeBaseUrl)
                 .getFbsCargoPacking(session.authorizationHeader(), session.deviceCode)
                 .execute();
             if (!response.isSuccessful() || response.body() == null) {
@@ -7128,7 +7182,7 @@ public class MainActivity extends Activity {
         statusMessage = tr("Проверяю...", "Tekshirilmoqda...");
         renderFbsCargoPackingScreen();
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdFbsCargoPackingResponse> response;
             if ("open".equals(action)) {
                 Map<String, Object> payload = new LinkedHashMap<>();
@@ -7235,7 +7289,7 @@ public class MainActivity extends Activity {
         }
 
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<List<TsdAssemblyRequestSummary>> response = ("logoff".equals(BuildConfig.FLAVOR)
                 ? api.listFboRequests(session.authorizationHeader(), fboPacking ? "fbo-pack" : "fbo-pick", fboMarketplace)
                 : api.listAssemblyRequests(session.authorizationHeader())).execute();
@@ -7305,7 +7359,7 @@ public class MainActivity extends Activity {
             return;
         }
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdBoxlessPackingResponse> response = api
                 .getBoxlessPacking(session.authorizationHeader(), assemblyPlan.id)
                 .execute();
@@ -7420,7 +7474,7 @@ public class MainActivity extends Activity {
         if ("scan-item".equals(action)) payload.put("barcode", scanned);
 
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdBoxlessPackingResponse> response;
             if ("open-box".equals(action)) {
                 response = api.openBoxlessPackingBox(session.authorizationHeader(), assemblyPlan.id, payload).execute();
@@ -7506,7 +7560,7 @@ public class MainActivity extends Activity {
         String requestId = assemblyPlan.id;
         String requestTitle = assemblyPlan.title;
         runSilentBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Map<String, String> payload = new LinkedHashMap<>();
             payload.put("requestId", requestId);
             payload.put("stage", stage);
@@ -7536,7 +7590,7 @@ public class MainActivity extends Activity {
 
         runBackground(() -> {
             outbox.enqueueAssemblyStage(payload);
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
             Response<TsdAssemblyPlan> response = api.getAssemblyRequest(session.authorizationHeader(), requestId).execute();
@@ -7565,7 +7619,7 @@ public class MainActivity extends Activity {
 
         String requestId = assemblyPlan.id;
         runSilentBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Map<String, String> payload = new LinkedHashMap<>();
             payload.put("boxCode", boxCode);
             payload.put("deviceCode", session.deviceCode);
@@ -7619,7 +7673,7 @@ public class MainActivity extends Activity {
         }
 
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdAssemblyPlan> response = api.getAssemblyRequest(session.authorizationHeader(), requestId).execute();
             if (!response.isSuccessful()) {
                 throw new IOException("HTTP " + response.code());
@@ -7654,7 +7708,7 @@ public class MainActivity extends Activity {
             TsdSession session = safeSession(); if (session == null) return;
             if (fboTwoStageScreen != null) fboTwoStageScreen.close();
             screen = Screen.FBO_TWO_STAGE;
-            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(DEFAULT_BASE_URL),DEFAULT_BASE_URL,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();},this::openFboRemainderTransfer);
+            fboTwoStageScreen = new FboTwoStageScreen(this,session,WmsApiFactory.create(activeBaseUrl),activeBaseUrl,assemblyPlan.id,fboPacking,()->{fboTwoStageScreen=null;loadAssemblyRequests();},this::openFboRemainderTransfer);
             return;
         }
         if (isAssemblyPackedOnServer()) {
@@ -7974,7 +8028,7 @@ public class MainActivity extends Activity {
         renderRelabelBoxScreen();
         runBackground(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 Response<List<TsdPrintStation>> response = api.relabelPrintStations(session.authorizationHeader(), requestId).execute();
                 String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось найти печатную станцию.");
                 List<TsdPrintStation> stations = response.body();
@@ -8028,7 +8082,7 @@ public class MainActivity extends Activity {
         renderRelabelBoxScreen();
         runBackground(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 Map<String, String> body = new LinkedHashMap<>();
                 body.put("printId", printId);
                 body.put("stationId", station.id);
@@ -8076,7 +8130,7 @@ public class MainActivity extends Activity {
         relabelPrintBusy = true;
         runBackground(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 Response<TsdRelabelPrintJob> response = api.relabelPrintStatus(session.authorizationHeader(), requestId, printId).execute();
                 String failure = response.isSuccessful() ? "" : responseErrorMessage(response, "Не удалось проверить печать.");
                 TsdRelabelPrintJob job = response.body();
@@ -8422,14 +8476,14 @@ public class MainActivity extends Activity {
                     );
                     TsdSyncSummary summary = null;
                     if (session != null) {
-                        WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                        WmsApi api = WmsApiFactory.create(activeBaseUrl);
                         summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                             .syncPending(session.authorizationHeader());
                     }
                     TsdSyncSummary finalSummary = summary;
                     TsdAssemblyPlan freshPlan = null;
                     if (session != null && summary != null && summary.retried == 0) {
-                        Response<TsdAssemblyPlan> planResponse = WmsApiFactory.create(DEFAULT_BASE_URL)
+                        Response<TsdAssemblyPlan> planResponse = WmsApiFactory.create(activeBaseUrl)
                             .getAssemblyRequest(session.authorizationHeader(), assemblyPlan.id)
                             .execute();
                         if (planResponse.isSuccessful()) freshPlan = planResponse.body();
@@ -8554,7 +8608,7 @@ public class MainActivity extends Activity {
         renderAssemblyDetailScreen();
 
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             OperationOutboxCounts counts = outbox.counts();
             if (counts.pending > 0) {
                 TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
@@ -8725,7 +8779,7 @@ public class MainActivity extends Activity {
         scanInput.setEnabled(false);
         executor.execute(() -> {
             try {
-                Response<TsdKizCheckResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<TsdKizCheckResponse> response = WmsApiFactory.create(activeBaseUrl)
                     .checkReceiptKiz(session.authorizationHeader(), receiptClientId, kiz)
                     .execute();
                 if (!response.isSuccessful() || response.body() == null) {
@@ -8810,7 +8864,7 @@ public class MainActivity extends Activity {
 
         executor.execute(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 Map<String, Object> payload = new LinkedHashMap<>();
                 payload.put("clientId", receiptClientId);
                 payload.put("boxCode", boxCode);
@@ -8893,7 +8947,7 @@ public class MainActivity extends Activity {
         final String lookupScope = receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode;
         runBackground(() -> {
             try {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<TsdSkuInfo> response = api.findSkuByBarcode(session.authorizationHeader(), lookupClient, barcode).execute();
             if (response.isSuccessful() && response.body() != null) {
                 TsdSkuInfo sku = response.body();
@@ -8984,7 +9038,7 @@ public class MainActivity extends Activity {
         }
         executor.execute(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 Response<TsdKizCheckResponse> response = api
                     .checkReceiptKiz(session.authorizationHeader(), checkedClientId, kiz)
                     .execute();
@@ -9035,6 +9089,12 @@ public class MainActivity extends Activity {
         }
         ReceiptItem added = new ReceiptItem(barcode, kiz, sku == null ? null : sku.name);
         added.secondBarcodeScan = receiptBarcodeRescan.evidence();
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            TsdSession session = safeSession();
+            added.captionSnapshot = pro.logoff.wms.tsd.data.ReceiptScanSnapshot.capture(
+                sku == null ? null : sku.name, sku == null ? null : sku.article,
+                session == null ? null : session.userName, System.currentTimeMillis());
+        }
         receiptCurrentItems.add(added);
         if (kiz != null && !kiz.trim().isEmpty()) {
             String normalizedKiz = receiptKizKey(kiz);
@@ -9088,7 +9148,7 @@ public class MainActivity extends Activity {
                 "Поштучная приемка ТСД без коробов",
                 receiptExtras
             );
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
             PendingOperation savedReceipt = outbox.findOperation(receiptOperation.operationKey);
@@ -9181,7 +9241,7 @@ public class MainActivity extends Activity {
                         "Приемка ТСД: короб " + closedBoxCode
                     );
                 }
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                     .syncPending(session.authorizationHeader());
                 mainHandler.post(() -> {
@@ -9219,6 +9279,7 @@ public class MainActivity extends Activity {
                 Map<String, String> payload = new LinkedHashMap<>();
                 payload.put("barcode", item.barcode);
                 payload.put("secondBarcodeScan", item.secondBarcodeScan);
+                payload.putAll(item.captionSnapshot);
                 payload.put("kiz", item.kiz);
                 payload.put("comment", "Приемка ТСД: короб " + closedBoxCode);
                 if (!receiptStoreId.isEmpty()) payload.put("storeId", receiptStoreId);
@@ -9241,7 +9302,7 @@ public class MainActivity extends Activity {
         runBackground(() -> {
             try {
                 outbox.enqueueReceiptBatch(batch);
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                     .syncReceiptBatch(session.authorizationHeader(), batch.closeKey);
                 PendingOperation close = outbox.findOperation(batch.closeKey);
@@ -9353,7 +9414,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        String baseUrl = textValue(baseUrlInput);
+        String baseUrl = "logoff".equals(BuildConfig.FLAVOR) ? activeBaseUrl : textValue(baseUrlInput);
         runBackground(() -> {
             WmsApi api = WmsApiFactory.create(baseUrl);
             Response<TsdLoginResponse> response = api.login(
@@ -9390,7 +9451,7 @@ public class MainActivity extends Activity {
         }
 
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             Response<List<TsdClientSummary>> response = api.listClients(session.authorizationHeader()).execute();
             if (!response.isSuccessful()) {
                 throw new IOException(inventoryHttpError(response));
@@ -9425,7 +9486,7 @@ public class MainActivity extends Activity {
         }
 
         runBackground(() -> {
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
             mainHandler.post(() -> {
@@ -9536,6 +9597,15 @@ public class MainActivity extends Activity {
                             error.getMessage(),
                             tr("Ошибка приложения.", "Ilova xatosi.")
                         );
+                    if (networkFailure) {
+                        StringBuilder types = new StringBuilder();
+                        Throwable detail = error;
+                        for (int depth = 0; detail != null && depth < 4; depth++, detail = detail.getCause()) {
+                            if (types.length() > 0) types.append(" / ");
+                            types.append(detail.getClass().getSimpleName());
+                        }
+                        failureMessage += " [" + types + "]";
+                    }
                     // FIX: a slow server/WB response is not proof that the terminal lost internet.
                     if ("logoff".equals(BuildConfig.FLAVOR) &&
                         (screen == Screen.FBS_ASSEMBLY || screen == Screen.FBS_REQUESTS) &&
@@ -9588,7 +9658,7 @@ public class MainActivity extends Activity {
         Map<String, Object> payload = buildMonitorPayload();
         monitorExecutor.execute(() -> {
             try {
-                Response<Map<String, Object>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<Map<String, Object>> response = WmsApiFactory.create(activeBaseUrl)
                     .sendMonitorHeartbeat(session.authorizationHeader(), payload)
                     .execute();
                 Map<String, Object> body = response.body();
@@ -9647,7 +9717,7 @@ public class MainActivity extends Activity {
         monitorExecutor.execute(() -> {
             boolean accepted = false;
             try {
-                Response<Map<String, Object>> response = WmsApiFactory.create(DEFAULT_BASE_URL)
+                Response<Map<String, Object>> response = WmsApiFactory.create(activeBaseUrl)
                     .acknowledgeMonitorMessage(session.authorizationHeader(), id).execute();
                 accepted = response.isSuccessful() && response.body() != null && Boolean.TRUE.equals(response.body().get("accepted"));
             } catch (Exception ignored) { }
@@ -9692,7 +9762,7 @@ public class MainActivity extends Activity {
         byte[] screenshot = captureAppScreenshot();
         monitorExecutor.execute(() -> {
             try {
-                WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+                WmsApi api = WmsApiFactory.create(activeBaseUrl);
                 Response<Map<String, Object>> response = api
                     .sendMonitorError(session.authorizationHeader(), payload)
                     .execute();
@@ -9931,7 +10001,8 @@ public class MainActivity extends Activity {
             sessionNameView.setText(session == null ? "Вход сотрудника" : session.deviceName);
         }
         if (sessionCodeView != null) {
-            sessionCodeView.setText(session == null ? "не выполнен" : session.deviceCode);
+            sessionCodeView.setText((session == null ? "не выполнен" : session.deviceCode)
+                + ("logoff".equals(BuildConfig.FLAVOR) ? "\n" + ServerSettings.name(serverProfile) : ""));
         }
         if (queueView != null) {
             queueView.setText((online ? "Онлайн" : "Офлайн") + " · очередь: " + pendingCount);
@@ -11332,7 +11403,7 @@ public class MainActivity extends Activity {
         receiptKizReviewBusy = true; statusMessage = ""; renderReceiptScreen();
         executor.execute(() -> {
             try {
-                Response<TsdKizReviewResponse> response = WmsApiFactory.create(DEFAULT_BASE_URL).reviewReceiptKiz(session.authorizationHeader(), body).execute();
+                Response<TsdKizReviewResponse> response = WmsApiFactory.create(activeBaseUrl).reviewReceiptKiz(session.authorizationHeader(), body).execute();
                 if (!response.isSuccessful() || response.body() == null) throw new IOException(inventoryHttpError(response));
                 TsdKizReviewResponse result = response.body();
                 mainHandler.post(() -> {
@@ -11419,7 +11490,7 @@ public class MainActivity extends Activity {
                 });
                 return;
             }
-            WmsApi api = WmsApiFactory.create(DEFAULT_BASE_URL);
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
             TsdSyncSummary summary = new TsdSyncRunner(outbox, api, session.deviceCode)
                 .syncPending(session.authorizationHeader());
             OperationOutboxCounts counts = outbox.counts();
@@ -11464,16 +11535,20 @@ public class MainActivity extends Activity {
     }
 
     private File downloadAndVerifyUpdateApk() throws Exception {
-        String metadataUrl = APK_URL.endsWith(".apk")
-            ? APK_URL.substring(0, APK_URL.length() - 4) + ".json"
-            : APK_URL + ".json";
+        String metadataUrl = activeApkUrl.endsWith(".apk")
+            ? activeApkUrl.substring(0, activeApkUrl.length() - 4) + ".json"
+            : activeApkUrl + ".json";
         JSONObject metadata = new JSONObject(new String(downloadBytes(metadataUrl), java.nio.charset.StandardCharsets.UTF_8));
+        if ("logoff".equals(BuildConfig.FLAVOR) && !BuildConfig.APPLICATION_ID.equals(
+                metadata.optString("packageId", BuildConfig.APPLICATION_ID))) {
+            throw new SecurityException("Обновление предназначено для другого приложения ТСД");
+        }
         int remoteVersion = metadata.optInt("versionCode", 0);
         int installedVersion = installedVersionCode();
         if (remoteVersion <= installedVersion) {
             return null;
         }
-        byte[] apkBytes = downloadBytes(metadata.optString("apkUrl", APK_URL) + "?v=" + remoteVersion);
+        byte[] apkBytes = downloadBytes(metadata.optString("apkUrl", activeApkUrl) + "?v=" + remoteVersion);
         String expectedSha = metadata.optString("sha256", "").trim().toLowerCase(Locale.ROOT);
         String actualSha = sha256(apkBytes);
         if (expectedSha.isEmpty() || !expectedSha.equals(actualSha)) {
@@ -11618,6 +11693,7 @@ public class MainActivity extends Activity {
     }
 
     private static class ReceiptItem {
+        Map<String, String> captionSnapshot = java.util.Collections.emptyMap();
         String secondBarcodeScan = "";
         final String barcode;
         final String kiz;

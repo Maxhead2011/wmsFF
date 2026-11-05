@@ -1,6 +1,8 @@
+import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
-import { confirmFabricProduction } from '../warehouse/fabric-fbs-confirmation';
-import { writeFabricProduction } from '../warehouse/fabric-fbs-production';
+import { FABRIC_TASK_MARKER, readFabricTaskLines, requireFabricCutComplete } from '../warehouse/fabric-fbs-task-state';
+import { tryAssignFabricTask } from './fbs-fabric-queue';
+import { releaseFabricTask, releaseCancelledFabricOrder } from '../warehouse/fabric-fbs-task-release';
 import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { closeWbPackedRequest, wbPackedAutoDoneEnabled } from './wb-packed-auto-done';
 import { closeOzonPackedRequest, ozonPackedAutoDoneEnabled } from './ozon-packed-auto-done';
@@ -5759,6 +5761,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     if (current) {
       const canReleaseEmptyAssignment =
+        current.sourceArticle !== FABRIC_TASK_MARKER &&
         Boolean(selectedRequestId) &&
         selectedRequestId !== current.requestId &&
         !current.boxId &&
@@ -6028,6 +6031,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               `Повторная проверка заказа WB №${retryTask.orderId}. Отсканируйте заново только ШК товара${retryTask.requiresKiz ? ' и ЧЗ' : ''}. Остальные заказы заявки повторно собирать не нужно.`,
             );
           }
+          // FIX: reserve raw material before the finished-stock filter, atomically with task assignment.
+          const fabricAssignment = await tryAssignFabricTask(this, clientId, order, existing, user, deviceCode);
+          if (fabricAssignment.handled) {
+            if (fabricAssignment.task) return this.formatFbsTsdAssembly(fabricAssignment.task, user, 'Ткань зарезервирована под заказ.');
+            continue;
+          }
           // FIX: the one-off approved adjacent size must reach the TSD queue, not only the route preview.
           const stockSource = await this.resolveDovoz1049TsdStockSource(existing) ?? await this.resolveFbsTsdStockSource(
             clientId,
@@ -6278,6 +6287,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   // WMS request no longer exists or is already closed. It must be reviewed by
   // a manager and must not follow the next employee on the handheld.
   private async parkFbsTsdAssignmentFromClosedRequest(task: FbsTsdAssemblyRecord) {
+    if (task.sourceArticle === FABRIC_TASK_MARKER) return releaseFabricTask(this.prisma, task, 'CLOSED_REQUEST');
     if (typeof this.prisma.clientRequest?.findUnique !== 'function') return false;
     const request = await this.prisma.clientRequest.findUnique({
       where: { id: task.requestId },
@@ -6318,6 +6328,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     task: FbsTsdAssemblyRecord,
     user: AuthUser,
   ) {
+    if (task.sourceArticle === FABRIC_TASK_MARKER) return false;
     if (
       task.marketplace !== MarketplaceType.WILDBERRIES ||
       task.boxId ||
@@ -8831,10 +8842,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     const scannedCode = normalizeFbsScannerCode(rawCode);
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await readFabricTaskLines(this.prisma, task);
     await this.requireFbsOrderStillCollectable(task);
     // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
     const multiline = await handleOzonPickLines(this, task, user, 'code', payload);
     if (multiline) return multiline;
+    if(task.sourceArticle===FABRIC_TASK_MARKER) return this.scanFbsTsdBarcode(taskId,{...payload,barcode:scannedCode},user);
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') {
       return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
@@ -8926,11 +8939,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   private async performFbsTsdBoxScan(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await readFabricTaskLines(this.prisma, task);
     await this.requireFbsOrderStillCollectable(task);
     // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
     const multiline = await handleOzonPickLines(this, task, user, 'box', payload);
     if (multiline) return multiline;
     task = await this.assertFbsTsdLeaseVersion(task, user);
+    if (task.sourceArticle === FABRIC_TASK_MARKER) throw new BadRequestException('Отрез изготовлен под этот заказ. Отсканируйте ШК товара; исходный короб не требуется.');
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') return this.formatFbsTsdAssembly(task, user, 'Заказ уже собран.');
     const scannedCode = normalizeFbsScannerCode(
@@ -10248,10 +10263,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async scanFbsTsdBarcode(taskId: string, payload: Record<string, unknown>, user: AuthUser) {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await readFabricTaskLines(this.prisma, task);
     await this.requireFbsOrderStillCollectable(task);
     // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
     const multiline = await handleOzonPickLines(this, task, user, 'barcode', payload);
     if (multiline) return multiline;
+    const fabricScan=task.sourceArticle===FABRIC_TASK_MARKER
+      ? await scanWbFabric(this,task,normalizeFbsScannerCode(requiredFbsTsdText(payload.barcode,'Отсканируйте ШК товара.')),payload.scannedItemCount,user) : null;
+    if(fabricScan) return this.formatFbsTsdAssembly(fabricScan,user,'Товар принят. Метры учтены.');
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
     if (!task.boxId && !fbsTsdUsesNoBox(task)) {
@@ -10487,6 +10506,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: bounded timing only; preserve the existing result, error and call order.
     return measureOperation('fbs_scan', async () => {
     let task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await requireFabricCutComplete(this.prisma, task);
     await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
@@ -14218,6 +14238,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: bounded timing only; preserve the existing result, error and call order.
     return measureOperation('fbs_complete', async () => {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    await requireFabricCutComplete(this.prisma, task);
     await this.requireFbsOrderStillCollectable(task);
     // FIX: multi-product Ozon uses durable per-line proof, never the first-product total.
     const multiline = await handleOzonPickLines(this, task, user, 'complete');
@@ -14954,6 +14975,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   async releaseFbsTsdAssembly(taskId: string, user: AuthUser) {
     const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    if (task.sourceArticle === FABRIC_TASK_MARKER) {
+      await releaseFabricTask(this.prisma, task, 'POSTPONE', {id:user.id,deviceCode:this.fbsTsdDeviceCode(undefined,user)});
+      return this.emptyFbsTsdAssembly(task.deviceCode,user,'Заказ отложен. Резерв и нарезанные отрезы сохранены для продолжения.');
+    }
     requireFbsTaskWithoutSyncConflict(task);
     if (task.status === 'COMPLETED') throw new BadRequestException('Собранный заказ нельзя отложить.');
     if (task.kiz || task.wbMetaStatus === 'ACCEPTED') {
@@ -15036,28 +15061,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
   // FIX: derive all ownership identifiers from the authenticated task, never the body.
   async confirmFbsTsdFabricCut(taskId: string, body: Record<string, unknown>, user: AuthUser) {
-    if (process.env.WMS_FBS_FABRIC_CUT_ENABLED !== 'true' || user.tsdFabricCutConfirmation !== true) {
-      throw new ConflictException('Нарезка ФБС не включена для этого ТСД.');
-    }
-    if (typeof body?.lineId !== 'string' || !body.lineId.trim() || typeof body.operationId !== 'string' ||
-        !Number.isSafeInteger(body.confirmedUnits) || (body.confirmedUnits as number) < 1) {
-      throw new BadRequestException('Укажите позицию, количество нарезанных единиц и ключ операции.');
-    }
-    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
-    this.requireCurrentFbsTsdLease(task, user);
-    await this.inventoryLock?.assertStockMovementsAllowed();
-    return this.prisma.$transaction(async tx => {
-      await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${task.requestId} FOR UPDATE`;
-      const request = await tx.clientRequest.findUnique({ where: { id: task.requestId } });
-      if (!request?.warehouseId || request.warehouseId !== user.activeWarehouseId) {
-        throw new ConflictException('Выберите филиал текущей заявки.');
-      }
-      return confirmFabricProduction(tx, {
-        clientId: task.clientId, taskId: task.id,
-        owner: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId, requestId: task.requestId },
-        lineId: body.lineId as string, confirmedUnits: body.confirmedUnits as number, operationId: body.operationId as string,
-      }, { userId: user.id, deviceCode: this.fbsTsdDeviceCode(undefined, user) }, (_, proof) => writeFabricProduction(tx, proof));
-    });
+    // FIX: retired separate confirmation must never debit material without a product scan.
+    throw new ConflictException('Отдельное подтверждение нарезки больше не используется. Отсканируйте ШК товара в задании.');
   }
 
   // FIX: printing inside FBS assembly must use the worker's current, source-scanned task.
@@ -15199,6 +15204,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   // FIX: mirror every physical, marketplace, label and packing marker used by
   // the legacy-lease recovery. The automatic "no box" marker is not a scan.
   private isFbsTsdTaskUntouchedForAutoRelease(task: FbsTsdAssemblyRecord) {
+    if (task.sourceArticle === FABRIC_TASK_MARKER) return false;
     // FIX: a pinned original image is preparation, not a physical scan.
     const originalImage = task.marketplace === MarketplaceType.WILDBERRIES && task.marketplaceLabelContentType === 'image/png; purpose=original-repeat';
     return (
@@ -16005,6 +16011,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async formatFbsTsdAssembly(task: FbsTsdAssemblyRecord, user: AuthUser, message: string) {
     // FIX: bounded timing only; preserve the existing result, error and call order.
     return measureOperation('fbs_response', async () => {
+    // FIX: cutting is a separate explicit step; never invent a source or a product scan.
+    const fabricLines = task.status === 'IN_PROGRESS' ? await readFabricTaskLines(this.prisma, task) : null;
+    if (fabricLines && task.marketplace === 'WILDBERRIES') {
+      const line=fabricLines[0];
+      const client=await this.prisma.client.findUnique({where:{id:task.clientId},select:{id:true,code:true,name:true}});
+      return {state:line.remainingUnits>0?'SCAN_BARCODE':'READY_TO_COMPLETE',
+        message:message || 'Отсканируйте готовый отрез. Метры спишутся при успешном скане.',
+        task:{id:task.id,requestId:task.requestId,marketplace:task.marketplace,orderId:task.orderId,supplyId:task.supplyId,
+          client,status:task.status,itemCount:line.quantity,scannedItemCount:line.confirmedUnits,perUnitScanning:true,
+          sourceWithoutBox:true,sourceBoxPending:false,scannedBoxCode:'БЕЗ КОРОБА',scannedBarcode:task.barcode,
+          physicalPickConfirmation:true,requiresKiz:false,relabeling:null,orderSticker:null,storageBoxes:[],
+          product:{id:task.skuId,name:task.productName,article:task.article,barcodes:task.barcodes}},
+      };
+    }
     const excludedReceiptBoxes=await receiptBlockedBoxes(this.prisma,task.clientId,'fbs',task.id);
     const multiline = await handleOzonPickLines(this, task, user, 'view', {}, message);
     if (multiline) return multiline;
@@ -25069,6 +25089,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       for (const link of liveLinks) {
         const order = orderByKey.get(selectionKey(link.connectionId, link.orderId))!;
         const task = taskByKey.get(selectionKey(link.connectionId, link.orderId));
+        const fabricProduced = task && order.category==='cancelled'
+          ? await releaseCancelledFabricOrder(tx,task) : false;
         // FIX: never collapse durable Ozon line quantities back into the header SKU.
         const lineState = task ? ozonLineStates.get(task.id) : null;
         if (task && lineState) {
@@ -25129,7 +25151,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
 
         if (order.category === 'cancelled') {
-          const physicallyHandled = task ? fbsTsdTaskWasPhysicallyHandled(task) : false;
+          const physicallyHandled = fabricProduced || (task ? fbsTsdTaskWasPhysicallyHandled(task) : false);
           if (physicallyHandled || request.status === ClientRequestStatus.PACKED) {
             const issue = `Заказ ${order.id} изменён на «${order.statusLabel}» после начала сборки. Товар нужно вернуть или подтвердить решение менеджера.`;
             const conflictWasNew =

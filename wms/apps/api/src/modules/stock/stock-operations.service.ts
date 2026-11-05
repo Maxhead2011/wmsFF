@@ -2733,6 +2733,7 @@ export class StockOperationsService {
         }
         if (remaining > 0) {
           // Reconcile only internal SHIPPING, consumed by this same closing transaction.
+          if (proof.strictPacking) throw new BadRequestException('Не хватает изготовленных отрезов в упаковке. Проверьте движения; повторное производство автоматически не выполняется.');
           // AVAILABLE and marks are never increased or deducted here.
           const balance = await this.incrementTargetBalance(tx, { clientId: request.clientId,
             warehouseId: proof.warehouseId, skuId: proof.skuId, boxId: proof.boxId,
