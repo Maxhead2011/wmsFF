@@ -1,4 +1,6 @@
-Подготовлено: [паузы запросов WB ФБО](wb-fbo-request-pause.md), отдельный флаг WMS_WB_FBO_REQUEST_PAUSE, хранилище SystemSetting.
+Опубликован PR864 (05.11.2026): сохранение паузы WB ФБО по Retry-After и X-Ratelimit в БД. WMS_WB_FBO_REQUEST_PAUSE=true только нашей WMS. Проверены health, точная замена двух модулей свежего runtime, сохранение остальных контейнеров. API4314/web594, PostgreSQL53, TypeScript и кандидат runtime прошли. Source parity остаётся false. База: 2026-11-05-wb-fbo-pause.
+
+
 
 FBO stock availability: gated exact blocked-mark returns in completed FBS requests. Regression: apps/api/test/fbo-fbs-reservations.spec.ts.
 
