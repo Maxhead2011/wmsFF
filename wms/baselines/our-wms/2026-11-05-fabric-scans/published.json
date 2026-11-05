@@ -1,0 +1,25 @@
+{
+  "pr": 870,
+  "fabricCutEnabled": true,
+  "otherContainersUnchanged": true,
+  "webImage": "sha256:72b175810d525d1099fc5ed879b149bf44c542bc4b3e9f7d16531abcefee1e89",
+  "base": "sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04",
+  "candidate": "sha256:9e0fe0a4bc4a56d0ced35ce6b5d0a8eed139c8b8d309938f2a5b3a6692dbb994",
+  "hashes": {
+    "/app/apps/api/dist/modules/stock/stock-operations.service.js": "fbdc503375007381cebdbf9b87b3d77387a1e9a7fdd37e87b1d540f14e1bcf7e",
+    "/app/apps/api/dist/modules/marketplace-connections/ozon-fbs-pick-workflow.js": "bdadd80ca5ab2e7e994d444e2653da251ccb3ecc6feb73dabf6411b0421e7e85",
+    "/app/apps/api/dist/modules/warehouse/fabric-fbs-shipment-proof.js": "7bc6890a84eb507ad59e01e5b332689118113de4361181a5a255ec5687a44e1b",
+    "/app/apps/api/dist/modules/marketplace-connections/marketplace-connections.service.js": "730fb9266b995249afe3174c42b8f43e9ad9fc3a3df23f284124efac756f3cf2",
+    "/app/apps/api/dist/modules/warehouse/fabric-fbs-task-release.js": "cd988728ceaef784df4bc10377ec5d35864156f065dfbbddf98219f18a41efb8",
+    "/app/apps/api/dist/modules/marketplace-connections/fbs-fabric-queue.js": "013908c28025fd133ce94bf0e167413a4ea7498546ff664208a5a31bb3e8bcaf",
+    "/app/apps/api/dist/modules/warehouse/fabric-fbs-scan.js": "28ba3ce8e2f80d87fae9cc93746180d8283cbb31197777acb066d7a72d97877c",
+    "/app/apps/api/dist/modules/warehouse/fabric-roll-storage.js": "585e6422b3999d245f3173b6392bae6aa14ac9524adb7de2d18cb72d22189c8b",
+    "/app/apps/api/dist/modules/client-requests/client-requests.service.js": "d2e5f9c11e420a003f116d1919e35267b38c543cb28d13439a773bb600ea075e",
+    "/app/apps/api/dist/modules/warehouse/fabric-rolls.js": "e57096fc3b279bd209a6e5c937211e483dfdab0a20f35d95d6b98e57d745835a",
+    "/app/apps/api/dist/modules/warehouse/fabric-fbs-task-state.js": "efb081273e942c7b8a2da064137721279020269abe338ecb15110110e85843aa",
+    "/app/apps/api/dist/modules/stock/fbs-picked-stock-proof.js": "b21283ff6031698f53cdfda8313abf1889d0e3e646522924b1bda9eeeb1e1473",
+    "/app/apps/api/dist/modules/warehouse/fabric-shipment-accounting.js": "6feb25784e265d14f0432ae410a243952dd55381459e891e0da6c6fc73d66d0f"
+  },
+  "runtime": "fabric scan runtime OK: module load, route, capability, isolation; no database access",
+  "composeSha256": "9445778e342847c95c7776b7c0c7568b8dd4d0a809e69e43dd9d3c2efb25782d"
+}

@@ -1,0 +1,18 @@
+{
+  "referenceSha256": "5cc40334f3559932d36510dae9200895fd0fe8419bea3802cb295907cc000a19",
+  "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+  "package": "pro.logoff.wms.tsd",
+  "versionCode": 255,
+  "nonCodePayloadDifferences": [],
+  "published": false,
+  "normalizedBytecodeClasses": 4607,
+  "tests": {
+    "tests": 328,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "signedCandidate": "D:\\WMSFF\\_Kof\\work\\tsd255-reference\\logoff-tsd-fabric-256.apk",
+  "candidateSha256": "3c5ebf1b9268f620991401e2afd8ca1e17fdae2e9e0e2ada302839b671f77e93",
+  "candidateVersion": 256
+}
