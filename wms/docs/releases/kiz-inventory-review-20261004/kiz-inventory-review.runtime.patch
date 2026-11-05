@@ -1,0 +1,83 @@
+diff --git a/wms/apps/api/dist/common/kiz-cancelled-reuse.js b/wms/apps/api/dist/common/kiz-cancelled-reuse.js
+index 489df87..08ca82d 100644
+--- a/wms/apps/api/dist/common/kiz-cancelled-reuse.js
++++ b/wms/apps/api/dist/common/kiz-cancelled-reuse.js
+@@ -28,6 +28,20 @@ async function releaseCancelledBindings(tx, clientId, kiz, evidence, userId, rev
+     const links = (await tx.fbsTsdAssembly.findMany({ where: { clientId, id: { not: excludedTaskId },
+             OR: (0, kiz_sorting_return_proof_2.manualKizPrefixes)(identity).map(p => ({ kiz: { startsWith: p } })) } })).filter(t => (0, kiz_sorting_return_proof_2.manualKizIdentity)(t.kiz ?? '') === identity);
+     const requests = await tx.clientRequest.findMany({ where: { clientId, id: { in: links.map(t => t.requestId) }, status: { in: ['DONE', 'CANCELLED', 'REJECTED'] } } });
++    // FIX: a confirmed physical recount can release a historical WB_ACCOUNTED slot,
++    // but only through the existing administrator confirmation, never on a scan.
++    const inventoryProof = physicalReview && process.env.WMS_KIZ_INVENTORY_ADMIN_REUSE_ENABLED === 'true'
++        ? await inventoryReturnProof(tx, clientId, identity, links, requests, evidence) : null;
++    if (inventoryProof) {
++        for (const old of links) {
++            await tx.auditLog.create({ data: { userId, action: 'KIZ_INVENTORY_BINDING_ARCHIVED', entity: 'FbsTsdAssembly', entityId: old.id,
++                payload: JSON.parse(JSON.stringify({ reviewId, kizIdentity: identity, evidence, physicalConfirmation: true, inventoryProof, before: old })) } });
++            const changed = await tx.fbsTsdAssembly.updateMany({ where: { id: old.id, clientId, status: old.status,
++                kiz: old.kiz, updatedAt: old.updatedAt }, data: { kiz: null } });
++            if (changed.count !== 1) throw conflict();
++        }
++        return;
++    }
+     // FIX: preserve full audit before clearing only a never-shipped cancelled binding.
+     const unfinishedProof = physicalReview ? await unfinishedCancelledProof(tx, clientId, identity, links, requests, evidence) : null;
+     if (unfinishedProof) {
+@@ -66,6 +80,56 @@ async function releaseCancelledBindings(tx, clientId, kiz, evidence, userId, rev
+     }
+ }
+ 
++// FIX: immutable, per-serial recount evidence is required; an AVAILABLE flag alone is insufficient.
++async function inventoryReturnProof(tx, clientId, identity, links, requests, evidence) {
++    if (!links.length || links.some(t => !['COMPLETED', 'WB_ACCOUNTED', 'RELEASED'].includes(t.status) ||
++        !requests.some(r => r.id === t.requestId) || !evidence.orders.some(o => o.orderId === t.orderId))) return null;
++    // Fail closed on unknown/contradictory WB replies and any evidence of transmission.
++    if (!evidence.orders.every(o => o.verified && ['cancel', 'complete'].includes(o.supplierStatus) &&
++        cancelledWithoutSale(o.wbStatus) && o.containsKiz === false && o.supplyAccepted === false)) return null;
++    const prefixes = kiz_sorting_return_proof_2.manualKizPrefixes(identity);
++    const exact = value => kiz_sorting_return_proof_2.manualKizIdentity(value || '') === identity;
++    const marks = (await tx.productMark.findMany({ where: { OR: prefixes.map(p => ({ value: { startsWith: p } })) } }))
++        .filter(m => exact(m.value));
++    if (marks.length !== 1 || marks[0].clientId !== clientId || marks[0].status !== 'AVAILABLE' || !marks[0].boxId) return null;
++    const mark = marks[0];
++    await tx.$queryRaw`SELECT id FROM "ProductMark" WHERE id = ${mark.id} FOR UPDATE`;
++    const current = await tx.productMark.findUnique({ where: { id: mark.id } });
++    if (!current || current.updatedAt.getTime() !== mark.updatedAt.getTime() || current.status !== 'AVAILABLE' ||
++        current.clientId !== clientId || current.boxId !== mark.boxId || current.skuId !== mark.skuId || !exact(current.value)) return null;
++    const box = await tx.box.findUnique({ where: { id: mark.boxId } });
++    if (!box || box.clientId !== clientId || !box.warehouseId || ['archived', 'deleted'].includes(box.status) ||
++        requests.some(r => r.warehouseId !== box.warehouseId)) return null;
++    const allBindings = (await tx.fbsTsdAssembly.findMany({ where: { OR: prefixes.map(p => ({ kiz: { startsWith: p } })) } }))
++        .filter(t => exact(t.kiz));
++    if (allBindings.some(t => !links.some(old => old.id === t.id))) return null;
++    const fbo = await tx.fboAssemblyUnit.findMany({ where: { OR: [{ activeMarkId: mark.id },
++        { OR: prefixes.map(p => ({ kiz: { startsWith: p } })), state: { in: ['PICKED', 'PACKED'] },
++          assembly: { phase: { not: 'COMPLETED' }, request: { status: { notIn: ['DONE', 'CANCELLED'] } } } }] } });
++    if (fbo.some(u => u.activeMarkId === mark.id || exact(u.kiz))) return null;
++    const history = (await tx.shippedKizHistory.findMany({ where: { OR: prefixes.map(p => ({ kiz: { startsWith: p } })) } }))
++        .filter(h => exact(h.kiz));
++    if (history.some(h => h.clientId !== clientId || h.warehouseId !== box.warehouseId ||
++        !evidence.orders.some(o => o.orderId === h.orderId)) ||
++        links.some(t => !history.some(h => h.assemblyId === t.id && h.orderId === t.orderId && h.requestId === t.requestId))) return null;
++    const after = new Date(Math.max(...links.map(t => new Date(t.updatedAt).getTime()),
++        ...history.map(h => new Date(h.shippedAt).getTime())));
++    if (!Number.isFinite(after.getTime())) return null;
++    const audit = await tx.auditLog.findFirst({ where: { action: 'INVENTORY_KIZ_COMPOSITION_CONFIRMED', entity: 'InventoryAuditBox',
++        createdAt: { gt: after }, AND: [{ payload: { path: ['boxId'], equals: mark.boxId } },
++        { payload: { path: ['clientId'], equals: clientId } }] }, orderBy: { createdAt: 'desc' } });
++    const p = audit?.payload;
++    if (!audit?.userId || !p || p.clientId !== clientId || p.warehouseId !== box.warehouseId || p.boxId !== mark.boxId ||
++        !(new Date(p.roundStartedAt).getTime() > after.getTime()) ||
++        !Array.isArray(p.scans) || p.scans.filter(s => s.identity === identity && s.skuId === mark.skuId && exact(s.value)).length !== 1 ||
++        !Array.isArray(p.previousScannedMarks) || !p.previousScannedMarks.some(m => m.id === mark.id && m.clientId === clientId && exact(m.value))) return null;
++    const balance = await tx.stockBalance.aggregate({ where: { clientId, warehouseId: box.warehouseId, skuId: mark.skuId,
++        boxId: mark.boxId, status: 'AVAILABLE' }, _sum: { quantity: true } });
++    if ((balance._sum.quantity ?? 0) < 1) return null;
++    return { auditId: audit.id, auditBoxId: audit.entityId, confirmedBy: audit.userId, confirmedAt: audit.createdAt,
++        markId: mark.id, boxId: mark.boxId, previousShipmentAt: after, shipmentIds: history.map(h => h.id) };
++}
++
+ // FIX: a cancelled pick that never shipped has no shipment timestamp to return after.
+ async function unfinishedCancelledProof(tx, clientId, identity, links, requests, evidence) {
+  if (!links.length || links.some(t => t.status !== 'RELEASED' || t.completedAt || !requests.some(r => r.id === t.requestId))) return null;
+
