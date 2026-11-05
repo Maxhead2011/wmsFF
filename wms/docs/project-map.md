@@ -1,3 +1,5 @@
+PR866: [серверная основа FBS из рулонов](fbs-fabric-cut-flow.md), выпуск с WMS_FBS_FABRIC_CUT_ENABLED=false. Очередь и Android ещё не подключены, рабочая нарезка не включается. API4408, integration57, focused105; точный runtime12, capability/переклейка18, baseline8 и disabled-runtime проверены. Факт публикации — в current-production.
+
 Опубликован PR864 (05.11.2026): сохранение паузы WB ФБО по Retry-After и X-Ratelimit в БД. WMS_WB_FBO_REQUEST_PAUSE=true только нашей WMS. Проверены health, точная замена двух модулей свежего runtime, сохранение остальных контейнеров. API4314/web594, PostgreSQL53, TypeScript и кандидат runtime прошли. Source parity остаётся false. База: 2026-11-05-wb-fbo-pause.
 
 

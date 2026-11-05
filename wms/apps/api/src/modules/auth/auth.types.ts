@@ -19,6 +19,7 @@ export type AuthUser = {
   printerGroups?: UserPrinterGroupScope[];
   deviceId?: string;
   deviceCode?: string;
+  tsdFabricCutConfirmation?: boolean;
 };
 
 export type UserPrinterGroupScope = {

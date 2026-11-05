@@ -1,4 +1,6 @@
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
+import { confirmFabricProduction } from '../warehouse/fabric-fbs-confirmation';
+import { writeFabricProduction } from '../warehouse/fabric-fbs-production';
 import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { closeWbPackedRequest, wbPackedAutoDoneEnabled } from './wb-packed-auto-done';
 import { closeOzonPackedRequest, ozonPackedAutoDoneEnabled } from './ozon-packed-auto-done';
@@ -15029,6 +15031,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
     return task;
 
+    });
+  }
+
+  // FIX: derive all ownership identifiers from the authenticated task, never the body.
+  async confirmFbsTsdFabricCut(taskId: string, body: Record<string, unknown>, user: AuthUser) {
+    if (process.env.WMS_FBS_FABRIC_CUT_ENABLED !== 'true' || user.tsdFabricCutConfirmation !== true) {
+      throw new ConflictException('Нарезка ФБС не включена для этого ТСД.');
+    }
+    if (typeof body?.lineId !== 'string' || !body.lineId.trim() || typeof body.operationId !== 'string' ||
+        !Number.isSafeInteger(body.confirmedUnits) || (body.confirmedUnits as number) < 1) {
+      throw new BadRequestException('Укажите позицию, количество нарезанных единиц и ключ операции.');
+    }
+    const task = await this.loadOwnedFbsTsdAssembly(taskId, user);
+    this.requireCurrentFbsTsdLease(task, user);
+    await this.inventoryLock?.assertStockMovementsAllowed();
+    return this.prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${task.requestId} FOR UPDATE`;
+      const request = await tx.clientRequest.findUnique({ where: { id: task.requestId } });
+      if (!request?.warehouseId || request.warehouseId !== user.activeWarehouseId) {
+        throw new ConflictException('Выберите филиал текущей заявки.');
+      }
+      return confirmFabricProduction(tx, {
+        clientId: task.clientId, taskId: task.id,
+        owner: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId, requestId: task.requestId },
+        lineId: body.lineId as string, confirmedUnits: body.confirmedUnits as number, operationId: body.operationId as string,
+      }, { userId: user.id, deviceCode: this.fbsTsdDeviceCode(undefined, user) }, (_, proof) => writeFabricProduction(tx, proof));
     });
   }
 
