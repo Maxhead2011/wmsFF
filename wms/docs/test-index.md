@@ -1,3 +1,5 @@
+PR868 release checks: exact runtime overlay in scripts/releases/turnover-search-20261105; real browser selection/edit3 and shared bootstrap5 passed. Web595 passed,2 skipped; TypeScript passed. API candidate unchanged against pinned baseline.
+
 TurnoverPanel.box-lookup.spec.tsx: регрессия составной подписи товара в запросе; выбор передаёт SKU и ШК без full-text ограничения, редактирование возвращает текстовый поиск. Тест воспроизвёл ошибку до исправления.
 
 Опубликован PR866 (05.11.2026): отключённая серверная основа FBS из рулонов. WMS_FBS_FABRIC_CUT_ENABLED=false; выдача заданий и Android ещё не подключены, проблема готовых отрезов этим выпуском не закрыта. API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04. Точный overlay12; runtime18, disabled-container, baseline8, health и хеши проверены. Остальные флаги, web, APK, данные и контейнеры сохранены; sold не менялся. База 2026-11-05-fabric-foundation-disabled; sourceParityVerified=false.
