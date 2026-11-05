@@ -1,3 +1,7 @@
+Published PR870 (2026-11-05): FBS fabric metres reserved on assignment, consumed on accepted product scan; no separate cutting step. Own API `sha256:9e0fe0a4bc4a56d0ced35ce6b5d0a8eed139c8b8d309938f2a5b3a6692dbb994`, exact13 overlay; all744 live files equal candidate. Web PR868, other containers and sold WMS unchanged. WMS_FBS_FABRIC_CUT_ENABLED=true; audited client opt-in for Bushkova/Khrupova, no stock edits. API4433/9 skipped, web595/2 skipped, sequential integration60/107 skipped, runtime Ozon16/regression30/PostgreSQL8, isolated full Nest health and staged-container checks passed. Android328 passed. LOGOFF256 separate signed-255-compatible APK published and public hash verified; old249 and servers254 feeds unchanged. Physical device update untested. Baseline `2026-11-05-fabric-scans`, sourceParityVerified=false.
+
+Operational limits: Bushkova retains32 historical shipmentPending records (red/ivory); affected material remains blocked pending reconciliation. Khrupova has no recorded rolls. Client enablement does not fabricate receipt or clear historic consumption. Existing Ffullhab receipt tests2 fail on base as well; excluded from LOGOFF release.
+
 ## Уточнение процесса 05.11.2026: списание по скану — кандидат, не опубликован
 
 По решению Катерины отдельный этап CUT_FABRIC и кнопка «Нарезано» отменены.
