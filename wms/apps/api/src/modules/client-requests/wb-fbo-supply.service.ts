@@ -1,3 +1,4 @@
+import {wbFboPausedFetch} from './wb-fbo-request-pause';
 import {dispatchKey} from './wb-fbo-dispatch';
 import {StockOperationsService} from '../stock/stock-operations.service';
 import {BadGatewayException,BadRequestException,ConflictException,ForbiddenException,Injectable,NotFoundException} from '@nestjs/common';
@@ -38,8 +39,8 @@ export class WbFboSupplyService {
  private async stored(db:any,id:string):Promise<Binding|null>{return (await db.systemSetting.findUnique({where:{key:key(id)}}))?.value??null;}
  private async connection(id:string,clientId:string){const c=await this.db.clientMarketplaceConnection.findFirst({where:{id,clientId,marketplace:'WILDBERRIES',isActive:true}});if(!c)throw new BadRequestException('Действующее подключение WB этого клиента не найдено.');return c;}
  // FIX: fixed read endpoint, bounded timeout, no marketplace writes or raw response logging.
- async remote(c:{apiKey:string},id:string){
-  let response:Response;try{response=await fetch('https://supplies-api.wildberries.ru/api/v1/supplies/'+id+'?isPreorderID=false',{headers:{Authorization:c.apiKey},signal:AbortSignal.timeout(20000),redirect:'error'});}catch{throw new BadGatewayException('Нет ответа WB. Повторите проверку.');}
+ async remote(c:{apiKey:string;clientId?:string},id:string){
+  let response:Response;try{response=await (process.env.WMS_WB_FBO_REQUEST_PAUSE==='true' ? (url:string,init:RequestInit)=>wbFboPausedFetch(this.db,c.clientId,()=>fetch(url,init)) : fetch)('https://supplies-api.wildberries.ru/api/v1/supplies/'+id+'?isPreorderID=false',{headers:{Authorization:c.apiKey},signal:AbortSignal.timeout(20000),redirect:'error'});}catch(e){if(e instanceof BadGatewayException)throw e;throw new BadGatewayException('Нет ответа WB. Повторите проверку.');}
   if(!response.ok)throw new BadGatewayException(response.status===403?'Нет доступа к поставкам WB у этого API-ключа.':`WB: HTTP ${response.status}.`);
   let data:any;try{data=await response.json();}catch{throw new BadGatewayException('Некорректный ответ WB.');}
   if(!Number.isInteger(data.statusID)||!wbFboStatuses[data.statusID]||!Number.isSafeInteger(data.quantity)||data.quantity<0||!Number.isSafeInteger(data.acceptedQuantity)||data.acceptedQuantity<0)throw new BadGatewayException('WB не подтвердил статус и количество поставки.');

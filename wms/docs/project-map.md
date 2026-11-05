@@ -1,3 +1,5 @@
+Подготовлено: [паузы запросов WB ФБО](wb-fbo-request-pause.md), отдельный флаг WMS_WB_FBO_REQUEST_PAUSE, хранилище SystemSetting.
+
 FBO stock availability: gated exact blocked-mark returns in completed FBS requests. Regression: apps/api/test/fbo-fbs-reservations.spec.ts.
 
 Request action menus follow the selected font and collapse to one column when narrow. Edge regression: apps/web/test/request-menu-font-wrap.ps1.
