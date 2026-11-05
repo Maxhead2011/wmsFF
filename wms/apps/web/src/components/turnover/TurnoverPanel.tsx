@@ -118,6 +118,9 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
   const [stockExportError, setStockExportError] = useState('');
   const [ignoreActiveStockRequests, setIgnoreActiveStockRequests] = useState(false);
 
+  // FIX: keep suggestion identity separate from its human-readable label.
+  const [productFilter, setProductFilter] = useState<{ skuId: string; label: string; clientId: string } | null>(null);
+
   const canSeeStatistics = useMemo(() => canUseStatistics(session.user.roleCodes, session.user.permissionCodes), [session.user]);
   // FIX: scoped stock reads do not require internal statistics privileges.
   const canReadStock = canSeeStatistics || session.user.permissionCodes.includes('stock:read');
@@ -246,9 +249,12 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
     setReceiptPeriodError('');
     setStockExportError('');
 
+    const filterSkuId = productFilter?.label === search && productFilter.clientId === selectedClientId
+      ? productFilter.skuId : undefined;
     const reportFilter = {
       clientId: selectedClientId,
-      search: search.trim() || undefined,
+      skuId: filterSkuId || undefined,
+      search: filterSkuId ? undefined : search.trim() || undefined,
       barcode: barcode.trim() || undefined,
       kiz: kiz.trim() || undefined,
       dateFrom: dateFrom || undefined,
@@ -529,6 +535,7 @@ export function TurnoverPanel({ session }: { session: AuthSession }) {
             }}
             onSelect={(option) => {
               setSearch(option.label ?? option.value);
+              setProductFilter({ skuId: optionDataString(option, 'skuId'), label: option.label ?? option.value, clientId: selectedClientId });
               setSuggestionQuery(option.value);
               setBarcode(optionDataString(option, 'barcode'));
               const skuId = optionDataString(option, 'skuId');

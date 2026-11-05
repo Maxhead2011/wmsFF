@@ -1,3 +1,5 @@
+Исправление поиска выбранного товара: TurnoverPanel.tsx хранит идентификатор выбранной подсказки отдельно от её подписи и передаёт skuId без search. Ручное изменение текста или смена клиента отключает этот фильтр. Сервер, остатки и проданная WMS не изменены; публикация не выполнена.
+
 Опубликован PR866 (05.11.2026): отключённая серверная основа FBS из рулонов. WMS_FBS_FABRIC_CUT_ENABLED=false; выдача заданий и Android ещё не подключены, проблема готовых отрезов этим выпуском не закрыта. API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04. Точный overlay12; runtime18, disabled-container, baseline8, health и хеши проверены. Остальные флаги, web, APK, данные и контейнеры сохранены; sold не менялся. База 2026-11-05-fabric-foundation-disabled; sourceParityVerified=false.
 
 PR866: [серверная основа FBS из рулонов](fbs-fabric-cut-flow.md), выпуск с WMS_FBS_FABRIC_CUT_ENABLED=false. Очередь и Android ещё не подключены, рабочая нарезка не включается. API4408, integration57, focused105; точный runtime12, capability/переклейка18, baseline8 и disabled-runtime проверены. Факт публикации — в current-production.
