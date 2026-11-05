@@ -414,6 +414,14 @@ export class TsdDeviceController {
     return this.marketplace.completeFbsTsdAssembly(id, user);
   }
 
+  // FIX: an explicit manufacturing confirmation, separate from barcode/KIZ scans.
+  @Post('fbs/tasks/:id/confirm-fabric-cut')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  confirmFbsFabricCut(@Param('id') id: string, @Body() body: Record<string, unknown>, @CurrentFbsTsdUser() user: AuthUser) {
+    return this.marketplace.confirmFbsTsdFabricCut(id, body, user);
+  }
+
   @Post('fbs/tasks/:id/release')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')

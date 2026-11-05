@@ -11,5 +11,6 @@ export const CurrentFbsTsdUser = createParamDecorator((_data: unknown, context: 
   return {
     ...request.user,
     tsdPhysicalPickConfirmation: request.headers['x-tsd-fbs-capability'] === 'physical-pick-v1',
+    ...(request.headers['x-tsd-fabric-capability'] === 'fabric-cut-v1' ? { tsdFabricCutConfirmation: true } : {}),
   };
 });
