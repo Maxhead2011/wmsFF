@@ -770,16 +770,16 @@
       }
     },
     "public-apk-proof.json": {
-      "size": 258,
-      "sha256": "1d1d7d465d7dfc4a766a22b02819b2b14d1e2cb3888b838c44e1a9c0193510c2"
+      "size": 252,
+      "sha256": "85a8daa9c80fa4ce7a4583faf2ecdb57ccbe01996ae9f28de9d4d6f70a8c2931"
     },
     "published.json": {
-      "size": 2401,
-      "sha256": "cf16a8a010b57a6e3265bda030ed76a19718c863b62cf08e44e0dedb3a000675"
+      "size": 2377,
+      "sha256": "9ba224cccc5f8cab5e355c053cd69bf5531eaf312d4e3ce2fcf4334f698765ad"
     },
     "apk-reference-proof.json": {
-      "size": 646,
-      "sha256": "8c94d547a49a2fb7698458c6bb60cae42e07983a78a11a9732d447ba5c7d8037"
+      "size": 629,
+      "sha256": "a7557b49f2be0b78a6f75e33e38f0bc27b8f9114c92739469348e066a1eebfe2"
     }
   }
 }
