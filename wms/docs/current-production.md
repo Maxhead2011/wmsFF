@@ -1,3 +1,5 @@
+Опубликован PR866 (05.11.2026): отключённая серверная основа FBS из рулонов. WMS_FBS_FABRIC_CUT_ENABLED=false; выдача заданий и Android ещё не подключены, проблема готовых отрезов этим выпуском не закрыта. API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04. Точный overlay12; runtime18, disabled-container, baseline8, health и хеши проверены. Остальные флаги, web, APK, данные и контейнеры сохранены; sold не менялся. База 2026-11-05-fabric-foundation-disabled; sourceParityVerified=false.
+
 Опубликован PR864 (05.11.2026): сохранение паузы WB ФБО по Retry-After и X-Ratelimit в БД. WMS_WB_FBO_REQUEST_PAUSE=true только нашей WMS. Проверены health, точная замена двух модулей свежего runtime, сохранение остальных контейнеров. API4314/web594, PostgreSQL53, TypeScript и кандидат runtime прошли. Source parity остаётся false. База: 2026-11-05-wb-fbo-pause.
 
 Опубликован PR860 (04.11.2026): автоматический опрос WB по номерам заказов незакрытых FBS-заявок. WMS_WB_LINKED_STATUS_REFRESH=true только в нашей WMS. Проверены работающий API и точная замена двух модулей относительно PR858; остальные контейнеры сохранены. База: 2026-11-04-wb-linked-status.
