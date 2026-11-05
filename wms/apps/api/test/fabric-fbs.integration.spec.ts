@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+import { createRequire } from 'node:module';
 import { reserveFabricOrder, fabricOrderKey } from '../src/modules/warehouse/fabric-fbs-order';
-import { confirmFabricProduction } from '../src/modules/warehouse/fabric-fbs-confirmation';
-import { writeFabricProduction } from '../src/modules/warehouse/fabric-fbs-production';
-import { assignFabricOrder } from '../src/modules/warehouse/fabric-fbs-assignment';
+// TEST: exercise the actual release artifact with the same PostgreSQL scenarios.
+const load=createRequire(import.meta.url), runtime=process.env.FABRIC_FBS_RUNTIME;
+const {scanWbFabric}=runtime?load(runtime+'/fabric-fbs-scan.js'):await import('../src/modules/warehouse/fabric-fbs-scan');
+const {confirmFabricProduction}=runtime?load(runtime+'/fabric-fbs-confirmation.js'):await import('../src/modules/warehouse/fabric-fbs-confirmation');
+const {writeFabricProduction}=runtime?load(runtime+'/fabric-fbs-production.js'):await import('../src/modules/warehouse/fabric-fbs-production');
+const {assignFabricOrder}=runtime?load(runtime+'/fabric-fbs-assignment.js'):await import('../src/modules/warehouse/fabric-fbs-assignment');
+const {releaseCancelledFabricRequest}=runtime?load(runtime+'/fabric-fbs-task-release.js'):await import('../src/modules/warehouse/fabric-fbs-task-release');
 
 const url = process.env.FABRIC_FBS_TEST_DATABASE_URL;
 // TEST: never run fixture writes against a remote or ordinary application DB.
@@ -16,6 +21,7 @@ if (url) {
 }
 const db = url ? new PrismaClient({ datasources: { db: { url } } }) : null;
 describe.skipIf(!db)('fabric production PostgreSQL transaction', () => {
+  afterEach(()=>vi.unstubAllEnvs());
   const clients: string[] = [], users: string[] = [], warehouses: string[] = [];
   afterAll(async () => {
     if (!db) return;
@@ -66,8 +72,59 @@ describe.skipIf(!db)('fabric production PostgreSQL transaction', () => {
       audits: await db!.auditLog.count({ where: { entityId: client.id } }),
       events: await db!.clientRequestEvent.count({ where: { clientId: client.id } }),
     });
-    return { confirm, snapshot, client, request, owner, item, sku, warehouse, state };
+    return { confirm, snapshot, client, request, owner, item, sku, warehouse, state, task, user };
   }
+  // TEST: accepted scanner input is the only production trigger, atomically with its counter.
+  it('cancellation and reserve release commit or roll back together',async()=>{
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','true');
+    const f=await fixture();
+    await db!.fbsTsdAssembly.update({where:{id:f.task.id},data:{sourceArticle:'__FABRIC_FBS__'}});
+    const cancel=(fail:boolean)=>db!.$transaction(async tx=>{
+      await releaseCancelledFabricRequest(tx,f.request.id);
+      await tx.clientRequest.update({where:{id:f.request.id},data:{status:'CANCELLED'}});
+      if(fail)throw Error('Cancellation failure');
+    });
+    await expect(cancel(true)).rejects.toThrow('Cancellation failure');
+    expect((await f.snapshot()).state.fbsReservations[0].released).toBe(false);
+    expect((await db!.clientRequest.findUniqueOrThrow({where:{id:f.request.id}})).status).not.toBe('CANCELLED');
+    await cancel(false);
+    const state=await f.snapshot();
+    expect(state.state.fbsReservations[0].released).toBe(true);
+    expect(state.state.rolls[0].remainingMm).toBe(100000);
+    expect(state.movements).toHaveLength(0);
+  });
+  it('WB scans one piece, retries without debit and rejects a wrong barcode',async()=>{
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','true');
+    const f=await fixture();
+    const task=await db!.fbsTsdAssembly.update({where:{id:f.task.id},data:{sourceArticle:'__FABRIC_FBS__',marketplace:'WILDBERRIES',barcodes:['1234567890123']}});
+    const ledger=reserveFabricOrder({rolls:f.state.rolls},task,f.state.fbsOrders![fabricOrderKey(f.owner)].lines);
+    await db!.systemSetting.update({where:{key:`fabric.rolls.v1:${f.client.id}`},data:{value:ledger as any}});
+    const service={prisma:db,requireCurrentFbsTsdLease:(fresh:any,user:any)=>{if(fresh.workerUserId!==user.id)throw Error('lease');},fbsTsdDeviceCode:()=>task.deviceCode};
+    await expect(scanWbFabric(service,task,'999',0,f.user)).rejects.toThrow('Неверный');
+    expect((await f.snapshot()).movements).toHaveLength(0);
+    const first=await scanWbFabric(service,task,'1234567890123',0,f.user);
+    expect(first.barcode).toBeNull();expect((await f.snapshot()).state.rolls[0].remainingMm).toBe(97000);
+    await scanWbFabric(service,task,'1234567890123',0,f.user);
+    expect((await f.snapshot()).movements).toHaveLength(1);
+    const second=await scanWbFabric(service,task,'1234567890123',1,f.user);
+    expect(second.barcode).toBe('1234567890123');expect((await f.snapshot()).state.rolls[0].remainingMm).toBe(94000);
+    await scanWbFabric(service,task,'1234567890123',1,f.user);
+    expect((await f.snapshot()).movements).toHaveLength(2);
+  });
+  // TEST: a failure persisting the accepted scan rolls back the material debit too.
+  it('rolls back metres and PACKING when saving the WB scan fails',async()=>{
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','true');
+    const f=await fixture();
+    const task=await db!.fbsTsdAssembly.update({where:{id:f.task.id},data:{sourceArticle:'__FABRIC_FBS__',marketplace:'WILDBERRIES',barcodes:['1234567890123']}});
+    const ledger=reserveFabricOrder({rolls:f.state.rolls},task,f.state.fbsOrders![fabricOrderKey(f.owner)].lines);
+    await db!.systemSetting.update({where:{key:`fabric.rolls.v1:${f.client.id}`},data:{value:ledger as any}});
+    const service={prisma:{$transaction:(fn:any)=>db!.$transaction(tx=>fn({...tx,fbsTsdAssembly:{
+      findUnique:tx.fbsTsdAssembly.findUnique.bind(tx.fbsTsdAssembly),update:async()=>{throw Error('Scan save failed');},
+    }}))},requireCurrentFbsTsdLease:()=>{},fbsTsdDeviceCode:()=>task.deviceCode};
+    await expect(scanWbFabric(service,task,'1234567890123',0,f.user)).rejects.toThrow('Scan save failed');
+    const s=await f.snapshot();expect(s.state.rolls[0].remainingMm).toBe(100000);
+    expect(s.movements).toHaveLength(0);expect(s.balances).toHaveLength(0);expect(s.audits).toBe(0);
+  });
   it('commits raw meters and order-owned PACKING once across retries', async () => {
     const f = await fixture();
     await f.confirm();

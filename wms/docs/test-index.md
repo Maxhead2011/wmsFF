@@ -1,3 +1,46 @@
+## Уточнение процесса 05.11.2026: списание по скану — кандидат, не опубликован
+
+По решению Катерины отдельный этап CUT_FABRIC и кнопка «Нарезано» отменены.
+Резерв создаётся при выдаче задания из рулонов; один успешный скан товара
+подтверждает один готовый отрез и списывает его длину. Неверный ШК не списывает
+ткань. Абсолютный счётчик защищает от повторного списания при повторе запроса.
+`fabric-fbs-scan.ts` сохраняет производство и скан в одной транзакции. Для Ozon
+сохраняется поштучный состав, включая смешанные заказы. Старый отдельный endpoint
+confirm-fabric-cut отклоняет обращения без изменения данных. Неопубликованные
+экран и кнопки Android удалены; используется обычный экран сканирования.
+
+Проверено после подключения отмены: API 4433 passed / 9 skipped; TypeScript прошёл.
+Целевые проверки — 40 passed, включая 8 PostgreSQL-сценариев. Отмена после паузы
+освобождает ненарезанный резерв; повтор не возвращает списанные метры. Освобождение
+подключено к отмене клиентской заявки и подтверждённой отмене WB/Ozon; ошибка
+транзакции отменяет и смену статуса, и освобождение резерва. LOGOFF Android прошёл.
+
+Release preparation update 2026-11-05 (not published): exact runtime overlay prepared,
+13 changed/added modules; runtime Ozon 16, regression 30 and PostgreSQL 8 passed.
+Full sequential integration: 60 passed / 107 skipped. LOGOFF unit tests and
+unsigned release 253 build succeeded. Token patch helper: 3 tests passed after
+correcting the test dependency root. No production changes made by this work.
+
+Signing backup verified as PrivateKeyEntry, alias logoff-tsd-servers; secrets
+remain outside Git. Certificate SHA256:
+70715AF4C2EA269D393F9CFB15806AEEE920445A22AAC16248E76D621BEDE5DA.
+This is distinct from the historic main-app certificate 52916D77... .
+Verified user-supplied APK255 at /video/static/downloads/logoff-tsd-receipt-255.apk:
+package pro.logoff.wms.tsd, 0.1.255-receipt-time, SHA256
+5cc40334f3559932d36510dae9200895fd0fe8419bea3802cb295907cc000a19.
+Its certificate matches the supplied backup. Server source254 was preserved and
+the released ReceiptScanSnapshot changes reconstructed in an isolated copy.
+All 4607 classes match after normalizing dex offsets, pool indices and debug
+line numbers; non-code ZIP payload including manifest/resources matches byte
+for byte (signature files excluded). Raw strings compared losslessly.
+
+The candidate now preserves source255 server selection, per-server database/session
+isolation, shared network client and receipt scan evidence. LOGOFF256 adds only
+the fabric capability on this Android base. 328 Android tests passed, release
+build succeeded, signed APK verified against the APK255 certificate. The old
+certificate installation is not claimed upgrade-compatible. Physical TSD update
+has not been tested. Keys/passwords are not tracked. PR target feature/la_panthera.
+Full candidate service boot and release checks are still required; not published.
 Опубликован PR868 (05.11.2026): поиск выбранного товара в товародвижении по SKU без составной подписи в search. Точный web2 overlay; API, данные, остальные контейнеры и проданная WMS сохранены. Web595 passed/2 skipped, TypeScript; браузер3 и bootstrap5 проверены до и после публикации. База 2026-11-05-turnover-search; sourceParityVerified=false.
 
 PR868 release checks: exact runtime overlay in scripts/releases/turnover-search-20261105; real browser selection/edit3 and shared bootstrap5 passed. Web595 passed,2 skipped; TypeScript passed. API candidate unchanged against pinned baseline.
@@ -548,3 +591,26 @@ Lamoda PR711/712 final validation: API3810 passed/155 skipped (dedicated KIZ DB 
 - Manual status fix: API4294, targeted42, API TypeScript and exact runtime6 pass. Dedicated PostgreSQL suite unavailable on this host; standalone integration API scope tests11 pass, database-dependent integration cases skipped. Read-only current-data probe: old handler404, candidate returns38 scoped targets with background disabled; no business writes.
 
 - PR858 published: manual status capability, exact API2 baseline 2026-11-04-manual-market-status, runtime6 and live38 targets verified; background remains paused.
+## Проверка кандидата интеграции нарезки 05.11.2026 — не опубликован
+
+Ветка `feature/fbs-fabric-cut-integration`, предполагаемая цель PR — `feature/la_panthera`.
+Подключены исходники очереди WB/Ozon, экран CUT_FABRIC, подтверждение нарезки,
+откладывание с сохранением резерва и сканов, доказательство PACKING при отгрузке.
+`fbs-fabric-queue.ts` проверяет включение поштучного состава Ozon до резерва;
+обычные товары клиента остаются на прежнем пути. `fabric-fbs-shipment-proof.ts`
+исключает уже отгруженные WB-задания и проверяет принадлежность производства заказу.
+
+Проверки: API без integration — 4436 passed / 9 skipped; integration последовательно
+на отдельной локальной БД — 57 passed / 107 skipped. TypeScript прошёл.
+Android LOGOFF прошёл; в Ffullhab два падения ReceiptPlacementActivityTest и
+ReceiptProgressActivityTest воспроизводятся также на исходном 9bbd7a40 без изменений.
+Параллельный общий запуск integration дал три падения KIZ identity transfer;
+отдельно на исходной и изменённой версии, а также последовательно они проходят.
+Это ограничение тестового запуска, не доказательство ошибки production.
+
+До выпуска остаются: обработка отмены отложенного задания и отмены на маркетплейсе,
+сквозная проверка повторного назначения, точный runtime overlay (sourceParityVerified=false),
+проверки собранного API/подписанного APK. Нельзя включать режим на основании одних unit-тестов.
+Повторная read-only сверка сервера: API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04;
+web sha256:b62f4d4b5d6f7f0f067d75ad9240b724d3160fdcc278f283ef171cc0780627e3.
+Production, флаги и бизнес-данные в ходе проверки не менялись.

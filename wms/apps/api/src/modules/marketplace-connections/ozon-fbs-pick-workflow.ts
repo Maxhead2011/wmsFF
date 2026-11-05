@@ -2,6 +2,8 @@ import { ozonLinkedSkus } from './marketplace-product-links';
 import { receiptBlockedBoxes, assertReceiptFbsBox } from '../warehouse/receipt-channel-policy';
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { reconcileFbsRequestStatus } from '../../common/stock/fbs-request-auto-status';
+import { FABRIC_TASK_MARKER, readFabricTaskLines } from '../warehouse/fabric-fbs-task-state';
+import { recordFabricScan } from '../warehouse/fabric-fbs-scan';
 import {
   OzonPickState, ozonPickLinesEnabled, ozonPostingProducts, resolveOzonLineSku,
   readOzonPickState, writeOzonPickState, ozonActiveLine, ozonPickCount, ozonPickTotal,
@@ -11,6 +13,18 @@ import {
 const NO_BOX = 'БЕЗ КОРОБА';
 const closed = ['DONE', 'CANCELLED', 'REJECTED'];
 const singleProductUntil = new WeakMap<object, Map<string, number>>();
+
+// FIX: only this exact order's manufactured line may bypass source-box selection.
+async function producedLine(db: any, task: any, state: OzonPickState) {
+  if (task.sourceArticle !== FABRIC_TASK_MARKER) return null;
+  const active = ozonActiveLine(state);
+  if (!active) return null;
+  const lines = await readFabricTaskLines(db, task);
+  const line = lines?.find(l => l.lineId === active.requestItemId && l.skuId === active.skuId);
+  if (line && line.quantity !== active.quantity)
+    throw new ConflictException('Состав нарезки изменился.');
+  return line ?? null;
+}
 type Action = 'view' | 'code' | 'barcode' | 'box' | 'complete';
 
 async function requireRequestCapacity(tx: any, task: any, state: OzonPickState) {
@@ -34,6 +48,11 @@ async function requireRequestCapacity(tx: any, task: any, state: OzonPickState) 
 async function locked<T>(service: any, task: any, user: any, operation: (tx: any, fresh: any) => Promise<T>): Promise<T> {
   return service.prisma.$transaction(async (tx: any) => {
     await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${task.requestId} FOR UPDATE`;
+    if(task.sourceArticle===FABRIC_TASK_MARKER) {
+      const key=`fabric.rolls.v1:${task.clientId}`;
+      const locks=await tx.$queryRaw`SELECT pg_try_advisory_xact_lock(hashtext(${key})) AS locked`;
+      if(locks[0]?.locked!==true) throw new ConflictException('Ткань обрабатывается другим сотрудником. Повторите скан.');
+    }
     await tx.$queryRaw`SELECT id FROM "FbsTsdAssembly" WHERE id=${task.id} FOR UPDATE`;
     const fresh = await tx.fbsTsdAssembly.findUnique({ where: { id: task.id } });
     if (fresh?.status === 'COMPLETED') {
@@ -118,6 +137,7 @@ async function initialize(service: any, task: any, user: any): Promise<OzonPickS
 async function locations(service: any, task: any, state: OzonPickState) {
   const line = ozonActiveLine(state);
   if (!line) return [];
+  if (await producedLine(service.prisma, task, state)) return [];
   const warehouseId = await service.resolveFbsTsdExpectedWarehouseId(task);
   if (!warehouseId) throw new ConflictException('Не определён склад исполнения заявки.');
   const excludedReceiptBoxes=await receiptBlockedBoxes(service.prisma,task.clientId,'fbs',task.id);
@@ -140,6 +160,8 @@ async function locations(service: any, task: any, state: OzonPickState) {
 }
 
 async function render(service: any, task: any, state: OzonPickState, message: string) {
+  const manufactured = await producedLine(service.prisma, task, state);
+  if (manufactured) state = { ...state, source: { boxId: null, boxCode: NO_BOX } };
   const active = ozonActiveLine(state), line = active ?? state.lines[state.lines.length - 1];
   const [client, request, totals, completed, boxes] = await Promise.all([
     service.prisma.client.findUnique({ where: { id: task.clientId }, select: { id: true, code: true, name: true } }),
@@ -159,7 +181,7 @@ async function render(service: any, task: any, state: OzonPickState, message: st
       ozonLines: state.lines.map(l => ({ article: l.article, quantity: l.quantity, scanned: l.picks.length })),
       activeLineNumber: active ? state.lines.indexOf(active) + 1 : state.lines.length,
       physicalPickConfirmation: true, requiresKiz: false, relabeling: null, orderSticker: null,
-      scannedBoxCode: state.source?.boxCode ?? null, sourceWithoutBox: false, sourceBoxPending: state.source?.boxCode === NO_BOX,
+      scannedBoxCode: state.source?.boxCode ?? null, sourceWithoutBox: Boolean(manufactured), sourceBoxPending: !manufactured && state.source?.boxCode === NO_BOX,
       scannedBarcode: !active ? line.picks[line.picks.length - 1]?.barcode : null,
       recommendedBoxCode: boxes[0]?.code ?? null,
       recommendedLocation: placement ? { palletId: placement.palletId, palletCode: placement.pallet.code,
@@ -229,8 +251,10 @@ async function complete(service: any, task: any, user: any) {
       });
     }
     const completedAt = new Date();
+    const fabricLines = fresh.sourceArticle === FABRIC_TASK_MARKER ? await readFabricTaskLines(tx, fresh) : null;
     await tx.fbsTsdAssembly.update({ where: { id: task.id }, data: { status: 'COMPLETED', completedAt, errorMessage: null,
-      barcode: state.lines[0].picks[0].barcode, sourceBoxPending: state.lines.some(l => l.picks.some(p => !p.boxId)) } });
+      barcode: state.lines[0].picks[0].barcode, sourceBoxPending: state.lines.some(l => l.picks.some(p => !p.boxId) &&
+        !fabricLines?.some(f => f.lineId === l.requestItemId && f.skuId === l.skuId && f.remainingUnits === 0 && f.quantity === l.quantity)) } });
     state.submission = 'COMPLETED';
     await writeOzonPickState(tx, task.id, state);
     await tx.clientRequestEvent.create({ data: {
@@ -253,15 +277,24 @@ export async function handleOzonPickLines(service: any, task: any, user: any, ac
   if (!state) return null;
   if (action === 'complete') state = await complete(service, task, user);
   else if (action !== 'view') {
+    if(task.sourceArticle===FABRIC_TASK_MARKER) await service.inventoryLock?.assertStockMovementsAllowed();
     state = await locked(service, task, user, async (tx, fresh) => {
       let current = (await readOzonPickState(tx, task.id))!;
       if (fresh.status === 'COMPLETED') return current;
       const code = String(payload.barcode ?? payload.boxCode ?? payload.code ?? '').trim();
       const line = ozonActiveLine(current);
+      const manufactured = await producedLine(tx, fresh, current);
+      if (manufactured) current = { ...current, source: { boxId: null, boxCode: NO_BOX } };
       if (action === 'barcode' || (action === 'code' && /^\d{8,13}$/.test(code))) {
         await assertReceiptFbsBox(tx,fresh,current.source?.boxId);
+        const previousCount=ozonPickCount(current);
         current = recordOzonLineScan(current, code, payload.scannedItemCount, user.id);
+        if(manufactured && line && ozonPickCount(current)>previousCount) {
+          const accepted=current.lines.find(l=>l.requestItemId===line.requestItemId)!;
+          await recordFabricScan(tx,fresh,line.requestItemId,accepted.picks.length,user,service.fbsTsdDeviceCode(undefined,user));
+        }
       } else {
+        if (manufactured) throw new BadRequestException('Для отреза из рулона отсканируйте ШК товара.');
         if (!Number.isSafeInteger(payload.scannedItemCount) || Number(payload.scannedItemCount) > ozonPickCount(current)) throw new ConflictException('Обновите задание перед выбором короба.');
         if (Number(payload.scannedItemCount) < ozonPickCount(current)) return current;
         if (!line || current.submission !== 'PICKING') throw new ConflictException('Все товары отобраны или заказ передаётся.');

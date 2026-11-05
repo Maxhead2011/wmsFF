@@ -11,21 +11,34 @@ public final class WmsApiFactory {
     private WmsApiFactory() {
     }
 
-    public static WmsApi create(String baseUrl) {
-        return new Retrofit.Builder()
-            .baseUrl(normalizeBaseUrl(baseUrl))
-            // FIX: only updated LOGOFF terminals opt into label-free physical picking.
-            .client(new OkHttpClient.Builder()
-                // FIX: allow WB KIZ validation to finish before the terminal times out.
-                .addInterceptor(new FbsRequestTimeouts("logoff".equals(BuildConfig.FLAVOR)))
-                .addInterceptor(chain -> chain.proceed(
-                "logoff".equals(BuildConfig.FLAVOR)
-                    ? chain.request().newBuilder().header("X-TSD-FBS-Capability", "physical-pick-v1").build()
-                    : chain.request()
-            )).build())
+    // Share connection pools and TLS sessions across scans and monitoring calls.
+    private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
+        .addInterceptor(new FbsRequestTimeouts("logoff".equals(BuildConfig.FLAVOR)))
+        .addInterceptor(chain -> chain.proceed(
+            "logoff".equals(BuildConfig.FLAVOR)
+                ? chain.request().newBuilder().header("X-TSD-FBS-Capability", "physical-pick-v1")
+                    // FIX: advertise scan-confirmed fabric production only for LOGOFF.
+                    .header("X-TSD-Fabric-Capability", "fabric-cut-v1").build()
+                : chain.request()
+        )).build();
+    private static final java.util.Map<String, WmsApi> APIS =
+        new java.util.LinkedHashMap<String, WmsApi>(8, 0.75f, true) {
+            @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, WmsApi> entry) {
+                return size() > 8;
+            }
+        };
+
+    public static synchronized WmsApi create(String baseUrl) {
+        String normalized = normalizeBaseUrl(baseUrl);
+        WmsApi current = APIS.get(normalized);
+        if (current != null) return current;
+        WmsApi api = new Retrofit.Builder()
+            .baseUrl(normalized)
+            .client(CLIENT)
             .addConverterFactory(MoshiConverterFactory.create())
-            .build()
-            .create(WmsApi.class);
+            .build().create(WmsApi.class);
+        APIS.put(normalized, api);
+        return api;
     }
 
     private static String normalizeBaseUrl(String baseUrl) {

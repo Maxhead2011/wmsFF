@@ -2,15 +2,18 @@ import { BadRequestException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled } from '../../common/stock/wb-order-stock-lifecycle';
 import { Prisma } from '@prisma/client';
 import { readFbsAttemptHistory } from '../../common/shipment-history/fbs-attempt-history';
+import { readFabricShipmentProof } from '../warehouse/fabric-fbs-shipment-proof';
 
-export type FbsPickedProof = { itemId: string; skuId: string; boxId: string | null; palletId: string | null; warehouseId: string; quantity: number; movementIds: string[] };
+export type FbsPickedProof = { itemId: string; skuId: string; boxId: string | null; palletId: string | null; warehouseId: string; quantity: number; movementIds: string[]; strictPacking?: boolean };
 type Request = { id: string; clientId: string; items: Array<{id:string;skuId:string|null;quantity:number}> };
 
 // FIX: net exact-task physical deductions against returns; status COMPLETED alone is not stock evidence.
 export async function readFbsPickedStockProof(tx: Prisma.TransactionClient, request: Request, warehouseId?: string): Promise<FbsPickedProof[]> {
   if (!('fbsTsdAssembly' in tx)) return [];
   const live = await tx.fbsTsdAssembly.findMany({ where: {requestId:request.id,clientId:request.clientId,status:'COMPLETED'},
-    select:{id:true,requestId:true,requestItemId:true,clientId:true,skuId:true,boxId:true,status:true,itemCount:true,sourceSkuId:true,relabelConfirmedAt:true,kiz:true} });
+    select:{id:true,requestId:true,requestItemId:true,clientId:true,skuId:true,boxId:true,status:true,itemCount:true,sourceSkuId:true,relabelConfirmedAt:true,kiz:true,sourceArticle:true} });
+  if (process.env.WMS_FBS_FABRIC_CUT_ENABLED !== 'true' && live.some(t=>t.sourceArticle==='__FABRIC_FBS__'))
+    throw new BadRequestException('Отгрузка содержит нарезанные отрезы. Восстановите режим нарезки для проверки их учёта.');
   const tasks = new Map(live.filter(t=>t.id && t.status==='COMPLETED' && t.clientId===request.clientId).map(t=>[t.id,t]));
   for (const {task} of await readFbsAttemptHistory(tx,{requestId:request.id})) {
     if(task.clientId===request.clientId && task.status==='COMPLETED') tasks.set(task.id,task);
@@ -22,8 +25,10 @@ export async function readFbsPickedStockProof(tx: Prisma.TransactionClient, requ
     facts.forEach(fact => tasks.delete(fact.assemblyId));
   }
   if (!warehouseId) throw new BadRequestException('Для проверки фактического отбора нужен филиал заявки.');
-  const result:FbsPickedProof[]=[];
+  const result:FbsPickedProof[]=process.env.WMS_FBS_FABRIC_CUT_ENABLED === 'true'
+    ? await readFabricShipmentProof(tx,request,warehouseId,new Set(tasks.keys())) : [];
   const itemRemaining=new Map(request.items.map(i=>[i.id,i.quantity]));
+  for(const proof of result) itemRemaining.set(proof.itemId,(itemRemaining.get(proof.itemId)??0)-proof.quantity);
   const taskList=[...tasks.values()];
   for(let offset=0;offset<taskList.length;offset+=100) {
     const batch=taskList.slice(offset,offset+100);

@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 252 // FIX: retain receipt scan times and boxes.
-            versionName = "0.1.252-receipt-placement"
+            versionCode = 256 // FIX: retain receipt scan times and boxes.
+            versionName = "0.1.256-fabric-scans"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -79,6 +79,14 @@ android {
                 signingConfig = signingConfigs.getByName("logoffRelease")
             }
             isMinifyEnabled = false
+        }
+        create("servers") {
+            initWith(getByName("release"))
+            // Separate installation: the original application's data/signing identity stay intact.
+            applicationIdSuffix = ".servers"
+            signingConfig = null
+            resValue("string", "app_name", "LOGOFF ТСД · Серверы")
+            matchingFallbacks += listOf("release")
         }
     }
 
