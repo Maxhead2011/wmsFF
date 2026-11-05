@@ -1,3 +1,5 @@
+Опубликован PR866 (05.11.2026): отключённая серверная основа FBS из рулонов. WMS_FBS_FABRIC_CUT_ENABLED=false; выдача заданий и Android ещё не подключены, проблема готовых отрезов этим выпуском не закрыта. API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04. Точный overlay12; runtime18, disabled-container, baseline8, health и хеши проверены. Остальные флаги, web, APK, данные и контейнеры сохранены; sold не менялся. База 2026-11-05-fabric-foundation-disabled; sourceParityVerified=false.
+
 # FBS: производство отрезов под заказ
 
 Статус 05.11.2026: PR866 в `feature/la_panthera` готовит **отключённую серверную основу**. Не является выпуском рабочего сценария нарезки на ТСД.
