@@ -138,3 +138,22 @@ describe('client stock access', () => {
     expect(hooks.values[0]).toBe('stockExport');
   });
 });
+
+// TEST: a suggestion label is presentation, not a full-text search constraint.
+describe('selected turnover product', () => {
+  beforeEach(() => { hooks.values=[]; hooks.effects=[]; hooks.ref.current=0; vi.clearAllMocks(); });
+  it('queries the selected SKU and restores text search after editing', async () => {
+    vi.mocked(fetchTurnoverReport).mockResolvedValue({items:[],totals:{}} as any);
+    const make=()=>{hooks.cursor=0;return TurnoverPanel({session:{accessToken:'token',user:{id:'u',roleCodes:[],permissionCodes:[]}} as any});};
+    const input=(tree:any)=>elements(tree).find(n=>n.props?.label==='Поиск по товару');
+    const show=(tree:any)=>elements(tree).find(n=>n.type==='button'&&n.props.className==='primary-button');
+    hooks.values[0]='movement';
+    const label='Костюм_реглан_синий-S / 44 · ШК 2047945569214';
+    input(make()).props.onSelect({value:label,label,data:{skuId:'sku-reglan',barcode:'2047945569214'}});
+    await show(make()).props.onClick();
+    expect(fetchTurnoverReport).toHaveBeenLastCalledWith('token',expect.objectContaining({skuId:'sku-reglan',search:undefined,barcode:'2047945569214'}));
+    input(make()).props.onChange('Другой костюм');
+    await show(make()).props.onClick();
+    expect(fetchTurnoverReport).toHaveBeenLastCalledWith('token',expect.objectContaining({skuId:undefined,search:'Другой костюм'}));
+  });
+});
