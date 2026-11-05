@@ -1,0 +1,25 @@
+{
+  "passed": 3,
+  "checks": [
+    {
+      "label": "initial",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    },
+    {
+      "label": "reload",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    },
+    {
+      "label": "selected SKU and edited search",
+      "boots": [
+        "/assets/turnover-selected-product-20261105.js"
+      ]
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

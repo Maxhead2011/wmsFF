@@ -41,6 +41,11 @@ build succeeded, signed APK verified against the APK255 certificate. The old
 certificate installation is not claimed upgrade-compatible. Physical TSD update
 has not been tested. Keys/passwords are not tracked. PR target feature/la_panthera.
 Full candidate service boot and release checks are still required; not published.
+Опубликован PR868 (05.11.2026): поиск выбранного товара в товародвижении по SKU без составной подписи в search. Точный web2 overlay; API, данные, остальные контейнеры и проданная WMS сохранены. Web595 passed/2 skipped, TypeScript; браузер3 и bootstrap5 проверены до и после публикации. База 2026-11-05-turnover-search; sourceParityVerified=false.
+
+PR868 release checks: exact runtime overlay in scripts/releases/turnover-search-20261105; real browser selection/edit3 and shared bootstrap5 passed. Web595 passed,2 skipped; TypeScript passed. API candidate unchanged against pinned baseline.
+
+TurnoverPanel.box-lookup.spec.tsx: регрессия составной подписи товара в запросе; выбор передаёт SKU и ШК без full-text ограничения, редактирование возвращает текстовый поиск. Тест воспроизвёл ошибку до исправления.
 
 Опубликован PR866 (05.11.2026): отключённая серверная основа FBS из рулонов. WMS_FBS_FABRIC_CUT_ENABLED=false; выдача заданий и Android ещё не подключены, проблема готовых отрезов этим выпуском не закрыта. API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04. Точный overlay12; runtime18, disabled-container, baseline8, health и хеши проверены. Остальные флаги, web, APK, данные и контейнеры сохранены; sold не менялся. База 2026-11-05-fabric-foundation-disabled; sourceParityVerified=false.
 

@@ -26,4 +26,3 @@ if(found.length!==1){
 }
 const start=all[found[0]].start,end=all[found[0]+needle.length-1].end;
 process.stdout.write(JSON.stringify(text.slice(0,start)+after.trim()+text.slice(end)));
-
