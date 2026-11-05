@@ -1,3 +1,11 @@
+## Final scan candidate verification, 2026-11-05
+
+After merging PR869 with both approved documentation entries retained: API 4433 passed / 9 skipped, web 595 passed / 2 skipped, TypeScript passed. Full candidate Nest startup against isolated PostgreSQL returned health ok. Exact API overlay contains 13 modules; server-side staged container passed module/route/capability/closed-legacy-endpoint checks without database access. `release-scan.py` enforces the live image, merged PR, compose hash, environment preservation, other-container preservation and rollback.
+
+Signed LOGOFF 256 retains package `pro.logoff.wms.tsd` and certificate of reference 255. APK SHA256: `3c5ebf1b9268f620991401e2afd8ca1e17fdae2e9e0e2ada302839b671f77e93`. Separate versioned download only: do not replace the old-key 249 update feed or the distinct `.servers` package feed. Physical terminal installation remains untested. Publication is recorded separately after deployment.
+
+Earlier candidate notes below are chronological; CUT_FABRIC and version253 are superseded by scan confirmation and version256.
+
 ## Уточнение процесса 05.11.2026: списание по скану — кандидат, не опубликован
 
 По решению Катерины отдельный этап CUT_FABRIC и кнопка «Нарезано» отменены.
