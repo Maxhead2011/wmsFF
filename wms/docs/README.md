@@ -1,3 +1,5 @@
+Подготовлено: [паузы запросов WB ФБО](wb-fbo-request-pause.md), отдельный флаг WMS_WB_FBO_REQUEST_PAUSE, хранилище SystemSetting.
+
 Опубликован PR860 (04.11.2026): автоматический опрос WB по номерам заказов незакрытых FBS-заявок. WMS_WB_LINKED_STATUS_REFRESH=true только в нашей WMS. Проверены работающий API и точная замена двух модулей относительно PR858; остальные контейнеры сохранены. База: 2026-11-04-wb-linked-status.
 
 PR831. WB request rows use LegacyWbBi. Its header now opens supply binding. Browser verification starts from the Requests list on published assets with actual request 2565 plan and fixture API responses. Web 593 passed/2 skipped, TypeScript passed. Baseline 2026-11-01-wb-request-entry.
