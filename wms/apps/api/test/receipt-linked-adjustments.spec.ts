@@ -28,12 +28,13 @@ it.each(['quantity','boxId','clientId','warehouseId','sourceDocument'])('rejects
  await expect(receiptDocuments(db,'c','w',undefined,undefined,true)).rejects.toThrow();
 });
 // TEST: downloadable receipt retains signed corrections and exactly the report total.
-it('exports linked adjustments including negative quantities',async()=>{
+it('exports final quantities without separate signed movements',async()=>{
+ vi.stubEnv('WMS_RECEIPT_LINKED_ADJUSTMENTS_ENABLED','true');
  const sku={name:'Product',article:'A',size:'M',barcodes:[{value:'123'}]};
- const db:any={stockMovement:{findMany:vi.fn(async()=>[953,10,-2].map(quantity=>({quantity,sku,boxId:'b',createdAt:new Date('2026-11-06')})))}};
+ const db:any={stockMovement:{findMany:vi.fn(async()=>[953,10,-2].map(quantity=>({quantity,sku,skuId:'s',boxId:'b',createdAt:new Date('2026-11-06')})))}};
  const controller:any=new ReceiptChannelsController(db,{} as any,{} as any);
  controller.readReceipt=async()=>({date:'2026-11-06',boxes:[{id:'b',code:'BOX_1',receiptDocument:'doc',linkedAdjustmentIds:['plus','minus']}]});
  let data:any;await controller.file({},'c','w','id',{setHeader:vi.fn(),send:(b:any)=>{data=b;}});
  expect(db.stockMovement.findMany.mock.calls[0][0].where.OR[1]).toEqual({type:'INVENTORY_ADJUSTMENT',id:{in:['plus','minus']}});
- const wb=new ExcelJS.Workbook();await wb.xlsx.load(data);let total=0;wb.worksheets[0].eachRow((row,i)=>{if(i>1)total+=Number(row.getCell(7).value);});expect(total).toBe(961);
+ const wb=new ExcelJS.Workbook();await wb.xlsx.load(data);let total=0;wb.worksheets[0].eachRow((row,i)=>{if(i>1)total+=Number(row.getCell(7).value);});expect(total).toBe(961);expect(wb.worksheets[0].rowCount).toBe(2);
 });

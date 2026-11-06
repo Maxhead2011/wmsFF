@@ -1,6 +1,7 @@
 import { receiptProcessingEnabled, receiptProcessingPrefix, receiptProcessingKey, saveReceiptProcessing } from '../billing/receipt-processing';
 import { canManageReceiptDirections } from './receipt-direction-access';
 import { ModuleRef } from '@nestjs/core';
+import {receiptFinalQuantities} from './receipt-final-quantities';
 import { MarketplaceConnectionsService } from '../marketplace-connections/marketplace-connections.service';
 import { BadRequestException, Body, Controller, Get, Logger, Post, Query, ForbiddenException, NotFoundException, Res } from '@nestjs/common';
 import type { Response } from 'express';
@@ -79,7 +80,9 @@ export class ReceiptChannelsController {
     const barcodes=await receiptExportBarcodes(this.prisma,rows,boxes);
     const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('Приёмка');
     sheet.columns=[{header:'Дата приёмки (МСК)',key:'date',width:23},{header:'Короб',key:'box',width:24},{header:'Товар',key:'name',width:45},{header:'Артикул',key:'article',width:28},{header:'Размер',key:'size',width:16},{header:'Штрихкод',key:'barcode',width:20},{header:'Принято, шт.',key:'quantity',width:16}];
-    for(const r of rows)sheet.addRow({date:r.createdAt.toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}),box:boxes.get(r.boxId!),name:r.sku.name,article:r.sku.article,size:r.sku.size,barcode:barcodes.get(r.id)??'',quantity:r.quantity});
+    // FIX: own-WMS linked receipts export final accepted quantities, without movement rows.
+    const finalRows=process.env.WMS_RECEIPT_LINKED_ADJUSTMENTS_ENABLED==='true'&&doc.boxes.some(b=>b.linkedAdjustmentIds?.length)?receiptFinalQuantities(rows):rows;
+    for(const r of finalRows)sheet.addRow({date:r.createdAt.toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}),box:boxes.get(r.boxId!),name:r.sku.name,article:r.sku.article,size:r.sku.size,barcode:barcodes.get(r.id)??'',quantity:r.quantity});
     sheet.getRow(1).font={bold:true};sheet.views=[{state:'frozen',ySplit:1}];
     response.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');response.setHeader('Content-Disposition',`attachment; filename="receipt-${id}.xlsx"`);response.send(Buffer.from(await workbook.xlsx.writeBuffer()));
   }
