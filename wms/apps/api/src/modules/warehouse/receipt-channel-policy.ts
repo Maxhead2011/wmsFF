@@ -1,5 +1,6 @@
 import { receiptStockIndexEnabled, readIndexedReceiptState } from './receipt-stock-index';
 import { receiptReportEvidence } from './receipt-report-evidence';
+import { applyReceiptLinkedAdjustments } from './receipt-linked-adjustments';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@prisma/client';
@@ -11,7 +12,7 @@ export const receiptOrderKey = (t: { marketplace?: string; connectionId: string;
 export type ReceiptRule = { id: string; clientId: string; warehouseId: string; sourceDocument: string;
   fbs: boolean; fbo: boolean; protectedOrders: string[]; changedAt: string; revision: number; stockAvailable?: boolean };
 type Receipt = { id: string; clientId: string; warehouseId: string; sourceDocument: string; date: string;
-  boxes: Array<{ id: string; code: string; status: string; receiptDocument?: string }>; received: number; current: boolean; lastActivity: string };
+  boxes: Array<{ id: string; code: string; status: string; receiptDocument?: string; linkedAdjustmentIds?: string[] }>; received: number; current: boolean; lastActivity: string };
 export const receiptSeries = (code:string,at:Date) => `SERIES:${at.getUTCFullYear()}:${code.replace(/_[0-9]+$/, '')}`;
 const idFor = (client: string, warehouse: string, document: string) => createHash('sha256').update(JSON.stringify([client,warehouse,document])).digest('hex').slice(0,32);
 
@@ -47,6 +48,8 @@ export async function receiptDocuments(db: Db, clientId: string, warehouseId: st
   for(const m of movements){if(!m.boxId)continue;const document=m.sourceDocument||`BOX:${m.boxId}`;
     if(latest.get(m.boxId)?.document!==document)continue;
     const box=byId.get(m.boxId);if(!box)continue;const row=groups.get(idFor(clientId,warehouseId,assignments.get(box.id)?.series||receiptSeries(box.code,m.createdAt)));if(row)row.received+=m.quantity;}
+  // FIX: reporting links do not alter stock approval, routing, or original receipt operations.
+  if(report)await applyReceiptLinkedAdjustments(db,clientId,warehouseId,[...groups.values()]);
   return [...groups.values()].filter(g=>g.current||!since||new Date(g.date)>=since).sort((a,b)=>Number(b.current)-Number(a.current)||b.lastActivity.localeCompare(a.lastActivity));
 }
 
