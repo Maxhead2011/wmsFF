@@ -1,0 +1,20 @@
+{
+  "base": "sha256:037a1fea30d6cbb89f499d1bfeb8297634568dee1bcf076431d0c955c9791351",
+  "image": "sha256:f41eabfd7540e6c967d6d9d119a20d3a2aebf1eec888cf9378ec63f447960385",
+  "changedFiles": {
+    "/app/apps/api/dist/modules/warehouse/receipt-channel-policy.js": "4c56904d106130494016c341fedc6ec6fd8d0cd3563827b56ab2f5615ca90bbd",
+    "/app/apps/api/dist/modules/warehouse/receipt-channels.controller.js": "56ccaedb4b6b5004ad4ceac488b0e49795b8f1ef4fce72d7da2ac6f9e80d0baa",
+    "/app/apps/api/dist/modules/warehouse/receipt-linked-adjustments.js": "ff4e5584e4675093ae64c5f518f30e2f32417e14f4e2fc79df7184af785d07cf"
+  },
+  "runtime": {
+    "passed": 3,
+    "report": 961,
+    "xlsx": 961,
+    "disabled": 953,
+    "stockWrites": 0
+  },
+  "pr": 887,
+  "published": true,
+  "otherContainersUnchanged": true,
+  "flag": "WMS_RECEIPT_LINKED_ADJUSTMENTS_ENABLED=true"
+}
