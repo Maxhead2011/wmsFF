@@ -32,8 +32,12 @@ export async function scanWbFabric(service:any, task:any, barcode:string, expect
       throw new ConflictException('Неверный ШК товара. Метры не списаны.');
     if(!Number.isSafeInteger(expected) || Number(expected)<0 || Number(expected)>line.confirmedUnits)
       throw new ConflictException('Обновите счётчик сканирования.');
+    // FIX: a validated rescan restores lost barcode proof without another production debit.
+    if(line.remainingUnits===0) {
+      if(fresh.barcode===barcode) return fresh;
+      return tx.fbsTsdAssembly.update({where:{id:fresh.id},data:{barcode,errorMessage:null}});
+    }
     if(Number(expected)<line.confirmedUnits) return fresh;
-    if(line.remainingUnits===0) return fresh;
     await recordFabricScan(tx,fresh,line.lineId,line.confirmedUnits+1,user,service.fbsTsdDeviceCode(undefined,user));
     return tx.fbsTsdAssembly.update({where:{id:fresh.id},data:{
       barcode:line.remainingUnits===1?barcode:null,errorMessage:null,
