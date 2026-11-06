@@ -1,3 +1,5 @@
+Published PR875 (2026-11-06): separate pro.logoff.wms.tsd.servers channel updated254->256 on new WMS. The UPDATE_APP command reached a254-network terminal, but its feed previously offered254. APK signed with matching70715af4 certificate, Android328 and feed4 tests passed; public HTTPS metadata/package/hash verified. Ordinary256 feed, API, data and all containers unchanged. Android installation confirmation may still be required; physical terminal install not verified. This supersedes the previous note that servers254 feed is retained.
+
 ## Servers-package update feed256 (candidate)
 
 The live terminal receiving UPDATE_APP on2026-11-06 reports0.1.254-network. Its separate `pro.logoff.wms.tsd.servers` channel still offers254, so ordinary package256 cannot update it. Build LOGOFF servers256 from the already merged source;328 tests passed, package/version and certificate70715af4 verified. Add versioned download and update only server-choice JSON; ordinary256 and API unchanged. Four feed isolation/drift tests passed. Android may require installation confirmation; command delivery does not prove silent-install privileges.
