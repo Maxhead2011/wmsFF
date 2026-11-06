@@ -111,3 +111,11 @@ export async function tryAssignFabricTask(service: any, clientId: string, order:
   });
   return { handled:true,task };
 }
+export async function assignFabricTaskForQueue(...args: Parameters<typeof tryAssignFabricTask>): Promise<{handled:boolean;task?:any;blockedReason?:string}> {
+  // FIX: business conflicts must reach the picker instead of the marketplace fallback.
+  try { return await tryAssignFabricTask(...args); }
+  catch (error) {
+    if (error instanceof ConflictException) return {handled:true,blockedReason:error.message};
+    throw error;
+  }
+}

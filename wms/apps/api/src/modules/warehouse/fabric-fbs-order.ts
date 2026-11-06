@@ -19,14 +19,14 @@ function composition(lines: FabricOrderLine[]): string {
     [l.lineId, l.skuId, l.warehouseId, l.material, l.color, l.lengthMm, l.units]));
 }
 // FIX: all lines reserve atomically in memory; the caller persists once under the client lock.
-export function reserveFabricOrder(input: FabricOrderLedger, owner: FabricOrderIdentity, lines: FabricOrderLine[]): FabricOrderLedger {
+export function reserveFabricOrder(input: FabricOrderLedger, owner: FabricOrderIdentity, lines: FabricOrderLine[], receivedAfter: ReadonlyMap<string, number> = new Map()): FabricOrderLedger {
   const key = fabricOrderKey(owner);
   if (!lines.length || lines.some(l => typeof l.lineId !== 'string' || !l.lineId.trim())) throw new Error('Missing fabric order lines');
   if (new Set(lines.map(l => l.lineId)).size !== lines.length) throw new Error('Duplicate fabric order line');
   const saved = input.fbsOrders?.[key];
   if (saved && composition(saved.lines) !== composition(lines)) throw new Error('Fabric order composition changed');
   let next: FabricOrderLedger = structuredClone(input);
-  for (const line of lines) next = reserveFabric(next, { ...line, key: lineKey(owner, line.lineId) });
+  for (const line of lines) next = reserveFabric(next, { ...line, key: lineKey(owner, line.lineId) }, receivedAfter.get(line.lineId));
   (next.fbsOrders ??= {})[key] = { identity: structuredClone(owner), lines: structuredClone(lines) };
   return next;
 }

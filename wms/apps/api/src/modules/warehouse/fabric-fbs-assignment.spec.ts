@@ -66,3 +66,58 @@ describe('fabric task assignment', () => {
     expect(f.claim).not.toHaveBeenCalled(); expect(f.tx.systemSetting.update).not.toHaveBeenCalled();
   });
 });
+
+// TEST: historical debt cannot consume or block independently received later rolls.
+describe('fabric receipts after disputed shipments', () => {
+  function pendingFixture() {
+    const f = fixture();
+    f.ledger().shipmentPending = [{ key: 'wb:shipment', warehouseId: 'warehouse', material: 'SATIN', color: 'white', meters: 264 }];
+    f.ledger().rolls.unshift({ ...f.ledger().rolls[0], id: 'old', createdAt: '2026-10-20', remainingMm: 500000 });
+    f.tx.wbOrderShipment = { findMany: vi.fn().mockResolvedValue([{ id: 'shipment', shippedAt: new Date('2026-10-21T09:05:28Z') }]) };
+    return f;
+  }
+  it('reserves later receipts and preserves old rolls and pending debt', async () => {
+    const f = pendingFixture(), before = structuredClone(f.ledger());
+    await assignFabricOrder(f.tx, command, f.claim, true);
+    expect(f.ledger().fbsReservations[0].rollIds).toEqual(['roll', 'roll']);
+    expect(f.ledger().rolls).toEqual(before.rolls);
+    expect(f.ledger().shipmentPending).toEqual(before.shipmentPending);
+    expect(f.tx.wbOrderShipment.findMany.mock.calls[0][0].where).toMatchObject({ clientId: 'client', warehouseId: 'warehouse', id: { in: ['shipment'] } });
+  });
+  it('keeps repeated assignment idempotent and respects other reservations', async () => {
+    const f = pendingFixture();
+    f.ledger().fbsReservations = [{ ...command.lines[0], key: 'other', units: 1, lengthMm: 3000, rollIds: ['roll'], confirmedUnits: 0, released: false, operations: [] }];
+    await assignFabricOrder(f.tx, command, f.claim, true);
+    const once = structuredClone(f.ledger());
+    await assignFabricOrder(f.tx, command, f.claim, true);
+    expect(f.ledger()).toEqual(once);
+    expect(f.ledger().fbsReservations).toHaveLength(2);
+  });
+  it('uses the latest of all unresolved shipment dates', async () => {
+    const f = pendingFixture();
+    f.ledger().shipmentPending.push({ ...f.ledger().shipmentPending[0], key: 'wb:later' });
+    f.tx.wbOrderShipment.findMany.mockResolvedValue([{ id: 'shipment', shippedAt: new Date('2026-10-21') }, { id: 'later', shippedAt: new Date('2026-11-06') }]);
+    await expect(assignFabricOrder(f.tx, command, f.claim, true)).rejects.toThrow('Недостаточно');
+    expect(f.claim).not.toHaveBeenCalled();
+  });
+  it('never falls back to old stock when later receipts are insufficient', async () => {
+    const f = pendingFixture(); f.ledger().rolls[1].remainingMm = 3000;
+    await expect(assignFabricOrder(f.tx, command, f.claim, true)).rejects.toThrow();
+    expect(f.claim).not.toHaveBeenCalled(); expect(f.tx.systemSetting.update).not.toHaveBeenCalled();
+  });
+  it('excludes receipts at the exact shipment timestamp', async () => {
+    const f = pendingFixture(); f.ledger().rolls[1].createdAt = '2026-10-21T09:05:28Z';
+    await expect(assignFabricOrder(f.tx, command, f.claim, true)).rejects.toThrow();
+    expect(f.claim).not.toHaveBeenCalled();
+  });
+  it.each([{ proof: [] }, { proof: [{ id: 'shipment', shippedAt: new Date('invalid') }] }])('blocks missing or invalid shipment proof', async ({ proof }) => {
+    const f = pendingFixture(); f.tx.wbOrderShipment.findMany.mockResolvedValue(proof);
+    await expect(assignFabricOrder(f.tx, command, f.claim, true)).rejects.toThrow('сверка');
+    expect(f.claim).not.toHaveBeenCalled();
+  });
+  it('blocks unsupported pending keys', async () => {
+    const f = pendingFixture(); f.ledger().shipmentPending[0].key = 'unknown';
+    await expect(assignFabricOrder(f.tx, command, f.claim, true)).rejects.toThrow('сверка');
+    expect(f.claim).not.toHaveBeenCalled();
+  });
+});

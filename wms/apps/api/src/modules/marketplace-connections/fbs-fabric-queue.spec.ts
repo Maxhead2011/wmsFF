@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { tryAssignFabricTask } from './fbs-fabric-queue';
+import { tryAssignFabricTask, assignFabricTaskForQueue } from './fbs-fabric-queue';
 vi.mock('./marketplace-product-links', () => ({ozonLinkedSkus: async (_db:any,_c:any,_s:any,skus:any)=>skus}));
 afterEach(()=>vi.unstubAllEnvs());
 function fixture(marketplace='WILDBERRIES') {
@@ -91,5 +91,25 @@ describe('fabric queue integration',()=>{
     }
     const f=fixture('OZON');f.order.itemCount=3;
     await expect(tryAssignFabricTask(f.service,'client',f.order,null,f.user,'device')).rejects.toThrow('Состав');
+  });
+});
+
+// TEST: local material blocks retain their reason and never become marketplace errors.
+describe('fabric queue block reporting',()=>{
+  it('reports pending consumption without changing the task or ledger',async()=>{
+    const f=fixture();
+    f.ledger().shipmentPending=[{warehouseId:'warehouse',material:'SATIN',color:'white',meters:3}];
+    const result=await assignFabricTaskForQueue(f.service,'client',f.order,{id:'old',status:'WAITING_STOCK'},f.user,'device');
+    expect(result).toEqual({handled:true,blockedReason:'По этому материалу требуется сверка предыдущего расхода.'});
+    expect(f.db.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+    expect(f.db.systemSetting.update).not.toHaveBeenCalled();
+  });
+  it('does not disclose unexpected infrastructure errors as a material block',async()=>{
+    const f=fixture();f.db.sku.findMany.mockRejectedValue(new Error('private database failure'));
+    await expect(assignFabricTaskForQueue(f.service,'client',f.order,null,f.user,'device')).rejects.toThrow('private database failure');
+  });
+  it('keeps disabled installations on their original path',async()=>{
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','false');
+    expect(await assignFabricTaskForQueue(null,'client',null,null,null,'device')).toEqual({handled:false});
   });
 });
