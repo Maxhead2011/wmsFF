@@ -113,3 +113,15 @@ describe('fabric queue block reporting',()=>{
     expect(await assignFabricTaskForQueue(null,'client',null,null,null,'device')).toEqual({handled:false});
   });
 });
+
+// TEST: releasing a terminal may clear legacy source fields, not the fabric reservation.
+it('restores no-box source when reclaiming a fabric task without erasing scan proof',async()=>{
+  const f=fixture();await tryAssignFabricTask(f.service,'client',f.order,null,f.user,'device');
+  const before=structuredClone(f.ledger());
+  f.db.fbsTsdAssembly.updateMany.mockResolvedValue({count:1});
+  f.db.fbsTsdAssembly.findUnique=vi.fn().mockResolvedValue({id:'old',status:'IN_PROGRESS'});
+  await tryAssignFabricTask(f.service,'client',f.order,{id:'old',status:'RELEASED',sourceArticle:'__FABRIC_FBS__',boxCode:null,barcode:'proof'},f.user,'device');
+  const data=f.db.fbsTsdAssembly.updateMany.mock.calls[0][0].data;
+  expect(data.boxCode).toBe('БЕЗ КОРОБА');expect(data.sourceBoxPending).toBe(false);
+  expect(data).not.toHaveProperty('barcode');expect(f.ledger()).toEqual(before);
+});

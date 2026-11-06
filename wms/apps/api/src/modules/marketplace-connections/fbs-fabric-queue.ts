@@ -91,7 +91,9 @@ export async function tryAssignFabricTask(service: any, clientId: string, order:
       let claimed;
       if (existing) {
         const assignmentData = existing.sourceArticle === FABRIC_TASK_MARKER
-          ? {status:'IN_PROGRESS',deviceCode,workerUserId:user.id,workerName:user.name,errorMessage:null}
+          ? {status:'IN_PROGRESS',deviceCode,workerUserId:user.id,workerName:user.name,errorMessage:null,
+              // FIX: restore WB's virtual source after terminal release without resetting scans.
+              ...(order.marketplace === 'WILDBERRIES' ? {boxId:null,boxCode:data.boxCode,sourceBoxPending:false} : {})}
           : data;
         const changed = await tx.fbsTsdAssembly.updateMany({where:{id:existing.id,status:existing.status,updatedAt:existing.updatedAt},data:assignmentData});
         if (changed.count !== 1) throw new ConflictException('Заказ уже взят другим сотрудником. Обновите очередь.');
