@@ -630,3 +630,7 @@ ReceiptProgressActivityTest воспроизводятся также на ис�
 Повторная read-only сверка сервера: API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04;
 web sha256:b62f4d4b5d6f7f0f067d75ad9240b724d3160fdcc278f283ef171cc0780627e3.
 Production, флаги и бизнес-данные в ходе проверки не менялись.
+
+FBS fabric waiting-stock regression: fbs-fabric-queue.spec.ts verifies assignment from raw rolls without consumption and rejection of five physical-evidence fields. Six new cases failed before the fix; 14 focused and 4439 API tests passed (9 skipped; integration excluded). Targeted TypeScript passed. Full TypeScript is blocked by existing generated Prisma types missing Lamoda relabel fields.
+
+Waiting-stock release candidate: exact one-file overlay verified against PR870 API, runtime assignment/evidence/disabled checks passed; existing route and scan-capability runtime checks passed. All 4439 API tests passed again (9 skipped, integration excluded). No APK, web, environment or stock edits in deployment.

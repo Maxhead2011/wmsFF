@@ -655,3 +655,7 @@ ReceiptProgressActivityTest воспроизводятся также на ис�
 Повторная read-only сверка сервера: API sha256:451665ebbe686df5fb0ed19596cf68db06d58d7e538a74fe3a20d3f4f2621b04;
 web sha256:b62f4d4b5d6f7f0f067d75ad9240b724d3160fdcc278f283ef171cc0780627e3.
 Production, флаги и бизнес-данные в ходе проверки не менялись.
+
+FBS fabric queue (prepared, not published): tryAssignFabricTask admits untouched WAITING_STOCK tasks created by automatic finished-stock reservation. Existing physical evidence checks and atomic claim stay intact; disabled installations unchanged. No marketplace or stock mutation in this code change.
+
+Release tooling for the waiting-stock fix: scripts/releases/fbs-fabric-waiting/runtime.cjs validates the built API without DB access; release.py stages a one-module overlay and publishes only with merged PR proof, current-image/compose checks, release locks and automatic rollback.
