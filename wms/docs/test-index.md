@@ -1,3 +1,7 @@
+## Servers-package update feed256 (candidate)
+
+The live terminal receiving UPDATE_APP on2026-11-06 reports0.1.254-network. Its separate `pro.logoff.wms.tsd.servers` channel still offers254, so ordinary package256 cannot update it. Build LOGOFF servers256 from the already merged source;328 tests passed, package/version and certificate70715af4 verified. Add versioned download and update only server-choice JSON; ordinary256 and API unchanged. Four feed isolation/drift tests passed. Android may require installation confirmation; command delivery does not prove silent-install privileges.
+
 Published PR873 (2026-11-06): new WMS HTTPS `77.37.144.211/downloads/logoff-tsd.json` advertises signed256 for package pro.logoff.wms.tsd; versioned APK and logoff-tsd.apk aliases installed. Public TLS, metadata and APK SHA256 verified; separate servers254 feed unchanged. Nginx syntax valid, Docker containers unchanged. Existing API/web baseline remains PR870/PR868. Two route-scope tests passed. Physical TSD update pending. Old domain wms.logoff.pro was unreachable from this workstation; its HTTP upstream config was not changed.
 
 ## New WMS TSD256 update feed (release preparation)
