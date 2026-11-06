@@ -32,7 +32,8 @@ export async function assignFabricOrder<T>(
       }
     }
     const items = await tx.clientRequestItem.findMany({ where: { requestId: request.id }, include: { sku: true } });
-    const pending = (raw as FabricOrderLedger & { shipmentPending?: Array<{ warehouseId: string; material: string; color: string; meters: number }> }).shipmentPending ?? [];
+    const pending = (raw as FabricOrderLedger & { shipmentPending?: Array<{ key?: string; warehouseId: string; material: string; color: string; meters: number }> }).shipmentPending ?? [];
+    const receivedAfter = new Map<string, number>();
     const currentKey = fabricOrderKey(command.owner);
     const orders = (raw as FabricOrderLedger).fbsOrders ?? {};
     for (const line of command.lines) {
@@ -57,11 +58,34 @@ export async function assignFabricOrder<T>(
         }
       }
       if (committed + line.units > item.quantity) throw new ConflictException('Количество позиции уже зарезервировано для других заказов.');
-      if (pending.some(p => p.warehouseId === line.warehouseId && p.material === line.material && p.color === line.color && p.meters > 0)) {
-        throw new ConflictException('По этому материалу требуется сверка предыдущего расхода.');
+      const disputed = pending.filter(p => p.warehouseId === line.warehouseId && p.material === line.material && p.color === line.color && p.meters > 0);
+      if (disputed.length) {
+        // FIX: resolve immutable shipment dates under the same client ledger lock.
+        // Unknown/FBO evidence fails closed; never spend new receipts to erase old debt.
+        if (disputed.some(p => !p.key?.startsWith('wb:') || p.key.length <= 3)) {
+          throw new ConflictException('По этому материалу требуется сверка предыдущего расхода.');
+        }
+        const ids = [...new Set(disputed.map(p => p.key!.slice(3)))];
+        const shipments = await tx.wbOrderShipment.findMany({
+          where: { clientId: command.clientId, warehouseId: line.warehouseId, id: { in: ids } },
+          select: { id: true, shippedAt: true },
+        });
+        const dates = ids.map(id => shipments.find(s => s.id === id)?.shippedAt?.getTime());
+        if (dates.some(date => date === undefined || !Number.isFinite(date))) {
+          throw new ConflictException('По этому материалу требуется сверка предыдущего расхода.');
+        }
+        receivedAfter.set(line.lineId, Math.max(...dates as number[]));
       }
     }
-    const ledger = reserveFabricOrder(raw as FabricOrderLedger, command.owner, command.lines);
+    let ledger: FabricOrderLedger;
+    try {
+      ledger = reserveFabricOrder(raw as FabricOrderLedger, command.owner, command.lines, receivedAfter);
+    } catch (error) {
+      if (receivedAfter.size && error instanceof Error && ['Insufficient continuous fabric', 'Fabric reservation requires reconciliation'].includes(error.message)) {
+        throw new ConflictException('Недостаточно свободной ткани из приходов после спорных отгрузок. Старый расход остаётся на сверке.');
+      }
+      throw error;
+    }
     const result = await claim(tx, ledger);
     return { ledger, result };
   });

@@ -58,8 +58,10 @@ export function reservedFabricMm(state: FabricLedger, rollId: string): number {
   return (state.fbsReservations ?? []).reduce((sum, r) => sum + (r.released ? 0 :
     r.rollIds.slice(r.confirmedUnits).filter(id => id === rollId).length * r.lengthMm), 0);
 }
-export function reserveFabric(state: FabricLedger, demand: FabricDemand): FabricLedger {
+export function reserveFabric(state: FabricLedger, demand: FabricDemand, receivedAfter?: number): FabricLedger {
   validateFabricLedger(state);
+  // FIX: only independently received rolls may cover new orders after disputed shipments.
+  if (receivedAfter !== undefined && !Number.isFinite(receivedAfter)) throw new Error('Invalid receipt cutoff');
   integer(demand.lengthMm, 1, 100000); integer(demand.units, 1, 500);
   if (![demand.key, demand.warehouseId, demand.material, demand.color, demand.skuId].every(v => typeof v === 'string' && v.trim())) {
     throw new Error('Incomplete fabric identity');
@@ -67,11 +69,14 @@ export function reserveFabric(state: FabricLedger, demand: FabricDemand): Fabric
   const existing = state.fbsReservations?.find(r => r.key === demand.key);
   if (existing) {
     if (!same(existing, demand) || existing.released) throw new Error('Fabric reservation conflict');
+    if (receivedAfter !== undefined && existing.rollIds.slice(existing.confirmedUnits).some(id =>
+      Date.parse(state.rolls.find(r => r.id === id)!.createdAt) <= receivedAfter)) throw new Error('Fabric reservation requires reconciliation');
     return copy(state);
   }
   const next = copy(state);
   const rolls = next.rolls.filter(r => !r.writtenOffAt && r.warehouseId === demand.warehouseId &&
-    r.material === demand.material && r.color === demand.color)
+    r.material === demand.material && r.color === demand.color &&
+    (receivedAfter === undefined || Date.parse(r.createdAt) > receivedAfter))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const rollIds: string[] = [];
   for (const roll of rolls) {
