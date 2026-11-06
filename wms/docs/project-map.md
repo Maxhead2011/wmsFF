@@ -1,3 +1,5 @@
+Prepared stock export correction (2026-11-06): Lukin full export retains placement visibility and does not subtract active reservations. Product-label selection prefers an unambiguous 13-digit SKU barcode over marking GTIN for Lukin only; other clients are unchanged. UI explains full/reserved mode. API4461 passed/9 skipped (DB integration excluded); web595 passed/2 skipped; exact browser initial/reload/search checks3 passed with one bootstrap. Runtime delta is API2/web2, no stock or card writes.
+
 Published PR881 (2026-11-06): WB fabric reassignment restores the virtual source; validated rescan restores barcode proof without a second debit. API4455 passed/9 skipped (DB integration excluded), targeted TypeScript and exact runtime checks passed. All 744 live files match candidate; API sha256:919ffad45bba3ca5f996d91009f9fb6be9b4f8d30f76a21d03af93bc604a2f27. Read-only order6204727939 proof retains one confirmed5m operation. Web/APK/environment/sold WMS and business records unchanged. Physical TSD retry pending. Baseline `2026-11-06-fabric-reassigned-source`; sourceParityVerified=false.
 
 ## Prepared: fabric task source after reassignment (2026-11-06)

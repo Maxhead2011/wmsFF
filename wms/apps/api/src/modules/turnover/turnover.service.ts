@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { stockExportBarcode } from './stock-export-barcode';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { InventoryLockService } from '../../common/inventory/inventory-lock.service';
 import { BoxCodePolicyService } from '../../common/boxes/box-code-policy.service';
@@ -1438,7 +1439,7 @@ export class TurnoverService {
     const rows = balances
       .map((balance) => {
         const barcodes = balance.sku.barcodes.map((barcode) => barcode.value).filter(Boolean);
-        const primaryBarcode = balance.sku.barcodes.find((barcode) => barcode.isPrimary)?.value ?? barcodes[0] ?? null;
+        const primaryBarcode = stockExportBarcode(clientId, balance.sku.barcodes);
 
         return {
           position: 0,

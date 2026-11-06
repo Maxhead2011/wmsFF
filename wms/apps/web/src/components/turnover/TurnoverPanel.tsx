@@ -1053,9 +1053,10 @@ function StockExportSection({
               checked={ignoreActiveRequests}
               onChange={(event) => onIgnoreActiveRequestsChange(event.target.checked)}
             />
-            <span>Игнорировать текущие заявки и скачать полный остаток</span>
+            <span>Скачать полный остаток вместе с резервами</span>
           </label>
           <small>
+            С галочкой резервы не вычитаются. Ограничения видимости коробов сохраняются.
             Если галочка снята, WMS вычтет товары из активных заявок клиента и строки с нулевым доступным остатком не попадут в Excel.
           </small>
         </div>

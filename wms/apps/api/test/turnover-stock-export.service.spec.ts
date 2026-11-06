@@ -5,16 +5,16 @@ import type { AuthUser } from '../src/modules/auth/auth.types';
 import { TurnoverService } from '../src/modules/turnover/turnover.service';
 
 describe('TurnoverService stock export reservations', () => {
-  it.each(['ADMIN','CLIENT'])('subtracts outbound reservations for %s readers', async role => {
+  it.each([['ADMIN',false],['CLIENT',false],['CLIENT',true]])('exports stock for %s full=%s', async (role,full) => {
     const prisma = {
       client: {
-        findUnique: vi.fn().mockResolvedValue({ id: 'client-1', code: 'CL-1', name: 'Client' }),
+        findUnique: vi.fn().mockResolvedValue({ id: 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9', code: 'CL-1', name: 'Client' }),
       },
       stockBalance: {
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'balance-1',
-            clientId: 'client-1',
+            clientId: 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9',
             skuId: 'sku-1',
             boxId: 'box-1',
             palletId: null,
@@ -53,7 +53,7 @@ describe('TurnoverService stock export reservations', () => {
       roleCodes: [role],
       permissionCodes: role === 'ADMIN' ? ['system:admin'] : ['stock:read'],
       clientScopeMode: role === 'ADMIN' ? 'ALL' : 'LIMITED',
-      clientIds: ['client-1'],
+      clientIds: ['c76b78f9-1b83-4e9b-bee3-bc28336ee1c9'],
       writableClientIds: [],
     };
 
@@ -63,12 +63,20 @@ describe('TurnoverService stock export reservations', () => {
       expect(prisma.client.findUnique).not.toHaveBeenCalled();
       expect(prisma.stockBalance.findMany).not.toHaveBeenCalled();
     }
-    await service.getStockXlsx({ clientId: 'client-1' }, user);
+    await service.getStockXlsx({ clientId: 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9',ignoreActiveRequests:full?'true':'false' }, user);
+    // TEST: full export keeps placement visibility while skipping reservation subtraction.
+    if(full) {
+      const where=JSON.stringify(prisma.stockBalance.findMany.mock.calls[0][0]);
+      expect(where).toContain('storagePlacement');
+      expect(where).toContain('archived');
+      expect(prisma.clientRequest.findMany).not.toHaveBeenCalled();
+      return;
+    }
 
     expect(prisma.clientRequest.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
-          clientId: 'client-1',
+          clientId: 'c76b78f9-1b83-4e9b-bee3-bc28336ee1c9',
           type: 'OUTBOUND',
           status: { in: [ClientRequestStatus.IN_WORK] },
         },
