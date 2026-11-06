@@ -11,6 +11,7 @@ import { PasswordService } from '../auth/password.service';
 import { CreateTsdDeviceDto } from './dto/create-tsd-device.dto';
 import { LoginTsdDeviceDto } from './dto/login-tsd-device.dto';
 import { TsdMonitorMessages } from './tsd-monitor-messages';
+import { TsdIdleSessionService } from '../auth/tsd-idle-session.service';
 
 const FBS_TSD_RESERVED_STATUS = 'RESERVED';
 const FBS_TSD_AUTO_RESERVATION_DEVICE = 'AUTO:FBS:PALLET_SORT';
@@ -258,14 +259,21 @@ export class TsdDeviceService {
 
   async login(dto: LoginTsdDeviceDto) {
     if (dto.login !== undefined || dto.password !== undefined) {
-      return this.loginByUserCredentials(dto);
+      const login=await this.loginByUserCredentials(dto);
+      return dto.idleSession===true ? new TsdIdleSessionService(this.prisma,this.tokens).start(login) : login;
     }
 
     if (dto.code !== undefined || dto.secret !== undefined) {
-      return this.loginByDeviceSecret(dto);
+      const login=await this.loginByDeviceSecret(dto);
+      return dto.idleSession===true ? new TsdIdleSessionService(this.prisma,this.tokens).start(login) : login;
     }
 
     throw new UnauthorizedException('Укажите логин/пароль или код/секрет ТСД.');
+  }
+
+  async recordSessionActivity(authorization:string,body:{activityAgeMs?:unknown}) {
+    const token=authorization?.startsWith('Bearer ') ? authorization.slice(7) : '';
+    return new TsdIdleSessionService(this.prisma,this.tokens).activity(token,body);
   }
 
   private async loginByUserCredentials(dto: LoginTsdDeviceDto) {

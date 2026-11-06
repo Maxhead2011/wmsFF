@@ -4,6 +4,7 @@ import { UserStatus } from '@prisma/client';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { SystemSettingsService } from '../../../common/settings/system-settings.service';
 import { AccessTokenService } from '../access-token.service';
+import { TsdIdleSessionService } from '../tsd-idle-session.service';
 import type { AuthUser } from '../auth.types';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { UserSessionService } from '../user-session.service';
@@ -45,7 +46,8 @@ export class AuthGuard implements CanActivate {
       user?: AuthUser;
     }>();
     const token = this.extractBearerToken(request.headers.authorization);
-    const payload = this.tokens.verify(token);
+    const payload = this.tokens.verify(token, true);
+    if (payload.tsdIdleSessionId) await new TsdIdleSessionService(this.prisma,this.tokens).assertActive(token,payload);
 
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },

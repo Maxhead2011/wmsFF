@@ -1,5 +1,5 @@
 import { onlinePlanView } from './online-plan-view';
-import { Body, Controller, Delete, Get, Param, Post, Query, Res, ServiceUnavailableException, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Post, Query, Res, ServiceUnavailableException, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -874,6 +874,13 @@ export class TsdDeviceController {
   @Public()
   login(@Body() dto: LoginTsdDeviceDto) {
     return this.devices.login(dto);
+  }
+
+  // FIX: explicit physical-input renewal; never invoked by monitoring or scan retries.
+  @Post('session/activity')
+  @ApiBearerAuth()
+  activity(@Headers('authorization') token:string,@Body() body:{activityAgeMs?:unknown}) {
+    return this.devices.recordSessionActivity(token,body);
   }
 }
 

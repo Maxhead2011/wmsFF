@@ -3,6 +3,7 @@ package pro.logoff.wms.tsd.network;
 import java.util.List;
 
 public class TsdLoginResponse {
+    public int idleTimeoutSeconds;
     public String accessToken;
     public String tokenType;
     public TsdDeviceInfo device;

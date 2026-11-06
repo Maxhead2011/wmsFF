@@ -78,6 +78,7 @@ import com.journeyapps.barcodescanner.DecoratedBarcodeView;
 
 import pro.logoff.wms.tsd.auth.TsdSession;
 import pro.logoff.wms.tsd.auth.TsdSessionStore;
+import pro.logoff.wms.tsd.auth.TsdIdleSession;
 import pro.logoff.wms.tsd.data.OperationOutbox;
 import pro.logoff.wms.tsd.data.OperationOutboxCounts;
 import pro.logoff.wms.tsd.data.PendingOperation;
@@ -379,6 +380,43 @@ public class MainActivity extends Activity {
         }
     };
 
+    private TsdIdleSession idleSession;
+    private boolean idleDialogShown;
+    // FIX: dialog windows have their own input dispatch and must report physical actions too.
+    boolean acceptDialogInput(){
+        if(idleSession==null)return true;
+        if(idleDialogShown)return false;
+        if(!idleSession.input()){expireIdleSession();return false;}
+        WmsApiFactory.flushIdleActivity(activeBaseUrl);return true;
+    }
+    boolean idleDialogVisible(){return idleDialogShown;}
+    private final Runnable idleCheck = new Runnable(){public void run(){
+        if(idleSession!=null&&!idleSession.check())expireIdleSession();
+        if(idleSession!=null&&!idleSession.locked())WmsApiFactory.flushIdleActivity(activeBaseUrl);
+        mainHandler.postDelayed(this,1000);
+    }};
+    // FIX: clearing authentication never clears the FBO/FBS pending journal or operation IDs.
+    private void expireIdleSession(){
+        if(idleDialogShown||isFinishing()||isDestroyed())return;
+        idleDialogShown=true;sessionStore.clear();
+        if(fboTwoStageScreen!=null)fboTwoStageScreen.close();
+        if(palletSortingScreen!=null)palletSortingScreen.close();
+        new TsdUi.DialogBuilder(this).setTitle("Войдите снова")
+            .setMessage("Вход завершён после 15 минут бездействия или истечения сессии. Неподтверждённые сканы сохранены. Войдите тем же сотрудником и откройте прежнее задание.")
+            .setCancelable(false).setPositiveButton("Перейти ко входу",(d,w)->recreate()).show();
+    }
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event){
+        if(event.getAction()==android.view.MotionEvent.ACTION_DOWN&&idleSession!=null&&!idleDialogShown&&!idleSession.input()){
+            expireIdleSession();return true;
+        }
+        return super.dispatchTouchEvent(event);
+    }
+    @Override public void onUserInteraction(){
+        super.onUserInteraction();if(idleSession!=null&&!idleDialogShown){
+            if(!idleSession.input())expireIdleSession();else WmsApiFactory.flushIdleActivity(activeBaseUrl);
+        }
+    }
+
     @Override
     protected void attachBaseContext(Context base) {
         if ("logoff".equals(BuildConfig.FLAVOR)) {
@@ -410,6 +448,14 @@ public class MainActivity extends Activity {
             uiLanguage = TsdLanguage.normalize(uiStore.getString("language", "ru"));
             phoneMode = uiStore.getBoolean("phone_mode", false);
             TsdSession startupSession = sessionStore.load();
+            if("logoff".equals(BuildConfig.FLAVOR)){
+                idleSession=new TsdIdleSession(getSharedPreferences("tsd_idle_session",MODE_PRIVATE),new TsdIdleSession.Clock(){
+                    public long elapsed(){return android.os.SystemClock.elapsedRealtime();}public long wall(){return System.currentTimeMillis();}
+                },()->mainHandler.post(this::expireIdleSession),startupSession==null?null:startupSession.authorizationHeader());
+                WmsApiFactory.idleSession(activeBaseUrl,idleSession);
+                if(!idleSession.check()){sessionStore.clear();idleSession.clear();startupSession=null;statusMessage="Войдите снова. Сохранённые сканы остаются в прежних заданиях.";}
+                mainHandler.post(idleCheck);
+            }
             if (startupSession != null && nonEmpty(startupSession.deviceCode, "")
                 .toUpperCase(Locale.ROOT).startsWith("USER:")) {
                 clearMandatoryFbsAuditState();
@@ -442,6 +488,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mainHandler.removeCallbacks(idleCheck);
         closeAssemblyScanVoice();
         if (fboTwoStageScreen != null) fboTwoStageScreen.close();
         if (kizSearchScreen != null) kizSearchScreen.close();
@@ -463,6 +510,7 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if(event.getAction()==KeyEvent.ACTION_DOWN&&idleSession!=null&&!idleDialogShown&&!idleSession.input()){expireIdleSession();return true;}
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER) {
             if (screen == Screen.FBO_TWO_STAGE && fboTwoStageScreen != null) { fboTwoStageScreen.submit(); return true; }
             if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.submit(); return true; }
@@ -581,6 +629,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         assemblyVoicePaused=false;
         super.onResume();
+        if(idleSession!=null&&!idleSession.check())expireIdleSession();
         if (
             phoneBarcodeView != null &&
             phoneScannerDialog != null &&
@@ -593,6 +642,7 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if(idleDialogShown)return;
         if(screen==Screen.STORAGE_PALLET && placementTask!=null){receiptPlacementAction(placementTask,"FINISH");return;}
         if (screen == Screen.KIZ_SEARCH && kizSearchScreen != null) { kizSearchScreen.close(); kizSearchScreen=null;renderKizMenu();return; }
         if (screen == Screen.FBO_PICK_MENU) { renderFboMenu(); return; }
@@ -9429,7 +9479,11 @@ public class MainActivity extends Activity {
             if (body == null || body.device == null) {
                 throw new IOException("Пустой ответ сервера");
             }
+            if("logoff".equals(BuildConfig.FLAVOR)&&body.idleTimeoutSeconds!=900){
+                throw new IOException("На сервере ещё не включён вход ТСД по активности. Требуется обновление API.");
+            }
             sessionStore.save(body);
+            if(idleSession!=null)idleSession.login(body.tokenType+" "+body.accessToken);
             mainHandler.post(() -> {
                 resetReceiptState();
                 clients.clear();
@@ -9526,6 +9580,7 @@ public class MainActivity extends Activity {
     }
 
     private void clearSession() {
+        if(idleSession!=null)idleSession.clear();
         clearMandatoryFbsAuditState();
         sessionStore.clear();
         // FIX: dismiss the previous employee's message immediately on logout.
@@ -10144,6 +10199,7 @@ public class MainActivity extends Activity {
             barcodeView.decodeSingle(new BarcodeCallback() {
                 @Override
                 public void barcodeResult(BarcodeResult result) {
+                    if(idleSession!=null&&!idleSession.input()){expireIdleSession();return;}
                     String scanned = result == null ? null : result.getText();
                     if (scanned == null || scanned.trim().isEmpty()) {
                         return;

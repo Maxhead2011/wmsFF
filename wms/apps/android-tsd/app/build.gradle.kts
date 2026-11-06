@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 256 // FIX: retain receipt scan times and boxes.
-            versionName = "0.1.256-fabric-scans"
+            versionCode = 258 // FIX: show WMS request number and physical unit quantity.
+            versionName = "0.1.258-request-summary"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

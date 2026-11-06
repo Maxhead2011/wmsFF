@@ -40,6 +40,14 @@ final class TsdUi {
         });
     }
     static void track(Dialog dialog) {
+        Activity owner=activity(dialog.getContext());
+        if("logoff".equals(BuildConfig.FLAVOR)&&owner instanceof MainActivity&&dialog.getWindow()!=null
+            &&!((MainActivity)owner).idleDialogVisible()){
+            pro.logoff.wms.tsd.auth.TsdIdleWindow.attach(dialog.getWindow(),((MainActivity)owner)::acceptDialogInput);
+        }
+        if("logoff".equals(BuildConfig.FLAVOR)&&owner instanceof StorageBoxTransferActivity&&dialog.getWindow()!=null){
+            pro.logoff.wms.tsd.auth.TsdIdleWindow.attach(dialog.getWindow(),((StorageBoxTransferActivity)owner)::acceptDialogInput);
+        }
         if(!enabled()||dialog.getWindow()==null)return;
         View root=dialog.getWindow().getDecorView();
         dialogs.add(new WeakReference<>(root));
