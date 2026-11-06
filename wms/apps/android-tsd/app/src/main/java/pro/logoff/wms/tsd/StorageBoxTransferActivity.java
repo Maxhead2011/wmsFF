@@ -56,6 +56,23 @@ public final class StorageBoxTransferActivity extends Activity {
     private boolean recountEnabled;
     private StorageKizRecountState recount;
     private boolean recountPending;
+    private pro.logoff.wms.tsd.auth.TsdIdleSession idleSession;
+    private final Runnable idleCheck=new Runnable(){public void run(){
+        if(idleSession!=null&&!idleSession.check()){
+            new TsdSessionStore(StorageBoxTransferActivity.this).clear();finish();return;
+        }
+        WmsApiFactory.flushIdleActivity(activeBaseUrl);mainHandler.postDelayed(this,1000);
+    }};
+    // FIX: this secondary Activity shares the same physical-input clock with MainActivity.
+    boolean acceptDialogInput(){
+        if(idleSession==null)return true;
+        if(!idleSession.input()){new TsdSessionStore(this).clear();finish();return false;}
+        WmsApiFactory.flushIdleActivity(activeBaseUrl);return true;
+    }
+    @Override public boolean dispatchTouchEvent(android.view.MotionEvent event){
+        if(event.getActionMasked()==android.view.MotionEvent.ACTION_DOWN&&!acceptDialogInput())return true;
+        return super.dispatchTouchEvent(event);
+    }
 
     @Override
     protected void attachBaseContext(android.content.Context base) {
@@ -76,6 +93,17 @@ public final class StorageBoxTransferActivity extends Activity {
             finish();
             return;
         }
+        idleSession=WmsApiFactory.idleSession(activeBaseUrl);
+        if(idleSession==null){
+            idleSession=new pro.logoff.wms.tsd.auth.TsdIdleSession(getSharedPreferences("tsd_idle_session",MODE_PRIVATE),
+                new pro.logoff.wms.tsd.auth.TsdIdleSession.Clock(){
+                    public long elapsed(){return android.os.SystemClock.elapsedRealtime();}
+                    public long wall(){return System.currentTimeMillis();}
+                },()->mainHandler.post(()->{new TsdSessionStore(this).clear();finish();}),session.authorizationHeader());
+            WmsApiFactory.idleSession(activeBaseUrl,idleSession);
+        }
+        if(!idleSession.activeFor(session.authorizationHeader())){new TsdSessionStore(this).clear();finish();return;}
+        mainHandler.post(idleCheck);
         // FIX: a pending operation always takes precedence over the newly selected mode.
         state = new StorageBoxTransferState(getIntent().getBooleanExtra(AUTO_SOURCE, false));
         if (state.autoSource()) message = "Сканируйте ШК товара, затем КИЗ. Исходный короб определит WMS.";
@@ -99,6 +127,7 @@ public final class StorageBoxTransferActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        if(event.getAction()==KeyEvent.ACTION_DOWN&&!acceptDialogInput())return true;
         if (event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN) {
             submitScan();
             return true;
@@ -577,6 +606,7 @@ public final class StorageBoxTransferActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        mainHandler.removeCallbacks(idleCheck);
         executor.shutdownNow();
         super.onDestroy();
     }

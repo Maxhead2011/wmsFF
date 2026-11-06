@@ -36,6 +36,8 @@ public class ServerSelectionTest {
         app = RuntimeEnvironment.getApplication();
         app.getSharedPreferences(ServerSettings.PREFS, 0).edit().clear().commit();
         ServerSettings.select(app, ServerSettings.MAIN);
+        pro.logoff.wms.tsd.network.WmsApiFactory.idleSession(ServerSettings.MAIN_URL,null);
+        pro.logoff.wms.tsd.network.WmsApiFactory.idleSession(ServerSettings.BACKUP_URL,null);
         for (String profile : new String[]{ServerSettings.MAIN, ServerSettings.BACKUP}) {
             new ServerScopedContext(app, profile).getSharedPreferences("logoff_wms_tsd_session", 0)
                 .edit().clear().commit();
@@ -108,6 +110,7 @@ public class ServerSelectionTest {
 
     @Test public void authenticatedOperatorMustLogOutBeforeChangingServer() throws Exception {
         saveSession(app, "main-token");
+        activeIdleSession(app,"main-token",ServerSettings.MAIN_URL);
         try (var controller = Robolectric.buildActivity(MainActivity.class)) {
             MainActivity a = controller.get(); quiet(a); controller.setup();
             var render = MainActivity.class.getDeclaredMethod("renderSettingsScreen"); render.setAccessible(true); render.invoke(a);
@@ -120,6 +123,7 @@ public class ServerSelectionTest {
     @Test public void secondaryTransferScreenUsesBackupSessionAndRoute() throws Exception {
         ServerSettings.select(app, ServerSettings.BACKUP);
         saveSession(new ServerScopedContext(app, ServerSettings.BACKUP), "backup-token");
+        activeIdleSession(new ServerScopedContext(app, ServerSettings.BACKUP),"backup-token",ServerSettings.BACKUP_URL);
         try (var controller = Robolectric.buildActivity(StorageBoxTransferActivity.class).setup()) {
             StorageBoxTransferActivity a = controller.get();
             assertFalse(a.isFinishing()); assertEquals(ServerSettings.BACKUP_URL, value(a, "activeBaseUrl"));
@@ -160,6 +164,15 @@ public class ServerSelectionTest {
         assertEquals("downloads/logoff-tsd.apk", ServerSettings.apkPath("pro.logoff.wms.tsd"));
     }
 
+    // TEST: represent an authenticated current-version terminal, not a legacy token needing re-login.
+    private static void activeIdleSession(Context context,String token,String baseUrl){
+        var gate=new pro.logoff.wms.tsd.auth.TsdIdleSession(context.getSharedPreferences("tsd_idle_session",0),
+            new pro.logoff.wms.tsd.auth.TsdIdleSession.Clock(){
+                public long elapsed(){return android.os.SystemClock.elapsedRealtime();}
+                public long wall(){return System.currentTimeMillis();}
+            },()->{},null);
+        gate.login("Bearer "+token);pro.logoff.wms.tsd.network.WmsApiFactory.idleSession(baseUrl,gate);
+    }
     private static void saveSession(Context context, String token) {
         context.getSharedPreferences("logoff_wms_tsd_session", 0).edit()
             .putString("access_token", token).putString("token_type", "Bearer")

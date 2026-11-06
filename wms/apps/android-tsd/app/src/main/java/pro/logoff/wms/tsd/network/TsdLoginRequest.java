@@ -1,6 +1,7 @@
 package pro.logoff.wms.tsd.network;
 
 public class TsdLoginRequest {
+    public Boolean idleSession = "logoff".equals(pro.logoff.wms.tsd.BuildConfig.FLAVOR) ? Boolean.TRUE : null;
     public String login;
     public String password;
     public String installationCode;

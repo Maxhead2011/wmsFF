@@ -1,6 +1,9 @@
-import { IsOptional, IsString, Length } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Length } from 'class-validator';
 
 export class LoginTsdDeviceDto {
+  @IsOptional()
+  @IsBoolean()
+  idleSession?: boolean;
   @IsOptional()
   @IsString()
   @Length(1, 200)

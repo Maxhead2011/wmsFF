@@ -6,6 +6,7 @@ import type { TokenPayload } from './auth.types';
 const TOKEN_TTL_SECONDS = 60 * 60 * 8;
 
 export type AccessTokenOptions = {
+  tsdIdleSessionId?: string;
   deviceId?: string;
   deviceCode?: string;
 };
@@ -20,6 +21,7 @@ export class AccessTokenService {
       sub: userId,
       deviceId: options.deviceId,
       deviceCode: options.deviceCode,
+      tsdIdleSessionId: options.tsdIdleSessionId,
       iat: now,
       exp: now + TOKEN_TTL_SECONDS,
     };
@@ -30,7 +32,7 @@ export class AccessTokenService {
     return `${header}.${body}.${signature}`;
   }
 
-  verify(token: string): TokenPayload {
+  verify(token: string, allowIdleSession = false): TokenPayload {
     const [header, body, signature] = token.split('.');
     if (!header || !body || !signature) {
       throw new UnauthorizedException('Некорректный access token.');
@@ -42,7 +44,9 @@ export class AccessTokenService {
     }
 
     const payload = this.decodeJson<TokenPayload>(body);
-    if (!payload.sub || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) {
+    // FIX: only AuthGuard / idle activity may defer expiry to the mandatory durable session check.
+    const idle = allowIdleSession && payload.tsdIdleSessionId && payload.deviceId && payload.deviceCode;
+    if (!payload.sub || !payload.exp || (!idle && payload.exp < Math.floor(Date.now() / 1000))) {
       throw new UnauthorizedException('Access token истек или поврежден.');
     }
 
