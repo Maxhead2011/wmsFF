@@ -1,0 +1,67 @@
+{
+  "api": {
+    "pr": 885,
+    "base": "sha256:f883125b2406f813cc5f4c61d3c21d0e7c179faf061c28ca63f5f8f8b50bdff2",
+    "image": "sha256:037a1fea30d6cbb89f499d1bfeb8297634568dee1bcf076431d0c955c9791351",
+    "changedFiles": {
+      "/app/apps/api/dist/modules/tsd/dto/login-tsd-device.dto.js": "89751249568c87443d012e443563fe53cda4e4f61e655e8a9f3aedee0d7e8a2d",
+      "/app/apps/api/dist/modules/auth/guards/auth.guard.js": "c4082d621e8e753a72a2c441f7758f321177923455d71165c4a04099b0f8f23c",
+      "/app/apps/api/dist/modules/tsd/tsd-device.controller.js": "c883dae89d71a1279bf9aa3f8dea7fb0260843b32c620cf2d9f5bdaa8d790641",
+      "/app/apps/api/dist/modules/auth/guards/tsd-warehouse-keeper-capability.js": "82aab328882529764d0e2cdacf90641f42725d42804dccb3d4b35923f6e37a73",
+      "/app/apps/api/dist/modules/auth/access-token.service.js": "793608c91571bab0e3e35f46b1216e0c1c0d95ea489dffc54e6eb058e663ba30",
+      "/app/apps/api/dist/modules/administration/administration-internal-api.service.js": "e83d1671accd066fa2468a952cb7a0ced0fdfe0e6a0c198d4ee64afe1f717ccd",
+      "/app/apps/api/dist/modules/tsd/tsd-device.service.js": "aaa8362cdffcac3bfaa80e8f7cac0a2502a4b3309c852b8f207ffce092887004",
+      "/app/apps/api/dist/modules/auth/tsd-idle-session.service.js": "8c63050d53ccca069e89c915fcaa98344c067a86992a1a9953cf35f28ecee38b"
+    },
+    "http": {
+      "passed": 12,
+      "login": true,
+      "pollingDoesNotExtend": true,
+      "activeBeyond8h": true,
+      "expiry": true,
+      "relogin": true,
+      "legacyAndFlagIsolation": true,
+      "stockWrites": 0
+    },
+    "flag": "WMS_TSD_IDLE_SESSION_ENABLED=true",
+    "otherContainersUnchanged": true,
+    "route": "activity-route-present"
+  },
+  "apk": {
+    "pr": 885,
+    "versionCode": 257,
+    "channels": [
+      {
+        "metadata": "logoff-tsd.json",
+        "file": "logoff-tsd-idle-257.apk",
+        "package": "pro.logoff.wms.tsd",
+        "sha256": "913775d6865ed1d65a93aca200b1ac56305144846b5326acb3c51f1d1e42c2f8"
+      },
+      {
+        "metadata": "logoff-tsd-server-choice.json",
+        "file": "logoff-tsd-servers-idle-257.apk",
+        "package": "pro.logoff.wms.tsd.servers",
+        "sha256": "d7db5bba4987a062c7039a4d1df8bbd5ca8a5a39cf525b666e2ed3805dad810c"
+      }
+    ],
+    "publicTlsAndHashesVerified": true,
+    "containersUnchanged": true
+  },
+  "public": {
+    "channels": [
+      {
+        "channel": "logoff-tsd.json",
+        "version": 257,
+        "sha256": "913775d6865ed1d65a93aca200b1ac56305144846b5326acb3c51f1d1e42c2f8",
+        "verified": true
+      },
+      {
+        "channel": "logoff-tsd-server-choice.json",
+        "version": 257,
+        "sha256": "d7db5bba4987a062c7039a4d1df8bbd5ca8a5a39cf525b666e2ed3805dad810c",
+        "verified": true
+      }
+    ],
+    "health": "ok"
+  }
+}
