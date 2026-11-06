@@ -29,6 +29,7 @@ export type UserPrinterGroupScope = {
 };
 
 export type TokenPayload = {
+  tsdIdleSessionId?: string;
   sub: string;
   deviceId?: string;
   deviceCode?: string;

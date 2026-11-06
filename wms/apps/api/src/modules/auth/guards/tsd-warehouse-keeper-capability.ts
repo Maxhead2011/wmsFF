@@ -47,6 +47,7 @@ export function assertTsdWarehouseKeeperCapability(request: TsdCapabilityRequest
 }
 
 export function isAllowedWarehouseKeeperTsdRoute(method: string, path: string, body?: unknown) {
+  if (method === 'POST' && path === '/tsd/session/activity') return true;
   if (method === 'GET' && path === '/tsd/clients') return true;
 
   if (
