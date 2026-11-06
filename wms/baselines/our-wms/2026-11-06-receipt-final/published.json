@@ -1,0 +1,27 @@
+{
+  "base": "sha256:0fa4b68def5d8e0985e2e8b22d9b9e6929ecc40dd3d7aa481f497c4ddf865585",
+  "image": "sha256:5ad42574bb9dc1c15dd806badd982fdf5a0f4e1fd928cfc71588a9514eebed62",
+  "changedFiles": {
+    "/app/apps/api/dist/modules/warehouse/receipt-final-quantities.js": "cf93829a1f7f3a3d47df31fbb2706863cb9f4a793eb986360b0dcb1b06681fc8",
+    "/app/apps/api/dist/modules/warehouse/receipt-channels.controller.js": "6732ba78d3d0abe891d74f9d04f2ac42bda817fd8315597de1108ca803405d74"
+  },
+  "runtime": {
+    "passed": 3,
+    "report": 961,
+    "xlsx": 961,
+    "disabled": 953,
+    "stockWrites": 0,
+    "positiveRowsOnly": true,
+    "dataRows": 66
+  },
+  "pr": 891,
+  "published": true,
+  "otherContainersUnchanged": true,
+  "flag": "WMS_RECEIPT_LINKED_ADJUSTMENTS_ENABLED=true",
+  "live": {
+    "receiptTotal": 961,
+    "positiveRows": 66,
+    "boxes": 27,
+    "stockMutation": false
+  }
+}
