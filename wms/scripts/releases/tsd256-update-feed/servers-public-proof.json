@@ -1,0 +1,13 @@
+{
+  "metadata": {
+    "packageId": "pro.logoff.wms.tsd.servers",
+    "versionCode": 256,
+    "versionName": "0.1.256-fabric-scans",
+    "apkUrl": "https://77.37.144.211/downloads/logoff-tsd-servers-256.apk",
+    "sha256": "f7b105b63d4b70956910511b2afd054b986b1ec19721b8f1187073d147487f17",
+    "size": 5969007
+  },
+  "tlsVerified": true,
+  "hashVerified": true,
+  "ordinaryFeedUnchanged": true
+}
