@@ -7393,6 +7393,8 @@ public class MainActivity extends Activity {
         String inWork = request.inWorkBy == null ? "" : "\nУже в работе: " + request.inWorkBy.name;
         String process = activeProcessesText(request.activeTsdProcesses, request.activeTsdProcess);
         String text = request.title + "\nКлиент: " + clientName + "\nГород: " + city + " · Статус: " + request.status + " · строк: " + request.rowsCount + inWork + process;
+        // FIX: keep sold-brand labels unchanged.
+        if ("logoff".equals(BuildConfig.FLAVOR)) text = request.wmsSummary() + "\n" + text;
         Button button = multilineSecondaryButton(text, view -> loadAssemblyPlan(request.id));
         if ((request.activeTsdProcesses != null && !request.activeTsdProcesses.isEmpty()) || request.activeTsdProcess != null) {
             button.setBackgroundColor(Color.rgb(219, 234, 254));

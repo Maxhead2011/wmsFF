@@ -118,6 +118,9 @@ export class TsdAssemblyService {
       select: {
         id: true,
         title: true,
+        // FIX: expose request identity and physical units separately from rows.
+        number: true,
+        items: { select: { quantity: true } },
         status: true,
         destinationCity: true,
         desiredDate: true,
@@ -140,6 +143,8 @@ export class TsdAssemblyService {
     return requests.map((request) => ({
       id: request.id,
       requestId: request.id,
+      number: request.number,
+      totalQuantity: request.items?.reduce((sum, item) => sum + item.quantity, 0) ?? 0,
       title: request.title,
       name: request.title,
       status: request.status,

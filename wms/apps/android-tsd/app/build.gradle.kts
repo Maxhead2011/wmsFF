@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 257 // FIX: expire LOGOFF login after fifteen minutes without physical input.
-            versionName = "0.1.257-idle-session"
+            versionCode = 258 // FIX: show WMS request number and physical unit quantity.
+            versionName = "0.1.258-request-summary"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
