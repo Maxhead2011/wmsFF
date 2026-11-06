@@ -1,7 +1,7 @@
 import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
 import { FABRIC_TASK_MARKER, readFabricTaskLines, requireFabricCutComplete } from '../warehouse/fabric-fbs-task-state';
-import { tryAssignFabricTask } from './fbs-fabric-queue';
+import { assignFabricTaskForQueue } from './fbs-fabric-queue';
 import { releaseFabricTask, releaseCancelledFabricOrder } from '../warehouse/fabric-fbs-task-release';
 import { clientReceiptMarking } from '../../common/client-receipt-kiz-policy';
 import { closeWbPackedRequest, wbPackedAutoDoneEnabled } from './wb-packed-auto-done';
@@ -6032,8 +6032,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             );
           }
           // FIX: reserve raw material before the finished-stock filter, atomically with task assignment.
-          const fabricAssignment = await tryAssignFabricTask(this, clientId, order, existing, user, deviceCode);
+          const fabricAssignment = await assignFabricTaskForQueue(this, clientId, order, existing, user, deviceCode);
           if (fabricAssignment.handled) {
+            // FIX: keep the material block visible, without claiming or resetting the order.
+            if (fabricAssignment.blockedReason) return this.emptyFbsTsdAssembly(
+              deviceCode, user, `Заказ ${order.id}: ${fabricAssignment.blockedReason}`,
+            );
             if (fabricAssignment.task) return this.formatFbsTsdAssembly(fabricAssignment.task, user, 'Ткань зарезервирована под заказ.');
             continue;
           }

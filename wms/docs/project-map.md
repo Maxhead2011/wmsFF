@@ -661,3 +661,5 @@ Production, флаги и бизнес-данные в ходе проверки
 FBS fabric queue (prepared, not published): tryAssignFabricTask admits untouched WAITING_STOCK tasks created by automatic finished-stock reservation. Existing physical evidence checks and atomic claim stay intact; disabled installations unchanged. No marketplace or stock mutation in this code change.
 
 Release tooling for the waiting-stock fix: scripts/releases/fbs-fabric-waiting/runtime.cjs validates the built API without DB access; release.py stages a one-module overlay and publishes only with merged PR proof, current-image/compose checks, release locks and automatic rollback.
+
+Prepared, not published: fabric queue reports local ConflictException messages with the order number through assignFabricTaskForQueue, instead of replacing them with a marketplace refresh failure. Unexpected errors retain the generic fallback. No change to material reconciliation rules, reservations or completed scans. Branch fix/fabric-queue-block-reason.

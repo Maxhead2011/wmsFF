@@ -636,3 +636,5 @@ Production, флаги и бизнес-данные в ходе проверки
 FBS fabric waiting-stock regression: fbs-fabric-queue.spec.ts verifies assignment from raw rolls without consumption and rejection of five physical-evidence fields. Six new cases failed before the fix; 14 focused and 4439 API tests passed (9 skipped; integration excluded). Targeted TypeScript passed. Full TypeScript is blocked by existing generated Prisma types missing Lamoda relabel fields.
 
 Waiting-stock release candidate: exact one-file overlay verified against PR870 API, runtime assignment/evidence/disabled checks passed; existing route and scan-capability runtime checks passed. All 4439 API tests passed again (9 skipped, integration excluded). No APK, web, environment or stock edits in deployment.
+
+Fabric queue block reason: fbs-fabric-queue.spec.ts reproduces the pending-consumption conflict before the wrapper fix; verifies readable business reason with no writes, propagation of unexpected infrastructure errors and disabled-mode isolation. Focused17 and API4442 passed/9 skipped (integration excluded); targeted TypeScript passed. Not deployed; real material reconciliation is a separate decision.
