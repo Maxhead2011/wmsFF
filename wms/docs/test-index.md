@@ -1,3 +1,5 @@
+Published PR873 (2026-11-06): new WMS HTTPS `77.37.144.211/downloads/logoff-tsd.json` advertises signed256 for package pro.logoff.wms.tsd; versioned APK and logoff-tsd.apk aliases installed. Public TLS, metadata and APK SHA256 verified; separate servers254 feed unchanged. Nginx syntax valid, Docker containers unchanged. Existing API/web baseline remains PR870/PR868. Two route-scope tests passed. Physical TSD update pending. Old domain wms.logoff.pro was unreachable from this workstation; its HTTP upstream config was not changed.
+
 ## New WMS TSD256 update feed (release preparation)
 
 The installed255 updater reads `/downloads/logoff-tsd.json` from the selected server. On the new WMS `https://77.37.144.211/`, expose version256 metadata and the matching signed APK through exact HTTPS Nginx locations. Old HTTP routing, video and separate `.servers` feed are preserved. No API/container/data changes. `scripts/releases/tsd256-update-feed/test_config.py`:2 tests passed; publication script validates APK hash, merged PR and nginx with config rollback. Physical terminal confirmation remains pending.
