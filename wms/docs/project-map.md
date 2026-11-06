@@ -1,3 +1,5 @@
+Published PR891 (2026-11-06): linked receipt XLSX shows final box/SKU quantities, without signed movement rows. Live list and download verified: 961 units, 27 boxes, 66 positive data rows. No stock or KIZ writes. API4480/9 skipped, web595/2 skipped, targeted11, TypeScript and runtime3 passed; DB integration excluded. Exact two-file overlay; all 748 live files match candidate. TSD258, barcode resolution, recovery and latest assembly change retained; web/environment/other containers/sold unchanged. Baseline `2026-11-06-receipt-final`; sourceParityVerified=false.
+
 Published PR889 (2026-11-06): LOGOFF TSD258 shows WMS request number and total units on FBO cards. API4488 passed/9 skipped; Android346 passed; exact runtime5 passed. Live read-only request2656:636 units/53 rows. Both signed APK channels verified; physical TSD not tested; DB integration excluded. One API module changed, environment/web/other containers and sold WMS unchanged. Baseline: 2026-11-06-tsd-request-summary; sourceParityVerified=false.
 
 ## Prepared: TSD request identity and units (2026-11-06)
