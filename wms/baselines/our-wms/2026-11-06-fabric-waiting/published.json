@@ -1,0 +1,13 @@
+{
+  "pr": 877,
+  "fabricCutEnabled": true,
+  "otherContainersUnchanged": true,
+  "webImage": "sha256:72b175810d525d1099fc5ed879b149bf44c542bc4b3e9f7d16531abcefee1e89",
+  "base": "sha256:9e0fe0a4bc4a56d0ced35ce6b5d0a8eed139c8b8d309938f2a5b3a6692dbb994",
+  "candidate": "sha256:49e8c7b277d7f47724381f6bc5458e477a3ebb389b512ca4a095e8890cbb6eda",
+  "hashes": {
+    "/app/apps/api/dist/modules/marketplace-connections/fbs-fabric-queue.js": "fbfc14311cb99b0625877419fb9cafa2e58d28783ed446564bd582e7ef0d1da5"
+  },
+  "runtime": "waiting-stock runtime OK: assignment, no consumption, five evidence guards, disabled isolation",
+  "composeSha256": "662d3ca469cfa94292c57488f1079bd7321d8a75b35bf13b9f11f16e094cb334"
+}

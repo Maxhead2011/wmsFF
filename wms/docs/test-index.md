@@ -1,3 +1,5 @@
+Published PR877 (2026-11-06): untouched WAITING_STOCK fabric tasks can be assigned from raw rolls. Exact API1 overlay; all 744 live files match verified candidate. Existing physical evidence and atomic claim guards retained. API4439 passed/9 skipped (integration excluded), focused14, targeted TypeScript and built-runtime checks passed. Full TypeScript remains blocked by pre-existing generated Prisma Lamoda fields. Web, APK, environment, other containers and sold WMS unchanged. Baseline `2026-11-06-fabric-waiting`; sourceParityVerified=false. Physical TSD workflow not tested.
+
 Published PR875 (2026-11-06): separate pro.logoff.wms.tsd.servers channel updated254->256 on new WMS. The UPDATE_APP command reached a254-network terminal, but its feed previously offered254. APK signed with matching70715af4 certificate, Android328 and feed4 tests passed; public HTTPS metadata/package/hash verified. Ordinary256 feed, API, data and all containers unchanged. Android installation confirmation may still be required; physical terminal install not verified. This supersedes the previous note that servers254 feed is retained.
 
 ## Servers-package update feed256 (candidate)
