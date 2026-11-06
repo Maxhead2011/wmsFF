@@ -41,7 +41,8 @@ export async function tryAssignFabricTask(service: any, clientId: string, order:
   if (new Set(rows.map(r => r.sku.id)).size !== rows.length || rows[0].sku.id !== order.product.id ||
       rows.reduce((n,r) => n+r.quantity,0) !== order.itemCount)
     throw new ConflictException('Состав заказа отличается от заявки. Обновите заявку перед нарезкой.');
-  if (existing && !['RESERVED', 'RELEASED'].includes(existing.status)) return { handled: true };
+  // FIX: auto-reservation waits for finished stock; raw-roll assignment can satisfy it.
+  if (existing && !['RESERVED', 'RELEASED', 'WAITING_STOCK'].includes(existing.status)) return { handled: true };
   // Existing physical evidence must not be erased by reassignment.
   if (existing && (existing.marketplaceSubmittedAt || (existing.sourceArticle !== FABRIC_TASK_MARKER &&
       (existing.barcode || existing.kiz || existing.sourceBarcode || existing.relabelConfirmedAt))))

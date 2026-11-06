@@ -26,6 +26,24 @@ function fixture(marketplace='WILDBERRIES') {
   return {service,db,order,user,sku,items,ledger:()=>ledger};
 }
 describe('fabric queue integration',()=>{
+  // TEST: auto-created WAITING_STOCK tasks must be claimable from raw rolls.
+  it('claims an untouched waiting-stock task without consuming metres',async()=>{
+    const f=fixture();
+    f.db.fbsTsdAssembly.updateMany.mockResolvedValue({count:1});
+    f.db.fbsTsdAssembly.findUnique=vi.fn().mockResolvedValue({id:'old',status:'IN_PROGRESS'});
+    const result=await tryAssignFabricTask(f.service,'client',f.order,{id:'old',status:'WAITING_STOCK',updatedAt:'version'},f.user,'device');
+    expect(result.task?.status).toBe('IN_PROGRESS');
+    expect(f.db.fbsTsdAssembly.updateMany).toHaveBeenCalledWith(expect.objectContaining({where:{id:'old',status:'WAITING_STOCK',updatedAt:'version'}}));
+    expect(f.ledger().fbsReservations[0].units).toBe(2);
+    expect(f.ledger().rolls[0].remainingMm).toBe(20000);
+  });
+  // TEST: admitting waiting tasks must not erase existing physical evidence.
+  it.each(['barcode','kiz','sourceBarcode','relabelConfirmedAt','marketplaceSubmittedAt'])('rejects waiting task with %s',async(field)=>{
+    const f=fixture();
+    await expect(tryAssignFabricTask(f.service,'client',f.order,{id:'old',status:'WAITING_STOCK',[field]:'proof'},f.user,'device')).rejects.toThrow('физические');
+    expect(f.db.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+    expect(f.db.systemSetting.update).not.toHaveBeenCalled();
+  });
   // TEST: reserve nothing when Ozon's mandatory piece-by-piece workflow is disabled.
   it('requires Ozon line accounting before reserving fabric',async()=>{
     const f=fixture('OZON');vi.stubEnv('WMS_OZON_MULTILINE_PICKING','false');
