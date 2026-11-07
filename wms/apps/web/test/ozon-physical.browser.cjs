@@ -21,6 +21,13 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=req
  if(process.env.SHOT)await page.screenshot({path:process.env.SHOT});
  await page.getByRole('button',{name:'Обновить состав из Ozon',exact:true}).click();assert.equal(await apply().count(),0);assert(await page.getByRole('button',{name:'Обновить заявку из Ozon',exact:true}).isDisabled());await page.getByRole('checkbox').check();await page.getByRole('button',{name:'Обновить заявку из Ozon',exact:true}).click();assert.equal(inbound,1);
  await adjust.click();await page.getByRole('checkbox').check();await apply().click();await page.getByText('Ответ не подтверждён',{exact:false}).waitFor();assert.equal(await adjust.count(),0);await page.getByRole('button',{name:'Проверить результат / продолжить',exact:true}).click();assert.equal(starts,2);
+ // TEST: partial rejection names the destination, keeps successful operations and blocks duplicate starts.
+ op={id:'op',state:'NEEDS_ATTENTION',operations:[{supplyId:'41',direction:'Краснодар',state:'SUCCESS'},{supplyId:'42',direction:'Ростов',state:'FAILED',error:'Ozon отклонил изменение: недостаточно места для приёмки (INBOUND_NO_CAPACITY). Короба в ВМС сохранены.'}]};
+ await page.reload();await page.getByText('Корректировка требует внимания', {exact:false}).waitFor();
+ await page.getByText('Ростов · Поставка 42: Отклонено Ozon',{exact:false}).waitFor();
+ await page.getByText('Краснодар · Поставка 41: Подтверждено Ozon',{exact:false}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'Отменить отклонённую корректировку'}).count(),0);
+ assert.equal(await adjust.count(),0);await page.getByRole('button',{name:'Проверить результат / продолжить',exact:true}).click();assert.equal(starts,2);
  await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.deepEqual(errors,[]);
- const proof={passed:10,previews,starts,inbound,errors,synthetic:true};if(process.env.PROOF)fs.writeFileSync(process.env.PROOF,JSON.stringify(proof));console.log(JSON.stringify(proof));
+ const proof={passed:11,previews,starts,inbound,errors,synthetic:true};if(process.env.PROOF)fs.writeFileSync(process.env.PROOF,JSON.stringify(proof));console.log(JSON.stringify(proof));
  }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1});
