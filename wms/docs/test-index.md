@@ -1,11 +1,13 @@
-## Подготовлено: кнопка обновления состава из Ozon (07.11.2026)
+Published PR893 (2026-11-07): active FBO Ozon requests have an explicit inbound composition button. Preview and confirmed apply use existing server guards; no outbound Ozon change. Exact current-runtime web3 overlay; original assets, IPv4 hosts, API, TSD258, environment, business data, other containers and sold WMS preserved. Web600/2 skipped, API4491/9 skipped (DB integration excluded), targeted38, source browser8, exact-runtime browser8 and published browser8 passed; public hashes verified. Browser requests were intercepted synthetic fixtures, not production writes. Baseline `2026-11-07-ozon-inbound`; sourceParityVerified=false. Web sha256:05e100b3bdb2a08d9d2053d2beab0d34bc752b053ebd351b13ef7d38799d40c6.
+
+## Опубликовано PR893: кнопка обновления состава из Ozon (07.11.2026)
 
 - `apps/web/src/components/ozon-fbo/OzonAssemblyList.spec.tsx`: новый тест воспроизвёл отсутствие кнопки до исправления; проверены активный этап, архив, упаковка/контроль и отсутствие права записи.
 - `apps/web/test/ozon-composition-sync.browser.cjs` + fixture/html: 8 браузерных сценариев на синтетических API — открытие из настоящего списка, подтверждение, блокировка повторного применения/закрытия при записи, обновление списка, поздний ответ после закрытия, ошибки preview/apply, свежая сверка после конфликта, совпадение количеств, мобильный размер и read-only/архив. Ни одного вызова исходящей корректировки; production-записей нет.
 - Существующие `apps/api/test/ozon-request-sync.spec.ts` и `ozon-stock-adjustment.spec.ts`: 38 passed, включая защиту от уменьшения ниже отобранного/упакованного, грузомест и смены состава между preview/apply.
 - Общий web: 600 passed / 2 skipped. Общий API: 4491 passed / 9 skipped, `**/*.integration.spec.ts` исключены (DB integration не выполнялась). TypeScript web и production build passed. Ранее опубликованный runtime этим прогоном не изменялся.
 
-Ветка `feature/ozon-inbound-composition-button`, кандидат PR → `feature/la_panthera`; не опубликовано.
+PR893 опубликован в нашей ВМС. `scripts/releases/ozon-inbound-20261107/browser.cjs`: 8 сценариев на точном runtime и повторно на опубликованных файлах; один React bootstrap, ошибки JS отсутствуют. Применение только на синтетических API.
 
 Published PR889 (2026-11-06): LOGOFF TSD258 shows WMS request number and total units on FBO cards. API4488 passed/9 skipped; Android346 passed; exact runtime5 passed. Live read-only request2656:636 units/53 rows. Both signed APK channels verified; physical TSD not tested; DB integration excluded. One API module changed, environment/web/other containers and sold WMS unchanged. Baseline: 2026-11-06-tsd-request-summary; sourceParityVerified=false.
 
