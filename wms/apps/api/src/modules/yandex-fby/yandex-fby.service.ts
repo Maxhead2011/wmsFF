@@ -137,6 +137,7 @@ export class YandexFbyService {
     });
   }
   async refresh(id: string, requestId: string, user: AuthUser) {
+    const checkedAt = new Date();
     const c = await this.account(id, user, 'read');
     const s = await this.db.yandexFbyShipment.findFirst({ where: { requestId, connectionId: id }, include: { request: { include: { items: true } } } });
     if (!s?.remoteNumber) throw new NotFoundException('Сначала привяжите поставку.');
@@ -148,7 +149,15 @@ export class YandexFbyService {
     const before = new Map((old ?? []).filter(l => l.offerId).map(l => [l.offerId!, l.quantity]));
     const after = new Map(items.map(i => [i.offerId, i.counters.planCount]));
     const differences = [...new Set([...before.keys(), ...after.keys()])].filter(key => before.get(key) !== after.get(key)).map(offerId => ({ offerId, assemblyQuantity: before.get(offerId) ?? 0, yandexQuantity: after.get(offerId) ?? 0 }));
-    // FIX: remote refresh is read-only and cannot replace picked/packed demand.
-    return { status: supply.status, checkedAt: new Date().toISOString(), differences, matches: !differences.length };
+    // FIX: persist only a complete check; an older response cannot overwrite a newer check or binding.
+    if (!user.isDemo) {
+      const saved = await this.db.yandexFbyShipment.updateMany({
+        where: { requestId, connectionId: id, remoteId: s.remoteId, remoteNumber: s.remoteNumber,
+          OR: [{ checkedAt: null }, { checkedAt: { lt: checkedAt } }] },
+        data: { remoteStatus: supply.status, checkedAt },
+      });
+      if (saved.count !== 1) throw new ConflictException('Привязка или результат проверки изменились. Повторите сверку.');
+    }
+    return { status: supply.status, checkedAt: checkedAt.toISOString(), differences, matches: !differences.length };
   }
 }
