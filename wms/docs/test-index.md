@@ -1,3 +1,12 @@
+## Подготовлено: кнопка обновления состава из Ozon (07.11.2026)
+
+- `apps/web/src/components/ozon-fbo/OzonAssemblyList.spec.tsx`: новый тест воспроизвёл отсутствие кнопки до исправления; проверены активный этап, архив, упаковка/контроль и отсутствие права записи.
+- `apps/web/test/ozon-composition-sync.browser.cjs` + fixture/html: 8 браузерных сценариев на синтетических API — открытие из настоящего списка, подтверждение, блокировка повторного применения/закрытия при записи, обновление списка, поздний ответ после закрытия, ошибки preview/apply, свежая сверка после конфликта, совпадение количеств, мобильный размер и read-only/архив. Ни одного вызова исходящей корректировки; production-записей нет.
+- Существующие `apps/api/test/ozon-request-sync.spec.ts` и `ozon-stock-adjustment.spec.ts`: 38 passed, включая защиту от уменьшения ниже отобранного/упакованного, грузомест и смены состава между preview/apply.
+- Общий web: 600 passed / 2 skipped. Общий API: 4491 passed / 9 skipped, `**/*.integration.spec.ts` исключены (DB integration не выполнялась). TypeScript web и production build passed. Ранее опубликованный runtime этим прогоном не изменялся.
+
+Ветка `feature/ozon-inbound-composition-button`, кандидат PR → `feature/la_panthera`; не опубликовано.
+
 Published PR889 (2026-11-06): LOGOFF TSD258 shows WMS request number and total units on FBO cards. API4488 passed/9 skipped; Android346 passed; exact runtime5 passed. Live read-only request2656:636 units/53 rows. Both signed APK channels verified; physical TSD not tested; DB integration excluded. One API module changed, environment/web/other containers and sold WMS unchanged. Baseline: 2026-11-06-tsd-request-summary; sourceParityVerified=false.
 
 ## Prepared: TSD request identity and units (2026-11-06)

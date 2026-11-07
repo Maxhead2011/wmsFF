@@ -1,5 +1,6 @@
 import {OzonStoreLabel} from './OzonStoreLabel';
 import {OzonAssemblyList} from './OzonAssemblyList';
+import {OzonCompositionSync} from './OzonCompositionSync';
 import {FboWorkspaceModal} from '../client-requests/FboWorkspaceModal';
 import {fetchWorkspaceClients} from '../../lib/marketplaceWorkspace';
 import {OzonEditCountdown} from './OzonEditCountdown';
@@ -18,8 +19,11 @@ export function OzonCustomerWorkspace({session}:{session:AuthSession}){
  // FIX: the combined layout is restricted to our deployment and local previews.
  const combined=typeof window!=='undefined'&&['wms.logoff.pro','localhost','127.0.0.1'].includes(window.location.hostname);
  const [columns,setColumns]=useState(6);
- const [selected,setSelected]=useState<{id:string;mode:'assembly'|'cargo'}|null>(null);
+ const [selected,setSelected]=useState<{id:string;mode:'assembly'|'cargo'|'sync'}|null>(null);
  const [opening,setOpening]=useState(false);
+ const [syncBusy,setSyncBusy]=useState(false),[syncNotice,setSyncNotice]=useState('');
+ const permissions=session.user.permissionCodes??[];
+ const canSync=permissions.includes('system:admin')||(permissions.includes('client-requests:write')&&((session.user.roleCodes??[]).includes('CLIENT')||permissions.includes('stock:write')));
  const requestSequence=useRef(0);
  useEffect(()=>()=>{requestSequence.current++;},[]);
  const [clients,setClients]=useState<ClientSummary[]>([]),[rememberedClient,setRememberedClient]=useRememberedClientId(session.user.id);
@@ -51,29 +55,32 @@ export function OzonCustomerWorkspace({session}:{session:AuthSession}){
   finally{if(requestSequence.current===sequence)setOpening(false);}
  }
  function cargo(id:string){if(combined){requestSequence.current++;setOpening(false);setPlan(null);setSelected({id,mode:'cargo'});}setSupplyId(id);}
- function close(){requestSequence.current++;setSelected(null);setOpening(false);setPlan(null);setSupplyId('');reload(n=>n+1);}
+ function syncComposition(id:string){requestSequence.current++;setError('');setSyncNotice('');setOpening(false);setPlan(null);setSupplyId('');setSelected({id,mode:'sync'});}
+ function close(){if(syncBusy)return;requestSequence.current++;setSelected(null);setOpening(false);setPlan(null);setSupplyId('');reload(n=>n+1);}
  const clientPicker=<label className="ozfbo-client-picker">Клиент<select value={clientId} onChange={e=>setClient(e.target.value)}>{combined&&<option value="">Все клиенты</option>}{clients.map(c=><option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select></label>;
  const selectedRow=rows.find(r=>r.id===selected?.id);
  return <RequestRemovalProvider token={session.accessToken} onRemoved={close}><section className={"ozfbo-shell ozfbo-customer-workspace"+(combined?" ozfbo-combined":"")} style={{"--ozfbo-columns":columns} as CSSProperties} aria-label="ФБО Ozon по файлу клиента">
   <header className="ozfbo-hero"><div><span className="ozfbo-kicker">LOGOFF WMS · OZON</span><h1>{combined?"Сборки Ozon":"Одна сборка — несколько направлений"}</h1>{!combined&&<p>Количество по файлу клиента. Общий отбор, затем отдельные короба по направлениям. Остальной товар хранится на складе.</p>}</div>
    {clientPicker}</header>
   {error&&<p role="alert">{error}</p>}
+  {syncNotice&&<p role="status">{syncNotice}</p>}
   <div className="ozfbo-home-grid"><div className="ozfbo-workspace-left"><div className="ozfbo-card ozfbo-import">{combined&&!clientId&&<p>Для создания сборки выберите конкретного клиента.</p>}{clientId&&<OzonCustomerImport key={branchScope} session={session} clients={clients} fixedClientId={clientId} embedded compact={combined} toolbar={combined?undefined:clientPicker} onWarehouseChange={(_,warehouseId)=>setBranch({scope:branchScope,warehouseId})} onCreated={()=>reload(n=>n+1)}/>}</div>
   {!combined&&plan&&<FboTwoStagePanel key={plan.requestId} embedded initial={plan} accessToken={session.accessToken} userId={session.user.id} canWrite={view==='active'} onClose={()=>{setPlan(null);reload(n=>n+1);}}/>}</div>
    <div className="ozfbo-card ozfbo-plans"><div className="ozfbo-card-title"><h2>Единые сборки Ozon</h2><button type="button" onClick={()=>reload(n=>n+1)} disabled={loading}>Обновить</button></div>
     <div className="ozfbo-workspace-tabs" role="group" aria-label="Список сборок"><button type="button" aria-pressed={view==='active'} onClick={()=>setView('active')}>Активные</button><button type="button" aria-pressed={view==='completed'} onClick={()=>setView('completed')}>Завершённые</button></div>
-    {loading&&(!combined||!rows.length)?<p>Загружаю сборки…</p>:rows.length===0?<p>{view==='completed'?'Завершённых сборок пока нет.':'Активных сборок пока нет. Проверьте файл и нажмите «Создать единую сборку».'}</p>:combined?<OzonAssemblyList rows={rows} active={view==='active'} selectedId={selected?.id} onOpen={id=>void open(id)} onCargo={cargo}/>:<div className="ozfbo-plan-list">{rows.map(r=><div key={r.id} className="ozfbo-card ozfbo-workspace-order" data-selected={combined&&selected?.id===r.id||undefined}><strong className="ozfbo-workspace-number">№{String(r.number).padStart(6,'0')}</strong><p className="ozfbo-workspace-name">{r.title}</p><OzonStoreLabel request={r}/><p>{r.quantity} шт. · {r.directions} направлений</p><small>{r.destinationCity} {r.desiredDate?new Date(r.desiredDate).toLocaleDateString('ru-RU'):''}</small>{view==='active'&&<OzonEditCountdown orders={r.editDeadlines}/>}<p className="ozfbo-workspace-status">{r.fboProgressLabel??(r.status==='DONE'?'Сдано':r.status==='CANCELLED'?'Отменена':r.status==='REJECTED'?'Отклонена':r.phase==='COMPLETED'?'Упаковано, ожидает сдачи':r.phase==='NOT_STARTED'?'Ожидает сборки':'Сборка в работе')}</p><div className="ozfbo-workspace-actions"><RequestRemovalButton request={r}/><button type="button" onClick={()=>cargo(r.id)}>Поставка и грузоместа Ozon</button><button type="button" onClick={()=>void open(r.id)}>Открыть сборку</button></div></div>)}</div>}
+    {loading&&(!combined||!rows.length)?<p>Загружаю сборки…</p>:rows.length===0?<p>{view==='completed'?'Завершённых сборок пока нет.':'Активных сборок пока нет. Проверьте файл и нажмите «Создать единую сборку».'}</p>:combined?<OzonAssemblyList rows={rows} active={view==='active'} selectedId={selected?.id} onOpen={id=>void open(id)} onCargo={cargo} onSync={canSync?syncComposition:undefined}/>:<div className="ozfbo-plan-list">{rows.map(r=><div key={r.id} className="ozfbo-card ozfbo-workspace-order" data-selected={combined&&selected?.id===r.id||undefined}><strong className="ozfbo-workspace-number">№{String(r.number).padStart(6,'0')}</strong><p className="ozfbo-workspace-name">{r.title}</p><OzonStoreLabel request={r}/><p>{r.quantity} шт. · {r.directions} направлений</p><small>{r.destinationCity} {r.desiredDate?new Date(r.desiredDate).toLocaleDateString('ru-RU'):''}</small>{view==='active'&&<OzonEditCountdown orders={r.editDeadlines}/>}<p className="ozfbo-workspace-status">{r.fboProgressLabel??(r.status==='DONE'?'Сдано':r.status==='CANCELLED'?'Отменена':r.status==='REJECTED'?'Отклонена':r.phase==='COMPLETED'?'Упаковано, ожидает сдачи':r.phase==='NOT_STARTED'?'Ожидает сборки':'Сборка в работе')}</p><div className="ozfbo-workspace-actions"><RequestRemovalButton request={r}/><button type="button" onClick={()=>cargo(r.id)}>Поставка и грузоместа Ozon</button><button type="button" onClick={()=>void open(r.id)}>Открыть сборку</button></div></div>)}</div>}
     {combined&&hasMore&&<button className="ozfbo-more" type="button" disabled={loading||moreBusy} onClick={()=>void more()}>{moreBusy?'Загружаю…':'Показать ещё'}</button>}
    </div></div>
   {!combined&&supplyId&&<OzonAssemblySupply key={supplyId} requestId={supplyId} accessToken={session.accessToken} clientName={rows.find(r=>r.id===supplyId)?.clientName??clients.find(c=>c.id===clientId)?.name}/>}
 
  </section>
   {/* FIX: modal is a sibling of the size container, so it centers on the viewport. */}
-  {combined&&selected&&<FboWorkspaceModal key={selected.id+":"+selected.mode} title={selected.mode==='cargo'?`Поставка и грузоместа Ozon · №${selectedRow?.number??''}`:!plan?`Сборка №${selectedRow?.number??''}`:undefined} onClose={close}>
+  {combined&&selected&&<FboWorkspaceModal key={selected.id+":"+selected.mode} title={selected.mode==='sync'?`Обновить состав из Ozon · №${selectedRow?.number??''}`:selected.mode==='cargo'?`Поставка и грузоместа Ozon · №${selectedRow?.number??''}`:!plan?`Сборка №${selectedRow?.number??''}`:undefined} onClose={syncBusy?undefined:close}>
    <div className="ozfbo-customer-workspace ozfbo-combined" aria-label="Выбранная сборка">
    {error&&<p role="alert">{error}</p>}
    {view==='active'&&selected.mode==='assembly'&&<OzonEditCountdown orders={selectedRow?.editDeadlines}/>}
    {opening&&<p role="status">Загружаю сборку…</p>}
+   {selected.mode==='sync'&&canSync&&<OzonCompositionSync key={selected.id+session.accessToken} requestId={selected.id} accessToken={session.accessToken} onBusyChange={setSyncBusy} onChanged={()=>{setSyncNotice(`Состав заявки №${selectedRow?.number??''} обновлён из Ozon.`);reload(n=>n+1);}}/>}
    {selected.mode==='assembly'&&plan&&<FboTwoStagePanel key={plan.requestId} embedded initial={plan} accessToken={session.accessToken} userId={session.user.id} canWrite={view==='active'} onClose={close}/>}
    {selected.mode==='cargo'&&supplyId&&<OzonAssemblySupply key={supplyId} requestId={supplyId} accessToken={session.accessToken} clientName={rows.find(r=>r.id===supplyId)?.clientName??clients.find(c=>c.id===clientId)?.name}/>}
   </div></FboWorkspaceModal>}

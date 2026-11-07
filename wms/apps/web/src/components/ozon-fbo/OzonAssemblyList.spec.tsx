@@ -5,6 +5,20 @@ import {OzonAssemblyList} from './OzonAssemblyList';
 import {fetchOzonCustomerRequests,type OzonCustomerRequest} from '../../lib/api';
 afterEach(()=>vi.unstubAllGlobals());
 const row:OzonCustomerRequest={id:'r',number:2477,title:'Поставка Ozon',clientName:'ИП Лукин',clientCode:'CL-000001',warehouseName:'Москва',status:'IN_WORK',phase:'COMPLETED',quantity:291,itemCount:4,itemsPreview:[{name:'Костюм',barcode:'123',quantity:10}],directions:9,desiredDate:'2026-10-30',destinationCity:'Строгино'};
+// TEST: the pre-picking action must be discoverable without opening the assembly.
+it('offers inbound Ozon composition on an active unstarted request',()=>{
+ const props={rows:[{...row,status:'SUBMITTED',phase:'NOT_STARTED'}],active:true,onOpen:vi.fn(),onCargo:vi.fn(),onSync:vi.fn()};
+ expect(renderToStaticMarkup(<OzonAssemblyList {...props}/>)).toContain('Обновить состав из Ozon');
+});
+it.each(['PACKING','CONTROL','COMPLETED'])('does not advertise pre-picking sync at %s',phase=>{
+ const props={rows:[{...row,phase}],active:true,onOpen:vi.fn(),onCargo:vi.fn(),onSync:vi.fn()};
+ expect(renderToStaticMarkup(<OzonAssemblyList {...props}/>)).not.toContain('Обновить состав из Ozon');
+});
+it('hides inbound action in archive and without write capability',()=>{
+ const props={rows:[{...row,phase:'NOT_STARTED'}],onOpen:vi.fn(),onCargo:vi.fn()};
+ expect(renderToStaticMarkup(<OzonAssemblyList {...props} active={false} {...{onSync:vi.fn()}}/>)).not.toContain('Обновить состав из Ozon');
+ expect(renderToStaticMarkup(<OzonAssemblyList {...props} active/>)).not.toContain('Обновить состав из Ozon');
+});
 // TEST: retain the payer and show the actual shop as a separate label.
 it('shows shop separately from payer and explicitly marks unknown shops',()=>{
  const render=(extra:object)=>renderToStaticMarkup(<OzonAssemblyList rows={[{...row,...extra}]} active onOpen={()=>{}} onCargo={()=>{}}/>);
