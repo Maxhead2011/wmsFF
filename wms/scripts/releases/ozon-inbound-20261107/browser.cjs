@@ -1,0 +1,39 @@
+// TEST: exact deployed module with synthetic API responses; no production writes.
+const fs=require('fs'),path=require('path'),http=require('http'),assert=require('node:assert/strict');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.resolve(process.argv[2]);
+const server=http.createServer((req,res)=>{const rel=new URL(req.url,'http://local').pathname.slice(1)||'index.html';if(rel.includes('..'))return res.end();let p=path.join(root,'web-payload',rel);if(!fs.existsSync(p))p=path.join(root,'web-base',rel);if(!fs.existsSync(p)){res.writeHead(404);return res.end()}let data=fs.readFileSync(p);if(rel.endsWith('.js'))data=Buffer.from(data.toString().replace(/(\w+)\.createRoot\(document\.getElementById\("root"\)\)/g,m=>`((window.__wmsBoots??=[]).push(${JSON.stringify(rel)}),${m})`));res.setHeader('Content-Type',rel.endsWith('.js')?'text/javascript':rel.endsWith('.css')?'text/css':rel.endsWith('.html')?'text/html':'application/octet-stream');res.end(data)});
+(async()=>{await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({headless:true,channel:'msedge'});try{
+ const page=await browser.newPage({viewport:{width:1440,height:1000},ignoreHTTPSErrors:true}),errors=[],warnings=[];page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(/Invalid hook|Minified React|already been passed/.test(m.text()))warnings.push(m.text())});
+ const user={id:'fixture',name:'Synthetic',administrationEnabled:true,roleCodes:['OWNER','ADMIN'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:'w',warehouseIds:['w'],writableWarehouseIds:['w']};
+ await page.addInitScript(u=>localStorage.setItem('logoff-wms-session',JSON.stringify({accessToken:'fixture-only',tokenType:'Bearer',user:u})),user);
+ let applies=0,previews=0,lists=0,failedPreview=false,failedApply=false,same=false,delay=false,release,delayApply=false,releaseApply,applied=false;
+ const preview=()=>({token:'review-'+previews,needed:256,after:same?256:252,rows:[{direction:'Москва',skuId:'s',name:'Платье',barcode:'123',before:4,after:same?4:0,packed:0}]});
+ const row={id:'r',number:2655,title:'ФБО Ozon · TEST',clientName:'Тестовый клиент',clientCode:'CL-TEST',status:'SUBMITTED',phase:'NOT_STARTED',quantity:256,directions:1,destinationCity:'Москва',desiredDate:null};
+ await page.route('**/api/v1/**',async route=>{const req=route.request(),url=new URL(req.url()),p=url.pathname;const json=(data,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(data)});
+  if(p.endsWith('/sync-preview')){previews++;const data=preview();if(delay)await new Promise(r=>release=r);return json(failedPreview?{message:'Ozon временно недоступен'}:data,failedPreview?503:200)}
+  if(p.endsWith('/sync-apply')){applies++;assert.deepEqual(req.postDataJSON(),{token:'review-'+previews,confirm:true});if(delayApply)await new Promise(r=>releaseApply=r);if(failedApply)return json({message:'Состав изменился. Повторите сверку.'},409);applied=true;return json(preview())}
+  if(p.endsWith('/ozon-fbo-import/requests')){lists++;return json([{...row,quantity:applied?252:256,...(url.searchParams.get('view')==='completed'?{status:'DONE',phase:'COMPLETED'}:{})}])}
+  if(req.method()!=='GET')throw Error('Unexpected mutation: '+p);
+  let data=[];if(p.endsWith('/auth/me'))data=user;else if(p.endsWith('/capability'))data={enabled:p.includes('/ozon-fbo-import/')};else if(p.endsWith('/users/workspaces'))data={users:[],workspaces:[]};else if(p.endsWith('/box-overlaps'))data={errors:[],overlaps:[],requestsWithOverlapsCount:0,overlappingBoxesCount:0};else if(p.endsWith('/branches'))data=[{id:'w',code:'MSK',name:'Москва',warehouseId:'w',isActive:true}];return json(data);
+ });
+ if(process.env.PUBLIC_URL)await page.route('**/*.js',async route=>{const response=await route.fetch();let body=await response.text();const rel=new URL(route.request().url()).pathname;body=body.replace(/(\w+)\.createRoot\(document\.getElementById\("root"\)\)/g,m=>`((window.__wmsBoots??=[]).push(${JSON.stringify(rel)}),${m})`);await route.fulfill({response,body})});
+ await page.goto(process.env.PUBLIC_URL||'http://127.0.0.1:'+server.address().port,{waitUntil:'networkidle'});
+ assert.equal((await page.evaluate(()=>window.__wmsBoots)).length,1);assert.deepEqual(errors,[]);
+ await page.locator('details').evaluateAll(nodes=>nodes.forEach(n=>n.open=true));
+ await page.getByRole('button',{name:/FBO|ФБО/}).first().click();
+ await page.getByRole('button',{name:/FBO Ozon|ФБО Ozon/}).first().click();
+ const open=()=>page.getByRole('button',{name:'Обновить состав из Ozon',exact:true}).click();
+ const modal=()=>page.getByRole('dialog',{name:'Обновить состав из Ozon · №2655'});
+ const apply=()=>modal().getByRole('button',{name:'Применить состав в ВМС',exact:true});
+ await open();await modal().getByText('Изменений количества:',{exact:false}).waitFor();assert.equal(applies,0);assert(await apply().isDisabled());
+ await page.screenshot({path:path.join(root,process.env.PUBLIC_URL?'published-preview.png':'runtime-preview.png')});
+ await modal().getByRole('checkbox').check();delayApply=true;await apply().click();await modal().getByRole('button',{name:'Обновляю заявку…'}).waitFor();assert.equal(await modal().getByRole('button',{name:'Закрыть',exact:true}).count(),0);assert(await modal().getByRole('button',{name:'Обновляю заявку…'}).isDisabled());await page.waitForTimeout(100);releaseApply();delayApply=false;
+ await page.getByText('Состав заявки №2655 обновлён из Ozon.',{exact:true}).waitFor();await page.waitForFunction(()=>!document.querySelector('[role=dialog]'));assert.equal(applies,1);assert(lists>=2);
+ delay=true;await open();await modal().getByText('Сверяю состав с Ozon…').waitFor();await page.waitForTimeout(100);await modal().getByRole('button',{name:'Закрыть',exact:true}).click();release();delay=false;await page.waitForTimeout(150);assert.equal(await modal().count(),0);
+ failedPreview=true;await open();await modal().getByRole('alert').getByText('Ozon временно недоступен').waitFor();assert.equal(await apply().count(),0);
+ failedPreview=false;same=true;await modal().getByRole('button',{name:'Повторить сверку'}).click();await modal().getByText('Количества совпадают с Ozon. Можно обновить данные привязанной поставки без изменения количества.').waitFor();assert(await apply().isDisabled());
+ same=false;await modal().getByRole('button',{name:'Повторить сверку'}).click();await modal().getByRole('checkbox').check();failedApply=true;await apply().click();await modal().getByRole('alert').getByText('Состав изменился. Повторите сверку.').waitFor();assert.equal(await apply().count(),0);failedApply=false;await modal().getByRole('button',{name:'Повторить сверку'}).click();await modal().getByRole('checkbox').waitFor();assert(await apply().isDisabled());
+ await page.setViewportSize({width:390,height:844});const bounds=await modal().boundingBox();assert(bounds&&bounds.x>=0&&bounds.width<=390);await modal().getByRole('button',{name:'Закрыть',exact:true}).click();await page.getByRole('button',{name:'Завершённые',exact:true}).click();await page.getByText('Сдано',{exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Обновить состав из Ozon',exact:true}).count(),0);
+ assert.deepEqual(errors,[]);assert.deepEqual(warnings,[]);assert.equal((await page.evaluate(()=>window.__wmsBoots)).length,1);
+ const proof={passed:8,applies,previews,lists,errors,warnings,synthetic:true,noProductionWrites:true};fs.writeFileSync(path.join(root,process.env.PUBLIC_URL?'public-browser-proof.json':'browser-proof.json'),JSON.stringify(proof,null,2));console.log(JSON.stringify(proof));
+ }finally{await browser.close();await new Promise(r=>server.close(r))}})().catch(e=>{console.error(e);server.close();process.exitCode=1});

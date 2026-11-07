@@ -10,3 +10,8 @@
 .ozfbo-composition-sync button.ozfbo-sync-apply {background:var(--surface-alt,#eee8f5);}
 .ozfbo-composition-sync button:disabled {opacity:.55;cursor:not-allowed;}
 .ozfbo-composition-sync [role=alert] {padding:12px;border:1px solid #b64b53;border-radius:10px;}
+
+/* FIX: reserve room for the new action without breaking words on desktop. */
+.ozfbo-assembly-table:has(.ozfbo-sync-open) th:nth-child(2) {width:24%;}
+.ozfbo-assembly-table:has(.ozfbo-sync-open) th:nth-child(5) {width:17%;}
+.ozfbo-assembly-table button.ozfbo-sync-open {overflow-wrap:normal;word-break:normal;padding:10px;}
