@@ -1,3 +1,11 @@
+## Подготовлено: состав заявки из Ozon перед сборкой (07.11.2026)
+
+В списке активных сборок нашей ВМС добавлена кнопка «Обновить состав из Ozon» для этапов NOT_STARTED/PICKING и статусов SUBMITTED/APPROVED/IN_WORK. `OzonAssemblyList` передаёт действие в `OzonCustomerWorkspace`, который открывает отдельный `FboWorkspaceModal` с `OzonCompositionSync`. Доступ соответствует существующим правам контроллера/сервиса: system:admin либо client-requests:write совместно с CLIENT/stock:write.
+
+Используется существующий серверный `sync-preview`/`sync-apply`: Ozon → ВМС, без изменения Ozon. До сохранения показаны количества и направления, требуется явное подтверждение; заново проверяются привязка, состав, отбор и упаковка. При совпадении количеств можно подтвердить обновление данных поставки. Ошибка применения сбрасывает предпросмотр, повтор требует свежей сверки; поздний ответ закрытого окна игнорируется. После успеха список обновляется. Старый экран корректировки по физическим остаткам и проданный интерфейс не изменены; сервер, БД, ТСД и публикация не затронуты.
+
+Ветка `feature/ozon-inbound-composition-button`, цель PR `feature/la_panthera`. Пока не опубликовано. Исходная база origin/feature/la_panthera: dcc1988b. Перед выпуском обязательна сверка свежего runtime/source-reference и точечный web overlay по release-workflow.md: sourceParityVerified=false.
+
 Published PR891 (2026-11-06): linked receipt XLSX shows final box/SKU quantities, without signed movement rows. Live list and download verified: 961 units, 27 boxes, 66 positive data rows. No stock or KIZ writes. API4480/9 skipped, web595/2 skipped, targeted11, TypeScript and runtime3 passed; DB integration excluded. Exact two-file overlay; all 748 live files match candidate. TSD258, barcode resolution, recovery and latest assembly change retained; web/environment/other containers/sold unchanged. Baseline `2026-11-06-receipt-final`; sourceParityVerified=false.
 
 Prepared final receipt quantities: [receipt-final-quantities](receipt-final-quantities.md). Linked-correction exports consolidate by box/SKU rather than displaying signed movements. Full runtime fixture: 66 positive rows, 961 units. Stock and KIZ unchanged.

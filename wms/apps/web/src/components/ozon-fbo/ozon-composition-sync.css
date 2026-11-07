@@ -1,0 +1,17 @@
+/* FIX: scope the comparison to its modal; preserve every other marketplace screen. */
+.ozfbo-composition-sync {color:var(--ink,#34434f);line-height:1.5;}
+.ozfbo-composition-sync .ozfbo-sync-summary {display:flex;flex-wrap:wrap;gap:16px;padding:16px;background:var(--surface-alt,#f5f2f9);border-radius:12px;margin:16px 0;}
+.ozfbo-composition-sync .ozfbo-sync-table-wrap {overflow-x:auto;}
+.ozfbo-composition-sync table {border-collapse:collapse;width:100%;}
+.ozfbo-composition-sync th,.ozfbo-composition-sync td {padding:12px;text-align:left;border-bottom:1px solid var(--line,#dce5e9);}
+.ozfbo-composition-sync .ozfbo-sync-confirm {display:flex;align-items:center;gap:10px;margin:20px 0;}
+.ozfbo-composition-sync .ozfbo-sync-actions {display:flex;flex-wrap:wrap;gap:12px;margin-top:16px;}
+.ozfbo-composition-sync button {min-height:44px;border:1px solid var(--line,#dce5e9);border-radius:12px;padding:10px 18px;background:var(--surface,#fff);color:inherit;font:inherit;font-weight:700;}
+.ozfbo-composition-sync button.ozfbo-sync-apply {background:var(--surface-alt,#eee8f5);}
+.ozfbo-composition-sync button:disabled {opacity:.55;cursor:not-allowed;}
+.ozfbo-composition-sync [role=alert] {padding:12px;border:1px solid #b64b53;border-radius:10px;}
+
+/* FIX: reserve room for the new action without breaking words on desktop. */
+.ozfbo-assembly-table:has(.ozfbo-sync-open) th:nth-child(2) {width:24%;}
+.ozfbo-assembly-table:has(.ozfbo-sync-open) th:nth-child(5) {width:17%;}
+.ozfbo-assembly-table button.ozfbo-sync-open {overflow-wrap:normal;word-break:normal;padding:10px;}

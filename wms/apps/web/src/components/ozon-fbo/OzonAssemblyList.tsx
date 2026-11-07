@@ -5,7 +5,7 @@ import {OzonStoreLabel} from './OzonStoreLabel';
 import './ozon-assembly-list.css';
 
 // FIX: use the WB row arrangement while retaining Ozon deadlines and operations.
-export function OzonAssemblyList({rows,active,selectedId,onOpen,onCargo}:{rows:OzonCustomerRequest[];active:boolean;selectedId?:string;onOpen:(id:string)=>void;onCargo:(id:string)=>void}) {
+export function OzonAssemblyList({rows,active,selectedId,onOpen,onCargo,onSync}:{rows:OzonCustomerRequest[];active:boolean;selectedId?:string;onOpen:(id:string)=>void;onCargo:(id:string)=>void;onSync?:(id:string)=>void}) {
  const date=(value?:string|null)=>value?new Date(value).toLocaleDateString('ru-RU'): '—';
  return <div className="ozfbo-assembly-table-wrap"><table className="ozfbo-assembly-table">
   <thead><tr><th>Заявка</th><th>Состав</th><th>Срок / статус</th><th>Склад</th><th>Действия</th></tr></thead>
@@ -15,7 +15,7 @@ export function OzonAssemblyList({rows,active,selectedId,onOpen,onCargo}:{rows:O
     <p>{r.itemsPreview?.map(i=>`${i.name||i.barcode||'Товар'} × ${i.quantity}`).join(', ')}{(r.itemCount??0)>(r.itemsPreview?.length??0)&&` · ещё ${(r.itemCount??0)-(r.itemsPreview?.length??0)}`}</p><small>{r.directions} направлений</small></td>
    <td data-label="Срок / статус"><p>{date(r.desiredDate)}</p>{active&&<OzonEditCountdown orders={r.editDeadlines}/>}<p className="ozfbo-row-status">{r.fboProgressLabel??(r.status==='DONE'?'Сдано':r.status==='CANCELLED'?'Отменена':r.status==='REJECTED'?'Отклонена':r.phase==='COMPLETED'?'Упаковано, ожидает сдачи':r.phase==='NOT_STARTED'?'Ожидает сборки':'Сборка в работе')}</p></td>
    <td data-label="Склад"><strong>{r.warehouseName??'—'}</strong><p>{r.destinationCity}</p><div className="ozfbo-row-buttons"><button type="button" onClick={()=>onOpen(r.id)}>Открыть сборку</button><button type="button" onClick={()=>onCargo(r.id)}>Поставка и грузоместа Ozon</button></div></td>
-   <td data-label="Действия"><RequestRemovalButton request={r}/></td>
+   <td data-label="Действия"><div className="ozfbo-row-buttons">{active&&onSync&&['NOT_STARTED','PICKING'].includes(r.phase)&&['SUBMITTED','APPROVED','IN_WORK'].includes(r.status)&&<button type="button" className="ozfbo-sync-open" onClick={()=>onSync(r.id)}>Обновить состав из Ozon</button>}<RequestRemovalButton request={r}/></div></td>
   </tr>)}</tbody>
  </table></div>;
 }
