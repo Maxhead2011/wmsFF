@@ -11,6 +11,7 @@ import {assertNoOzonAdjustment,mergeSupplyOrders,supplyOrders,supplyDifferences,
 import {FboTwoStageService} from './fbo-two-stage.service';
 import {wbReservationQuantities} from '../../common/stock/wb-order-stock-lifecycle';
 import {adjustmentHash,adjustmentRows,validateAdjustment,type AdjustmentRow} from './ozon-adjustment-policy';
+import {physicalAdjustmentPlan,reconciliationMode,reconciliationDirections,reconciliationOperations,remoteComposition,type ReconciliationMode} from './ozon-physical-reconciliation';
 const active=(op:any)=>op&&!['APPLIED','CANCELLED'].includes(op.state);
 const composition=(items:any[])=>adjustmentHash(items.map(i=>[i.id,i.skuId,i.barcode,i.quantity]).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))));
 @Injectable()
@@ -48,7 +49,50 @@ export class OzonStockAdjustmentService {
   const rows=adjustmentRows(plan,limits),basis={status:s.request.status,phase:s.request.fboAssembly?.phase??null,items:s.request.items.map((i:any)=>({id:i.id,skuId:i.skuId,barcode:i.barcode,quantity:i.quantity})).sort((a:any,b:any)=>a.id.localeCompare(b.id)),units:(s.request.fboAssembly?.units??[]).filter((u:any)=>u.state!=='RETURNED').map((u:any)=>({id:u.id,state:u.state,targetBoxId:u.targetBoxId})).sort((a:any,b:any)=>a.id.localeCompare(b.id)),directions:s.directions,connectionId:s.integration?.connectionId,orderIds:s.integration?supplyOrders(s.integration).map(o=>o.orderId):[]};
   return {s,plan,rows,basis,token:adjustmentHash([user.id,id,basis,rows])};
  }
- async preview(id:string,user:AuthUser){const x=await this.db.$transaction(tx=>this.assess(tx,id,user),{isolationLevel:'RepeatableRead',timeout:30000});const c=await this.connection(x.s),link=await this.fresh(x.s,c);await this.assertEmptyCargoes(c,link);if(supplyDifferences(x.s.directions,link).length)throw new ConflictException('Состав WMS уже расходится с Ozon. Сначала выполните сверку поставок.');return {token:x.token,rows:x.rows,lines:x.plan.lines,pendingLocations:x.plan.pendingLocations,route:x.plan.route,needed:x.plan.needed,after:x.rows.reduce((n,r)=>n+r.after,0)};}
+ async preview(id:string,user:AuthUser,body?:{mode?:unknown}){if(body?.mode!==undefined){const p=await this.prepareReconciliation(id,user,reconciliationMode(body.mode));return {token:p.token,rows:p.x.rows,lines:p.x.plan.lines,needed:p.x.plan.needed,after:p.x.rows.reduce((n:number,r:AdjustmentRow)=>n+r.after,0),mode:p.mode,physicalBasis:p.x.physicalBasis,comparison:p.remote.comparison,changes:p.remote.comparison.some((r:any)=>r.before!==r.after||r.remote!==r.after)};}const x=await this.db.$transaction(tx=>this.assess(tx,id,user),{isolationLevel:'RepeatableRead',timeout:30000});const c=await this.connection(x.s),link=await this.fresh(x.s,c);await this.assertEmptyCargoes(c,link);if(supplyDifferences(x.s.directions,link).length)throw new ConflictException('Состав WMS уже расходится с Ozon. Сначала выполните сверку поставок.');return {token:x.token,rows:x.rows,lines:x.plan.lines,pendingLocations:x.plan.pendingLocations,route:x.plan.route,needed:x.plan.needed,after:x.rows.reduce((n,r)=>n+r.after,0)};}
+ // FIX: opt-in permanent workflow; old clients retain their established contract.
+ private async reconciliationAssessment(tx:any,id:string,user:AuthUser,mode:ReconciliationMode){
+  const s=await this.load(tx,id,user),r=s.request,a=r.fboAssembly;assertNoOzonAdjustment(s.integration);
+  if(!['SUBMITTED','APPROVED','IN_WORK','PACKED'].includes(r.status)||s.integration?.frozenHash||Object.keys(s.integration?.operations??{}).length)throw new ConflictException('Корректировка доступна до передачи грузомест и сдачи.');
+  if(new Set(r.items.map((i:any)=>i.skuId)).size!==r.items.length||r.items.some((i:any)=>!i.skuId))throw new ConflictException('Строки заявки требуют сверки.');
+  if(a?.compositionHash&&a.compositionHash!==composition(r.items))throw new ConflictException('Состав сборки требует сверки.');
+  const physical=mode==='PICKED'||['CONTROL','COMPLETED'].includes(a?.phase)||!!a?.pickClosure;
+  const available=physical?null:await this.assess(tx,id,user);
+  const plan:any=physical?physicalAdjustmentPlan(s):available!.plan;
+  const rows=physical?adjustmentRows(plan,Object.fromEntries(plan.lines.map((l:any)=>[l.skuId,l.picked]))):available!.rows;
+  const basis={status:r.status,phase:a?.phase??null,items:r.items.map((i:any)=>({id:i.id,skuId:i.skuId,barcode:i.barcode,quantity:i.quantity})).sort((a:any,b:any)=>a.id.localeCompare(b.id)),units:(a?.units??[]).filter((u:any)=>u.state!=='RETURNED').map((u:any)=>({id:u.id,state:u.state,targetBoxId:u.targetBoxId})).sort((a:any,b:any)=>a.id.localeCompare(b.id)),directions:s.directions,connectionId:s.integration.connectionId,orderIds:supplyOrders(s.integration).map(o=>o.orderId),boxes:JSON.parse(JSON.stringify(a?.boxes??[])),pickClosure:a?.pickClosure??null};
+  return {s,plan,rows,basis,physicalBasis:physical?plan.physicalBasis:'AVAILABLE',token:adjustmentHash([user.id,id,mode,basis,rows,s.integration])};
+ }
+ private async prepareReconciliation(id:string,user:AuthUser,mode:ReconciliationMode,quantities?:number[]){
+  const x=await this.db.$transaction(tx=>this.reconciliationAssessment(tx,id,user,mode),{isolationLevel:'RepeatableRead',timeout:30000});
+  const c=await this.connection(x.s),fresh=await this.fresh(x.s,c);
+  if(supplyOrders(fresh).some(o=>!['DATA_FILLING','READY_TO_SUPPLY'].includes(o.state)))throw new ConflictException('Ozon больше не разрешает подготовку этой поставки.');
+  await this.assertEmptyCargoes(c,fresh);
+  const resolve=async(i:any)=>{
+   const saved=x.s.integration.supplies.flatMap((s:any)=>s.items).filter((v:any)=>v.barcode===i.barcode&&v.sku&&v.offerId);
+   const identities=[...new Map(saved.map((v:any)=>[`${v.sku}:${v.offerId}`,v])).values()] as any[];
+   let cards:any[]=[];
+   if(identities.length===1){const data=await this.ozon.call(c,'/v3/product/info/list',{sku:[identities[0].sku]});cards=(data.items??[]).filter((v:any)=>v.offer_id===identities[0].offerId&&String(v.sku)===String(identities[0].sku));}
+   else {const links=await this.db.marketplaceProductLink.findMany({where:{clientId:x.s.request.clientId,connectionId:c.id,marketplace:'OZON',skuId:i.skuId}});if(links.length===1){const data=await this.ozon.call(c,'/v3/product/info/list',{product_id:[links[0].productId]});cards=(data.items??[]).filter((v:any)=>String(v.id)===links[0].productId&&v.offer_id===links[0].offerId);}}
+   cards=cards.filter((v:any)=>v.barcodes?.includes(i.barcode)&&v.sku);
+   if(cards.length!==1)throw new ConflictException(`Не подтверждено сопоставление Ozon для ШК ${i.barcode}. Обновите карточки кабинета.`);
+   return {sku:String(cards[0].sku),offerId:cards[0].offer_id,barcode:i.barcode,quant:1};
+  };
+  const directions=reconciliationDirections(x.s,x.rows),remote=await reconciliationOperations(x.s,fresh,directions,resolve);
+  const token=adjustmentHash([x.token,remoteComposition(fresh),remote.fingerprint]);
+  const rows=quantities?validateAdjustment(x.rows,quantities):x.rows;
+  const selected=reconciliationDirections(x.s,rows),selectedRemote=quantities?await reconciliationOperations(x.s,fresh,selected,resolve):remote;
+  return {x,c,fresh,mode,token,remote,rows,directions:selected,operations:selectedRemote.operations};
+ }
+ private async startReconciliation(id:string,body:{token:string;quantities:number[];mode:unknown},user:AuthUser){
+  const mode=reconciliationMode(body.mode),p=await this.prepareReconciliation(id,user,mode,body.quantities);
+  if(body.token!==p.token)throw new ConflictException('Состав Ozon, остатки или сборка изменились. Повторите предпросмотр.');
+  if(!p.operations.length&&p.rows.every(r=>r.after===r.before))throw new ConflictException('Корректировка не требуется.');
+  await this.locked(id,user,async(s,tx)=>{const x=await this.reconciliationAssessment(tx,id,user,mode);if(x.token!==p.x.token)throw new ConflictException('Сборка изменилась. Повторите предпросмотр.');
+   p.fresh.adjustment={id:randomUUID(),state:'RUNNING',actorId:user.id,createdAt:new Date().toISOString(),mode,physicalBasis:x.physicalBasis,basis:x.basis,rows:p.rows,directions:p.directions,operations:p.operations,remoteBefore:remoteComposition(p.fresh),comparison:p.remote.comparison};
+   await tx.ozonFboShipment.update({where:{requestId:id},data:{integration:p.fresh as any}});await tx.auditLog.create({data:{userId:user.id,action:'OZON_STOCK_ADJUSTMENT_STARTED',entity:'ClientRequest',entityId:id,payload:p.fresh.adjustment as any}});await recordOzonCorrectionEvent(tx,id,s.request.clientId,user.id,'STARTED',p.fresh.adjustment.id);
+  });return this.resume(id,user);
+ }
  // FIX: inbound synchronization reads Ozon only; a fresh preview guards every local write.
  private async syncAssessment(tx:any,s:any,link:SupplyIntegration,user:AuthUser){
   assertNoOzonAdjustment(s.integration);
@@ -84,9 +128,10 @@ export class OzonStockAdjustmentService {
   });
  }
  // FIX: persist intent before external writes; unknown outcomes are never blindly retried.
- async start(id:string,body:{token:string;quantities:number[];confirm:boolean},user:AuthUser){
+ async start(id:string,body:{token:string;quantities:number[];confirm:boolean;mode?:unknown},user:AuthUser){
   if(body?.confirm!==true)throw new BadRequestException('Подтвердите изменение количества в WMS и Ozon.');
   const initial=await this.load(this.db,id,user);if(active(initial.integration?.adjustment))return this.view(id,user);
+  if(body.mode!==undefined)return this.startReconciliation(id,{...body,mode:body.mode},user);
   const c=await this.connection(initial),fresh=await this.fresh(initial,c);if(supplyDifferences(initial.directions,fresh).length)throw new ConflictException('Состав Ozon изменился. Повторите сверку.');
   if(supplyOrders(fresh).some(o=>!['DATA_FILLING','READY_TO_SUPPLY'].includes(o.state)))throw new ConflictException('Ozon больше не разрешает подготовку этой поставки.');
   await this.assertEmptyCargoes(c,fresh);
@@ -110,6 +155,7 @@ export class OzonStockAdjustmentService {
   if(a.operations.every((o:any)=>o.state==='SUCCESS')&&!supplyDifferences(a.directions,fresh).length){await this.locked(id,user,async(cur,tx)=>{
    const op=cur.integration.adjustment;if(op?.id!==opId||!active(op))return;
    if(cur.request.status!==op.basis.status||(cur.request.fboAssembly?.phase??null)!==op.basis.phase)throw new ConflictException('Статус сборки изменился во время корректировки. Требуется сверка.');
+   if(op.basis.boxes&&(adjustmentHash(JSON.parse(JSON.stringify(cur.request.fboAssembly?.boxes??[])))!==adjustmentHash(op.basis.boxes)||adjustmentHash(cur.request.fboAssembly?.pickClosure??null)!==adjustmentHash(op.basis.pickClosure)))throw new ConflictException('Короба изменились во время корректировки. Требуется сверка.');
    const currentItems=cur.request.items.map((i:any)=>({id:i.id,skuId:i.skuId,barcode:i.barcode,quantity:i.quantity})),currentUnits=(cur.request.fboAssembly?.units??[]).filter((u:any)=>u.state!=='RETURNED').map((u:any)=>({id:u.id,state:u.state,targetBoxId:u.targetBoxId}));
    const ordered=(x:any[])=>[...x].sort((a,b)=>a.id.localeCompare(b.id));if(adjustmentHash(ordered(currentItems))!==adjustmentHash(ordered(op.basis.items))||adjustmentHash(ordered(currentUnits))!==adjustmentHash(ordered(op.basis.units)))throw new ConflictException('Локальная сборка изменилась во время корректировки. Требуется сверка.');
    const items=[];for(const i of cur.request.items){const quantity=op.rows.filter((r:any)=>r.skuId===i.skuId).reduce((n:number,r:any)=>n+r.after,0);if(quantity){await tx.clientRequestItem.update({where:{id:i.id},data:{quantity}});items.push({...i,quantity});}else await tx.clientRequestItem.delete({where:{id:i.id}});}
@@ -119,7 +165,7 @@ export class OzonStockAdjustmentService {
  // FIX: cancel only a conclusively rejected, unchanged external operation; never unlock an uncertain write.
  async cancel(id:string,user:AuthUser){const s=await this.load(this.db,id,user),a=s.integration?.adjustment;if(!active(a))return this.view(id,user);
   if(a.operations.some((o:any)=>!['PENDING','FAILED'].includes(o.state)))throw new ConflictException('Есть неподтверждённая или успешная операция Ozon. Сначала завершите сверку.');
-  const fresh=await this.fresh(s,await this.connection(s));if(supplyDifferences(a.basis.directions,fresh).length)throw new ConflictException('Ozon уже изменён: отменять локальную корректировку нельзя.');
+  const fresh=await this.fresh(s,await this.connection(s));if(a.remoteBefore?adjustmentHash(remoteComposition(fresh))!==adjustmentHash(a.remoteBefore):supplyDifferences(a.basis.directions,fresh).length)throw new ConflictException('Ozon уже изменён: отменять локальную корректировку нельзя.');
   await this.locked(id,user,async(cur,tx)=>{const op=cur.integration.adjustment;if(op?.id!==a.id||!active(op)||op.operations.some((o:any)=>!['PENDING','FAILED'].includes(o.state)))throw new ConflictException('Состояние операции изменилось.');op.state='CANCELLED';await tx.ozonFboShipment.update({where:{requestId:id},data:{integration:cur.integration}});await tx.auditLog.create({data:{userId:user.id,action:'OZON_STOCK_ADJUSTMENT_CANCELLED',entity:'ClientRequest',entityId:id,payload:{operationId:a.id}}});});return this.view(id,user);
  }
 

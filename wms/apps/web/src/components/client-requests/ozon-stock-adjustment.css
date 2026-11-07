@@ -1,0 +1,21 @@
+/* FIX: scoped controls remain legible in every WMS theme and on narrow screens. */
+.ozon-adjustment { margin: 16px 0; color: #263d50; }
+.ozon-adjustment .ozon-adjustment__toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.ozon-adjustment button { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 11px 18px; border: 1px solid #d4dfe7; border-radius: 12px; background: #fff; color: #34495a; font: inherit; font-weight: 650; line-height: 1.35; white-space: normal; cursor: pointer; transition: background .15s, border-color .15s; }
+.ozon-adjustment button.ozon-adjustment__primary, .ozon-adjustment button[aria-pressed=true] { background: #eee7f7; color: #5b427b; border-color: #d8c9ec; }
+.ozon-adjustment button:hover:not(:disabled) { background: #e6edf4; border-color: #adbdcd; }
+.ozon-adjustment button:focus-visible { outline: 3px solid #8b74c6; outline-offset: 2px; }
+.ozon-adjustment button:disabled { opacity: .55; cursor: not-allowed; }
+.ozon-adjustment__preview { margin-top: 16px; padding: 20px; border: 1px solid #d6e1e8; border-radius: 16px; background: #fff; }
+.ozon-adjustment__preview h3 { margin: 0 0 14px; }
+.ozon-adjustment__preview p { line-height: 1.5; }
+.ozon-adjustment__table { overflow-x: auto; margin: 16px 0; }
+.ozon-adjustment table { border-collapse: collapse; width: 100%; }
+.ozon-adjustment th, .ozon-adjustment td { padding: 12px; text-align: left; border-bottom: 1px solid #e3e9ee; }
+.ozon-adjustment th { background: #f4f7fa; }
+.ozon-adjustment td input { width: 90px; padding: 10px; border: 1px solid #cfdbe4; border-radius: 9px; font: inherit; }
+.ozon-adjustment__confirm { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; }
+.ozon-adjustment__confirm input { flex: 0 0 auto; width: 19px; height: 19px; accent-color: #765b9e; }
+.ozon-adjustment__error { padding: 12px 16px; border-radius: 10px; background: #fff3eb; color: #8a3c1c; }
+@media (max-width: 600px) { .ozon-adjustment__toolbar > button { flex: 1 1 100%; } .ozon-adjustment__preview { padding: 12px; } }
+.ozon-adjustment__preview > button + button { margin-left: 8px; }

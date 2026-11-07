@@ -12718,7 +12718,7 @@ export const createOzonLinks=(accessToken:string,body:OzonLinkInput)=>request<{r
 export type OzonAdjustmentRow={direction:string;skuId:string;barcode:string;before:number;packed:number;after:number};
 export type OzonSyncPreview={token:string;rows:Array<OzonAdjustmentRow&{name?:string}>;needed:number;after:number};
 export const ozonSync=(accessToken:string,id:string,action:'sync-preview'|'sync-apply',body:unknown={})=>request<OzonSyncPreview>(`/tsd/requests/${encodeURIComponent(id)}/fbo/ozon-adjustment/${action}`,{accessToken,method:'POST',body});
-export type OzonAdjustmentPreview={token:string;rows:OzonAdjustmentRow[];lines:FboPlan['lines'];needed:number;after:number};
+export type OzonAdjustmentPreview={token:string;rows:OzonAdjustmentRow[];lines:FboPlan['lines'];needed:number;after:number;mode?:'AVAILABLE'|'PICKED';physicalBasis?:'AVAILABLE'|'PICKED'|'PACKED';changes?:boolean;comparison?:Array<{direction:string;barcode:string;before:number;remote:number;after:number}>};
 export type OzonAdjustmentState={operation:null|{id:string;state:string;rows:OzonAdjustmentRow[];operations:Array<{supplyId:string;state:string;error?:string}>}};
 export const ozonAdjustment=(accessToken:string,id:string,action:''|'preview'|'start'|'resume'|'cancel',body:unknown={})=>request<OzonAdjustmentPreview&OzonAdjustmentState>(`/tsd/requests/${encodeURIComponent(id)}/fbo/ozon-adjustment${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});
 
