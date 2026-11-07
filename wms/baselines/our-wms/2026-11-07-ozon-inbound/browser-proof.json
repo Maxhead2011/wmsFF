@@ -1,0 +1,10 @@
+{
+  "passed": 8,
+  "applies": 2,
+  "previews": 6,
+  "lists": 5,
+  "errors": [],
+  "warnings": [],
+  "synthetic": true,
+  "noProductionWrites": true
+}
