@@ -6,6 +6,12 @@ BASE={'api':'sha256:5ad42574bb9dc1c15dd806badd982fdf5a0f4e1fd928cfc71588a9514eeb
 PREFIX={'api':'/app/apps/api/dist/','web':'/usr/share/nginx/html/'}
 def d(*a):return subprocess.check_output(['docker',*a],text=True).strip()
 def sha(b):return hashlib.sha256(b).hexdigest()
+
+def env_hash(raw):
+ # FIX: Docker may reorder environment entries when recreating an identical configuration.
+ entries=json.loads(raw);keys=[x.split('=',1)[0] for x in entries]
+ assert len(keys)==len(set(keys)), 'Duplicate environment keys'
+ return sha(json.dumps(sorted(entries),ensure_ascii=False).encode())
 def files(img,service):return {n:h for h,n in (l.split(None,1) for l in d('run','--rm','--network','none','--entrypoint','sh',img,'-c','find '+PREFIX[service]+' -type f -exec sha256sum {} +').splitlines())}
 def current(service):return d('inspect','wms-local-'+service,'--format','{{.Image}}')
 def health():
@@ -37,7 +43,7 @@ else:
  assert all(current(k)==b for k,b in BASE.items());assert sha(C.read_bytes())==v['composeHash']
  old=C.read_bytes();(R/'compose.before.json').write_bytes(old)
  other={n:d('inspect',n,'--format','{{.Id}}') for n in d('ps','--format','{{.Names}}').splitlines() if n not in ['wms-local-api','wms-local-web']}
- env={s:sha(d('inspect','wms-local-'+s,'--format','{{json .Config.Env}}').encode()) for s in BASE}
+ env={s:env_hash(d('inspect','wms-local-'+s,'--format','{{json .Config.Env}}')) for s in BASE}
  config=json.loads(old)
  def start(service):d('compose','-f',str(C),'up','-d','--no-deps','--no-build','--pull','never',service)
  try:
@@ -46,7 +52,7 @@ else:
   d('exec','wms-local-web','wget','-qO-','http://127.0.0.1/')
   for service in BASE:
    assert current(service)==v['images'][service]
-   assert sha(d('inspect','wms-local-'+service,'--format','{{json .Config.Env}}').encode())==env[service]
+   assert env_hash(d('inspect','wms-local-'+service,'--format','{{json .Config.Env}}'))==env[service]
    for n,h in v['hashes'][service].items():assert d('exec','wms-local-'+service,'sha256sum',n).split()[0]==h
   assert all(d('inspect',n,'--format','{{.Id}}')==i for n,i in other.items())
  except Exception:
