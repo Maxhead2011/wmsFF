@@ -11,8 +11,8 @@ export class OzonStockAdjustmentController {
  @Post('sync-preview') syncPreview(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.syncPreview(id,user);}
  @Post('sync-apply') syncApply(@Param('id') id:string,@Body() body:{token:string;confirm:boolean},@CurrentUser() user:AuthUser){return this.service.syncApply(id,body,user);}
  @Get() view(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.view(id,user);}
- @Post('preview') preview(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.preview(id,user);}
- @Post('start') start(@Param('id') id:string,@Body() body:{token:string;quantities:number[];confirm:boolean},@CurrentUser() user:AuthUser){return this.service.start(id,body,user);}
+ @Post('preview') preview(@Param('id') id:string,@CurrentUser() user:AuthUser,@Body() body?:{mode?:unknown}){return this.service.preview(id,user,body);}
+ @Post('start') start(@Param('id') id:string,@Body() body:{token:string;quantities:number[];confirm:boolean;mode?:unknown},@CurrentUser() user:AuthUser){return this.service.start(id,body,user);}
  @Post('resume') resume(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.resume(id,user);}
  @Post('cancel') cancel(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.cancel(id,user);}
 }
