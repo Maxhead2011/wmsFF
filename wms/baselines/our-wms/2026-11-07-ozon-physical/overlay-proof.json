@@ -1,0 +1,1 @@
+{"api":["ozon-stock-adjustment.service","ozon-stock-adjustment.controller","ozon-physical-reconciliation"],"methods":["preview","reconciliationAssessment","prepareReconciliation","startReconciliation","start","resume","cancel"],"webFunctions":4,"existingMethodsPreserved":true,"existingWebAssetsPreserved":true}
