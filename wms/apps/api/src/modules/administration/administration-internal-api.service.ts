@@ -27,7 +27,7 @@ export type InternalApiDefinition = {
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
   // FIX: keep the internal route inventory complete for the opt-in FBY module.
   {
-    id: 'yandex-fby', name: 'Яндекс Маркет FBY', prefixes: ['/yandex-fby'], routeCount: 9,
+    id: 'yandex-fby', name: 'Яндекс Маркет FBY', prefixes: ['/yandex-fby'], routeCount: 10,
     description: 'Импорт поставок, Excel/ручные сборки, привязка и сверка состава.',
     logic: ['Права клиента и филиала проверяются на каждом запросе.', 'Заявка и принадлежность FBY создаются атомарно.', 'Сверка не меняет отобранный состав; отправка грузомест в Яндекс не выполняется.'],
     dependencies: ['Основная БД', 'Яндекс Partner API', 'WMS_YANDEX_FBY_ENABLED'],

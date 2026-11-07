@@ -10,6 +10,11 @@ import { FbyPreviewDto, FbyCreateDto, FbyBindDto } from './yandex-fby.dto';
 @RequirePermissions('client-requests:read')
 export class YandexFbyController {
   constructor(private readonly service: YandexFbyService) {}
+  @Get('accounts/:id/requests/:requestId/export')
+  async exportActual(@Param('id') id:string,@Param('requestId') requestId:string,@CurrentUser() user:AuthUser) {
+    const result=await this.service.exportActual(id,requestId,user);
+    return new StreamableFile(result.buffer,{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',disposition:`attachment; filename="Yandex-FBY-${String(result.number).replace(/[^0-9]/g,'')}.xlsx"`});
+  }
   @Get('accounts') accounts(@Query('clientId') clientId: string, @CurrentUser() user: AuthUser) { return this.service.accounts(clientId, user); }
   @Get('accounts/:id/warehouses') warehouses(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.service.warehouses(id, user); }
   @Get('accounts/:id/requests') list(@Param('id') id: string, @Query('view') view: string, @CurrentUser() user: AuthUser) { return this.service.list(id, user, view); }

@@ -10,6 +10,7 @@ import { assertWarehouseAccess, effectiveWarehouseId, warehouseScopeWhere } from
 import { YandexFbyClient, type Supply } from './yandex-fby-client';
 import { assertFbySupply, fbyCompositionHash, normalizeFbyLines } from './yandex-fby-policy';
 import { FbyPreviewDto, FbyCreateDto, FbyBindDto } from './yandex-fby.dto';
+import { assertActualFby, actualFbyRows, actualFbyWorkbook } from './yandex-fby-export';
 
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -33,6 +34,26 @@ export class YandexFbyService {
     this.guard(user, 'read'); this.scopes.requireClientAccess(user, clientId, 'read');
     return this.db.clientMarketplaceConnection.findMany({ where: { clientId, marketplace: 'YANDEX_MARKET', ...(process.env.WMS_MARKETPLACE_WORKSPACES_ENABLED === 'true' ? {} : {isActive:true}) },
       select: { id: true, accountName: true, sellerId: true, isActive: true, client: { select: { name: true } } } });
+  }
+  // FIX: scope and readiness precede remote reads, then a fresh consistent snapshot supplies the actual quantities.
+  private async actualContext(tx:Prisma.TransactionClient,id:string,requestId:string,clientId:string,user:AuthUser) {
+    const r=await tx.clientRequest.findFirst({where:{id:requestId,clientId,...warehouseScopeWhere(user),yandexFbyShipment:{is:{connectionId:id}}},include:{items:true,yandexFbyShipment:true,fboAssembly:{include:{units:true,boxes:true}}}});
+    if(!r)throw new NotFoundException('Сборка Яндекса недоступна.');
+    if(!r.fboAssembly)throw new BadRequestException('Сначала выполните сборку и упаковку.');
+    const lines=(r.yandexFbyShipment?.snapshot as any)?.lines;
+    const mappings=Array.isArray(lines)?lines.filter(l=>typeof l?.skuId==='string'&&typeof l?.offerId==='string').map(l=>({skuId:l.skuId,offerId:l.offerId})):[];
+    const context={status:r.status,phase:r.fboAssembly.phase,items:r.items,units:r.fboAssembly.units,boxes:r.fboAssembly.boxes,mappings};
+    assertActualFby(context);return {context,number:r.number};
+  }
+  async exportActual(id:string,requestId:string,user:AuthUser) {
+    const c=await this.account(id,user,'read');
+    await this.actualContext(this.db,id,requestId,c.clientId,user);
+    const offers=await this.remote.offers(c);
+    const result=await this.db.$transaction(async tx=>{
+      const fresh=await this.actualContext(tx,id,requestId,c.clientId,user);
+      return {rows:actualFbyRows(fresh.context,offers),number:fresh.number};
+    },{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead});
+    return {buffer:await actualFbyWorkbook(result.rows),number:result.number};
   }
   async warehouses(id: string, user: AuthUser, mode: 'read' | 'write' = 'read') {
     const c = await this.account(id, user, mode);

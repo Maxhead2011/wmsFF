@@ -1,5 +1,6 @@
 import { BadGatewayException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { supplyReference } from './yandex-fby-policy';
+import type { FbyOffer } from './yandex-fby-export';
 
 export type Supply = { id: { id: number; marketplaceRequestId?: string; warehouseRequestId?: string }; type: string; subtype: string; status: string; targetLocation?: { name?: string; requestedDate?: string }; transitLocation?: { name?: string; requestedDate?: string } | null };
 export type SupplyItem = { offerId: string; name?: string; counters: { planCount: number } };
@@ -8,6 +9,33 @@ export type FbyCredentials = { sellerId: string | null; apiKey: string };
 // FIX: only read operations against a fixed API origin. Caller-controlled links never become fetch URLs.
 export class YandexFbyClient {
   constructor(private readonly send: typeof fetch = fetch) {}
+  // FIX: read the catalogue of the selected campaign's business, never guess offer IDs from WMS SKUs.
+  async offers(c:FbyCredentials):Promise<FbyOffer[]> {
+    if(!c.sellerId||!/^[1-9]\d*$/.test(c.sellerId))throw new BadRequestException('Укажите ID кампании Яндекса.');
+    const signal=AbortSignal.timeout(60_000);
+    const read=async(path:string,body?:object)=>{
+      let response:Response;
+      try{response=await this.send(`https://api.partner.market.yandex.ru/v2/${path}`,{method:body?'POST':'GET',headers:{'Api-Key':c.apiKey,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal,redirect:'error'});}
+      catch{throw new BadGatewayException('Не удалось загрузить каталог Яндекса. Повторите скачивание.');}
+      if(!response.ok)throw new BadGatewayException(`Яндекс: HTTP ${response.status}. Проверьте доступ «Просмотр товаров и карточек».`);
+      try{return await response.json();}catch{throw new BadGatewayException('Некорректный ответ каталога Яндекса.');}
+    };
+    const campaign=await read(`campaigns/${c.sellerId}`);
+    const business=campaign.campaign?.business?.id;
+    if(String(campaign.campaign?.id)!==c.sellerId||!Number.isSafeInteger(business)||business<1)throw new BadGatewayException('Не удалось определить бизнес выбранной кампании Яндекса.');
+    const rows:FbyOffer[]=[],seen=new Set<string>(),tokens=new Set<string>();let token='';
+    for(let page=0;page<100;page++){
+      const data=await read(`businesses/${business}/offer-mappings?limit=100${token?'&pageToken='+encodeURIComponent(token):''}`,{});
+      if(data.status!=='OK'||!Array.isArray(data.result?.offerMappings))throw new BadGatewayException('Неполный каталог Яндекса.');
+      for(const m of data.result.offerMappings){const o=m.offer;
+        if(!o||typeof o.offerId!=='string'||!o.offerId||seen.has(o.offerId))throw new BadGatewayException('Некорректный или повторный SKU в каталоге Яндекса.');
+        seen.add(o.offerId);rows.push({offerId:o.offerId,name:typeof o.name==='string'?o.name:'',barcodes:Array.isArray(o.barcodes)?o.barcodes.filter((v:unknown)=>typeof v==='string'):[]});
+      }
+      const next=data.result.paging?.nextPageToken;if(!next)return rows;
+      if(typeof next!=='string'||tokens.has(next))throw new BadGatewayException('Повтор страницы каталога Яндекса.');tokens.add(next);token=next;
+    }
+    throw new BadGatewayException('Каталог слишком большой. Неполная выгрузка запрещена.');
+  }
   private async pages<T>(c: FbyCredentials, suffix: string, body: object, field: string, maxPages: number): Promise<T[]> {
     if (!c.sellerId || !/^[1-9]\d*$/.test(c.sellerId)) throw new BadRequestException('В подключении Яндекса укажите ID кампании.');
     const rows: T[] = [], seen = new Set<string>();
