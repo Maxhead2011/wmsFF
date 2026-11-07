@@ -84,9 +84,9 @@ describe('AdministrationInternalApiService', () => {
     // TEST: receipt directions add four branch-scoped routes.
     // TEST: suspicious receipt review adds one independently gated group.
     // TEST: Lamoda preparation is registered without being advertised as a shipping connector.
-    // TEST: FBY adds one independently gated group with nine declared routes.
+    // TEST: FBY adds one independently gated group with ten declared routes.
     expect(INTERNAL_API_DEFINITIONS).toHaveLength(37);
-    expect(INTERNAL_API_DEFINITIONS.find(d => d.id === 'yandex-fby')?.routeCount).toBe(9);
+    expect(INTERNAL_API_DEFINITIONS.find(d => d.id === 'yandex-fby')?.routeCount).toBe(10);
   });
 
   it('не рисует ложный зелёный статус при ошибке основной БД', async () => {

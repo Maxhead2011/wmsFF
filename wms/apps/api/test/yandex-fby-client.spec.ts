@@ -3,6 +3,20 @@ import { YandexFbyClient } from '../src/modules/yandex-fby/yandex-fby-client';
 import { fbyQueueScope } from '../src/modules/yandex-fby/yandex-fby-scope';
 const c={sellerId:'123',apiKey:'secret'};
 const response=(result:unknown)=>Response.json({status:'OK',result});
+// TEST: export catalogue is campaign-bound, complete, paginated and read-only.
+it('loads the selected campaign business catalogue across all pages',async()=>{
+ const http=vi.fn().mockResolvedValueOnce(Response.json({campaign:{id:123,business:{id:9}}}))
+ .mockResolvedValueOnce(response({offerMappings:[{offer:{offerId:'a',name:'A',barcodes:['001']}}],paging:{nextPageToken:'two'}}))
+ .mockResolvedValueOnce(response({offerMappings:[{offer:{offerId:'b',name:'B',barcodes:['002']}}]}));
+ expect((await new YandexFbyClient(http).offers(c)).map(o=>o.offerId)).toEqual(['a','b']);
+ expect(http.mock.calls[0][1].method).toBe('GET');expect(http.mock.calls[1][0]).toContain('businesses/9/offer-mappings');expect(http.mock.calls[2][0]).toContain('pageToken=two');
+});
+it('rejects foreign campaigns, partial catalogues and duplicate pages without exposing credentials',async()=>{
+ const wrong=vi.fn(async()=>Response.json({campaign:{id:456,business:{id:9}}}));await expect(new YandexFbyClient(wrong).offers(c)).rejects.toThrow('кампании');
+ const http=vi.fn().mockResolvedValueOnce(Response.json({campaign:{id:123,business:{id:9}}})).mockImplementation(async()=>response({offerMappings:[{offer:{offerId:'a'}}],paging:{nextPageToken:'again'}}));
+ await expect(new YandexFbyClient(http).offers(c)).rejects.toThrow('повторный');
+ const denied=vi.fn(async()=>Response.json({secret:c.apiKey},{status:403}));await expect(new YandexFbyClient(denied).offers(c)).rejects.toThrow('Просмотр товаров');
+});
 afterEach(()=>vi.unstubAllEnvs());
 // TEST: cabinet identity, pagination and no credential/error leakage.
 describe('Yandex FBY reader',()=>{

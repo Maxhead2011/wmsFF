@@ -1,3 +1,4 @@
+import { FbyActualExportButton } from './FbyActualExportButton';
 import { fetchWorkspaceClients, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -65,6 +66,7 @@ export function YandexFbyPanel({session}:{session:AuthSession}) {
    {plan&&<section><h3>Выполнение сборки</h3><FboProgress plan={plan} accessToken={token}/><button className="icon-text-button" onClick={()=>setPlan(null)}>Закрыть</button></section>}
   </section><section className="fby-card"><h3>Сборки FBY</h3><div className="fby-actions"><button className="icon-text-button" aria-pressed={view==='active'} onClick={()=>setView('active')}>Активные</button><button className="icon-text-button" aria-pressed={view==='closed'} onClick={()=>setView('closed')}>Завершённые</button><button className="icon-text-button" onClick={()=>setRevision(v=>v+1)}>Обновить</button></div>
    {loading&&<p>Загружаю…</p>}{!loading&&!rows.length&&<p>Сборок нет.</p>}{rows.map(r=><article className="fby-request" key={r.id}><strong>№{r.number} · {r.title}</strong><p>{r.items.reduce((s,i)=>s+i.quantity,0)} шт. · {r.destinationCity}</p><p>{r.status} · {r.yandexFbyShipment.remoteNumber?`Яндекс №${r.yandexFbyShipment.remoteNumber}`:'Поставка ещё не привязана'}</p><FbySupplyStatus status={r.yandexFbyShipment.remoteStatus} checkedAt={r.yandexFbyShipment.checkedAt}/><div className="fby-actions">
+    <FbyActualExportButton key={`${accountId}:${r.id}`} token={token} accountId={accountId} requestId={r.id} number={r.number} status={r.status}/>
     <button className="icon-text-button" disabled={busy} onClick={()=>void run(()=>fetchFboPlan(token,r.id),setPlan)}>Выполнение</button>
     {r.yandexFbyShipment.remoteNumber?<button className="icon-text-button" disabled={busy} onClick={()=>void run(()=>refreshFby(token,accountId,r.id),v=>{setRevision(n=>n+1);setNotice(`${v.status}. ${v.matches?'Состав совпадает.':'Есть расхождения: '+v.differences.map(d=>`${d.offerId}: сборка ${d.assemblyQuantity}, Яндекс ${d.yandexQuantity}`).join('; ')} Состав сборки сохранён.`)})}>Сверить с Яндексом</button>:view==='active'&&<button className="icon-text-button" disabled={disabled} onClick={()=>{setBinding(r);setWarehouseId(r.warehouseId);setMode('remote');setPreview(null);setReference('');setMappings({})}}>Привязать поставку</button>}
     {r.status==='PACKED'&&writable&&<button className="icon-text-button" disabled={busy} onClick={()=>setConfirmation({request:r,action:'DONE'})}>Отметить сданной</button>}

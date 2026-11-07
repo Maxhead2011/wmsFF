@@ -12,6 +12,21 @@ beforeEach(()=>{
  remote={supply:vi.fn(async()=>({id:{id:42,marketplaceRequestId:'100'},type:'SUPPLY',subtype:'DEFAULT',status:'CREATED',targetLocation:{name:'Москва'}})),items:vi.fn(async()=>[{offerId:'offer',name:'Товар',counters:{planCount:2}}])};(service as any).remote=remote;
 });
 afterEach(()=>vi.unstubAllEnvs());
+// TEST: no write calls, scoped reads and a second coherent snapshot after catalogue loading.
+it('exports actual units and revalidates packaging after the remote read',async()=>{
+ const r={number:7,status:'PACKED',items:[{id:'i',skuId:'s',quantity:1}],yandexFbyShipment:{snapshot:{lines:[]}},fboAssembly:{phase:'COMPLETED',units:[{id:'u',requestItemId:'i',skuId:'s',barcode:'001',state:'PACKED',targetBoxId:'b'}],boxes:[{boxId:'b',closedAt:new Date(),confirmedAt:new Date()}]}};
+ db.clientRequest.findFirst.mockResolvedValue(r);remote.offers=vi.fn(async()=>[{offerId:'seller',name:'Name',barcodes:['001']}]);
+ const file=await service.exportActual('a','r',user);expect(file.number).toBe(7);expect(file.buffer.length).toBeGreaterThan(1000);
+ expect(db.clientRequest.findFirst).toHaveBeenCalledTimes(2);expect(db.clientRequest.findFirst.mock.calls[0][0].where).toMatchObject({id:'r',clientId:'c',yandexFbyShipment:{is:{connectionId:'a'}}});
+ expect(db.clientRequest.create).not.toHaveBeenCalled();expect(db.yandexFbyShipment.update).not.toHaveBeenCalled();expect(db.$executeRaw).not.toHaveBeenCalled();
+ remote.offers.mockImplementation(async()=>{r.fboAssembly.phase='PACKING';return [{offerId:'seller',name:'Name',barcodes:['001']}];});
+ await expect(service.exportActual('a','r',user)).rejects.toThrow('Завершите');
+});
+it('denies unavailable requests and foreign clients before reading the catalogue',async()=>{
+ remote.offers=vi.fn();db.clientRequest.findFirst.mockResolvedValue(null);
+ await expect(service.exportActual('a','missing',user)).rejects.toThrow('недоступна');
+ await expect(service.exportActual('a','r',{...user,clientIds:[]})).rejects.toThrow();expect(remote.offers).not.toHaveBeenCalled();
+});
 // TEST: read disabled cabinets locally while retaining the active-only mutation guard.
 it('keeps disabled cabinet history readable without enabling imports',async()=>{
  vi.stubEnv('WMS_MARKETPLACE_WORKSPACES_ENABLED','true');
