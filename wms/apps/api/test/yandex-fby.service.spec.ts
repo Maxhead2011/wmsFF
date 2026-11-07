@@ -56,9 +56,25 @@ it('returns an existing assembly after a repeated import without another create'
  db.yandexFbyShipment.findFirst.mockResolvedValue({request:{id:'existing',warehouseId:'w'}});
  const result=await service.create('a',{warehouseId:'w',reference:'100',idempotencyKey:'key',previewHash:'old'},user);expect(result.existing).toBe(true);expect(db.clientRequest.create).not.toHaveBeenCalled();
 });
-it('refresh reports remote changes without mutating assembly, picked units or bindings',async()=>{
+it('refresh persists remote status without mutating assembly, picked units or bindings',async()=>{
+ db.yandexFbyShipment.updateMany=vi.fn(async()=>({count:1}));
  db.yandexFbyShipment.findFirst.mockResolvedValue({remoteNumber:'100',remoteId:'42',request:{warehouseId:'w',items:[]},snapshot:{lines:[{offerId:'offer',quantity:3}]}});
  const result=await service.refresh('a','r',user);expect(result.matches).toBe(false);expect(result.differences).toEqual([{offerId:'offer',assemblyQuantity:3,yandexQuantity:2}]);expect(db.yandexFbyShipment.update).not.toHaveBeenCalled();expect(db.clientRequest.create).not.toHaveBeenCalled();
+ expect(db.yandexFbyShipment.updateMany).toHaveBeenCalledWith(expect.objectContaining({where:expect.objectContaining({requestId:'r',connectionId:'a',remoteId:'42'}),data:{remoteStatus:'CREATED',checkedAt:expect.any(Date)}}));
+});
+// TEST: stale responses and failed remote reads cannot replace the last successful check.
+it('rejects a refresh superseded by another refresh or a changed binding',async()=>{
+ db.yandexFbyShipment.findFirst.mockResolvedValue({remoteNumber:'100',remoteId:'42',request:{warehouseId:'w'},snapshot:{lines:[]}});
+ db.yandexFbyShipment.updateMany=vi.fn(async()=>({count:0}));
+ await expect(service.refresh('a','r',user)).rejects.toThrow('Повторите');
+});
+it('does not persist a partial remote check or a demo check',async()=>{
+ db.yandexFbyShipment.findFirst.mockResolvedValue({remoteNumber:'100',remoteId:'42',request:{warehouseId:'w'},snapshot:{lines:[]}});
+ db.yandexFbyShipment.updateMany=vi.fn();
+ remote.items.mockRejectedValueOnce(new Error('remote unavailable'));
+ await expect(service.refresh('a','r',user)).rejects.toThrow('remote unavailable');
+ await service.refresh('a','r',{...user,isDemo:true});
+ expect(db.yandexFbyShipment.updateMany).not.toHaveBeenCalled();
 });
 it('parses the Excel template and keeps leading zeros; rejects wrong columns',async()=>{
  const make=(rows:unknown[][])=>{const b=XLSX.utils.book_new();XLSX.utils.book_append_sheet(b,XLSX.utils.aoa_to_sheet(rows),'FBY');return XLSX.write(b,{type:'buffer',bookType:'xlsx'})};
