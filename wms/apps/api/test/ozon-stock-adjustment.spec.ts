@@ -41,7 +41,32 @@ describe('Ozon physical reconciliation',()=>{
  function packed(){const x=setup();x.s.request.status='IN_WORK';x.s.request.fboAssembly.phase='CONTROL';x.s.request.fboAssembly.boxes=[{id:'box',boxId:'b',direction:'A',closedAt:'2026-11-07',confirmedAt:null}];x.s.request.fboAssembly.units=Array.from({length:7},(_,i)=>({id:'u'+i,skuId:'sku',state:'PACKED',targetBoxId:'b'}));return x;}
  const preview=(x:any,mode='AVAILABLE')=>(x.svc.preview as any)('r',x.user,{mode});
  const apply=(x:any,p:any,mode='AVAILABLE')=>x.svc.start('r',{token:p.token,quantities:p.rows.map((r:any)=>r.after),confirm:true,mode} as any,x.user);
+ // TEST: real Ozon ERROR is terminal; resuming must never submit it twice or alter boxes.
+ it.each(['ERROR','FAILED'])('reports %s capacity rejection with direction and preserves packed boxes',async status=>{
+  const x=packed(),before=structuredClone(x.s.request.fboAssembly),original=x.ozon.call.getMockImplementation();
+  x.ozon.call.mockImplementation(async(...args:any[])=>args[1].endsWith('/content/update/status')?{status,errors:['INBOUND_NO_CAPACITY'],error_details:{items_quantity_limit:0}}:original(...args));
+  const result=await apply(x,await preview(x));
+  expect(result.operation.state).toBe('NEEDS_ATTENTION');
+  expect(result.operation.operations[0]).toMatchObject({state:'FAILED',direction:'A',error:expect.stringContaining('недостаточно места')});
+  expect(x.s.integration.adjustment.operations[0]).toMatchObject({remoteStatus:status,errorDetails:{items_quantity_limit:0}});
+  await x.svc.resume('r',x.user);
+  expect(x.ozon.call.mock.calls.filter((c:any)=>c[1].endsWith('/content/update'))).toHaveLength(1);
+  expect(x.db.clientRequestItem.update).not.toHaveBeenCalled();expect(x.db.fboAssembly.update).not.toHaveBeenCalled();
+  expect(x.s.request.fboAssembly).toEqual(before);
+ });
  it('reconciles CONTROL from packed units and preserves every box and unit',async()=>{const x=packed(),before=structuredClone(x.s.request.fboAssembly),p=await preview(x);expect(p.after).toBe(7);expect(p.physicalBasis).toBe('PACKED');expect((await apply(x,p)).operation.state).toBe('APPLIED');expect(x.s.request.fboAssembly).toEqual(before);expect(x.fbo.adjustmentContext).not.toHaveBeenCalled();expect(x.db.stockBalance.findMany).not.toHaveBeenCalled();});
+ // TEST: existing partial operations are repaired by polling only, without unlocking or discarding boxes.
+ it('refreshes an existing accepted ERROR beside a success without resending or allowing cancel',async()=>{
+  const x=packed(),before=structuredClone(x.s.request.fboAssembly),original=x.ozon.call.getMockImplementation();
+  x.ozon.call.mockImplementation(async(...args:any[])=>args[1].endsWith('/content/update/status')?{status:'ERROR',errors:['INBOUND_NO_CAPACITY']}:original(...args));
+  await apply(x,await preview(x));x.s.integration.adjustment.operations[0].state='ACCEPTED';
+  x.s.integration.adjustment.operations.push({supplyId:'43',state:'SUCCESS',operationId:'already-done'});x.ozon.call.mockClear();
+  const result=await x.svc.resume('r',x.user);expect(result.operation?.state).toBe('NEEDS_ATTENTION');
+  expect(result.operation?.operations.map((o:any)=>o.state)).toEqual(['FAILED','SUCCESS']);
+  expect(x.ozon.call.mock.calls.filter((c:any)=>c[1].endsWith('/content/update'))).toHaveLength(0);
+  await expect(x.svc.cancel('r',x.user)).rejects.toThrow('успешная операция');
+  expect(x.db.clientRequestItem.update).not.toHaveBeenCalled();expect(x.s.request.fboAssembly).toEqual(before);
+ });
  it('allows remote-only drift when local quantity already equals packed',async()=>{const x=packed();x.s.request.items[0].quantity=7;x.s.directions[0].items[0].quantity=7;const p=await preview(x);expect(p.after).toBe(p.needed);expect(p.comparison[0]).toMatchObject({remote:10,after:7});expect((await apply(x,p)).operation.state).toBe('APPLIED');});
  it('uses picked-only basis without reading warehouse stock',async()=>{const x=setup(),p=await preview(x,'PICKED');expect(p.after).toBe(1);expect((await apply(x,p,'PICKED')).operation.state).toBe('APPLIED');expect(x.db.stockBalance.findMany).not.toHaveBeenCalled();});
  it('rejects remote changes since preview before any write',async()=>{const x=packed(),p=await preview(x);x.remote.supplies[0].items[0].quantity=9;await expect(apply(x,p)).rejects.toThrow('предпросмотр');expect(x.db.ozonFboShipment.update).not.toHaveBeenCalled();});
