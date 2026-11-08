@@ -1,0 +1,42 @@
+// TEST: real compiled download handler, synthetic Ozon artwork, no live credentials.
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),Module=require('module');
+const root=path.resolve(process.argv[2]),candidate=path.join(root,'api-candidate');
+process.env.NODE_PATH=[path.resolve('apps/api/node_modules'),path.resolve('node_modules')].join(path.delimiter);Module._initPaths();
+const local=Module.createRequire(path.resolve('apps/api/package.json')),load=Module._load;
+Module._load=function(name,parent){if(parent?.filename.startsWith(candidate)&&!name.startsWith('.')&&!path.isAbsolute(name))return local(name);return load.apply(this,arguments)};
+const {PDFDocument,StandardFonts}=local('pdf-lib'),{PDFParse}=local('pdf-parse'),bwip=local('bwip-js');
+const {MarketplaceConnectionsService}=require(candidate+'/modules/marketplace-connections/marketplace-connections.service');
+const MM=72/25.4,sku={id:'s',name:'Ткань атлас сатин синий 30 метров',internalSku:'blue_30',marketplaceProductId:'12',marketplaceOfferId:'blue_30',barcodes:[{value:'2000000000053'}]};
+const service=Object.create(MarketplaceConnectionsService.prototype);
+service.prisma={sku:{findMany:async()=>[sku]},clientMarketplaceConnection:{findMany:async()=>[{id:'c',marketplace:'OZON',sellerId:'synthetic',apiKey:'synthetic'}]}};
+service.clientScopes={requireClientAccess:()=>{}};
+process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED='true';process.env.WMS_FBS_FABRIC_CUT_ENABLED='false';
+process.env.WMS_MARKETPLACE_PRODUCT_LINKS_ENABLED='false';
+const expected=['2000000000053','90123456789012345678','2000000000053','90123456789012345679'];
+let calls=0;
+global.fetch=async(url,init)=>{calls++;const input=JSON.parse(init.body);
+ if(String(url).endsWith('/posting/fbs/get')) return new Response(JSON.stringify({result:{posting_number:input.posting_number,status:'awaiting_deliver',products:[{sku:12,offer_id:'blue_30',quantity:1}]}}),{status:200,headers:{'Content-Type':'application/json'}});
+ assert(String(url).endsWith('/posting/fbs/package-label'));
+ const p=await PDFDocument.create(),font=await p.embedFont(StandardFonts.Helvetica),page=p.addPage([120*MM,75*MM]);
+ page.drawText('TEST / NOT FOR SHIPMENT',{x:8*MM,y:65*MM,size:16,font});
+ const number=input.posting_number[0]==='TEST-001'?expected[1]:expected[3];
+ const png=await p.embedPng(await bwip.toBuffer({bcid:'code128',text:number,scale:4,height:15,includetext:true}));
+ page.drawImage(png,{x:10*MM,y:25*MM,width:100*MM,height:27*MM});
+ page.drawText(input.posting_number[0],{x:8*MM,y:10*MM,size:20,font});
+ return new Response(await p.save(),{status:200,headers:{'Content-Type':'application/pdf'}});
+};
+(async()=>{
+ const dto={clientId:'synthetic',orders:['TEST-001','TEST-002'].map(id=>({id,connectionId:'c'}))};
+ const result=await service.getFbsOrderStickersPdf(dto,{});assert.equal(result.count,2);assert.equal(calls,4);
+ const pdf=await PDFDocument.load(result.buffer);assert.equal(pdf.getPageCount(),4);
+ for(const p of pdf.getPages()){assert(Math.abs(p.getWidth()-58*MM)<.01);assert(Math.abs(p.getHeight()-40*MM)<.01);}
+ const reader=new PDFParse({data:result.buffer});const texts=(await reader.getText()).pages.map(p=>p.text);await reader.destroy();
+ for(let i=0;i<4;i++)assert(texts[i].includes(`Комплект 00${Math.floor(i/2)+1} · ${i%2+1}/2`));
+ assert(texts[0].includes('Количество'));assert(texts[1].includes('TEST / NOT FOR SHIPMENT'));
+ fs.writeFileSync(root+'/ozon-numbered-preview.pdf',result.buffer);
+ fs.writeFileSync(root+'/expected-barcodes.json',JSON.stringify(expected));
+ service.clientScopes.requireClientAccess=()=>{throw Error('denied')};const before=calls;
+ await assert.rejects(()=>service.getFbsOrderStickersPdf(dto,{}),/denied/);assert.equal(calls,before);
+ fs.writeFileSync(root+'/api-candidate-proof.json',JSON.stringify({passed:3,pages:4,syntheticOnly:true,marketplaceMutations:0}));
+ console.log('Compiled handler: numbering, page geometry/order and permission gate passed');process.exit(0);
+})().catch(e=>{console.error(e);process.exit(1)});
