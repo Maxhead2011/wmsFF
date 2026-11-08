@@ -1,0 +1,48 @@
+name: Own WMS compact controls regression
+on:
+  pull_request:
+    branches: [feature/la_panthera]
+  push:
+    branches: [feature/la_panthera]
+permissions:
+  contents: read
+jobs:
+  compact-controls:
+    # FIX: pin the OS supported by the pinned Playwright browser dependencies.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix work/controls-tools --no-package-lock playwright@1.58.2
+          npm install --prefix work/controls-tools --no-package-lock esbuild@0.25.12 react@18.3.1 react-dom@18.3.1 lucide-react@0.468.0 qrcode@1.5.4 jsbarcode@3.11.6 echarts@5.6.0 gsap@3.15.0 @gsap/react@2.1.2 niimbot-web-bluetooth@1.3.5
+          work/controls-tools/node_modules/.bin/playwright install --with-deps chromium
+      - name: Check grid and Ozon selector in source cascade
+        env:
+          PLAYWRIGHT_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/playwright'
+        run: node wms/scripts/check_compact_controls.cjs work/controls-check --source
+      - name: Prove regression detection
+        env:
+          PLAYWRIGHT_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/playwright'
+        run: node wms/scripts/test_compact_controls_guard.cjs work/controls-negative
+      - name: Check real request header and disclosures
+        env:
+          PLAYWRIGHT_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/playwright'
+          ESBUILD_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/esbuild'
+          BROWSER_NODE_MODULES: '${{ github.workspace }}/work/controls-tools/node_modules'
+          REQUEST_FOLDS_PREVIEW: '${{ github.workspace }}/work/controls-check/request-folds.png'
+        run: node --test wms/apps/web/src/components/client-requests/request-fold-layout.browser-test.cjs
+      - name: Prove header and disclosure regression detection
+        env:
+          PLAYWRIGHT_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/playwright'
+          ESBUILD_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/esbuild'
+          BROWSER_NODE_MODULES: '${{ github.workspace }}/work/controls-tools/node_modules'
+        run: node wms/scripts/test_request_layout_guard.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compact-controls-proof
+          path: work/controls-check
