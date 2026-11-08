@@ -10,7 +10,8 @@ const user={id:'startup-regression',name:'Startup test',email:'startup@example.i
   const p=await b.newPage(),errors=[];let restores=0;
   p.on('pageerror',e=>errors.push(e.message));
   await p.addInitScript(u=>localStorage.setItem('logoff-wms-session',JSON.stringify({accessToken:'synthetic-no-access',user:u})),user);
-  await p.route('**/api/**',r=>{const me=r.request().url().includes('/auth/me');if(me)restores++;return r.fulfill({json:me?user:[]})});
+  if(process.env.UI_THEME)await p.addInitScript(theme=>localStorage.setItem('logoff-wms-ui-theme:startup-regression',theme),process.env.UI_THEME);
+  await p.route('**/api/**',r=>{const me=new URL(r.request().url()).pathname.endsWith('/auth/me');if(me)restores++;return r.fulfill({json:me?user:[]})});
   if(process.env.CANDIDATE_HTML)await p.route(url,async r=>r.fulfill({body:fixEntry(fs.readFileSync(process.env.CANDIDATE_HTML,'utf8')),contentType:'text/html'}));
   for(let i=0;i<2;i++){
    if(i)await p.reload({waitUntil:'domcontentloaded'});else await p.goto(url,{waitUntil:'domcontentloaded'});
