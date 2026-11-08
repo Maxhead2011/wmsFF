@@ -1,4 +1,5 @@
 import {OzonEditCountdown} from './OzonEditCountdown';
+import {OzonPrintAllLabels} from './OzonPrintAllLabels';
 import './ozon-workspace.css';
 import {ozonCabinetLabel} from '../client-requests/OzonLinkImport';
 import {useEffect,useState} from 'react';
@@ -44,6 +45,7 @@ export function OzonAssemblySupply({requestId,accessToken,clientName,onBindingRe
  <p>Короб WMS → направление → номер грузоместа Ozon. Файл доступен после подтверждения всех направлений. Порядок этикеток может отличаться от порядка коробов.</p>
  <label className="ozfbo-upload-confirm"><input type="checkbox" checked={confirm} disabled={busy} onChange={e=>setConfirm(e.target.checked)}/>Подтверждаю передачу состава упакованных и закрытых коробов</label>
  <button type="button" disabled={busy||!confirm||!!data.packingError||data.differences.length>0} onClick={()=>void action('upload',{confirm:true})}>Передать короба в Ozon</button></>}
+ {!bindingOnly&&<OzonPrintAllLabels key={requestId} requestId={requestId} accessToken={accessToken} ready={mappingReady&&!busy}/>}
  {Object.keys(data.link.operations).length>0&&<><button type="button" disabled={busy} onClick={()=>void action('status')}>Проверить результат отправки</button><p>Состав зафиксирован. Повторная отправка уже начатых направлений не выполняется.</p>{Object.entries(data.link.operations).map(([id,op])=><div key={id}><strong>{data.link!.supplies.find(s=>s.id===id)?.name??id}</strong><p>{({SENDING:'Запрос отправляется; повтор заблокирован',UNKNOWN:'Ответ не подтверждён — требуется сверка грузомест в кабинете',ACCEPTED:'Ozon обрабатывает',SUCCESS:'Грузоместа подтверждены',FAILED:'Ozon отклонил грузоместа'})[op.state]??op.state}</p>{op.error&&<p role="alert">{op.error}</p>}{op.state==='SUCCESS'&&<button disabled={busy} type="button" onClick={()=>void action('labels',{supplyId:id})}>Получить этикетки Ozon</button>}{op.labelOperationId&&!op.labelUrl&&<p>Этикетки готовятся. Нажмите «Получить этикетки Ozon» повторно.</p>}{op.labelUrl&&<button type="button" disabled={busy} onClick={()=>void downloadLabels(id)}>Скачать стикеры Ozon</button>}</div>)}</>}
  </>}
  </>}

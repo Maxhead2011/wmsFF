@@ -9,6 +9,8 @@ import {OzonAssemblySupplyService} from './ozon-assembly-supply.service';
 @RequirePermissions('client-requests:write')
 export class OzonAssemblySupplyController {
  constructor(private readonly service:OzonAssemblySupplyService){}
+ // FIX: label preparation only, never cargo creation or shipment confirmation.
+ @Post('print-labels') printLabels(@Param('id') id:string,@Body() body:{supplyId?:string},@CurrentUser() user:AuthUser){return this.service.printLabels(id,body.supplyId,user);}
  @Get() view(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.view(id,user);}
  // FIX: download does not send or recreate any Ozon cargoes.
  @Get('cargo-mapping.xlsx') async cargoMapping(@Param('id') id:string,@CurrentUser() user:AuthUser,@Res({passthrough:true}) response:Response){

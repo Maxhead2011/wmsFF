@@ -1,3 +1,5 @@
+Prepared 2026-11-08: FBO Ozon print-all cargo labels, complete-set verification and existing idempotent agent queue. API4575/web612, runtime8/browser8, isolated full API/PostgreSQL, controls24 and startup/reload passed. See wms/docs/ozon-print-all.md (docs/ozon-print-all.md from wms); release scripts scripts/releases/ozon-print-all-20261108. Own WMS only; not yet published.
+
 Published PR925 (2026-11-08): scoped Yandex FBY active counter; API1/web2 exact overlay from PR922, PR924 preserved. API4568/web608 passed, 9/2 skipped; dedicated DB integration excluded. Runtime API6/browser4, full isolated API/PostgreSQL boot, controls24, request header and startup/reload passed; public counter4 passed. Web build passes; two pre-existing API nullable-SKU type errors remain. Business data, environment, other containers and sold WMS unchanged. Baseline `2026-11-08-yandex-counter`; sourceParityVerified=false. API sha256:6a1c602f6766a3609f175e9b380c3a083f655b670ad38cde28f622fdc78faff7; web sha256:1d09014b4aa7defdff0db3100a9a6d52af3ff283248a2363e88ccd510866b32a.
 
 ## Подготовлено: счётчик активных заявок Яндекс FBY
