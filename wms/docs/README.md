@@ -481,3 +481,7 @@ Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced bef
 
 Prepared / 2026-10-28: shared guarded removal in Lamoda FBO cards; scope reset and refreshed archive. Preserves PR725 stock review. Web-only on PR725; API3872/web529, runtime browser50 plus stock regression8 passed. [Details](lamoda-request-removal.md).
 Prepared, not published: [explicit receipt corrections](receipt-linked-adjustments.md) add already-posted signed inventory corrections to receipt reporting and XLSX. Default-off flag; no second stock receipt.
+
+## Prepared: fabric reservation display (2026-11-08)
+
+[fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): WB cut-on-demand orders no longer search finished boxed stock or display its shortage. Client/deployment gates and exact SKU/marking guards; existing physical evidence, metre accounting, Ozon and sold WMS preserved. fbs-fabric-reservation helper, syncFbsPalletSortReservations and FbsOrderRow; source5/UI2/runtime7/browser2, live read-only sample20 and isolated full API/PostgreSQL health. Exact API2/web2 overlay, scripts/releases/fbs-fabric-display-20261108/. PR target feature/la_panthera.

@@ -6693,7 +6693,7 @@ function FbsOrdersView({
   );
 }
 
-function FbsOrderRow({
+export function FbsOrderRow({
   order,
   now,
   showBoxes,
@@ -6809,7 +6809,14 @@ function FbsOrderRow({
       </td>
       {showBoxes ? (
         <td>
-          {order.reservation?.withoutBox && order.reservation.status === 'RESERVED' ? (
+          {/* FIX: raw fabric is cut on demand; it does not require a finished-stock box. */}
+          {order.reservation?.status === 'FABRIC_ON_DEMAND' ? (
+            <div className="fbs-pallet-reservation">
+              <strong>Нарезка по факту</strong>
+              <small>Из рулона. Готовый отрез и короб на остатках не требуются.</small>
+              <small>Метры проверяются при сборке; это не подтверждение резерва ткани.</small>
+            </div>
+          ) : order.reservation?.withoutBox && order.reservation.status === 'RESERVED' ? (
             <div className="fbs-pallet-reservation">
               <strong>Зарезервировано со склада</strong>
               <small>Без привязки к коробу и палет-сорту</small>

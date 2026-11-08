@@ -1,4 +1,5 @@
 import { fabricPairedLabels } from './fbs-paired-labels';
+import { fabricReservationOrders, untouchedFabricReservation } from './fbs-fabric-reservation';
 import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
 import { FABRIC_TASK_MARKER, readFabricTaskLines, requireFabricCutComplete } from '../warehouse/fabric-fbs-task-state';
@@ -25537,6 +25538,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   private async syncFbsPalletSortReservations(
     clientId: string,
     orders: FbsOrderSummary[],
+    readOnly = false,
   ) {
     orders = await withoutRemovedOrders(this.prisma,clientId,orders);
     const result = new Map<
@@ -25545,7 +25547,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     >();
     if (
       !this.prisma.fbsTsdAssembly?.findMany ||
-      !this.prisma.stockBalance?.findMany
+      (!readOnly && !this.prisma.stockBalance?.findMany)
     ) {
       return result;
     }
@@ -25579,6 +25581,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const relevantOrderIds = uniqueStrings(
       relevantOrders.map((order) => order.id),
     );
+    // FIX: preserve the published display-only path without stock writes.
+    if (!readOnly) {
     const existingTaskBatches = [];
     // FIX: Thousands of composite OR branches made PostgreSQL spend tens of
     // seconds planning each lookup. Two IN lists are fast; exact connection +
@@ -25646,7 +25650,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    // FIX: fabric is claimed from rolls by the picking flow, never from boxed finished stock.
+    const fabricOrders = await fabricReservationOrders(this.prisma, clientId, relevantOrders, taskByKey);
     const reservableOrders = relevantOrders.filter((order) => {
+      if (fabricOrders.has(selectionKey(order.connectionId, order.id))) return false;
       if (retainDovoz1049Route(taskByKey.get(selectionKey(order.connectionId, order.id)))) return false;
       if (
         order.category !== 'active' ||
@@ -25790,6 +25797,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const routeResolutionByKey = new Map<string, Promise<string | null>>();
 
     for (const order of relevantOrders) {
+      if (fabricOrders.has(selectionKey(order.connectionId, order.id))) continue;
       if (
         order.category !== 'active' ||
         !order.product ||
@@ -26244,6 +26252,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
+    }
     const taskBatches = [];
     for (const orderIdBatch of chunks(relevantOrderIds, 20_000)) {
       taskBatches.push(await this.prisma.fbsTsdAssembly.findMany({
@@ -26263,6 +26272,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           boxId: true,
           boxCode: true,
           errorMessage: true,
+          barcode: true, sourceBarcode: true, kiz: true, relabelConfirmedAt: true,
+          completedAt: true, marketplaceSubmittedAt: true,
         },
       }));
     }
@@ -26310,6 +26321,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         reservedAt: task.reservedAt?.toISOString() ?? null,
         problem: task.errorMessage,
       });
+    }
+    // FIX: recheck fresh task evidence; a concurrent pick must keep its actual state.
+    const freshTasks = new Map(tasks.map(task => [selectionKey(task.connectionId, task.orderId), task]));
+    const displayFabricOrders = await fabricReservationOrders(this.prisma, clientId, relevantOrders, freshTasks);
+    for (const key of displayFabricOrders) if (untouchedFabricReservation(freshTasks.get(key))) {
+      result.set(key, { status: 'FABRIC_ON_DEMAND', withoutBox: true, boxCode: null,
+        palletCode: null, warehouseId: null, reservedAt: null, problem: null });
     }
     return result;
   }
