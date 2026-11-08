@@ -34,6 +34,9 @@ public class MainActivity extends Activity {
     private static final int MODE_BOX = 3;
 
     private final ArrayList<String> requestIds = new ArrayList<>();
+    private final ArrayList<Boolean> requestPrintOnly = new ArrayList<>();
+    private String lastPostAssembly = "", lastPostBarcode = "", lastPostRequest = "";
+    private Button postRepeatButton, refreshRequestsButton;
     private final ArrayList<String> stationIds = new ArrayList<>();
     private String token = "";
     private String activeTaskId = "";
@@ -90,6 +93,23 @@ public class MainActivity extends Activity {
         });
         mode = findViewById(R.id.mode);
         request = findViewById(R.id.request);
+        postRepeatButton = findViewById(R.id.postRepeatButton);
+        refreshRequestsButton = findViewById(R.id.refreshRequestsButton);
+        refreshRequestsButton.setOnClickListener(v -> { if (!busy && activeTaskId.isEmpty()) { setBusy(true); loadRequests(); } });
+        postRepeatButton.setOnClickListener(v -> {
+            if (busy || lastPostAssembly.isEmpty() || !lastPostRequest.equals(selectedRequestId())) return;
+            new android.app.AlertDialog.Builder(this).setTitle("Повторная печать")
+                .setMessage("Повторить стикер последнего заказа? Отбор и остатки не изменятся.")
+                .setPositiveButton("Напечатать повторно", (d, w) -> postPickPrint(lastPostBarcode, lastPostAssembly))
+                .setNegativeButton("Отмена", null).show();
+        });
+        request.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() {
+            @Override public void onNothingSelected(android.widget.AdapterView<?> parent) {}
+            @Override public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) {
+                lastPostAssembly = ""; postRepeatButton.setVisibility(View.GONE);
+                if (!busy && activeTaskId.isEmpty()) renderMode();
+            }
+        });
         station = findViewById(R.id.station);
         modeLabel = findViewById(R.id.modeLabel);
         requestLabel = findViewById(R.id.requestLabel);
@@ -135,18 +155,80 @@ public class MainActivity extends Activity {
     }
 
     private void loadRequests() {
-        call("/marketplace-connections/fbs/sos/requests", "GET", null, response -> {
-            JSONArray rows = response.optJSONArray("requests");
-            requestIds.clear();
-            ArrayList<String> names = new ArrayList<>();
-            if (rows != null) for (int i = 0; i < rows.length(); i++) {
-                JSONObject row = rows.getJSONObject(i);
-                requestIds.add(row.getString("requestId"));
-                names.add("№" + String.format("%06d", row.optInt("requestNumber")) + " · " +
-                    row.optJSONObject("client").optString("name") + " · доступно " + row.optInt("availableOrders"));
+        final String previous = selectedRequestId();
+        {
+            call("/marketplace-connections/fbs/sos/post-pick/requests", "GET", null, printed -> {
+                ArrayList<String> ids = new ArrayList<>(), names = new ArrayList<>();
+                ArrayList<Boolean> printOnly = new ArrayList<>();
+                for (int group = 0; group < 1; group++) {
+                    JSONArray rows = printed.optJSONArray("requests");
+                    if (rows == null) continue;
+                    for (int i = 0; i < rows.length(); i++) {
+                        JSONObject row = rows.getJSONObject(i);
+                        ids.add(row.getString("requestId")); printOnly.add(group == 0);
+                        names.add("№" + String.format("%06d", row.optInt("requestNumber")) + " · " +
+                            row.optJSONObject("client").optString("name") + (group == 0
+                            ? " · ПЕЧАТЬ: " + row.optInt("printedOrders") + "/" + row.optInt("totalOrders") + " · в очереди " + row.optInt("queuedOrders")
+                            : " · ОТБОР: " + row.optInt("availableOrders")));
+                    }
+                }
+                runOnUiThread(() -> {
+                    requestIds.clear(); requestIds.addAll(ids); requestPrintOnly.clear(); requestPrintOnly.addAll(printOnly);
+                    request.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, names));
+                    if (ids.contains(previous)) request.setSelection(ids.indexOf(previous));
+                    loadStations();
+                });
+            });
+        }
+    }
+
+    private String selectedRequestId() {
+        int index = request == null ? -1 : request.getSelectedItemPosition();
+        return index >= 0 && index < requestIds.size() ? requestIds.get(index) : "";
+    }
+    private boolean isPostPickRequest() {
+        int index = request.getSelectedItemPosition();
+        return mode.getSelectedItemPosition() == MODE_REQUEST && index >= 0 && index < requestPrintOnly.size() && requestPrintOnly.get(index);
+    }
+    // FIX: scan-to-print never calls SOS claim, KIZ acceptance or warehouse completion.
+    private void postPickPrint(String barcode, String repeatAssembly) {
+        int index = station.getSelectedItemPosition();
+        if (index < 0 || index >= stationIds.size()) { red("Выберите доступный принтер."); return; }
+        String stationId = stationIds.get(index), requestId = selectedRequestId();
+        JSONObject body;
+        String pending = prefs.getString("post-pick-pending", "");
+        try {
+            if (!pending.isEmpty()) {
+                body = new JSONObject(pending);
+                if (!body.optString("requestId").equals(requestId) || !body.optString("barcode").equals(barcode) || !body.optString("stationId").equals(stationId)) {
+                    red("Результат прошлой печати неизвестен. Выберите прежнюю заявку и принтер, повторите тот же ШК."); return;
+                }
+            } else {
+                body = new JSONObject(map("requestId", requestId, "barcode", barcode, "stationId", stationId,
+                    "operationId", java.util.UUID.randomUUID().toString(), "deviceCode", deviceCode()));
+                if (!repeatAssembly.isEmpty()) body.put("repeatAssemblyId", repeatAssembly);
+                prefs.edit().putString("post-pick-pending", body.toString()).commit();
             }
-            runOnUiThread(() -> request.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, names)));
-            loadStations();
+        } catch (Exception e) { red("Не удалось подготовить печать: " + e.getMessage()); return; }
+        setBusy(true); show("Получаю стикер и передаю на принтер…");
+        call("/marketplace-connections/fbs/sos/post-pick/print", "POST", body.toString(), response -> runOnUiThread(() -> {
+            prefs.edit().remove("post-pick-pending").commit();
+            lastPostAssembly = response.optString("assemblyId"); lastPostBarcode = barcode; lastPostRequest = requestId;
+            setBusy(false); postRepeatButton.setVisibility(View.VISIBLE);
+            green("Заказ №" + response.optString("orderId") + " · " + response.optString("productName") + "\n" +
+                ("PRINTED".equals(response.optString("printStatus")) ? "Печать подтверждена агентом." : "Стикер в очереди печати. Проверьте выход этикетки.") + "\nОстатки не изменены."); focus();
+        }), failure -> {
+            if (failure.status < 500) prefs.edit().remove("post-pick-pending").commit();
+            String repeat = failure.field("repeatAssemblyId");
+            runOnUiThread(() -> {
+                setBusy(false); red(failure.getMessage());
+                if (!repeat.isEmpty() && !"null".equals(repeat)) {
+                    lastPostAssembly = repeat; lastPostBarcode = barcode; lastPostRequest = requestId;
+                    postRepeatButton.setVisibility(View.VISIBLE);
+                }
+                focus();
+            });
+            return true;
         });
     }
 
@@ -196,19 +278,24 @@ public class MainActivity extends Activity {
         modeBoxButton.setSelected(value == MODE_BOX);
         boolean selected = value == MODE_REQUEST;
         boolean printing = value == MODE_PRINT;
+        boolean postPicking = isPostPickRequest();
+        refreshRequestsButton.setVisibility(selectedModeVisible(value) ? View.VISIBLE : View.GONE);
+        postRepeatButton.setVisibility(View.GONE);
         requestLabel.setVisibility(selected ? View.VISIBLE : View.GONE);
         request.setVisibility(selected ? View.VISIBLE : View.GONE);
-        stationLabel.setVisibility(printing ? View.VISIBLE : View.GONE);
-        station.setVisibility(printing ? View.VISIBLE : View.GONE);
+        stationLabel.setVisibility((printing || postPicking) ? View.VISIBLE : View.GONE);
+        station.setVisibility((printing || postPicking) ? View.VISIBLE : View.GONE);
         waitingKiz = false; activeTaskId = ""; activeTaskNeedsRelease = false; pendingReplaceKiz = ""; selectedSourceBox = ""; cancelButton.setVisibility(View.GONE); replaceButton.setVisibility(View.GONE);
         requestNumber.setVisibility(View.GONE); orderNumber.setVisibility(View.GONE);
         neutral();
-        prompt.setText(printing ? "ОТСКАНИРУЙТЕ КИЗ ДЛЯ ПЕЧАТИ WB" : "ОТСКАНИРУЙТЕ ШК КОСТЮМА");
-        show(printing
+        prompt.setText(postPicking ? "ОТСКАНИРУЙТЕ ШК ДЛЯ ПЕЧАТИ" : printing ? "ОТСКАНИРУЙТЕ КИЗ ДЛЯ ПЕЧАТИ WB" : "ОТСКАНИРУЙТЕ ШК КОСТЮМА");
+        show(postPicking ? "Печать отобранных заказов WB/Ozon. Повторного отбора и списания нет." : printing
             ? "КИЗ будет найден в заказах, WB-этикетка отправится на выбранную станцию."
             : selected ? "Выберите заявку и сканируйте костюмы в любом порядке." : "Поиск идёт сразу по всем незакрытым заявкам.");
         focus();
     }
+
+    private boolean selectedModeVisible(int value) { return value == MODE_REQUEST; }
 
     private void selectMode(int selectedMode) {
         if (busy) return;
@@ -229,6 +316,7 @@ public class MainActivity extends Activity {
         String value = code.getText().toString().replace("\r", "").replace("\n", "").trim();
         clearScanField();
         if (value.length() < 5) { show("Код слишком короткий. Повторите сканирование."); focus(); return; }
+        if (isPostPickRequest()) { postPickPrint(value, ""); return; }
         if (mode.getSelectedItemPosition() == MODE_PRINT) { printKiz(value); return; }
         if (mode.getSelectedItemPosition() == MODE_BOX && !waitingKiz && selectedSourceBox.isEmpty()) {
             selectedSourceBox = value;
@@ -361,7 +449,7 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             HttpURLConnection connection = null;
             try {
-                connection = (HttpURLConnection) new URL(API + path).openConnection();
+                connection = openConnection(API + path);
                 connection.setConnectTimeout(10_000); connection.setReadTimeout(45_000); connection.setRequestMethod(method);
                 connection.setRequestProperty("Accept", "application/json"); connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
                 if (!token.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + token);
@@ -378,6 +466,8 @@ public class MainActivity extends Activity {
             } finally { if (connection != null) connection.disconnect(); }
         }, "sos-wb-request").start();
     }
+
+    protected HttpURLConnection openConnection(String endpoint) throws Exception { return (HttpURLConnection) new URL(endpoint).openConnection(); }
 
     private static String read(HttpURLConnection ignored, InputStream stream) throws Exception {
         if (stream == null) return "{}";
@@ -401,6 +491,7 @@ public class MainActivity extends Activity {
 
     private void setBusy(boolean value) { busy = value; runOnUiThread(() -> {
         boolean taskActive = !activeTaskId.isEmpty();
+        station.setEnabled(!value); refreshRequestsButton.setEnabled(!value && !taskActive); postRepeatButton.setEnabled(!value);
         code.setEnabled(!value && !activeTaskNeedsRelease); loginButton.setEnabled(!value); cancelButton.setEnabled(!value && taskActive);
         mode.setEnabled(!value && !taskActive); request.setEnabled(!value && !taskActive);
         modeRequestButton.setEnabled(!value && !taskActive); modeAllButton.setEnabled(!value && !taskActive); modePrintButton.setEnabled(!value && !taskActive); modeBoxButton.setEnabled(!value && !taskActive);

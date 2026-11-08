@@ -1,3 +1,5 @@
+import { PDFDocument } from 'pdf-lib';
+import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
 import { fabricPairedLabels } from './fbs-paired-labels';
 import { fabricReservationOrders, untouchedFabricReservation, decorateFabricReservationResponse } from './fbs-fabric-reservation';
@@ -11770,6 +11772,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: a separate post-pick path can only queue labels, not claim/ship stock.
+  async listSosPostPickRequests(user: AuthUser) {
+    return listPostPick(this.prisma, this.clientScopes, user);
+  }
+  async printSosPostPick(body: any, user: AuthUser) {
+    return queuePostPick(this.prisma, this.clientScopes, user, body, async task => {
+      const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: {
+        id: task.connectionId, clientId: task.clientId, marketplace: task.marketplace, isActive: true,
+      }, select: { apiKey: true, sellerId: true } });
+      if (!connection) throw new BadRequestException('Кабинет маркетплейса отключён.');
+      if (task.marketplace === MarketplaceType.WILDBERRIES) {
+        const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40', {
+          method: 'POST', headers: wbHeaders(connection.apiKey), body: JSON.stringify({ orders: [numericWbOrderId(task.orderId)] }),
+          signal: AbortSignal.timeout(FBS_TSD_STICKER_TIMEOUT_MS),
+        });
+        const row = asArray<Record<string, unknown>>(response.stickers).find(r => textValue(r.orderId) === task.orderId);
+        return { barcode: textValue(row?.barcode), imageBase64: textValue(row?.file), contentType: 'image/png' };
+      }
+      if (!connection.sellerId) throw new BadRequestException('Кабинет Ozon не настроен.');
+      const label = await marketplaceBinary('https://api-seller.ozon.ru/v2/posting/fbs/package-label', {
+        method: 'POST', headers: { ...ozonHeaders(connection.sellerId, connection.apiKey), Accept: 'application/pdf' },
+        body: JSON.stringify({ posting_number: [task.orderId] }), signal: AbortSignal.timeout(FBS_TSD_STICKER_TIMEOUT_MS),
+      });
+      // FIX: one scan prints one order; never silently drop additional cargo pages.
+      if (label.contentType.toLowerCase().includes('pdf')) {
+        const document = await PDFDocument.load(label.buffer);
+        if (document.getPageCount() !== 1) throw new BadRequestException('В заказе несколько грузомест. Скачайте полный комплект этикеток в WMS.');
+      }
+      const prepared = await this.prepareOzonFbsTsdLabel(label.buffer, label.contentType);
+      return { barcode: task.orderId, imageBase64: prepared.buffer.toString('base64'), contentType: prepared.contentType };
+    });
+  }
+
   async listSosWbRequests(user: AuthUser) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
@@ -17761,7 +17796,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const stale = new Date(Date.now() - 120_000);
     const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' },
       // FIX: an uncertain physical relabel print must not automatically print another pair.
-      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { not: 'TSD_RELABEL' } }] }, orderBy: { createdAt: 'asc' } });
+      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { notIn: ['TSD_RELABEL', SOS_POST_PICK] } }] }, orderBy: { createdAt: 'asc' } });
     if (!job) return null;
     // FIX: the existing quiet agent prints both images. A relabel job contains
     // two identical target-product labels instead of an FBS order/sorting pair.
@@ -17769,7 +17804,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ? { contentType: 'image/png' as const, imageBase64: job.stickerBase64,
           widthMm: 58, heightMm: 40, templateVersion: 'tsd-relabel-lukin-v1' }
       : await buildFbsSortingLabel(job);
-    if (job.source === 'TSD_RELABEL') {
+    if (job.source === 'TSD_RELABEL' || job.source === SOS_POST_PICK) {
       // FIX: two agents polling one station cannot both print the same relabel pair.
       const claimed = await this.prisma.fbsPrintJob.updateMany({ where: { id: job.id, status: 'QUEUED' },
         data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
@@ -17793,7 +17828,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       entity: 'FbsPrintJob', entityId: job.id,
       payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
     // FIX: only the successful print-agent acknowledgement is a shipment trigger.
-    if (success && job.source !== 'TSD_RELABEL' && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
+    if (success && job.source !== 'TSD_RELABEL' && job.source !== SOS_POST_PICK && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
       const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: job.assemblyId } });
       if (task.marketplace === MarketplaceType.WILDBERRIES) {
         const cached = this.fbsOrdersCache.get(task.clientId)?.value.orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId);
@@ -17846,7 +17881,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             const printed: Array<{assemblyId:string;printedAt:Date|null}> = [];
             for (const ids of chunks(pendingIds, 10000))
                 printed.push(...await this.prisma.fbsPrintJob.findMany({
-                    where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
+                    where: { status: 'PRINTED', source: { not: SOS_POST_PICK }, deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
                     select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' },
                 }));
             for (const print of printed) {
