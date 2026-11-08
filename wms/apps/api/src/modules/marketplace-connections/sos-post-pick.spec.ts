@@ -30,6 +30,16 @@ function fixture(marketplace = 'WILDBERRIES') {
 beforeEach(() => vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true'));
 afterEach(() => vi.unstubAllEnvs());
 describe('SOS post-pick printing', () => {
+  // TEST: the same active-request scope is enforced for listing and direct scans.
+  it.each(['DONE','CANCELLED','REJECTED','PACKED','IN_WORK'])('filters request status %s', async status => {
+    const f=fixture(); f.request.status=status;
+    f.db.clientRequest.findMany.mockImplementation(async ({where}:any) =>
+      where.status.notIn.includes(status) ? [] : [f.request]);
+    const active=['PACKED','IN_WORK'].includes(status);
+    expect((await listPostPick(f.db,f.clients,user)).requests).toHaveLength(active ? 1 : 0);
+    if (active) expect((await f.run()).printStatus).toBe('QUEUED');
+    else { await expect(f.run()).rejects.toThrow('недоступна'); expect(f.label).not.toHaveBeenCalled(); }
+  });
   it.each(['Королёв','Королёва','Баландин','Другой клиент'])('lists %s without a hardcoded allowlist', async name => {
     const f=fixture();f.request.client.name=name;
     expect((await listPostPick(f.db,f.clients,user)).requests[0]).toMatchObject({printOnly:true,totalOrders:1,availableOrders:1,client:{name}});
