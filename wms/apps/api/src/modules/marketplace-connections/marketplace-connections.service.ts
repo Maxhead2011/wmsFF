@@ -1,3 +1,4 @@
+import { wbAllLabels } from './wb-all-labels';
 import { fabricPairedLabels } from './fbs-paired-labels';
 import { fabricReservationOrders, untouchedFabricReservation, decorateFabricReservationResponse } from './fbs-fabric-reservation';
 import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
@@ -21500,6 +21501,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       buffer,
       fileName: `FBS-cancelled-orders-${fileTimestamp(new Date())}.xlsx`,
     };
+  }
+
+  // FIX: validate the complete selection before attempting partial downloads.
+  async getFbsAllLabels(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    return wbAllLabels(orders, {
+      sc: selected => this.getFbsSupplyStickersPdf({ clientId, orders: selected }, user),
+      pvz: selected => this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user),
+      pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user),
+    });
   }
 
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
