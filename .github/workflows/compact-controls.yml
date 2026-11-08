@@ -1,0 +1,34 @@
+name: Own WMS compact controls regression
+on:
+  pull_request:
+    branches: [feature/la_panthera]
+  push:
+    branches: [feature/la_panthera]
+permissions:
+  contents: read
+jobs:
+  compact-controls:
+    # FIX: pin the OS supported by the pinned Playwright browser dependencies.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix work/controls-tools --no-package-lock playwright@1.58.2
+          work/controls-tools/node_modules/.bin/playwright install --with-deps chromium
+      - name: Check grid and Ozon selector in source cascade
+        env:
+          PLAYWRIGHT_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/playwright'
+        run: node wms/scripts/check_compact_controls.cjs work/controls-check --source
+      - name: Prove regression detection
+        env:
+          PLAYWRIGHT_MODULE: '${{ github.workspace }}/work/controls-tools/node_modules/playwright'
+        run: node wms/scripts/test_compact_controls_guard.cjs work/controls-negative
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compact-controls-proof
+          path: work/controls-check

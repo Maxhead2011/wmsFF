@@ -1,3 +1,7 @@
+## Защита оформления заявок и Ozon
+
+[Постоянная проверка 2×2 и переключателей Ozon](compact-controls-release-guard.md): `scripts/check_compact_controls.cjs`, три отрицательных теста и workflow `compact-controls.yml` для каждого PR нашей WMS. Перед выпуском проверять точный web-кандидат, после — публичный сайт. Проверка исходников не заменяет проверку runtime.
+
 # Следующее изменение от текущей базы
 
 1. Читать [паспорт](current-production.md), [карту](project-map.md) и [индекс тестов](test-index.md).

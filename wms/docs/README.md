@@ -1,3 +1,7 @@
+## Защита оформления заявок и Ozon
+
+[Постоянная проверка 2×2 и переключателей Ozon](compact-controls-release-guard.md): `scripts/check_compact_controls.cjs`, три отрицательных теста и workflow `compact-controls.yml` для каждого PR нашей WMS. Перед выпуском проверять точный web-кандидат, после — публичный сайт. Проверка исходников не заменяет проверку runtime.
+
 Published PR910 (2026-11-08): Ozon FBS paired PDFs use product-first order and shared set/page numbering on58x40mm media. Official vector artwork is fitted above a separate footer, with crop/rotation preserved; no barcode overlay. Multiple products/pages remain one set. Existing own-WMS unmarked-printing flag; WB, marked-only, legacy mode, fabric accounting and sold WMS unchanged. API4545/web603 passed (9/2 skipped; dedicated DB suites excluded), helper24 including3 new (two RED), compiled handler3, baseline8, targeted TypeScript and isolated full API/PostgreSQL boot. Synthetic sample visually checked and four barcodes decoded at203dpi. Live Ozon package-label still returns429: real Ozon label and physical printer unverified. All753 runtime hashes match API1 candidate; public health, environment and other-container guards passed. PR905 web and TSD258 unchanged. Baseline `2026-11-08-ozon-label-numbering`; sourceParityVerified=false. API sha256:520834afbbbd6e4e339ae4d675ccb5803354e8e75aa2d23cb4493a0859cc3d78; web sha256:ee124855d31819a08ea87ec78c14a1e155f4d9d0d4faf10f6eb3525308dee17e.
 
 ## Prepared: numbered Ozon FBS label sets (2026-11-08)
