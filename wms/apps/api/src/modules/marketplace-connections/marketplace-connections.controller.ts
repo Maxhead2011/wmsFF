@@ -113,7 +113,9 @@ export class MarketplaceConnectionsController {
   ) {
     const scoped = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
     const result = this.stores ? await this.stores.decorateOrders(clientId, scoped, user) : scoped;
-    return { ...result, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };
+    // FIX: apply after access/branch/store scoping, including a cold saved snapshot.
+    const display = await this.connections.decorateFbsFabricDisplay?.(clientId, result) ?? result;
+    return { ...display, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };
   }
 
   // FIX: explicit live audit of every WB supply routed to the user's active branch.

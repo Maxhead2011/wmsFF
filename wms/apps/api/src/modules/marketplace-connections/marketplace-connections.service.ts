@@ -1,5 +1,5 @@
 import { fabricPairedLabels } from './fbs-paired-labels';
-import { fabricReservationOrders, untouchedFabricReservation } from './fbs-fabric-reservation';
+import { fabricReservationOrders, untouchedFabricReservation, decorateFabricReservationResponse } from './fbs-fabric-reservation';
 import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
 import { FABRIC_TASK_MARKER, readFabricTaskLines, requireFabricCutComplete } from '../warehouse/fabric-fbs-task-state';
@@ -25533,6 +25533,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       maxWait: 10_000,
       timeout: 30_000,
     });
+  }
+
+  // FIX: shared display decoration also covers saved request snapshots.
+  async decorateFbsFabricDisplay(clientId: string, response: any) {
+    return decorateFabricReservationResponse(this.prisma, clientId, response);
   }
 
   private async syncFbsPalletSortReservations(

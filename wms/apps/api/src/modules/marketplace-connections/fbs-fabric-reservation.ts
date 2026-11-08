@@ -13,6 +13,7 @@ export async function fabricReservationOrders(db: any, clientId: string, orders:
   const candidates = orders.filter(o => o.marketplace === 'WILDBERRIES' && o.category === 'active' &&
     ['new', 'confirm'].includes(o.supplierStatus) && o.product?.id && !o.relabeling &&
     ![...(o.requiredMeta ?? []), ...(o.optionalMeta ?? [])].some((m: string) => m.toLowerCase() === 'sgtin') &&
+    !tasks.get(`${o.connectionId.trim()}:${o.id.trim()}`)?.requiresKiz &&
     untouchedFabricReservation(tasks.get(`${o.connectionId.trim()}:${o.id.trim()}`)));
   if (!candidates.length) return result;
   const enabled = await Promise.all(['fabric.fbs.enabled.v1:', 'fabric.rolls.enabled.v1:'].map(prefix =>
@@ -24,4 +25,33 @@ export async function fabricReservationOrders(db: any, clientId: string, orders:
     !(s.needsChestnyZnak && !s.isUnmarked) && !s.needsRelabel).map((s: any) => s.id));
   for (const o of candidates) if (eligible.has(o.product.id)) result.add(`${o.connectionId.trim()}:${o.id.trim()}`);
   return result;
+}
+
+// FIX: saved/cold/merged screen rows bypass the live reservation loader. Decorate the
+// already scoped response from fresh task evidence, without changing the cached object.
+export async function decorateFabricReservationResponse(db: any, clientId: string, response: any) {
+  if (process.env.WMS_FBS_FABRIC_CUT_ENABLED !== 'true' || !response?.orders?.length) return response;
+  const candidates = response.orders.filter((o: any) => o.marketplace === 'WILDBERRIES' &&
+    o.category === 'active' && ['new', 'confirm'].includes(o.supplierStatus) && o.product?.id);
+  if (!candidates.length) return response;
+  const tasks: any[] = [];
+  for (let start = 0; start < candidates.length; start += 500) {
+    const batch = candidates.slice(start, start + 500);
+    tasks.push(...await db.fbsTsdAssembly.findMany({ where: { clientId, marketplace: 'WILDBERRIES',
+      connectionId: { in: [...new Set(batch.map((o: any) => o.connectionId))] },
+      orderId: { in: batch.map((o: any) => o.id) } }, select: {
+      connectionId: true, orderId: true, status: true, reservedBoxId: true, reservedBoxCode: true,
+      boxId: true, boxCode: true, barcode: true, sourceBarcode: true, kiz: true,
+      relabelConfirmedAt: true, completedAt: true, marketplaceSubmittedAt: true, requiresKiz: true,
+    } }));
+  }
+  const byKey = new Map(tasks.map(t => [`${t.connectionId}:${t.orderId}`, t]));
+  const eligible = await fabricReservationOrders(db, clientId, candidates, byKey);
+  return { ...response, orders: response.orders.map((order: any) => {
+    const key = `${order.connectionId}:${order.id}`;
+    if (eligible.has(key)) return { ...order, reservation: { status: 'FABRIC_ON_DEMAND', withoutBox: true,
+      boxCode: null, palletCode: null, warehouseId: null, reservedAt: null, problem: null } };
+    // A cached display flag must not conceal a later physical action or disabled setting.
+    return order.reservation?.status === 'FABRIC_ON_DEMAND' ? { ...order, reservation: null } : order;
+  }) };
 }
