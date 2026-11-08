@@ -93,20 +93,20 @@ export class ClientRequestsService {
         ...warehouseScopeWhere(user),
         type: 'OUTBOUND',
         status: { notIn: ['DONE', 'CANCELLED', 'REJECTED'] },
-        yandexFbyShipment: null,
       },
-      select: { id: true, title: true, comment: true, lamodaAssembly: {select:{requestId:true}}, ozonShipment: {select:{requestId:true}}, _count:{select:{fbsOrderLinks:true}} },
+      select: { id: true, title: true, comment: true, yandexFbyShipment: {select:{id:true}}, lamodaAssembly: {select:{requestId:true}}, ozonShipment: {select:{requestId:true}}, _count:{select:{fbsOrderLinks:true}} },
     });
     const history = rows.length ? await readFbsAttemptHistory(this.prisma, {requestId:{in:rows.map(row=>row.id)}}) : [];
     const fbsIds = new Set(history.map(row=>row.task.requestId));
     return rows.reduce((counts, row) => {
-      // FIX: Lamoda assemblies have their own badge and cannot fall through to WB.
-      if (row.lamodaAssembly) counts.lamoda++;
+      // FIX: explicit FBY shipments have their own badge and cannot fall through to WB.
+      if (row.yandexFbyShipment) counts.yandex++;
+      else if (row.lamodaAssembly) counts.lamoda++;
       else if (row.ozonShipment) counts.ozon++;
       else if (!row._count.fbsOrderLinks && !fbsIds.has(row.id) && !/^(FBS|DBS)/i.test(row.title.trim()) &&
         !row.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:')) counts.wb++;
       return counts;
-    }, {wb:0, ozon:0, lamoda:0});
+    }, {wb:0, ozon:0, lamoda:0, yandex:0});
   }
 
   async list(query: ListClientRequestsDto, user: AuthUser) {

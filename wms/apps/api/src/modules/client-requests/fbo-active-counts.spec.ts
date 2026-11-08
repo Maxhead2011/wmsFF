@@ -19,7 +19,7 @@ describe('FBO active card counts', () => {
     const findMany=vi.fn().mockResolvedValue([]);
     const service=new ClientRequestsService({clientRequest:{findMany}} as never,new ClientScopeService(),{} as never);
     const user={roleCodes:['CLIENT'],permissionCodes:[],clientScopeMode:'LIMITED',clientIds:['own'],activeWarehouseId:'other'} as unknown as AuthUser;
-    expect(await service.activeFboCounts(user)).toEqual({wb:0,ozon:0,lamoda:0});
+    expect(await service.activeFboCounts(user)).toEqual({wb:0,ozon:0,lamoda:0,yandex:0});
     expect(findMany.mock.calls[0][0].where.clientId).toEqual({in:['own']});
     expect(findMany.mock.calls[0][0].where.warehouseId).toBeUndefined();
     findMany.mockClear();
@@ -33,6 +33,8 @@ describe('FBO active card counts', () => {
       ...Array.from({length:205},(_,i)=>({...row,id:String(i)})),
       {...row,id:'ozon',ozonShipment:{requestId:'ozon'}},
       {...row,id:'lamoda',lamodaAssembly:{requestId:'lamoda'}},
+      // TEST: FBY is counted separately, even when its title resembles FBS.
+      {...row,id:'yandex',title:'FBS imported title',yandexFbyShipment:{id:'shipment'}},
       {...row,id:'fbs',_count:{fbsOrderLinks:1}},
       {...row,id:'legacy',title:' FBS old'},
       {...row,id:'comment',comment:'Создано из FBS-заказов: 1'},
@@ -40,12 +42,13 @@ describe('FBO active card counts', () => {
     const resolveClientFilter=vi.fn().mockReturnValue({in:['own-client']});
     const service=new ClientRequestsService({clientRequest:{findMany}} as never,{resolveClientFilter} as never,{} as never);
     const user={roleCodes:[],permissionCodes:['system:admin'],activeWarehouseId:'moscow'} as unknown as AuthUser;
-    expect(await service.activeFboCounts(user)).toEqual({wb:205,ozon:1,lamoda:1});
+    expect(await service.activeFboCounts(user)).toEqual({wb:205,ozon:1,lamoda:1,yandex:1});
     const query=findMany.mock.calls[0][0];
     expect(query.take).toBeUndefined();
     expect(query.where).toMatchObject({clientId:{in:['own-client']},warehouseId:'moscow',type:'OUTBOUND',status:{notIn:['DONE','CANCELLED','REJECTED']}});
     // TEST: Lamoda is counted separately, never as WB.
     expect(query.where.lamodaAssembly).toBeUndefined();
-    expect(query.where.yandexFbyShipment).toEqual(null);
+    expect(query.where.yandexFbyShipment).toBeUndefined();
+    expect(query.select.yandexFbyShipment).toEqual({select:{id:true}});
   });
 });
