@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { filterOrdersByStore } from './store-filter';
+import { openWbRibbonPrint } from '../../lib/wbRibbonPrint';
 const LamodaFbs = lazy(() => import('../lamoda/LamodaPanel').then(m=>({default:m.LamodaPanel})));
 import { fetchWorkspaceClients, workspaceClients, visibleMarket, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { startVisiblePolling } from '../../lib/visiblePolling';
@@ -1359,7 +1360,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     }
   }
 
-  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all = false) {
+  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all: boolean | 'print' = false) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('stickers');
     setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
@@ -1367,11 +1368,12 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setOrderActionError('');
     try {
       // FIX: explicit boolean keeps the existing single-label click unchanged.
-      if (all === true) {
+      if (all === true || all === 'print') {
         const result = await downloadFbsAllLabels(session.accessToken, {
           clientId: selectedClientId,
           orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
         });
+        if (all === 'print') { await openWbRibbonPrint(session.accessToken, selectedClientId, result); return; }
         const bytes = Uint8Array.from(atob(result.fileBase64), char => char.charCodeAt(0));
         downloadFbsBlob(new Blob([bytes], { type: 'application/pdf' }), result.fileName);
         setOrderActionMessage(`Скачана лента: ${result.pageCount} стр.`);
@@ -5720,7 +5722,7 @@ function FbsOrdersView({
   onMoveToNewSupply: (orders: FbsOrderSummary[]) => Promise<void>;
   onCancel: (orders: FbsOrderSummary[]) => Promise<void>;
   onRemoveCancelledOrder: (order: FbsOrderSummary) => Promise<void>;
-  onDownloadStickers: (orders: FbsOrderSummary[], all?: boolean) => Promise<void>;
+  onDownloadStickers: (orders: FbsOrderSummary[], all?: boolean | 'print') => Promise<void>;
   onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadSupplyStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadPickList: (order: FbsOrderSummary) => Promise<void>;
@@ -6449,6 +6451,9 @@ function FbsOrdersView({
               onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), true)}>
               <Download size={16} aria-hidden="true" />Скачать все ШК
             </button>
+            <button type="button" className="button button-secondary"
+              disabled={orderAction !== null || !selectedOrders.some(order => order.marketplace === 'WILDBERRIES')}
+              onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), 'print')}>Печатать все ШК</button>
             <button
               type="button"
               className="button button-secondary"
@@ -6631,6 +6636,8 @@ function FbsOrdersView({
                           title="Скачать доступные СЦ, ПВЗ и пары товара/заказа одной лентой">
                           <Download size={14} aria-hidden="true" />Все ШК
                         </button>
+                        <button type="button" disabled={orderAction !== null}
+                          onClick={() => void onDownloadStickers(group.orders, 'print')}>Печатать все ШК</button>
                         <button type="button" disabled={groupStickerOrders.length === 0 || orderAction !== null} onClick={() => void onDownloadStickers(groupStickerOrders)}>
                           <Download size={13} aria-hidden="true" /> ШК заказов
                         </button>
@@ -6689,7 +6696,7 @@ function FbsOrdersView({
                   )}
                   canDownloadPickList={canDownloadPickList}
                   onHideWaitingStock={() => setHiddenWaitingStockKeys((current) => new Set(current).add(fbsOrderSelectionKey(order)))}
-                  onDownloadSticker={(all = false) => void onDownloadStickers([order], all)}
+                  onDownloadSticker={(all: boolean | 'print' = false) => void onDownloadStickers([order], all)}
                   onDownloadCargoStickers={() => void onDownloadCargoStickers([order])}
                   onDownloadSupplyStickers={() => void onDownloadSupplyStickers([order])}
                   onDownloadPickList={() => void onDownloadPickList(order)}
@@ -6753,7 +6760,7 @@ export function FbsOrderRow({
   requiresCargoPlaces: boolean;
   canDownloadPickList: boolean;
   onHideWaitingStock: () => void;
-  onDownloadSticker: (all?: boolean) => void;
+  onDownloadSticker: (all?: boolean | 'print') => void;
   onDownloadCargoStickers: () => void;
   onDownloadSupplyStickers: () => void;
   onDownloadPickList: () => void;
@@ -6927,6 +6934,8 @@ export function FbsOrderRow({
             title="СЦ, ПВЗ и пары ШК товара + QR заказа. Недоступные части будут перечислены.">
             <Download size={14} aria-hidden="true" />Скачать все ШК
           </button> : null}
+          {order.marketplace === 'WILDBERRIES' ? <button type="button" className="fbs-order-document-button"
+            disabled={actionsDisabled} onClick={() => onDownloadSticker('print')}>Печатать все ШК</button> : null}
           <button
             type="button"
             className="fbs-order-document-button"
