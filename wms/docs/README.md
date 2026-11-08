@@ -1,3 +1,5 @@
+Published PR925 (2026-11-08): scoped Yandex FBY active counter; API1/web2 exact overlay from PR922, PR924 preserved. API4568/web608 passed, 9/2 skipped; dedicated DB integration excluded. Runtime API6/browser4, full isolated API/PostgreSQL boot, controls24, request header and startup/reload passed; public counter4 passed. Web build passes; two pre-existing API nullable-SKU type errors remain. Business data, environment, other containers and sold WMS unchanged. Baseline `2026-11-08-yandex-counter`; sourceParityVerified=false. API sha256:6a1c602f6766a3609f175e9b380c3a083f655b670ad38cde28f622fdc78faff7; web sha256:1d09014b4aa7defdff0db3100a9a6d52af3ff283248a2363e88ccd510866b32a.
+
 ## 2026-11-08: startup regression and verified recovery
 
 PR919 changed root import aliases but left the direct module script on the old root URL. Import maps do not rewrite script `src`, so two React applications mounted the same root; a full authenticated startup reproduced `removeChild` errors. Extracted button tests did not cover application startup.
