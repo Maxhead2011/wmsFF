@@ -5,6 +5,15 @@ import {FboActiveCount,FboWorkspace} from './FboWorkspace';
 
 describe('FBO active card badge',()=>{
   afterEach(()=>vi.unstubAllEnvs());
+  // TEST: Yandex FBY must display the same active-request badge as other FBO tiles.
+  it('renders a counter on the Yandex FBY tile',()=>{
+    vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED','true');
+    vi.stubEnv('VITE_YANDEX_FBY_ENABLED','true');
+    const session={accessToken:'test',user:{roleCodes:[],permissionCodes:['system:admin'],clientIds:[]}} as never;
+    const html=renderToStaticMarkup(<FboWorkspace session={session}/>);
+    const tile=html.split('fbs-marketplace-card--yandex')[1].split('</button>')[0];
+    expect(tile).toContain('fbs-marketplace-card__active-count');
+  });
   // TEST: the visible Lamoda tile must have its own count badge.
   it('renders a counter on the Lamoda tile',()=>{
     vi.stubEnv('VITE_MARKETPLACE_WORKSPACES_ENABLED','true');

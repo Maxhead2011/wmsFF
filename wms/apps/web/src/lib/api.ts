@@ -7839,7 +7839,7 @@ export async function fetchClients(accessToken: string, options: { includeArchiv
 
 // FIX: totals use a scoped lightweight endpoint, not the capped request list.
 export const fetchFboActiveCounts = (accessToken: string) =>
-  request<{wb:number;ozon:number;lamoda:number}>('/client-requests/fbo-active-counts', {accessToken});
+  request<{wb:number;ozon:number;lamoda:number;yandex:number}>('/client-requests/fbo-active-counts', {accessToken});
 
 export async function fetchClientRequests(
   accessToken: string,
