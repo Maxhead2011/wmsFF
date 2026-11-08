@@ -208,7 +208,7 @@ export class BillingController {
   // FIX: large selections use JSON; same read permission, scope and read-only service as GET.
   @Post('invoices/fbs-merge-preview')
   previewFbsMerge(@Body() dto: PreviewFbsInvoicesDto, @CurrentUser() user: AuthUser) {
-    return this.billing.getFbsMergePreview(dto.clientId, user, dto.invoiceIds);
+    return this.billing.getFbsMergePreview(dto.clientId, user, dto.invoiceIds, dto);
   }
 
   @Get('invoices/fbs-merge-preview')
@@ -216,11 +216,14 @@ export class BillingController {
     @Query('clientId') clientId: string,
     @Query('invoiceIds') invoiceIds: string | undefined,
     @CurrentUser() user: AuthUser,
+    @Query('periodFrom') periodFrom?: string,
+    @Query('periodTo') periodTo?: string,
   ) {
     return this.billing.getFbsMergePreview(
       clientId,
       user,
       invoiceIds?.split(',').map((id) => id.trim()).filter(Boolean),
+      { periodFrom, periodTo },
     );
   }
 

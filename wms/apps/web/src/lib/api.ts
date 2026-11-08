@@ -1066,6 +1066,8 @@ export type FbsInvoiceMergePreview = {
 
 export type MergeFbsInvoicesPayload = {
   clientId: string;
+  periodFrom?: string;
+  periodTo?: string;
   invoiceIds?: string[];
   includePrimaryProcessing?: boolean;
   aggregateSameItems?: boolean;
@@ -1078,6 +1080,8 @@ export type MergeFbsInvoicesPayload = {
 
 export type MergeBillingInvoicesPayload = {
   invoiceIds: string[];
+  periodFrom?: string;
+  periodTo?: string;
   aggregateSameItems?: boolean;
   excludeZeroTotalItems?: boolean;
 };
@@ -8624,10 +8628,11 @@ export async function fetchFbsInvoiceMergePreview(
   accessToken: string,
   clientId: string,
   invoiceIds?: string[],
+  period: { periodFrom?: string; periodTo?: string } = {},
 ) {
   // FIX: hundreds of invoice IDs exceed proxy/Node URL limits; keep the exact selection in JSON.
   return request<FbsInvoiceMergePreview>('/billing/invoices/fbs-merge-preview', {
-    method: 'POST', body: { clientId, invoiceIds }, accessToken,
+    method: 'POST', body: { clientId, invoiceIds, ...period }, accessToken,
   });
 }
 
