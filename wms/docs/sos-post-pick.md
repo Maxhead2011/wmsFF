@@ -1,3 +1,5 @@
+Prepared 2026-11-08: SOS request printing now uses the WMS active request filter, excluding DONE/CANCELLED/REJECTED for listing and direct printing. Fixes historical requests appearing after APK9. API4618 passed/9 skipped (DB integration excluded), five regression cases with pre-fix DONE failure, compiled runtime6. Exact API1 overlay on current PR934; web/APK9/stock/billing/sold WMS unchanged.
+
 # SOS WB2: печать после отбора по заявке
 
 ## Правило выбора меню

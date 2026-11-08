@@ -31,7 +31,8 @@ export async function postPickTasks(db: any, clients: any, user: any, requestId?
   scope(user);
   let requests = await db.clientRequest.findMany({ where: {
     ...(requestId ? { id: requestId } : {}), clientId: clients.resolveClientFilter(user),
-    warehouseId: user.activeWarehouseId, status: { notIn: ['CANCELLED', 'REJECTED'] },
+    // FIX: match the WMS active-request list; completed history is not a print queue.
+    warehouseId: user.activeWarehouseId, status: { notIn: ['DONE', 'CANCELLED', 'REJECTED'] },
   }, select: { id: true, number: true, title: true, status: true, clientId: true,
     client: { select: { id: true, name: true, code: true } } }, orderBy: { number: 'desc' } });
   // FIX: client policy routes the workflow; SKU marking remains an additional safeguard.
