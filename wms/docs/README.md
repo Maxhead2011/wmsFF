@@ -1,3 +1,7 @@
+## Published: PR914 fabric reservation display (2026-11-08)
+
+[fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): cut-on-demand WB display and finished-box allocation exclusion; metre accounting and sold WMS retained. API4550/web605, runtime7/browser2, compact-controls24/request-header12 candidate and public, isolated full API boot, read-only20 samples. Exact API2/web2, all754 API files and public hashes verified. Baseline `2026-11-08-fabric-display`, sourceParityVerified=false; TSD258 unchanged.
+
 ## Защита оформления заявок и Ozon
 
 [Постоянная проверка 2×2 и переключателей Ozon](compact-controls-release-guard.md): `scripts/check_compact_controls.cjs`, три отрицательных теста и workflow `compact-controls.yml` для каждого PR нашей WMS. Перед выпуском проверять точный web-кандидат, после — публичный сайт. Проверка исходников не заменяет проверку runtime.
@@ -481,7 +485,3 @@ Lamoda FBO final candidate: follow-up TSD entry/filter regression reproduced bef
 
 Prepared / 2026-10-28: shared guarded removal in Lamoda FBO cards; scope reset and refreshed archive. Preserves PR725 stock review. Web-only on PR725; API3872/web529, runtime browser50 plus stock regression8 passed. [Details](lamoda-request-removal.md).
 Prepared, not published: [explicit receipt corrections](receipt-linked-adjustments.md) add already-posted signed inventory corrections to receipt reporting and XLSX. Default-off flag; no second stock receipt.
-
-## Prepared: fabric reservation display (2026-11-08)
-
-[fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): WB cut-on-demand orders no longer search finished boxed stock or display its shortage. Client/deployment gates and exact SKU/marking guards; existing physical evidence, metre accounting, Ozon and sold WMS preserved. fbs-fabric-reservation helper, syncFbsPalletSortReservations and FbsOrderRow; source5/UI2/runtime7/browser2, live read-only sample20 and isolated full API/PostgreSQL health. Exact API2/web2 overlay, scripts/releases/fbs-fabric-display-20261108/. PR target feature/la_panthera.
