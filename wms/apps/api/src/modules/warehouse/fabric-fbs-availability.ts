@@ -4,7 +4,7 @@ export interface FabricSkuIdentity { id: string; name: string; internalSku: stri
 // FIX: use the same exact SKU grammar as existing roll receipt; never infer metres from a title.
 export function identifyFabricSku(sku: FabricSkuIdentity) {
   if (!/ткань/i.test(sku.name)) return null;
-  const match = /^(gab_)?(black|white|green|red|ivory)_(1|3|5|10|20|30|50)(?:-0)?$/.exec(sku.internalSku ?? '');
+  const match = /^(gab_)?(black|white|green|red|ivory|blue)_(1|3|5|10|20|30|50)(?:-0)?$/.exec(sku.internalSku ?? '');
   return match ? { skuId: sku.id, material: match[1] ? 'GABARDINE' : 'SATIN', color: match[2], lengthMm: Number(match[3]) * 1000 } : null;
 }
 type Pending = { warehouseId: string; material: string; color: string; meters: number };

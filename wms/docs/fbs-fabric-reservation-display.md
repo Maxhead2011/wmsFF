@@ -15,3 +15,13 @@
 Скрипты выпуска: `scripts/releases/fbs-fabric-display-20261108/`. Отдельный PR в `feature/la_panthera`; production baseline остаётся с `sourceParityVerified=false`.
 
 Опубликовано PR914 в `feature/la_panthera`. Проверены хеши всех 754 модулей API и двух web-файлов на сайте, здоровье API и сохранность окружения/остальных контейнеров. Браузерные проверки нового блока и ранее опубликованных кнопок/шапки прошли на кандидате и сайте. База `2026-11-08-fabric-display`.
+
+## Follow-up: saved WB snapshots and blue fabric (2026-11-08)
+
+`decorateFabricReservationResponse` runs after the controller's client/branch/store scoping, including cold saved snapshots and merged order rows. It reads fresh task evidence in bounded batches, preserves cache objects and sync metadata, and refuses physical/marked tasks. No task or stock write occurs. `blue_*` exact articles are supported consistently in fabric availability, runtime roll receipt, shipment accounting and the roll storage label. Existing client/our-WMS gates remain; sold WMS is not deployed.
+
+Files/functions: fbs-fabric-reservation.ts, MarketplaceConnectionsController.listFbsOrders, MarketplaceConnectionsService.decorateFbsFabricDisplay, identifyFabricSku; legacy runtime fabricSku/applyRollAction, identify/planShipments and virtualSku use exact constant-only overlays. Runtime snapshot routing absent from the older controller source is preserved, not overwritten. Scripts: `scripts/releases/fbs-fabric-snapshot-20261108/` (API7, web0). PR target `feature/la_panthera`.
+
+Validation: new source7 (first two reproduced before fix), API4557 passed/9 skipped, web605 passed/2 skipped; dedicated DB integration excluded. Exact runtime9, baseline8, isolated full API/PostgreSQL boot, read-only four actual saved orders with no WB calls. Full API typecheck still has the two pre-existing Yandex nullable-SKU errors; no new type errors. Public stock-cell browser2 and compact-controls/header checks must pass before release. Physical TSD/printer not tested. No receipts/metres/stock were created by the diagnostic or release.
+
+Published follow-up PR916. Read-only checks on all four reported saved rows and exact runtime9 passed on the working server. Public stock-cell2, compact controls24 and header12 passed; all API hashes match and web is unchanged. Baseline `2026-11-08-fabric-snapshot`.
