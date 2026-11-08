@@ -1,0 +1,21 @@
+// FIX: add a download-only hook without replacing other production service methods.
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict'),ts=require('../../../node_modules/typescript');
+const root=path.resolve(process.argv[2]),modulePath='modules/marketplace-connections/';
+const write=(p,s)=>{fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s)};
+const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,experimentalDecorators:true,emitDecoratorMetadata:true}}).outputText;
+const file=modulePath+'marketplace-connections.service.js',base=fs.readFileSync(root+'/api-base/'+file,'utf8');
+const anchor="async getFbsOrderStickersPdf(dto, user) {\n        const clientId = dto.clientId.trim();\n        this.clientScopes.requireClientAccess(user, clientId, 'read');";
+assert.equal(base.split(anchor).length,2);
+const hook=`\n        const paired = await fabricPairedLabels(this.prisma, clientId, dto.orders, selection => this.resolveSelectedFbsOrders(clientId, selection), marketplaceJson, marketplaceBinary);
+        if (paired) return { ...paired, fileName: 'fbs-product-and-order-' + fileTimestamp(new Date()) + '.pdf', contentType: 'application/pdf' };`;
+const prefix='const { fabricPairedLabels } = require("./fbs-paired-labels");\n';
+const patched=prefix+base.replace(anchor,anchor+hook);
+assert.equal(patched.slice(prefix.length).replace(hook,''),base);
+write(root+'/api-payload/'+file,patched);
+write(root+'/api-payload/'+modulePath+'fbs-paired-labels.js',compile(fs.readFileSync('apps/api/src/'+modulePath+'fbs-paired-labels.ts','utf8')));
+const changed=[file,modulePath+'fbs-paired-labels.js'];
+for(const file of changed)assert.equal(ts.createSourceFile(file,fs.readFileSync(root+'/api-payload/'+file,'utf8'),99,true).parseDiagnostics.length,0);
+write(root+'/api-changes.json',JSON.stringify(changed));
+fs.cpSync(root+'/api-base',root+'/api-candidate',{recursive:true});fs.cpSync(root+'/api-payload',root+'/api-candidate',{recursive:true});
+write(root+'/overlay-proof.json',JSON.stringify({existingBytesPreserved:true,changed}));
+console.log('Prepared two-file overlay; original service bytes preserved.');

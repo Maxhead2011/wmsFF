@@ -1,3 +1,4 @@
+import { fabricPairedLabels } from './fbs-paired-labels';
 import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
 import { FABRIC_TASK_MARKER, readFabricTaskLines, requireFabricCutComplete } from '../warehouse/fabric-fbs-task-state';
@@ -21503,6 +21504,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    // FIX: fabric downloads contain a product label followed by the official order label.
+    const paired = await fabricPairedLabels(this.prisma, clientId, dto.orders,
+      (selection) => this.resolveSelectedFbsOrders(clientId, selection), marketplaceJson, marketplaceBinary);
+    if (paired) return { ...paired, fileName: `fbs-product-and-order-${fileTimestamp(new Date())}.pdf`, contentType: 'application/pdf' as const };
     // FIX: an Ozon label download must not wait for every marketplace's history.
     const direct = await selectedOzonLabels(this.prisma, clientId, dto.orders, marketplaceJson, marketplaceBinary);
     if (direct) return {
