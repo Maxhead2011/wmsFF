@@ -13,6 +13,7 @@ export class PrintSeriesController {
   @Post('stations/:id/format') format(@Param('id') id:string,@Body() b:{widthMm?:unknown;heightMm?:unknown},@CurrentUser() u:AuthUser) {return this.service.setFormat(id,b??{},u);}
   @Get('stations') stations(@CurrentUser() u:AuthUser) {return this.service.stations(u);}
   @Post('jobs') create(@Body() b:Parameters<PrintSeriesService['create']>[0],@CurrentUser() u:AuthUser) {return this.service.create(b??{},u);}
+  @Post('pdf-jobs') createPdf(@Body() b:Parameters<PrintSeriesService['createPdf']>[0],@CurrentUser() u:AuthUser) {return this.service.createPdf(b??{},u);}
   @Post('stations/:id/heartbeat') heartbeat(@Param('id') id:string,@CurrentUser() u:AuthUser) {return this.service.heartbeat(id,u);}
   @Post('stations/:id/claim') claim(@Param('id') id:string,@CurrentUser() u:AuthUser) {return this.service.claim(id,u);}
   @Post('stations/:station/jobs/:id/result') finish(@Param('station') station:string,@Param('id') id:string,@Body() b:{success?:unknown;error?:unknown},@CurrentUser() u:AuthUser) {return this.service.finish(station,id,b?.success,b?.error,u);}

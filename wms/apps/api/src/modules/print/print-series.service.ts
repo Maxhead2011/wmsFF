@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
+import { pdfSeries } from './pdf-series';
 
 type Page = { value: string; imageBase64: string };
 type Body = { requestId?: unknown; stationId?: unknown; clientId?: unknown; widthMm?: unknown; heightMm?: unknown; pages?: unknown };
@@ -105,6 +106,20 @@ export class PrintSeriesService {
       if((e as {code?:string}).code!=='P2002')throw e;
       const job=await this.prisma.printJob.findUnique({where:{id}});if(!job)throw e;return match(job);
     }
+  }
+  // FIX: validate client/branch/station before rendering, then reuse atomic series creation.
+  async createPdf(body: { requestId?: unknown; stationId?: unknown; clientId?: unknown; fileBase64?: unknown }, user: AuthUser) {
+    const warehouseId = this.scope(user), clientId = text(body.clientId), stationId = text(body.stationId);
+    const requestId = text(body.requestId);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new BadRequestException('Неверный номер операции.');
+    this.clients.requireClientAccess(user, clientId, 'read');
+    if (!await this.prisma.warehouseClient.findFirst({ where: { clientId, warehouseId } })) throw new ForbiddenException();
+    await this.binding(stationId, user);
+    const station = await this.prisma.fbsPrintStation.findFirst({ where: { id: stationId, enabled: true } });
+    if (!station || station.labelWidthMm !== 58 || station.labelHeightMm !== 40)
+      throw new BadRequestException('Для ленты WB выберите принтер с этикетками 58 × 40 мм.');
+    const pages = await pdfSeries(body.fileBase64, 58, 40);
+    return this.create({ requestId, stationId, clientId, widthMm: 58, heightMm: 40, pages }, user);
   }
   async claim(stationId: string,user: AuthUser) {
     await this.binding(stationId,user,true);
