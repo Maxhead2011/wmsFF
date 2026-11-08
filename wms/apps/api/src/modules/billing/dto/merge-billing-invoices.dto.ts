@@ -7,7 +7,9 @@ import {
   IsUUID,
 } from 'class-validator';
 
-export class MergeBillingInvoicesDto {
+import { BillingMergePeriodDto } from './billing-merge-period.dto';
+
+export class MergeBillingInvoicesDto extends BillingMergePeriodDto {
   @IsArray()
   @ArrayMinSize(2)
   @ArrayUnique()

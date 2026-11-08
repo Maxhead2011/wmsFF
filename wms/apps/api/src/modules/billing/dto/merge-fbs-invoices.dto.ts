@@ -12,6 +12,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { BillingMergePeriodDto } from './billing-merge-period.dto';
+
 export class MergeFbsLogisticsDayDto {
   @IsDateString()
   date!: string;
@@ -21,7 +23,7 @@ export class MergeFbsLogisticsDayDto {
   amountRub!: number;
 }
 
-export class MergeFbsInvoicesDto {
+export class MergeFbsInvoicesDto extends BillingMergePeriodDto {
   @IsString()
   clientId!: string;
 

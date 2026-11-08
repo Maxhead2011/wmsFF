@@ -128,6 +128,8 @@ export function BillingPanel({ session }: BillingPanelProps) {
   }, [session.accessToken, canWrite]);
   const [invoicePeriodFrom, setInvoicePeriodFrom] = useState(currentMonthStart());
   const [invoicePeriodTo, setInvoicePeriodTo] = useState(todayDate());
+  // FIX: submit the exact period used to open this merge preview.
+  const [mergePeriod, setMergePeriod] = useState({ periodFrom: '', periodTo: '' });
 
   const activeServices = useMemo(() => services.data.filter((service) => service.isActive), [services.data]);
   const overviewInvoices = useMemo(
@@ -179,8 +181,12 @@ export function BillingPanel({ session }: BillingPanelProps) {
   );
   const selectedInvoiceClient = clients.data.find((client) => client.id === invoiceClientId);
   const selectableInvoiceIds = useMemo(
-    () => new Set(invoiceRegisterInvoices.filter(isSelectableDraft).map((invoice) => invoice.id)),
-    [invoiceRegisterInvoices],
+    () => new Set(invoiceRegisterInvoices.filter(invoice =>
+      isSelectableDraft(invoice) &&
+      invoice.periodFrom.slice(0, 10) >= invoicePeriodFrom &&
+      invoice.periodTo.slice(0, 10) <= invoicePeriodTo,
+    ).map(invoice => invoice.id)),
+    [invoiceRegisterInvoices, invoicePeriodFrom, invoicePeriodTo],
   );
   const combinedInvoicesClientId =
     invoiceClientId || (clients.status === 'ready' && clients.data.length === 1 ? clients.data[0].id : '');
@@ -497,10 +503,16 @@ export function BillingPanel({ session }: BillingPanelProps) {
       setError('Сначала выберите клиента.');
       return;
     }
+    if (!invoicePeriodFrom || !invoicePeriodTo || invoicePeriodFrom > invoicePeriodTo) {
+      setError('Укажите корректный период объединения.');
+      return;
+    }
+    const period = { periodFrom: invoicePeriodFrom, periodTo: invoicePeriodTo };
+    setMergePeriod(period);
     // FIX: implicit selection is confined to the visible service period.
     const invoiceIds = selectedInvoiceIds.size > 0
       ? [...selectedInvoiceIds].filter((id) => selectableInvoiceIds.has(id))
-      : invoiceRegisterInvoices.filter(isSelectableFbsDraft).map(invoice => invoice.id);
+      : invoiceRegisterInvoices.filter(invoice => isSelectableFbsDraft(invoice) && selectableInvoiceIds.has(invoice.id)).map(invoice => invoice.id);
     if (invoiceIds.length === 0) {
       setError('В выбранном периоде нет доступных FBS-черновиков.');
       return;
@@ -528,6 +540,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
         session.accessToken,
         combinedInvoicesClientId,
         invoiceIds.length ? invoiceIds : undefined,
+        period,
       );
       setFbsMergePreview(preview);
       setFbsMergeInvoiceIds(invoiceIds);
@@ -560,6 +573,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
     try {
       const invoice = await mergeFbsInvoices(session.accessToken, {
         clientId: fbsMergePreview.client.id,
+        ...mergePeriod,
         invoiceIds: fbsMergeInvoiceIds.length ? fbsMergeInvoiceIds : undefined,
         includePrimaryProcessing: includeFbsPrimaryProcessing,
         aggregateSameItems: mergeAggregateSameItems,
@@ -589,6 +603,7 @@ export function BillingPanel({ session }: BillingPanelProps) {
     try {
       const invoice = await mergeBillingInvoices(session.accessToken, {
         invoiceIds: genericMergeInvoices.map((item) => item.id),
+        ...mergePeriod,
         aggregateSameItems: mergeAggregateSameItems,
         excludeZeroTotalItems: mergeExcludeZeroTotalItems,
       });

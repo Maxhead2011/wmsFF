@@ -1,7 +1,10 @@
 import { ArrayMaxSize, ArrayNotEmpty, ArrayUnique, IsArray, IsNotEmpty, IsString, IsUUID, ValidateIf } from 'class-validator';
 
+import { BillingMergePeriodDto } from './billing-merge-period.dto';
+
 // FIX: read-only preview accepts a bounded JSON selection instead of an oversized URL.
-export class PreviewFbsInvoicesDto {
+
+export class PreviewFbsInvoicesDto extends BillingMergePeriodDto {
   @IsString()
   @IsNotEmpty()
   clientId!: string;

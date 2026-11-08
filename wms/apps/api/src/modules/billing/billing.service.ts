@@ -35,6 +35,7 @@ import { ListBillingReconciliationDto } from './dto/list-billing-reconciliation.
 import { ListBillingServiceHistoryDto } from './dto/list-billing-service-history.dto';
 import { MergeBillingInvoicesDto } from './dto/merge-billing-invoices.dto';
 import { MergeFbsInvoicesDto } from './dto/merge-fbs-invoices.dto';
+import { BillingMergePeriodDto, billingMergePeriodWhere, invoiceWithinMergePeriod } from './dto/billing-merge-period.dto';
 import { UpdateBillingChargeStatusDto } from './dto/update-billing-charge-status.dto';
 import { UpdateBillingInvoiceStatusDto } from './dto/update-billing-invoice-status.dto';
 import { UpdateClientFbsTurnkeyDto } from './dto/update-client-fbs-turnkey.dto';
@@ -2105,8 +2106,8 @@ export class BillingService {
     );
   }
 
-  async getFbsMergePreview(clientId: string, user: AuthUser, invoiceIds?: string[]) {
-    const selection = await this.loadFbsMergeSelection(clientId, user, invoiceIds);
+  async getFbsMergePreview(clientId: string, user: AuthUser, invoiceIds?: string[], period: BillingMergePeriodDto = {}) {
+    const selection = await this.loadFbsMergeSelection(clientId, user, invoiceIds, period);
     return selection.preview;
   }
 
@@ -2116,7 +2117,7 @@ export class BillingService {
   }
 
   private async mergeFbsInvoicesLocked(dto: MergeFbsInvoicesDto, user: AuthUser) {
-    const selection = await this.loadFbsMergeSelection(dto.clientId, user, dto.invoiceIds);
+    const selection = await this.loadFbsMergeSelection(dto.clientId, user, dto.invoiceIds, dto);
     const includePrimaryProcessing =
       dto.includePrimaryProcessing === true ||
       selection.preview.primaryProcessing.included;
@@ -2398,6 +2399,7 @@ export class BillingService {
   }
 
   private async mergeInvoicesLocked(dto: MergeBillingInvoicesDto, user: AuthUser) {
+    const periodWhere = billingMergePeriodWhere(dto);
     const invoiceIds = [...new Set(dto.invoiceIds)];
     if (invoiceIds.length < 2) {
       throw new BadRequestException('Для объединения выберите минимум два счёта.');
@@ -2421,6 +2423,11 @@ export class BillingService {
     if (invoices.some((invoice) => invoice.clientId !== clientId)) {
       throw new BadRequestException('Объединять можно только счета одного клиента.');
     }
+    // FIX: explicit selections must also stay fully inside the chosen period.
+    if (invoices.some(invoice => !invoiceWithinMergePeriod(invoice, periodWhere))) {
+      throw new BadRequestException('Один или несколько счетов выходят за выбранный период объединения.');
+    }
+
     if (
       invoices.some(
         (invoice) =>
@@ -2540,7 +2547,8 @@ export class BillingService {
     });
   }
 
-  private async loadFbsMergeSelection(clientId: string, user: AuthUser, invoiceIds?: string[]) {
+  private async loadFbsMergeSelection(clientId: string, user: AuthUser, invoiceIds?: string[], period: BillingMergePeriodDto = {}) {
+    const periodWhere = billingMergePeriodWhere(period);
     if (!clientId) {
       throw new BadRequestException('Выберите клиента для объединения FBS-счетов.');
     }
@@ -2560,6 +2568,7 @@ export class BillingService {
           status: BillingInvoiceStatus.DRAFT,
           paidRub: { lte: 0 },
           payments: { none: {} },
+          ...periodWhere,
         },
         include: fbsMergeInvoiceInclude,
         orderBy: [{ periodFrom: 'asc' }, { createdAt: 'asc' }],
@@ -2569,8 +2578,10 @@ export class BillingService {
         select: { primaryProcessingEnabled: true },
       }),
     ]);
-    const allInvoices = drafts.filter(isFbsMergeInvoice);
-    const allPrimaryInvoices = drafts.filter(isFbsPrimaryProcessingInvoice);
+    // FIX: scope both the old merged target and primary processing to the period.
+    const periodDrafts = drafts.filter(invoice => invoiceWithinMergePeriod(invoice, periodWhere));
+    const allInvoices = periodDrafts.filter(isFbsMergeInvoice);
+    const allPrimaryInvoices = periodDrafts.filter(isFbsPrimaryProcessingInvoice);
     const target = allInvoices.find(
       (invoice) => isMergedFbsInvoiceSourceKey(invoice.sourceKey, clientId),
     );
