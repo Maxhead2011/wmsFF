@@ -83,3 +83,13 @@ it('preserves the legacy delivery guard when our WMS flag is off', async () => {
   service.loadFbsDeliveryPlan = async () => ({ requiresCargoPlaces: false });
   await expect(service.getFbsSupplyStickersPdf({ clientId: 'client', orders: [] }, {})).rejects.toThrow('после её передачи');
 });
+// TEST: preserve reference portrait artwork rotated into physical 58x40 media, with a large QR.
+it('embeds the reference 40x58 artwork into 58x40 media without page rotation', async () => {
+  const pdf = await PDFDocument.load(await buildWbSupplyLabelsPdf([{ supplyId: 'WB-GI-306846466', quantity: 1, destination: 'Москва_Восток' }]));
+  const page = pdf.getPage(0);
+  expect(page.getWidth()).toBeCloseTo(58 * 72 / 25.4, 2);
+  expect(page.getHeight()).toBeCloseTo(40 * 72 / 25.4, 2);
+  expect(page.getRotation().angle).toBe(0);
+  const resources = page.node.Resources();
+  expect(resources?.toString()).toContain('/XObject');
+});
