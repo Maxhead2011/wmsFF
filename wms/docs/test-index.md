@@ -1,4 +1,6 @@
-## Подготовлено: WB FBS — лента доступных этикеток
+Published PR919 (2026-11-08): WB FBS available-label ribbon for order, supply group and selected orders. SC → PVZ → existing product/order pairs; partial downloads explain missing sections, access failures remain fatal. Existing individual printing retained; no delivery, cargo creation or metre debit initiated. API4565/web605 passed (9/2 skipped; dedicated DB integration excluded), helper8, runtime6/browser6, baseline8, isolated full API/PostgreSQL boot and CI passed. Public browser6, compact-controls24 and request-header12 before/after; all755 API hashes and web3 public files match candidate. Environment, other containers, TSD258 and sold WMS preserved. Full API typecheck retains two existing Yandex nullable-SKU errors; web passes. Physical printer/real-supply ribbon unverified. Baseline `2026-11-08-wb-all-labels`; sourceParityVerified=false. API sha256:747f21e5b2bfc269ea7e642a2ca73d8851ee41850c42c412b8b836aade1c3d62; web sha256:56bf0c10efdc9f55db12314152fff0abf34a0465d06960629cd86b4a9155091b.
+
+## Опубликовано PR919: WB FBS — лента доступных этикеток
 
 [Скачать все ШК](wb-all-labels.md): СЦ → ПВЗ → пары товара/заказа; частичный PDF с предупреждениями, прежняя печать сохранена. API4/web3, без передачи поставок и списаний.
 
