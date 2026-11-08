@@ -7,7 +7,7 @@ const root=path.resolve(process.argv[2]);
  const read=p=>fs.readFileSync(p,'utf8'),s=read(root+'/web-payload/assets/ozon-media-core-20261108.js'),html=read(root+'/web-payload/index.html');
  const map=JSON.parse(html.match(/<script type="importmap">(.*?)<\/script>/s)[1]).imports;
  assert(!Object.values(map).includes('/assets/wb-all-labels-api-20261108.js'));
- assert.equal([...html.matchAll(/<script[^>]+src="\/assets\/ozon-media-core-20261108.js"/g)].length,1);assert(!html.includes('src="/assets/stock-export-20261106.js"')); 
+ assert.equal([...html.matchAll(/<script[^>]+src="\/assets\/ozon-media-core-20261108.js"/g)].length,1);assert(!html.includes('src="/assets/stock-export-20261106.js"'));
  assert(s.includes('e.jsx(__StationMedia,{session:t})'));
  const component=s.slice(s.lastIndexOf('var __StationMedia='));
  const bundle=esbuild.buildSync({stdin:{contents:'import * as x from "react";import {createRoot} from "react-dom/client";'+component+'\ncreateRoot(document.getElementById("root")).render(x.createElement(__StationMedia,{session:{accessToken:"synthetic"}}));',resolveDir:path.resolve('apps/web'),loader:'jsx'},bundle:true,write:false,format:'iife'}).outputFiles[0].text;
