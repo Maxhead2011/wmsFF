@@ -8,7 +8,8 @@ permissions:
   contents: read
 jobs:
   compact-controls:
-    runs-on: ubuntu-latest
+    # FIX: pin the OS supported by the pinned Playwright browser dependencies.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
