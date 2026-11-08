@@ -3,7 +3,7 @@ from pathlib import Path
 import json,subprocess,sys,hashlib,fcntl
 R=Path(sys.argv[1]);C=Path('/opt/wms-restore/compose.json')
 BASE='sha256:79a1d9a4ef78c04a77c8efa933b58045f461d5a59e8130c148988ee8137d535c'
-API='sha256:48595b98f735dbef559cbe9d45917bcce50b63f037e897cb210b660b685181ab'
+API='sha256:9d9cc419a8adfa851aaaedc6ad0bd501a38ebc8e87ba5e96a42fa04f46c733f4'
 def d(*a):return subprocess.check_output(['docker',*a],text=True).strip()
 def sha(b):return hashlib.sha256(b).hexdigest()
 def current(n):return d('inspect','wms-local-'+n,'--format','{{.Image}}')

@@ -1,0 +1,13 @@
+# WB: selected-order printing reads
+
+The label handlers previously called the operational client order loader, including unrelated marketplace/history and stock/billing work. A complete ribbon repeated that selection for its SC, PVZ and paired sections. An observed all-labels request took 21.7 seconds and returned a client error; its individual stage durations were not recorded.
+
+`wb-label-orders.ts::wbLabelOrders` reads only selected active client connections, uses saved order dates to bound the WB metadata query, requests fresh selected statuses, and resolves product identity and the saved delivery plan without stock/billing writes. It works without a warm in-memory order cache. Local order links are not accepted as marketplace status or product metadata.
+
+`MarketplaceConnectionsService::resolveFbsLabelOrders` supplies a request-local snapshot to `getFbsAllLabels`, `getFbsOrderStickersPdf`, `getFbsCargoPlaceStickersPdf` and `getFbsSupplyStickersPdf`. The same snapshot is reused for recursively split paired-label batches. Existing scope checks, official label readers and partial-download warnings remain. Other marketplaces use their existing path. The selected WB reader requires the existing own-WMS flag `WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED`; no flag or schema change is deployed.
+
+Candidate validation on actual WB data, inside a read-only database transaction and with network writes blocked: request 2817: 1262ms/3 pages, 2818: 1306ms/5 pages, 2781: 1144ms/8 pages. These include the whole service handler and live metadata/status calls, but not browser/network transfer or physical printing. Unlike the earlier 610–922ms PDF-only probes, the order resolver is not stubbed. The old 21.7-second log is not a controlled paired benchmark.
+
+Tests: `wb-label-orders.spec.ts` (5), `wb-label-read-path.spec.ts` (3), existing ribbon/paired tests (32); old handler fails the regression with “Full client refresh forbidden while printing”. Full API: 4613 passed/9 skipped (dedicated DB suites excluded); web: 613 passed/2 skipped. Exact runtime: 6 checks and isolated full API/PostgreSQL boot. Baseline: 8 checks. Physical printer not exercised.
+
+Release: API2 exact overlay from verified PR931/933 baseline. `scripts/releases/wb-label-selected-read-20261108/prepare.cjs` verifies inverse byte preservation, `runtime.cjs` exercises the real compiled service, and `release.py` guards image/compose/environment drift with rollback. Web, SOS APK9, TSD258, stock, billing, delivery and sold WMS are unchanged. Source/runtime parity remains false; never replace the full runtime with a source build.
