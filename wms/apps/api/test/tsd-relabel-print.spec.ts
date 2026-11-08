@@ -112,7 +112,7 @@ it('hands the unchanged quiet agent two identical relabel images without auto-re
   expect(f.db.fbsPrintJob.updateMany).toHaveBeenCalledWith(expect.objectContaining({
     where: { id: 'job', status: 'QUEUED' },
   }));
-  expect(f.db.fbsPrintJob.findFirst.mock.calls[0][0].where.OR[1].source).toEqual({ not: 'TSD_RELABEL' });
+  expect(f.db.fbsPrintJob.findFirst.mock.calls[0][0].where.OR[1].source).toEqual({ notIn: ['TSD_RELABEL', 'SOS_POST_PICK'] });
 });
 
 it('uses the real assembly context from station discovery through queue creation', async () => {

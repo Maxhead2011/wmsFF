@@ -16,6 +16,8 @@
     <Spinner android:id="@+id/mode" android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"/>
     <TextView android:id="@+id/requestLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="ЗАЯВКА WMS" android:textStyle="bold" android:layout_marginTop="8dp" android:visibility="gone"/>
     <Spinner android:id="@+id/request" android:layout_width="match_parent" android:layout_height="60dp" android:visibility="gone"/>
+    <Button android:id="@+id/refreshRequestsButton" android:layout_width="match_parent" android:layout_height="48dp" android:text="ОБНОВИТЬ ЗАЯВКИ И ПЕЧАТЬ" android:visibility="gone"/>
+    <Button android:id="@+id/postRepeatButton" android:layout_width="match_parent" android:layout_height="48dp" android:text="ПОВТОРИТЬ ПЕЧАТЬ" android:visibility="gone"/>
     <TextView android:id="@+id/stationLabel" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="ПЕЧАТНАЯ СТАНЦИЯ" android:textStyle="bold" android:layout_marginTop="8dp" android:visibility="gone"/>
     <Spinner android:id="@+id/station" android:layout_width="match_parent" android:layout_height="60dp" android:visibility="gone"/>
     <TextView android:id="@+id/requestNumber" android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="46sp" android:textStyle="bold" android:textColor="#FFFFFF" android:gravity="center" android:visibility="gone"/>
