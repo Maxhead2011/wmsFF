@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import pdfMake = require('pdfmake');
+import { PDFDocument, degrees } from 'pdf-lib';
 import type { Content, TDocumentDefinitions } from 'pdfmake/interfaces';
 import { configurePdfMake } from '../../common/pdf/pdfmake';
 
@@ -44,23 +45,28 @@ export async function readWbSupplyLabels(orders: Order[], connections: Connectio
   return labels;
 }
 
-// FIX: vector QR with the exact supply ID; captions never overlap the QR quiet zone.
+// FIX: reproduce the supplied WB layout: supply number, large QR, quantity and direction.
+// Rotate the artwork, not the PDF page, so merging/printing preserves physical 58x40 media.
 export async function buildWbSupplyLabelsPdf(labels: SupplyLabel[]) {
   configurePdfMake();
   const content: Content[] = labels.map((label, index) => ({
     stack: [
-      { text: `${label.quantity} шт.`, bold: true, fontSize: 11, margin: [0, 0, 0, 2] },
-      { columns: [
-        { qr: label.supplyId, fit: 50, eccLevel: 'M', width: 70, margin: [9, 9, 9, 9] },
-        { text: label.destination, fontSize: label.destination.length > 35 ? 6 : 8, width: '*', margin: [3, 3, 0, 0] },
-      ] },
-      { text: label.supplyId, fontSize: 10, bold: true, margin: [0, 4, 0, 0], alignment: 'center' },
+      { text: label.supplyId, bold: true, fontSize: 10, alignment: 'center', margin: [0, 0, 0, 4] },
+      { qr: label.supplyId, fit: 107, eccLevel: 'M', alignment: 'center', margin: [0, 0, 0, 2] },
+      { text: `${label.quantity} шт.`, fontSize: 12, margin: [0, 0, 0, 1] },
+      { text: label.destination, fontSize: label.destination.length > 35 ? 5 : label.destination.length > 20 ? 8 : 12 },
     ],
     ...(index < labels.length - 1 ? { pageBreak: 'after' as const } : {}),
   }));
+  const width = 40 * 72 / 25.4, height = 58 * 72 / 25.4;
   const definition: TDocumentDefinitions = {
-    pageSize: { width: 58 * 72 / 25.4, height: 40 * 72 / 25.4 }, pageMargins: [6, 5, 6, 5],
+    pageSize: { width, height }, pageMargins: [3, 4, 3, 4],
     defaultStyle: { font: 'DejaVuSans' }, content,
   };
-  return pdfMake.createPdf(definition).getBuffer();
+  const source = await PDFDocument.load(await pdfMake.createPdf(definition).getBuffer());
+  const result = await PDFDocument.create();
+  for (const embedded of await result.embedPages(source.getPages())) {
+    result.addPage([height, width]).drawPage(embedded, { x: height, y: 0, rotate: degrees(90) });
+  }
+  return Buffer.from(await result.save());
 }
