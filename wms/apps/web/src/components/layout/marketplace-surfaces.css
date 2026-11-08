@@ -1,3 +1,4 @@
+@import './compact-operational-controls.css';
 /* FIX: opaque operational surfaces over Panthera wallpaper; loaded only by our workspace flag. */
 @media screen {
  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'] {
