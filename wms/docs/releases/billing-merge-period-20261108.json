@@ -1,0 +1,61 @@
+{
+  "release": "billing-merge-period-20261108",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/918",
+  "sourceCommit": "6903ed18",
+  "mergeCommit": "35207ad6f110f7a59d92a5ee15fe1f3cf508c0b0",
+  "publishedAt": "2026-11-08T14:21:52Z",
+  "target": "our-wms-home-server",
+  "images": {
+    "api": "sha256:0f49b1a75a845ba606ac17ee6c8424e38944aa881c01323897a5a8a9cbf7ecea",
+    "web": "sha256:30733c98a48b18636294570901654635d28d56ca8c55508502febed48ad99480"
+  },
+  "runtimeBaseline": {
+    "directory": "/opt/wms-restore/releases/billing-merge-period-20261108-r2/published-baseline",
+    "manifestSha256": "e6a60d44517cf08705a419886fbdb966a6237e0241eba577483ae976cd94d3ea",
+    "apiArchiveSha256": "0476baa7d5a53da70a25b54e3c695c4a7ef4ce985a06b8ee90dd4424742c3e1a",
+    "webManifestSha256": "865c4535edf3e9ce69812a502e5972c3c76c195792560a1efbb77d56818af3a2"
+  },
+  "sourceParityVerified": false,
+  "apiChangedFiles": {
+    "modules/billing/billing.service.js": "0faeb0df0f95f1a85a4d677eeaa74c9c902326308c0181a6d0dc300156c7afc5",
+    "modules/billing/billing.controller.js": "397d8173b5763e85d39b33f8b0146ac3ae69fa8aaec3f8ab98e3cfab7798c5ca",
+    "modules/billing/dto/billing-merge-period.dto.js": "08b7d5ec865c841b8b674c42ea19c41f0410d97e6703f52baa72437e8532f6f2",
+    "modules/billing/dto/merge-billing-invoices.dto.js": "e62c560fccaa50b6b997e21a2a34b93308a9ae8dc4e0db095feb2be9b827cb5a",
+    "modules/billing/dto/merge-fbs-invoices.dto.js": "1fb10380a69faceb111b6d7d60ba90e76f165c390c087d710e52e5562919185d",
+    "modules/billing/dto/preview-fbs-invoices.dto.js": "a4b4d99b88012f36e5b27d766799a706fe9e1f0cc8022b3df77c46e4cdbb09e0"
+  },
+  "webChangedFiles": {
+    "index.html": "cd23a9738dc1d45e5f9b2927bf100455ab09d31d2500b83bd7c38f7e1b2d98d1",
+    "assets/billing-merge-period-20261108.js": "9c7c324fe2e8fdddef54f907e004754ef51cecaac628792cbd9df992402a04fb",
+    "assets/billing-period-api-20261108.js": "bb420bf141002aead4141c007cf48bd0289303cbc7d45feb6096e06148848088"
+  },
+  "checks": {
+    "apiPassed": 4317,
+    "apiSkipped": 156,
+    "webPassed": 591,
+    "webSkipped": 2,
+    "newRegressionTests": 11,
+    "excludedDedicatedIntegration": "kiz-duplicate.integration.spec.ts",
+    "candidateHttpCases": 8,
+    "typescript": "passed",
+    "builds": "API and web passed",
+    "publicHttpsFiles": 3,
+    "livePeriod": {
+      "from": "2026-11-01",
+      "to": "2026-11-08",
+      "invoices": 37,
+      "orders": 130,
+      "items": 130,
+      "oldMergedTarget": null,
+      "financialSnapshotUnchanged": true,
+      "financialSnapshotSha256": "59d1156b665962e08cf9fd5d8b9b630a75fd78bd3b01a8ac54eca090953d1739"
+    }
+  },
+  "rollback": {
+    "images": {
+      "/wms-local-api": "sha256:747f21e5b2bfc269ea7e642a2ca73d8851ee41850c42c412b8b836aade1c3d62",
+      "/wms-local-web": "sha256:56bf0c10efdc9f55db12314152fff0abf34a0465d06960629cd86b4a9155091b"
+    },
+    "composeBackup": "/opt/wms-restore/releases/billing-merge-period-20261108-r2/compose-before.json"
+  }
+}

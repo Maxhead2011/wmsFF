@@ -1,3 +1,5 @@
+Published PR918. [Invoice merge selected period](releases/billing-merge-period-20261108.json) records the verified home-server runtime, exact overlay hashes, live 37-invoice/130-order November preview and rollback.
+
 PR847. Box overlap records and counters respect the selected administrator warehouse. The global cache is used only in the all-warehouse view. Verified delayed branch switches in Edge and live Moscow report (9 checked, 2 shared boxes, 0 errors). Baseline 2026-11-01-overlap-scope.
 
 PR844. Warehouse problem menu groups archive and bulk acknowledgement with accessible active, focus and disabled styles. Web 591 passed/2 skipped, TypeScript, mobile Edge and public browser checks passed. Baseline 2026-11-01-problem-buttons.
