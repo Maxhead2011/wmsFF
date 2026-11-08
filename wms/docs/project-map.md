@@ -750,3 +750,8 @@ Prepared, not published: fabric queue reports local ConflictException messages w
 
 Prepared, not published: approved later fabric receipts for FBS. assignFabricOrder resolves all matching pending WB shipment IDs within client/warehouse scope; only rolls received strictly after the latest proven shipment can be newly reserved. Unknown evidence remains blocked. reserveFabricOrder passes per-line cutoffs; reserveFabric preserves full ledger and existing commitments. Historical shipmentPending is not cleared or consumed. Own-WMS flag and client opt-in retained. Exact five-module overlay based on PR877; release scripts in scripts/releases/fbs-fabric-later-receipts.
 Prepared receipt reporting correction: `receipt-linked-adjustments.ts` validates explicit movement snapshots; `receipt-channel-policy.receiptDocuments` applies them only to reports; `receipt-channels.controller.file` includes signed linked rows in XLSX. See [scope and validation](receipt-linked-adjustments.md). Not published; balances and sold WMS unchanged.
+
+## Prepared: fabric reservation display (2026-11-08)
+
+[fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): WB cut-on-demand orders no longer search finished boxed stock or display its shortage. Client/deployment gates and exact SKU/marking guards; existing physical evidence, metre accounting, Ozon and sold WMS preserved. fbs-fabric-reservation helper, syncFbsPalletSortReservations and FbsOrderRow; source5/UI2/runtime7/browser2, live read-only sample20 and isolated full API/PostgreSQL health. Exact API2/web2 overlay, scripts/releases/fbs-fabric-display-20261108/. PR target feature/la_panthera.
+
