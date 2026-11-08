@@ -1,6 +1,7 @@
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
+import { readWbSupplyLabels, buildWbSupplyLabelsPdf } from './wb-supply-label';
 import { fabricPairedLabels } from './fbs-paired-labels';
 import { wbLabelOrders } from './wb-label-orders';
 import { fabricReservationOrders, untouchedFabricReservation, decorateFabricReservationResponse } from './fbs-fabric-reservation';
@@ -21815,6 +21816,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async getFbsSupplyStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser, snapshot?: FbsLabelOrder[]) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    // FIX: our WMS can print an existing supply before delivery; legacy VM stays unchanged.
+    if (process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true') {
+      const { orders } = await this.resolveFbsLabelOrders(clientId, dto.orders, snapshot);
+      const connections = await this.loadSelectedConnections(clientId, orders);
+      const labels = await readWbSupplyLabels(orders, connections, marketplaceJson);
+      const buffer = await buildWbSupplyLabelsPdf(labels);
+      return { fileName: `fbs-wb-supply-${fileTimestamp(new Date())}.pdf`, contentType: 'application/pdf', buffer, count: labels.length };
+    }
     const [{ orders }, deliveryPlan] = await Promise.all([
       this.resolveFbsLabelOrders(clientId, dto.orders, snapshot),
       this.loadFbsDeliveryPlan(clientId),
