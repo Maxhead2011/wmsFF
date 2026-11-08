@@ -66,6 +66,7 @@ import {
   downloadFbsDeadlineSelectedOrdersXlsx,
   downloadFbsPenaltiesReport,
   downloadFbsProductShipmentReport,
+  downloadFbsAllLabels,
   downloadFbsOrderStickersPdf,
   downloadFbsRequestPickListPdf,
   downloadFbsSupplyStickersPdf,
@@ -1358,13 +1359,25 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     }
   }
 
-  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[]) {
+  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all = false) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('stickers');
     setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
     setOrderActionMessage('');
     setOrderActionError('');
     try {
+      // FIX: explicit boolean keeps the existing single-label click unchanged.
+      if (all === true) {
+        const result = await downloadFbsAllLabels(session.accessToken, {
+          clientId: selectedClientId,
+          orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
+        });
+        const bytes = Uint8Array.from(atob(result.fileBase64), char => char.charCodeAt(0));
+        downloadFbsBlob(new Blob([bytes], { type: 'application/pdf' }), result.fileName);
+        setOrderActionMessage(`Скачана лента: ${result.pageCount} стр.`);
+        if (result.warnings.length) setOrderActionError(`Скачан неполный комплект. ${result.warnings.join(' ')}`);
+        return;
+      }
       const blob = await downloadFbsOrderStickersPdf(session.accessToken, {
         clientId: selectedClientId,
         orders: orders.map((order) => ({ connectionId: order.connectionId, id: order.id })),
@@ -5707,7 +5720,7 @@ function FbsOrdersView({
   onMoveToNewSupply: (orders: FbsOrderSummary[]) => Promise<void>;
   onCancel: (orders: FbsOrderSummary[]) => Promise<void>;
   onRemoveCancelledOrder: (order: FbsOrderSummary) => Promise<void>;
-  onDownloadStickers: (orders: FbsOrderSummary[]) => Promise<void>;
+  onDownloadStickers: (orders: FbsOrderSummary[], all?: boolean) => Promise<void>;
   onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadSupplyStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadPickList: (order: FbsOrderSummary) => Promise<void>;
@@ -6431,6 +6444,11 @@ function FbsOrdersView({
               {orderAction === 'stickers' ? 'Формирую…' : `ШК заказов (${stickerOrders.length})`}
             </button>
             {hasWildberriesOrders ? <>
+            <button type="button" className="button button-secondary"
+              disabled={orderAction !== null || !selectedOrders.some(order => order.marketplace === 'WILDBERRIES')}
+              onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), true)}>
+              <Download size={16} aria-hidden="true" />Скачать все ШК
+            </button>
             <button
               type="button"
               className="button button-secondary"
@@ -6608,6 +6626,11 @@ function FbsOrdersView({
                             Выбрать группу
                           </button>
                         ) : null}
+                        <button type="button" disabled={orderAction !== null}
+                          onClick={() => void onDownloadStickers(group.orders, true)}
+                          title="Скачать доступные СЦ, ПВЗ и пары товара/заказа одной лентой">
+                          <Download size={14} aria-hidden="true" />Все ШК
+                        </button>
                         <button type="button" disabled={groupStickerOrders.length === 0 || orderAction !== null} onClick={() => void onDownloadStickers(groupStickerOrders)}>
                           <Download size={13} aria-hidden="true" /> ШК заказов
                         </button>
@@ -6666,7 +6689,7 @@ function FbsOrdersView({
                   )}
                   canDownloadPickList={canDownloadPickList}
                   onHideWaitingStock={() => setHiddenWaitingStockKeys((current) => new Set(current).add(fbsOrderSelectionKey(order)))}
-                  onDownloadSticker={() => void onDownloadStickers([order])}
+                  onDownloadSticker={(all = false) => void onDownloadStickers([order], all)}
                   onDownloadCargoStickers={() => void onDownloadCargoStickers([order])}
                   onDownloadSupplyStickers={() => void onDownloadSupplyStickers([order])}
                   onDownloadPickList={() => void onDownloadPickList(order)}
@@ -6730,7 +6753,7 @@ export function FbsOrderRow({
   requiresCargoPlaces: boolean;
   canDownloadPickList: boolean;
   onHideWaitingStock: () => void;
-  onDownloadSticker: () => void;
+  onDownloadSticker: (all?: boolean) => void;
   onDownloadCargoStickers: () => void;
   onDownloadSupplyStickers: () => void;
   onDownloadPickList: () => void;
@@ -6898,11 +6921,17 @@ export function FbsOrderRow({
       </td>
       <td>
         <div className="fbs-order-documents">
+          {order.marketplace === 'WILDBERRIES' ? <button type="button"
+            className="fbs-order-document-button"
+            disabled={actionsDisabled} onClick={() => onDownloadSticker(true)}
+            title="СЦ, ПВЗ и пары ШК товара + QR заказа. Недоступные части будут перечислены.">
+            <Download size={14} aria-hidden="true" />Скачать все ШК
+          </button> : null}
           <button
             type="button"
             className="fbs-order-document-button"
             disabled={!canDownloadSticker || actionsDisabled}
-            onClick={onDownloadSticker}
+            onClick={() => onDownloadSticker()}
             title={
               canDownloadSticker
                 ? `Скачать ШК заказа ${order.id}`
