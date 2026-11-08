@@ -86,7 +86,7 @@ test('reopening an installed agent neither stops it nor registers a new station'
 function Get-AgentHome {return $testRoot}
 $cfg=@{server='https://test.invalid';stationId='0910';printerName='fake'}
 Write-AtomicJson (Join-Path $testRoot 'config.json') $cfg
-foreach($name in @('LOGOFF-FBS-Print-Agent.ps1','WmsApi.ps1','PrintSeries.ps1','KizDuplicate.ps1','JobJournal.ps1','AgentLifecycle.ps1','Setup-Agent.ps1','Install-Agent.cmd','README.txt')){[IO.File]::WriteAllText((Join-Path $testRoot $name),'test')}
+foreach($name in @('LOGOFF-FBS-Print-Agent.ps1','WmsApi.ps1','PrintSeries.ps1','LabelLayout.ps1','KizDuplicate.ps1','JobJournal.ps1','AgentLifecycle.ps1','Setup-Agent.ps1','Install-Agent.cmd','README.txt')){[IO.File]::WriteAllText((Join-Path $testRoot $name),'test')}
 function Get-ScheduledTask {return @{State='Running';Actions=@(@{Arguments=('-File "'+(Join-Path $testRoot 'LOGOFF-FBS-Print-Agent.ps1')+'"')})}}
 function Register-AgentTask {throw 'Must not replace a running task'}
 function Start-ScheduledTask {throw 'Already running'}
@@ -144,4 +144,20 @@ Initialize-PrintJournal $cfg $testRoot
 $script:conflict=$false
 Sync-PrintResults 'fbs'
 if($script:printRecords['fbs|blocked'].state -ne 'acknowledged' -or $script:physical -ne 2){throw 'Recovery lost'}
+`));
+
+// TEST: WMS media overrides stale local 58x40 before the next label is claimed.
+test('station media is refreshed before printing a custom label',()=>run(`
+. '${root.replace(/'/g,"''")}/LOGOFF-FBS-Print-Agent.ps1' -LibraryOnly
+$cfg=@{server='https://test.invalid';stationId='station';printerName='fake';labelWidthMm=58;labelHeightMm=40}
+Initialize-PrintJournal $cfg $testRoot
+function Invoke-WmsApi {param($m,$p,$b)
+ if($p -like '*heartbeat'){return @{labelWidthMm=70;labelHeightMm=120}}
+ if($p -like '/print/agent-stations/*/claim'){return @{id='media-job';imageBase64='AQ==';copies=1;widthMm=58;heightMm=40}}
+ return $null
+}
+$script:printed=0
+function Print-OneLabel {param($bytes,$printer,$widthMm,$heightMm) if($widthMm -ne 70 -or $heightMm -ne 120){throw 'Stale media used'};$script:printed++}
+Invoke-AgentQueueCycle $cfg
+if($script:printed -ne 1){throw 'Label missing'}
 `));

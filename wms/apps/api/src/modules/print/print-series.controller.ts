@@ -9,6 +9,8 @@ import { PrintSeriesService } from './print-series.service';
 @RequirePermissions('print:write')
 export class PrintSeriesController {
   constructor(private readonly service:PrintSeriesService) {}
+  @Get('formats') formats(@CurrentUser() u:AuthUser) {return this.service.formats(u);}
+  @Post('stations/:id/format') format(@Param('id') id:string,@Body() b:{widthMm?:unknown;heightMm?:unknown},@CurrentUser() u:AuthUser) {return this.service.setFormat(id,b??{},u);}
   @Get('stations') stations(@CurrentUser() u:AuthUser) {return this.service.stations(u);}
   @Post('jobs') create(@Body() b:Parameters<PrintSeriesService['create']>[0],@CurrentUser() u:AuthUser) {return this.service.create(b??{},u);}
   @Post('stations/:id/heartbeat') heartbeat(@Param('id') id:string,@CurrentUser() u:AuthUser) {return this.service.heartbeat(id,u);}

@@ -67,3 +67,27 @@ describe('print series',()=> {
     await expect(service.finish('station','job',false,'failed',user)).rejects.toThrow();expect(db.printJob.updateMany).not.toHaveBeenCalled();
   });
 });
+
+// TEST: station media is branch scoped, validated and audited.
+describe('station media',()=> {
+  it('saves 70 by 120 and audits the change without exposing credentials',async()=> {
+    const {db,service}=fixture();
+    db.fbsPrintStation.findFirst.mockResolvedValue({id:'station',printerModel:'TSC TE-200',labelWidthMm:58,labelHeightMm:40});
+    db.fbsPrintStation.update=vi.fn().mockResolvedValue({id:'station',labelWidthMm:70,labelHeightMm:120});
+    db.auditLog={create:vi.fn()};
+    expect(await service.setFormat('station',{widthMm:70,heightMm:120},user)).toMatchObject({labelWidthMm:70,labelHeightMm:120});
+    expect(db.fbsPrintStation.update.mock.calls[0][0].select.agentKey).toBeUndefined();
+    expect(db.auditLog.create.mock.calls[0][0].data.payload.after).toEqual({widthMm:70,heightMm:120});
+  });
+  it('rejects swapped TE200 dimensions, invalid sizes and another branch',async()=> {
+    const {db,service}=fixture();
+    db.fbsPrintStation.findFirst.mockResolvedValue({id:'station',printerModel:'TSC TE200'});
+    await expect(service.setFormat('station',{widthMm:120,heightMm:70},user)).rejects.toThrow('112');
+    await expect(service.setFormat('station',{widthMm:0,heightMm:120},user)).rejects.toThrow();
+    await expect(service.setFormat('station',{widthMm:70,heightMm:120},{...user,activeWarehouseId:'other'})).rejects.toThrow();
+  });
+  it('is unavailable on installations without the feature',async()=> {
+    const {service}=fixture();delete process.env.WMS_PRINT_SERIES_ENABLED;
+    await expect(service.setFormat('station',{widthMm:70,heightMm:120},user)).rejects.toThrow();
+  });
+});

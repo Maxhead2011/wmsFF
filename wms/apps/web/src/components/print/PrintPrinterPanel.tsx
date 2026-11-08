@@ -1,3 +1,4 @@
+import { PrintStationFormatPanel } from './PrintStationFormatPanel';
 import { Network, RefreshCw, Save } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import {
@@ -93,6 +94,7 @@ export function PrintPrinterPanel({ session }: PrintPrinterPanelProps) {
 
   return (
     <div className="print-printer-layout">
+      <PrintStationFormatPanel session={session} />
       <form className="print-form print-printer-form" onSubmit={savePrinter}>
         <div className="print-template-header">
           <div>

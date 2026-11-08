@@ -1,9 +1,10 @@
-param([string]$ConfigPath = "$PSScriptRoot\config.json", [switch]$LibraryOnly)
+﻿param([string]$ConfigPath = "$PSScriptRoot\config.json", [switch]$LibraryOnly)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 . (Join-Path $PSScriptRoot 'WmsApi.ps1')
 . (Join-Path $PSScriptRoot 'JobJournal.ps1')
 . (Join-Path $PSScriptRoot 'AgentLifecycle.ps1')
+. (Join-Path $PSScriptRoot 'LabelLayout.ps1')
 . (Join-Path $PSScriptRoot 'PrintSeries.ps1')
 . (Join-Path $PSScriptRoot 'KizDuplicate.ps1')
 # FIX: advertise and process duplicates independently of the working FBS queue.
@@ -46,7 +47,7 @@ function Print-OneLabel([byte[]]$bytes, [string]$printer, [int]$widthMm, [int]$h
     $eventArgs.PageSettings.PaperSize = $paper
     $eventArgs.PageSettings.Margins = [Drawing.Printing.Margins]::new(0, 0, 0, 0)
     $eventArgs.Graphics.PageUnit = [Drawing.GraphicsUnit]::Display
-    $eventArgs.Graphics.DrawImage($image, [Drawing.RectangleF]::new(0, 0, $paperWidth, $paperHeight))
+    Draw-FittedLabel $image $eventArgs $paperWidth $paperHeight
     $eventArgs.HasMorePages = $false
   }
   $doc.add_PrintPage($handler)
@@ -60,7 +61,12 @@ function Print-SortingLabel($job, [string]$printer, [int]$widthMm, [int]$heightM
 }
 
 function Invoke-AgentQueueCycle($cfg) {
-  Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/heartbeat" @{} | Out-Null
+  $station = Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/heartbeat" @{}
+  # FIX: the server owns the media size; refresh before claiming a job.
+  if ($station.labelWidthMm -ge 20 -and $station.labelHeightMm -ge 20) {
+    $cfg.labelWidthMm = [int]$station.labelWidthMm
+    $cfg.labelHeightMm = [int]$station.labelHeightMm
+  }
   Sync-PrintResults 'fbs'
   Sync-PrintResults 'label'
   $job = Invoke-WmsApi Post "/marketplace-connections/fbs/print-stations/$($cfg.stationId)/claim" @{}
@@ -82,7 +88,7 @@ function Invoke-AgentQueueCycle($cfg) {
       Invoke-DurablePrint $cfg 'label' $label.id {
         $image = [Convert]::FromBase64String($label.imageBase64)
         for ($copy = 0; $copy -lt [int]$label.copies; $copy++) {
-          Print-OneLabel $image $cfg.printerName ([int]$label.widthMm) ([int]$label.heightMm)
+          Print-OneLabel $image $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
         }
       }
     }
