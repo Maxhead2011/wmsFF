@@ -90,3 +90,74 @@ describe('fabric paired downloads', () => {
     expect((await PDFDocument.load((await f.call())!.buffer)).getPageCount()).toBe(3);
   });
 });
+
+describe('unmarked goods without fabric accounting', () => {
+  it('resolves an existing WB-origin warehouse card using the exact Ozon product barcode', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');const f=fixture('OZON');
+    f.sku.marketplaceProductId='wb-only';f.sku.marketplaceOfferId='2000000000053';
+    f.json.mockResolvedValueOnce({result:{posting_number:'123',status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2}]}})
+      .mockResolvedValueOnce({items:[{offer_id:'white_5',sources:[{sku:12}],barcodes:['2000000000053']}]});
+    expect((await PDFDocument.load((await f.call())!.buffer)).getPageCount()).toBe(2);
+    expect(JSON.parse(String(f.json.mock.calls[1][1].body))).toEqual({sku:['12']});
+  });
+  it('does not use a barcode returned for a different Ozon offer or SKU', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');const f=fixture('OZON');
+    f.sku.marketplaceProductId='wb-only';f.sku.marketplaceOfferId='2000000000053';
+    f.json.mockResolvedValueOnce({result:{posting_number:'123',status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2}]}})
+      .mockResolvedValueOnce({items:[{offer_id:'other',sources:[{sku:12}],barcodes:['2000000000053']},{offer_id:'white_5',sources:[{sku:13}],barcodes:['2000000000053']}]});
+    await expect(f.call()).rejects.toThrow('соответствие');expect(f.binary).not.toHaveBeenCalled();
+  });
+  // TEST: ordinary clients such as Balandin must not need fabric enablement.
+  it('pairs WB for an ordinary client even with fabric deployment and client settings disabled', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true');
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED', 'false'); const f = fixture();
+    f.db.systemSetting.findUnique.mockResolvedValue(null);
+    const result = await f.call();
+    expect((await PDFDocument.load(result!.buffer)).getPageCount()).toBe(2);
+    expect(f.db.systemSetting.findUnique).not.toHaveBeenCalled();
+  });
+  it('pairs ordinary Ozon goods without opting the client into fabric', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true');
+    vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED', 'false'); const f = fixture('OZON');
+    f.db.systemSetting.findUnique.mockResolvedValue(null);
+    f.json.mockResolvedValue({ result: { posting_number:'123',status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2}] } });
+    expect((await PDFDocument.load((await f.call())!.buffer)).getPageCount()).toBe(2);
+    expect(f.db.systemSetting.findUnique).not.toHaveBeenCalled();
+  });
+  it('leaves WB marked-only selections on the official-label path', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true'); const f = fixture();
+    Object.assign(f.sku, { needsChestnyZnak:true, isUnmarked:false });
+    expect(await f.call()).toBeNull(); expect(f.json).not.toHaveBeenCalled();
+  });
+  it('respects WB sgtin metadata even when the local card says unmarked', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true'); const f = fixture();
+    Object.assign(f.sku, { needsChestnyZnak:false, isUnmarked:true });
+    Object.assign(f.order, { requiredMeta:['SGTIN'] });
+    expect(await f.call()).toBeNull(); expect(f.json).not.toHaveBeenCalled();
+  });
+  it('keeps an official WB sticker for a marked order in a mixed selection', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true'); const f = fixture();
+    const marked={...f.sku,id:'marked',needsChestnyZnak:true,isUnmarked:false,barcodes:[]};
+    f.db.sku.findMany.mockResolvedValue([f.sku,marked]);
+    f.resolve.mockResolvedValue({orders:[f.order,{...f.order,id:'124',product:marked,barcodes:[]}]});
+    f.json.mockResolvedValue({stickers:[{orderId:123,file:png,barcode:'one'},{orderId:124,file:png,barcode:'two'}]});
+    expect((await PDFDocument.load((await f.call([{id:'123',connectionId:'c'},{id:'124',connectionId:'c'}]))!.buffer)).getPageCount()).toBe(3);
+  });
+  it('prints only the unmarked product in a mixed Ozon posting, preserving its official label', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true'); const f=fixture('OZON');
+    f.db.sku.findMany.mockResolvedValue([f.sku,{...f.sku,id:'marked',marketplaceProductId:'13',marketplaceOfferId:'marked',needsChestnyZnak:true,isUnmarked:false,barcodes:[]}]);
+    f.json.mockResolvedValue({result:{posting_number:'123',status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2},{sku:13,offer_id:'marked',quantity:1}]}});
+    expect((await PDFDocument.load((await f.call())!.buffer)).getPageCount()).toBe(2);
+  });
+  it('leaves an Ozon marked-only posting on the official-label path without requiring a product barcode', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true');const f=fixture('OZON');
+    Object.assign(f.sku,{needsChestnyZnak:true,isUnmarked:false,barcodes:[]});
+    f.json.mockResolvedValue({result:{posting_number:'123',status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2}]}});
+    expect(await f.call()).toBeNull();expect(f.binary).not.toHaveBeenCalled();
+  });
+  it('respects mandatory Ozon marking even when the catalogue says unmarked', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true');const f=fixture('OZON');
+    f.json.mockResolvedValue({result:{posting_number:'123',status:'awaiting_deliver',requirements:{products_requiring_mandatory_mark:[12]},products:[{sku:12,offer_id:'white_5',quantity:2}]}});
+    expect(await f.call()).toBeNull();expect(f.binary).not.toHaveBeenCalled();
+  });
+});
