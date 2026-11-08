@@ -1,6 +1,7 @@
+﻿. (Join-Path $PSScriptRoot 'LabelLayout.ps1')
 # FIX: one Windows spool document for the entire series, with all images checked first.
 function New-SeriesPrintDocument { return [Drawing.Printing.PrintDocument]::new() }
-function Print-LabelSeries($job, [string]$printer) {
+function Print-LabelSeries($job, [string]$printer, $media = $null) {
   if (-not $job.pages -or $job.pages.Count -gt 500) { throw 'Invalid print series.' }
   $images = [Collections.Generic.List[Drawing.Image]]::new()
   $streams = [Collections.Generic.List[IO.MemoryStream]]::new()
@@ -22,8 +23,10 @@ function Print-LabelSeries($job, [string]$printer) {
     $doc.PrinterSettings.Copies = 1
     $doc.PrintController = [Drawing.Printing.StandardPrintController]::new()
     $doc.OriginAtMargins = $false
-    $width = [int][Math]::Round($job.widthMm / 25.4 * 100)
-    $height = [int][Math]::Round($job.heightMm / 25.4 * 100)
+    $mediaWidth = if ($media) { $media.labelWidthMm } else { $job.widthMm }
+    $mediaHeight = if ($media) { $media.labelHeightMm } else { $job.heightMm }
+    $width = [int][Math]::Round($mediaWidth / 25.4 * 100)
+    $height = [int][Math]::Round($mediaHeight / 25.4 * 100)
     $paper = [Drawing.Printing.PaperSize]::new('LOGOFF_SERIES', $width, $height)
     $paper.RawKind = 256
     $doc.DefaultPageSettings.PaperSize = $paper
@@ -32,7 +35,7 @@ function Print-LabelSeries($job, [string]$printer) {
     $state = @{ Index = 0 }
     $handler = [Drawing.Printing.PrintPageEventHandler]{ param($sender,$e)
       $e.Graphics.PageUnit = [Drawing.GraphicsUnit]::Display
-      $e.Graphics.DrawImage($images[$state.Index], [Drawing.RectangleF]::new(0,0,$width,$height))
+      Draw-FittedLabel $images[$state.Index] $e $width $height
       $state.Index++
       $e.HasMorePages = $state.Index -lt $images.Count
     }
@@ -52,6 +55,6 @@ function Invoke-PrintSeriesCycle($cfg) {
   Sync-PrintResults 'series'
   $job = Invoke-WmsApi Post "$prefix/claim" @{}
   if (-not $job) { return $false }
-  Invoke-DurablePrint $cfg 'series' $job.id { Print-LabelSeries $job $cfg.printerName }
+  Invoke-DurablePrint $cfg 'series' $job.id { Print-LabelSeries $job $cfg.printerName $cfg }
   return $true
 }

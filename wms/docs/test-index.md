@@ -1,3 +1,9 @@
+## In progress: Ozon station media 70 × 120 (2026-11-08)
+
+Branch `fix/ozon-label-proportions`, based on PR915. Not published.
+`PrintStationFormatPanel.tsx` exposes station paper width/length presets and custom size; `PrintSeriesService.formats/setFormat` enforces the existing own-WMS feature gate and branch binding, validates dimensions and audits changes. Agent `LabelLayout.ps1` preserves proportions, rotates to fit and respects printable margins. Heartbeat refreshes media before queue processing; installer includes the helper. Downloaded Ozon PDFs still use the PDF viewer, not the image agent; physical FBO/FBS output is not yet verified. Second station host access remains pending.
+Tests: agent geometry/lifecycle/queue 33 passed; API station/series 12 passed both source and compiled candidate; UI selector/save/error 2 passed. Full web 605 passed, 2 skipped plus added UI2; full API 4542 passed, 9 skipped (DB integration excluded). Web build passed. Changed print modules compile with an isolated client generated from current schema. Full API type-check still has existing Yandex FBY nullable-SKU errors; no unrelated refactor. Source/runtime parity remains false; do not replace full runtime. The preserved published-agent candidate is local only; not installed and physical output unverified. Existing Ozon FBO PDF inspected: ~120 × 75 mm; fitting to 70 × 120 needs rotation and uniform reduction, not actual-size printing.
+
 ## Published: PR914 fabric reservation display (2026-11-08)
 
 [fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): cut-on-demand WB display and finished-box allocation exclusion; metre accounting and sold WMS retained. API4550/web605, runtime7/browser2, compact-controls24/request-header12 candidate and public, isolated full API boot, read-only20 samples. Exact API2/web2, all754 API files and public hashes verified. Baseline `2026-11-08-fabric-display`, sourceParityVerified=false; TSD258 unchanged.

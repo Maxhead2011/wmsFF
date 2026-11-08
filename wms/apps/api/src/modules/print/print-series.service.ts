@@ -50,6 +50,27 @@ export class PrintSeriesService {
     const ids=settings.filter(s=> {const b=s.value as unknown as Binding;return b.warehouseId===warehouseId && Date.now()-b.seenAt<120_000;}).map(s=>s.key.slice('print.series.agent.v1:'.length));
     return this.prisma.fbsPrintStation.findMany({where:{id:{in:ids},enabled:true},select:{id:true,name:true,printerName:true}});
   }
+  // FIX: media belongs to the branch-bound station, including temporarily offline agents.
+  async formats(user: AuthUser) {
+    const warehouseId = this.scope(user);
+    const settings = await this.prisma.systemSetting.findMany({where:{key:{startsWith:'print.series.agent.v1:'}}});
+    const ids = settings.filter(s => (s.value as unknown as Binding)?.warehouseId === warehouseId).map(s => s.key.slice('print.series.agent.v1:'.length));
+    return this.prisma.fbsPrintStation.findMany({where:{id:{in:ids},enabled:true},select:{id:true,name:true,printerName:true,printerModel:true,labelWidthMm:true,labelHeightMm:true,lastSeenAt:true}});
+  }
+  async setFormat(id: string, body: {widthMm?:unknown;heightMm?:unknown}, user: AuthUser) {
+    id = text(id);
+    await this.binding(id,user);
+    const w=body.widthMm,h=body.heightMm;
+    if(typeof w!=='number'||typeof h!=='number'||!Number.isInteger(w)||!Number.isInteger(h)||w<20||w>150||h<20||h>150) throw new BadRequestException('Ширина и длина должны быть целыми числами от 20 до 150 мм.');
+    return this.prisma.$transaction(async tx => {
+      const before=await tx.fbsPrintStation.findFirst({where:{id,enabled:true}});
+      if(!before) throw new NotFoundException('Станция не найдена.');
+      if(/TE[- ]?200/i.test(`${before.printerModel} ${before.printerName}`) && w>112) throw new BadRequestException('Для TSC TE200 ширина бумаги не должна превышать 112 мм. Для Ozon выберите ширину 70, длину 120 мм.');
+      const saved=await tx.fbsPrintStation.update({where:{id},data:{labelWidthMm:w,labelHeightMm:h},select:{id:true,name:true,printerName:true,printerModel:true,labelWidthMm:true,labelHeightMm:true,lastSeenAt:true}});
+      await tx.auditLog.create({data:{userId:user.id,action:'PRINT_STATION_MEDIA_UPDATED',entity:'FbsPrintStation',entityId:id,payload:{before:{widthMm:before.labelWidthMm,heightMm:before.labelHeightMm},after:{widthMm:w,heightMm:h}}}});
+      return saved;
+    });
+  }
   async create(body: Body, user: AuthUser) {
     const warehouseId=this.scope(user),clientId=text(body.clientId),stationId=text(body.stationId),requestId=text(body.requestId);
     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new BadRequestException('Неверный номер операции.');
