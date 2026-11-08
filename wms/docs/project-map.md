@@ -1,3 +1,7 @@
+## Published: PR914 fabric reservation display (2026-11-08)
+
+[fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): cut-on-demand WB display and finished-box allocation exclusion; metre accounting and sold WMS retained. API4550/web605, runtime7/browser2, compact-controls24/request-header12 candidate and public, isolated full API boot, read-only20 samples. Exact API2/web2, all754 API files and public hashes verified. Baseline `2026-11-08-fabric-display`, sourceParityVerified=false; TSD258 unchanged.
+
 ## Защита оформления заявок и Ozon
 
 [Постоянная проверка 2×2 и переключателей Ozon](compact-controls-release-guard.md): `scripts/check_compact_controls.cjs`, три отрицательных теста и workflow `compact-controls.yml` для каждого PR нашей WMS. Перед выпуском проверять точный web-кандидат, после — публичный сайт. Проверка исходников не заменяет проверку runtime.
@@ -756,7 +760,3 @@ Prepared, not published: fabric queue reports local ConflictException messages w
 
 Prepared, not published: approved later fabric receipts for FBS. assignFabricOrder resolves all matching pending WB shipment IDs within client/warehouse scope; only rolls received strictly after the latest proven shipment can be newly reserved. Unknown evidence remains blocked. reserveFabricOrder passes per-line cutoffs; reserveFabric preserves full ledger and existing commitments. Historical shipmentPending is not cleared or consumed. Own-WMS flag and client opt-in retained. Exact five-module overlay based on PR877; release scripts in scripts/releases/fbs-fabric-later-receipts.
 Prepared receipt reporting correction: `receipt-linked-adjustments.ts` validates explicit movement snapshots; `receipt-channel-policy.receiptDocuments` applies them only to reports; `receipt-channels.controller.file` includes signed linked rows in XLSX. See [scope and validation](receipt-linked-adjustments.md). Not published; balances and sold WMS unchanged.
-
-## Prepared: fabric reservation display (2026-11-08)
-
-[fbs-fabric-reservation-display.md](fbs-fabric-reservation-display.md): WB cut-on-demand orders no longer search finished boxed stock or display its shortage. Client/deployment gates and exact SKU/marking guards; existing physical evidence, metre accounting, Ozon and sold WMS preserved. fbs-fabric-reservation helper, syncFbsPalletSortReservations and FbsOrderRow; source5/UI2/runtime7/browser2, live read-only sample20 and isolated full API/PostgreSQL health. Exact API2/web2 overlay, scripts/releases/fbs-fabric-display-20261108/. PR target feature/la_panthera.
