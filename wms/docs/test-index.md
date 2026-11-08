@@ -1,3 +1,5 @@
+Подготовка публикации FBY: повторный API4568/web608, runtime API6/browser4, изолированный полный API/PostgreSQL, оформление24 и шапка/раскрывающиеся блоки, загрузка/reload приложения прошли. Точный delta API1/web2 от PR922; PR924 сохранён.
+
 ## Подготовлено: счётчик активных заявок Яндекс FBY
 
 Ветка `fix/yandex-fby-counter`, цель PR — `feature/la_panthera`. `ClientRequestsService.activeFboCounts` возвращает отдельное поле `yandex` по связи `yandexFbyShipment`; `FboWorkspace` показывает стандартный счётчик на карточке Яндекса. Сохраняются область клиента/филиала, исключение DONE/CANCELLED/REJECTED, состояния загрузки/ошибки и флаг WMS_MARKETPLACE_WORKSPACES_ENABLED. Изменений складских данных и проданной WMS нет. Не опубликовано.
