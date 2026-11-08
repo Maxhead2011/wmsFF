@@ -872,6 +872,19 @@ export class MarketplaceConnectionsController {
     );
   }
 
+  // FIX: these endpoints never enter the picking/stock-completion workflow.
+  @Get('fbs/sos/post-pick/requests')
+  @RequirePermissions()
+  listSosPostPickRequests(@CurrentUser() user: AuthUser) {
+    return this.connections.listSosPostPickRequests(user);
+  }
+
+  @Post('fbs/sos/post-pick/print')
+  @RequirePermissions()
+  printSosPostPick(@Body() body: any, @CurrentUser() user: AuthUser) {
+    return this.connections.printSosPostPick(body ?? {}, user);
+  }
+
   @Get('fbs/sos/requests')
   @RequirePermissions()
   listSosWbRequests(@CurrentUser() user: AuthUser) {
