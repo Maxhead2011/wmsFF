@@ -688,6 +688,13 @@ export class MarketplaceConnectionsController {
     return this.connections.repairFbsRequestSupplyConsistency(requestId, user);
   }
 
+  // FIX: partial PDF plus explicit missing-section warnings; no shipment mutation.
+  @Post('fbs/orders/all-labels')
+  @RequirePermissions()
+  async getFbsAllLabels(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.getFbsAllLabels(dto, user);
+  }
+
   @Post('fbs/orders/stickers.pdf')
   @RequirePermissions()
   async getFbsOrderStickersPdf(

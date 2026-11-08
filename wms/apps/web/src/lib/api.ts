@@ -10416,6 +10416,14 @@ export async function enableFbsEmergencyAssembly(accessToken: string, requestId:
   );
 }
 
+// FIX: return warnings with the printable ribbon, including partial availability.
+export async function downloadFbsAllLabels(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<{ fileBase64: string; fileName: string; pageCount: number; warnings: string[] }>(
+    '/marketplace-connections/fbs/orders/all-labels',
+    { method: 'POST', accessToken, body: sanitizeFbsOrderSelectionPayload(payload) },
+  );
+}
+
 export async function downloadFbsOrderStickersPdf(accessToken: string, payload: FbsOrderSelectionPayload) {
   return requestBlob('/marketplace-connections/fbs/orders/stickers.pdf', accessToken, {
     method: 'POST',

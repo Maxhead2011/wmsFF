@@ -1,3 +1,7 @@
+## Подготовлено: WB FBS — лента доступных этикеток
+
+[Скачать все ШК](wb-all-labels.md): СЦ → ПВЗ → пары товара/заказа; частичный PDF с предупреждениями, прежняя печать сохранена. API4/web3, без передачи поставок и списаний.
+
 Published PR916 (2026-11-08): cold/merged saved WB FBS orders now receive the cut-on-demand display mode after scoping. Exact blue fabric articles supported across availability, receipt and shipment accounting. Four actual saved orders verified read-only before/after release without WB calls. API4557/web605 passed (9/2 skipped; dedicated DB suites excluded), source7, runtime9/public9, baseline8, isolated full API/PostgreSQL boot, stock-cell browser2, compact-controls24 and request-header12 before/after; CI passed. Existing two Yandex nullable-SKU type errors remain; no new type errors. Exact API7 overlay, all754 published API hashes match candidate and all3277 web hashes unchanged. Environment, other containers, business data, TSD258 and sold WMS preserved. Physical TSD/printer untested. Baseline `2026-11-08-fabric-snapshot`; sourceParityVerified=false. API sha256:c8ff070ccf544028bde64b233201c24a56fb64b8b12c5d5498d52bed307c7371; web sha256:4ac996970b1b0130bace4e03187a1afc806250b972447c6e4a2e7fe3f176092d.
 
 ## Published: PR914 fabric reservation display (2026-11-08)
