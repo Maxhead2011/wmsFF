@@ -1,3 +1,7 @@
+## Подготовлено: парные стикеры FBS ткани (08.11.2026)
+
+[Поведение, ограничения и проверки](fbs-paired-labels.md). В существующий PDF добавлена этикетка товара перед официальным стикером WB/Ozon; отдельный opt-in клиента и флаг нашей ВМС. Новый helper fbs-paired-labels.ts и hook getFbsOrderStickersPdf; runtime overlay API2, web/ТСД/данные/проданная ВМС без изменений. API4532/web603, новые11 и compiled runtime3 проходят; полная проверка типов ограничена двумя прежними ошибками Яндекса.
+
 Published PR902 (2026-11-07): FBY downloads the supplied four-column Yandex VRC workbook from verified packed units, with exact catalogue identities and no stock/status mutations. API4521/web603 passed (9/2 skipped, dedicated DB integration suites excluded), TypeScript, exact runtime API9/browser9, published browser9 with synthetic HTTP, isolated PostgreSQL/full API health, baseline8/deployment3. All752 published API files and web3 match the tested candidate. Live seller-cabinet upload remains untested. Baseline `2026-11-07-fby-export`; sourceParityVerified=false. API sha256:f2b868f7080e84d49a95d500edbb8cfc3283342984ef6defd3ad133fbeb9ef67; web sha256:675d2be1b1f649a0bd2347c23bf56db03f667f425ec18fa32088256a49447e46. Environment, other containers, sold WMS and TSD258 unchanged.
 
 ## Prepared: FBY actual packed export (2026-11-07)
