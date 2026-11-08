@@ -1,3 +1,13 @@
+## 2026-11-08: startup regression and verified recovery
+
+Validation: API4568 passed/9 skipped (dedicated DB integration excluded), web607 passed/2 skipped, entry guard3; full-runtime RED/GREEN and current public startup/reload passed.
+
+PR919 changed root import aliases but left the direct module script on the old root URL. Import maps do not rewrite script `src`, so two React applications mounted the same root; a full authenticated startup reproduced `removeChild` errors. Extracted button tests did not cover application startup.
+
+The later PR922 runtime already aligns the entry and aliases to `ozon-media-core-20261108.js`. Verified current public startup AND reload using the real modules with synthetic session/API responses: no page errors, one root resource and one session restore per load. No business requests were sent. Observed web `sha256:1647a9345997216183063e7ecfb137ec85f2d74f9dd7aee970c94719d1b8a7a0`, API `sha256:c0b0fcebfa6b5661b4e6aefd8cadc303e77117ed4901bbd5dc6475849e97b824`. The guarded older candidate was stopped when the newer release appeared; it was NOT deployed over PR922. Billing PR918 and printing PR922 retained.
+
+Prevention: `scripts/releases/wb-all-labels-20261108/prepare.cjs` now rewrites the direct entry too; `entry-fix.test.cjs` runs in compact-controls CI. `startup.browser.cjs` tests full current runtime before/after publication (`PUBLIC_URL`, `PLAYWRIGHT_MODULE`; optional `CANDIDATE_HTML` for historical candidate). These checks do not claim a real authenticated warehouse workflow or physical printing. Sold WMS unchanged; source/runtime parity remains false.
+
 ## In progress: Ozon station media 70 × 120 (2026-11-08)
 
 Branch `fix/ozon-label-proportions`, merged through PR920; exact runtime candidate based on the current billing-period r2 release. Not published.

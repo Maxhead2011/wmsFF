@@ -53,6 +53,10 @@ preserve(s,base);s='import { __downloadWbAllLabels } from "./admin-tiles-2026101
 assert.equal(ts.createSourceFile('fbs.js',s,99,true,ts.ScriptKind.JS).parseDiagnostics.length,0);write(root+'/web-payload'+newWeb,s);
 let html=read(root+'/web-base/index.html'),match=html.match(/<script type="importmap">(.*?)<\/script>/s),map=JSON.parse(match[1]);
 for(const[old,next]of[[oldWeb,newWeb],[oldMain,newMain]]){let count=0;for(const key of Object.keys(map.imports))if(map.imports[key]===old){map.imports[key]=next;count++;}assert(count);map.imports[old]=next;}
-html=html.replace(match[1],()=>JSON.stringify(map));write(root+'/web-payload/index.html',html);
+html=html.replace(match[1],()=>JSON.stringify(map));
+// FIX: import maps do not rewrite module script src; use the same singleton entry.
+assert.equal(html.split('src="'+oldMain+'"').length,2);
+html=html.replace('src="'+oldMain+'"','src="'+newMain+'"');
+write(root+'/web-payload/index.html',html);
 write(root+'/web-changes.json',JSON.stringify(['index.html',newWeb.slice(1),newMain.slice(1)]));
 write(root+'/overlay-proof.json',JSON.stringify({apiFiles:4,webFiles:3,existingBytesPreserved:true}));console.log('API4/web3 prepared');
