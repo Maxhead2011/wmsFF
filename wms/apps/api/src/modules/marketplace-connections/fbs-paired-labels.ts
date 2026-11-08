@@ -1,7 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import bwipjs = require('bwip-js');
 import pdfMake = require('pdfmake');
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { configurePdfMake } from '../../common/pdf/pdfmake';
 import { ozonLinkedSkus } from './marketplace-product-links';
 import { ozonPostingProducts, resolveOzonLineSku } from './ozon-fbs-pick-lines';
@@ -10,6 +10,7 @@ import { fitSortingWarehouse } from './fbs-sorting-label';
 
 type Selection = { id: string; connectionId: string };
 type ProductLabel = { barcode: string; name: string; article: string; quantity: number };
+type LabelPosition = { set: number; page: number; total: number };
 type Plan = Selection & { connection: any; products: ProductLabel[]; crossBorder: boolean };
 const MM = 72 / 25.4;
 const key = (s: Selection) => JSON.stringify([s.connectionId, s.id]);
@@ -121,6 +122,7 @@ export async function fabricPairedLabels(db: any, clientId: string, selections: 
     }
   }
   const parts: Buffer[] = [];
+  let numberedSet = 0;
   for (const plan of plans) {
     let official = wbFiles.get(key(plan));
     if (plan.connection.marketplace === 'OZON') {
@@ -132,8 +134,16 @@ export async function fabricPairedLabels(db: any, clientId: string, selections: 
     }
     if (!official?.length || (await PDFDocument.load(official)).getPageCount() === 0)
       throw new BadRequestException(`Нет официальной этикетки заказа ${plan.id}.`);
-    for (const product of plan.products) parts.push(await buildFbsProductLabel(plan.id, product));
-    parts.push(official);
+    // FIX: one numbered set per posting, products first; never number unrelated WB pages.
+    if (unmarkedPrinting && plan.connection.marketplace === 'OZON' && plan.products.length) {
+      const source = await PDFDocument.load(official);
+      const position = { set: ++numberedSet, page: 0, total: plan.products.length + source.getPageCount() };
+      for (const product of plan.products) parts.push(await buildFbsProductLabel(plan.id, product, { ...position, page: ++position.page }));
+      parts.push(await numberedOzonLabels(source, position));
+    } else {
+      for (const product of plan.products) parts.push(await buildFbsProductLabel(plan.id, product));
+      parts.push(official);
+    }
   }
   return { buffer: await mergeFbsStickerPdfs(parts), count: plans.length };
 }
@@ -160,7 +170,41 @@ function labelProduct(sku: any, orderBarcodes: string[], quantity: number, order
   return { barcode: codes[0], name: clean(sku.name), article: clean(sku.internalSku || sku.article), quantity };
 }
 
-export async function buildFbsProductLabel(orderId: string, product: ProductLabel) {
+const positionText = (p: LabelPosition) => `Комплект ${String(p.set).padStart(3, '0')} · ${p.page}/${p.total}`;
+
+// FIX: the official artwork is embedded as vector content, proportionally fitted
+// above a separate footer. Never draw numbering over the marketplace barcode.
+async function numberedOzonLabels(source: PDFDocument, position: LabelPosition) {
+  configurePdfMake();
+  const width = 58 * MM, height = 40 * MM;
+  const templates = await pdfMake.createPdf({ pageSize: { width, height }, pageMargins: 0,
+    defaultStyle: { font: 'DejaVuSans' },
+    content: source.getPages().map((_, index) => ({ text: positionText({ ...position, page: position.page + index + 1 }),
+      fontSize: 6.5, bold: true, alignment: 'center', absolutePosition: { x: 0, y: 37 * MM },
+      ...(index ? { pageBreak: 'before' } : {}) })) as any,
+  }).getBuffer();
+  const result = await PDFDocument.load(templates);
+  for (const [index, page] of source.getPages().entries()) {
+    const crop = page.getCropBox();
+    if (!(crop.width > 0 && crop.height > 0)) throw new BadRequestException('Некорректный размер этикетки Ozon.');
+    page.pushOperators(); // Retain even an empty source page without an embedding error.
+    const artwork = await result.embedPage(page, { left: crop.x, bottom: crop.y, right: crop.x + crop.width, top: crop.y + crop.height });
+    // Respect the PDF's rotation, then use landscape orientation on 58x40 stock.
+    let angle = ((page.getRotation().angle % 360) + 360) % 360;
+    if (![0, 90, 180, 270].includes(angle)) throw new BadRequestException('Неподдерживаемый поворот этикетки Ozon.');
+    let w = angle % 180 ? crop.height : crop.width, h = angle % 180 ? crop.width : crop.height;
+    if (h > w) { angle = (angle + 90) % 360; [w, h] = [h, w]; }
+    const scale = Math.min(56 * MM / w, 35 * MM / h);
+    const left = (width - w * scale) / 2, bottom = 4 * MM + (35 * MM - h * scale) / 2;
+    // PDF /Rotate is clockwise; pdf-lib drawPage's rotate is counterclockwise.
+    const offsets = { 0: [0, 0], 90: [0, crop.width], 180: [crop.width, crop.height], 270: [crop.height, 0] }[angle]!;
+    result.getPage(index).drawPage(artwork, { x: left + offsets[0] * scale, y: bottom + offsets[1] * scale,
+      width: crop.width * scale, height: crop.height * scale, rotate: degrees(-angle) });
+  }
+  return Buffer.from(await result.save());
+}
+
+export async function buildFbsProductLabel(orderId: string, product: ProductLabel, position?: LabelPosition) {
   configurePdfMake();
   const fit = (text: string, count: number) => text.length > count ? text.slice(0, count - 1) + '…' : text;
   const line = (text: string, y: number, fontSize: number, bold = false): any => ({
@@ -176,6 +220,7 @@ export async function buildFbsProductLabel(orderId: string, product: ProductLabe
       line(product.barcode, 16.5, Math.min(7, 54 * MM / product.barcode.length)),
       ...name.text.split('\n').map((text, index) => line(text, 20 + index * name.fontSize * 1.3 / MM, name.fontSize, true)),
       line(`Артикул: ${fit(product.article, 30)}`, 30, 6),
-      line(`Количество: ${product.quantity} шт.`, 34, 9, true)],
+      line(`Количество: ${product.quantity} шт.`, position ? 33 : 34, position ? 8 : 9, true),
+      ...(position ? [line(positionText(position), 37, 6.5, true)] : [])],
   }).getBuffer());
 }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
+import { PDFParse } from 'pdf-parse';
 import { fabricPairedLabels } from './fbs-paired-labels';
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7X8AAAAASUVORK5CYII=';
@@ -18,6 +19,57 @@ function fixture(marketplace = 'WILDBERRIES') {
   return { db, sku, order, resolve, json, binary, call };
 }
 afterEach(() => vi.unstubAllEnvs());
+
+async function pageTexts(buffer: Buffer) {
+  const reader = new PDFParse({ data: buffer });
+  try { return (await reader.getText()).pages.map(page => page.text); }
+  finally { await reader.destroy(); }
+}
+
+describe('Ozon paired numbering', () => {
+  // TEST: each order must remain an adjacent, identifiable set on 58x40 stock.
+  it('prints product then official label with shared set numbers and page positions', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');const f=fixture('OZON');
+    f.json.mockImplementation(async (_url, init) => ({result:{posting_number:JSON.parse(String(init.body)).posting_number,
+      status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2}]}}));
+    f.binary.mockImplementation(async (_url, init) => {
+      const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica);
+      pdf.addPage([340,213]).drawText('OFFICIAL '+JSON.parse(String(init.body)).posting_number[0],{font,size:14});
+      return {buffer:Buffer.from(await pdf.save())};
+    });
+    const result=await f.call([{id:'123',connectionId:'c'},{id:'124',connectionId:'c'}]);
+    const pages=await pageTexts(result!.buffer);
+    expect(pages).toHaveLength(4);
+    expect(pages[0]).toContain('Заказ 123');expect(pages[1]).toContain('OFFICIAL 123');
+    expect(pages[2]).toContain('Заказ 124');expect(pages[3]).toContain('OFFICIAL 124');
+    for(let i=0;i<4;i++) expect(pages[i]).toContain(`Комплект ${String(Math.floor(i/2)+1).padStart(3,'0')} · ${i%2+1}/2`);
+    for(const p of (await PDFDocument.load(result!.buffer)).getPages()) {
+      expect(p.getWidth()).toBeCloseTo(58*72/25.4,2);expect(p.getHeight()).toBeCloseTo(40*72/25.4,2);
+    }
+  });
+  it('numbers multiple products and every official page as one complete set', async () => {
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');const f=fixture('OZON');
+    f.db.sku.findMany.mockResolvedValue([f.sku,{...f.sku,id:'s2',marketplaceProductId:'13',marketplaceOfferId:'red'}]);
+    f.json.mockResolvedValue({result:{posting_number:'123',status:'awaiting_deliver',products:[
+      {sku:12,offer_id:'white_5',quantity:2},{sku:13,offer_id:'red',quantity:1}]}});
+    f.binary.mockImplementation(async()=>{const p=await PDFDocument.create();
+      const font=await p.embedFont(StandardFonts.Helvetica);
+      for(let i=0;i<2;i++) {const page=p.addPage([213,340]);page.drawText('OFFICIAL '+i,{font,size:12});page.setRotation(degrees(90));}
+      return {buffer:Buffer.from(await p.save())};});
+    const result=await f.call(),pages=await pageTexts(result!.buffer);
+    expect(pages).toHaveLength(4);
+    for(let i=0;i<4;i++) expect(pages[i]).toContain(`Комплект 001 · ${i+1}/4`);
+    expect(pages[2]).toContain('OFFICIAL 0');expect(pages[3]).toContain('OFFICIAL 1');
+  });
+  it('keeps WB and legacy Ozon label formats unchanged', async()=>{
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');const wb=fixture();
+    expect((await pageTexts((await wb.call())!.buffer)).join('')).not.toContain('Комплект');
+    vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','false');vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','true');
+    const ozon=fixture('OZON');ozon.json.mockResolvedValue({result:{posting_number:'123',status:'awaiting_deliver',products:[{sku:12,offer_id:'white_5',quantity:2}]}});
+    const result=await ozon.call();expect((await PDFDocument.load(result!.buffer)).getPage(1).getSize()).toEqual({width:200,height:300});
+    expect((await pageTexts(result!.buffer)).join('')).not.toContain('Комплект');
+  });
+});
 describe('fabric paired downloads', () => {
   // TEST: request 2781 used to return marketplace-only pages.
   it('downloads product barcode then official WB sticker, deduplicating a selection', async () => {
