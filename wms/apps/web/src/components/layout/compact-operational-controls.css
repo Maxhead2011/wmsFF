@@ -33,7 +33,7 @@
  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'][data-ui-style='light'] [aria-label='Режим FBO Ozon'] > button[aria-pressed='true'] { background: #6a50ae; color: #fff; }
 }
 @media screen and (max-width:700px) {
- :root[data-ui-theme='modern'][data-ui-variant='la_panthera'] .client-request-table__warehouse-cell .client-request-actions > .request-action-menu { grid-template-columns: minmax(0,1fr) !important; }
+ :root[data-ui-theme='modern'][data-ui-variant='la_panthera'] .client-request-table__warehouse-cell .client-request-actions > .request-action-menu { grid-template-columns: repeat(2,minmax(0,1fr)) !important; }
  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'] .client-request-table__warehouse-cell .request-action-menu > button,
  :root[data-ui-theme='modern'][data-ui-variant='la_panthera'] .client-request-table__warehouse-cell .request-action-menu > details > summary { min-height: 44px !important; }
 }

@@ -2,7 +2,7 @@
 from pathlib import Path
 import json,hashlib,shutil,tarfile,os,urllib.request,sys
 r=Path(sys.argv[1]);baselines=Path(__file__).resolve().parents[3]/'baselines/our-wms'
-old=baselines/'2026-11-07-fby-export';out=baselines/'2026-11-08-compact-controls'
+old=baselines/'2026-11-08-fbs-unmarked-labels';out=baselines/'2026-11-08-compact-controls'
 v=json.loads((r/'published.json').read_text());prior=json.loads((old/'manifest.json').read_text())
 assert v['api']==prior['containers']['infra-api-1']['image']
 sha=lambda b:hashlib.sha256(b).hexdigest()
@@ -13,7 +13,7 @@ for p in (r/'web-payload').rglob('*'):
   name=p.relative_to(r/'web-payload').as_posix();data=urllib.request.urlopen(os.environ['WMS_PUBLIC_URL'].rstrip('/')+'/'+name,timeout=30).read()
   assert sha(data)==sha(p.read_bytes())==v['hashes']['/usr/share/nginx/html/'+name];public[name]=sha(data)
 assert json.load(urllib.request.urlopen(os.environ['WMS_PUBLIC_URL'].rstrip('/')+'/api/v1/health'))['status']=='ok'
-assert json.loads((r/'public-browser.json').read_text())['passed']==12
+assert json.loads((r/'public-browser.json').read_text())['passed']==24
 out.mkdir(parents=True,exist_ok=False);shutil.copyfile(old/'api-runtime.tar.gz',out/'api-runtime.tar.gz')
 artifacts={'api-runtime.tar.gz':prior['artifacts']['api-runtime.tar.gz']}
 with tarfile.open(out/'web-overlay.tar.gz','w:gz') as tar:

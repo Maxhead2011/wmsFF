@@ -3,7 +3,7 @@ import sys,json,subprocess,hashlib,fcntl
 from pathlib import Path
 R=Path(sys.argv[1]);C=Path('/opt/wms-restore/compose.json')
 BASE='sha256:675d2be1b1f649a0bd2347c23bf56db03f667f425ec18fa32088256a49447e46'
-API='sha256:f2b868f7080e84d49a95d500edbb8cfc3283342984ef6defd3ad133fbeb9ef67'
+API='sha256:9ba7837c197ebe2a79943fcd02801f6dbc40d6d7117f2eb5ace0edb8ba3b7315'
 PREFIX='/usr/share/nginx/html/'
 def d(*args):return subprocess.check_output(['docker',*args],text=True).strip()
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -12,7 +12,7 @@ def hashes(image):return {n:h for h,n in (line.split(None,1) for line in d('run'
 def env():return sorted(json.loads(d('inspect','wms-local-web','--format','{{json .Config.Env}}')))
 if sys.argv[-1]=='stage':
  assert current('web')==BASE and current('api')==API
- assert json.loads((R/'candidate-browser.json').read_text())['passed']==12
+ assert json.loads((R/'candidate-browser.json').read_text())['passed']==24
  (R/'Dockerfile').write_text('FROM '+BASE+'\nCOPY web-payload/ '+PREFIX+'\n')
  tag='wms-local-web:compact-controls-20261108';d('build','--network','none','-q','-t',tag,str(R));image=d('image','inspect',tag,'--format','{{.Id}}')
  before,after=hashes(BASE),hashes(image)

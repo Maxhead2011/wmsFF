@@ -1,9 +1,3 @@
-## Prepared: compact request actions and Ozon mode controls (2026-11-08)
-
-Restore a stable two-column action menu for desktop request rows. The prior auto-fit 8.7em minimum fell back to one column at the selected font/column width, with four 53px controls. Own-workspace CSS uses two columns and 38px minimum height, with 44px single-column phone targets. Open disclosures still span the row. Ozon's existing aria-pressed mode buttons receive a segmented light/dark style and keyboard focus indicators. No component event handlers, status logic, inventory, API, schema or sold WMS changes.
-
-Source: layout/compact-operational-controls.css, imported from the existing workspace-gated marketplace-surfaces.css. Test: scripts/releases/compact-controls-20261108/browser.cjs loads the full production CSS cascade; RED before, GREEN after, 12 viewport/font/theme combinations, disclosure opening and selected-mode switching. Publication is an exact web2 overlay (new CSS plus index link), preserving every existing asset.
-
 Published PR902 (2026-11-07): FBY downloads the supplied four-column Yandex VRC workbook from verified packed units, with exact catalogue identities and no stock/status mutations. API4521/web603 passed (9/2 skipped, dedicated DB integration suites excluded), TypeScript, exact runtime API9/browser9, published browser9 with synthetic HTTP, isolated PostgreSQL/full API health, baseline8/deployment3. All752 published API files and web3 match the tested candidate. Live seller-cabinet upload remains untested. Baseline `2026-11-07-fby-export`; sourceParityVerified=false. API sha256:f2b868f7080e84d49a95d500edbb8cfc3283342984ef6defd3ad133fbeb9ef67; web sha256:675d2be1b1f649a0bd2347c23bf56db03f667f425ec18fa32088256a49447e46. Environment, other containers, sold WMS and TSD258 unchanged.
 
 ## Prepared: FBY actual packed export (2026-11-07)
