@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Type, Transform } from 'class-transformer';
 import { FbsDeliveryDestination } from '@prisma/client';
 import {
   ArrayMaxSize,
@@ -50,6 +50,8 @@ export class FbsOrderSelectionDto {
   @Length(1, 120)
   shippingCity?: string;
 
+  // FIX: older clients send an empty selection before searching points.
+  @Transform(({ value }) => value === '' ? undefined : value)
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)

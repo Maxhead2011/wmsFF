@@ -25,7 +25,7 @@ export function FbsShippingEditor({ accessToken, payload, supplyId, pointId, car
     setBusy(true); setError(''); setMessage('');
     try {
       const result = await configureFbsShipping(accessToken, mode, { ...payload, shippingCity: city,
-        shippingPointId: selected, ...(mode === 'cargo' ? { cargoPlaceTotal: Number(total) } : {}) });
+        ...(mode === 'save' && selected ? { shippingPointId: selected } : {}), ...(mode === 'cargo' ? { cargoPlaceTotal: Number(total) } : {}) });
       if (mode === 'points') { setPoints(result.points ?? []); setSaved(false); }
       if (mode === 'save') { setSaved(true); setMessage('Пункт сдачи и дата сохранены в WB.'); }
       if (result.cargoPlaceIds) { setIds(result.cargoPlaceIds); setTotal(String(result.cargoPlaceIds.length)); setMessage('Грузоместа подтверждены WB. Распределите заказы и закройте грузоместа на ТСД; стикеры доступны в документах поставки.'); }

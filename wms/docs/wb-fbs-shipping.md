@@ -17,3 +17,8 @@ API4674 passed/9 skipped; web622 passed/2 skipped. Dedicated database integratio
 Source/runtime parity=false: exact API6/web3 overlay on fresh production images, inverse proof preserves other bytes. No live shipment mutations or physical printer tests; live WB check was read-only.
 
 Official contract: https://dev.wildberries.ru/api/swagger/yaml/ru/03-orders-fbs.yaml?region=ru
+
+## First search and latency correction
+Prepared follow-up: the browser omits shippingPointId until saving a selected point; the DTO normalizes the empty value sent by older tabs but still rejects malformed IDs. Shipping options and point/cargo operations use the selected-order reader with fresh WB statuses instead of full client refresh. Destination and date metadata are retained. Final delivery retains its existing fresh checks. Official SupplyOrderIDsAPI uses orderIds; cargo and final membership validation now follow that shape.
+
+Regression: wb-shipping-search.spec.ts (empty DTO RED/GREEN, malformed ID, no full refresh), workflow point-search request count, browser first request without point ID, exact runtime DTO/service tests. Read-only live selected-supply check: two orders, options1471ms, points1620ms/5432 points; no mutations. Network/browser latency is not included in those server timings.

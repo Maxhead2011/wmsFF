@@ -10,7 +10,7 @@ describe('WB shipping workflow', () => {
     const plan = { id: 'plan1', cargoPlaceIds: ids, deliveryDestination: 'PICKUP_POINT' };
     const host: any = {
       clientScopes: { requireClientAccess: vi.fn() }, refreshFbsOrdersCache: vi.fn().mockResolvedValue({}),
-      resolveSelectedFbsOrders: vi.fn().mockResolvedValue({ orders: [{ id: 'order1', connectionId: 'cab1', supplyId: 'WB-GI-1', marketplace: 'WILDBERRIES', supplierStatus: 'confirm' }] }),
+      resolveFbsShippingOrders: vi.fn().mockResolvedValue([{ id: 'order1', connectionId: 'cab1', supplyId: 'WB-GI-1', marketplace: 'WILDBERRIES', supplierStatus: 'confirm' }]),
       loadSelectedConnections: vi.fn().mockResolvedValue([{ id: 'cab1', apiKey: 'synthetic' }]),
       prisma: {
         $transaction: vi.fn((callback) => callback({ $executeRaw: vi.fn() })),
@@ -20,7 +20,7 @@ describe('WB shipping workflow', () => {
     };
     const json = vi.fn(async (url: string, init: RequestInit) => {
       if (url.includes('shipping-points?')) return { shippingPoints: [{ id: 42, available: true, officeType: 'pp' }] };
-      if (url.endsWith('/order-ids')) return { orders: [1, 2, 3, 4] };
+      if (url.endsWith('/order-ids')) return { orderIds: [1, 2, 3, 4] };
       if (url.endsWith('/trbx')) {
         if (init.method === 'POST') ids = [...ids, 'box2'];
         return { trbxes: ids.map((id) => ({ id })) };
@@ -30,6 +30,13 @@ describe('WB shipping workflow', () => {
     const dto = { clientId: 'client1', orders: [{ id: 'order1', connectionId: 'cab1' }], shippingCity: 'Москва', plannedDeliveryDate: '2099-11-09', cargoPlaceTotal: 2 };
     return { host, json, dto };
   }
+  // TEST: searching a point must never perform the full operational refresh.
+  it('searches only the selected supply without refreshing the client', async () => {
+    const {host,json,dto}=fixture();
+    await wbShippingWorkflow(host,dto,{id:'user'},'points',json);
+    expect(host.refreshFbsOrdersCache).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledTimes(1);
+  });
   it('checks scope before reading WB', async () => {
     const { host, json, dto } = fixture(); host.clientScopes.requireClientAccess.mockImplementation(() => { throw new Error('denied'); });
     await expect(wbShippingWorkflow(host, dto, { id: 'user' }, 'cargo', json)).rejects.toThrow('denied');

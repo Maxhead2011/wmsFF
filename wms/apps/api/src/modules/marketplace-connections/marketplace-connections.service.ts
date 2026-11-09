@@ -21074,17 +21074,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return wbShippingWorkflow(this, dto, user, mode, marketplaceJsonOnce);
   }
 
+  // FIX: selected metadata/status reads without refreshing the complete client.
+  private async resolveFbsShippingOrders(clientId: string, selections: Array<{ connectionId: string; id: string }>): Promise<FbsOrderSummary[]> {
+    const orders = await wbLabelOrders(this.prisma, clientId, selections, fetchWildberriesFbsHistory, marketplaceJson);
+    if (!orders) throw new BadRequestException('Select WB orders only.');
+    return orders as unknown as FbsOrderSummary[];
+  }
+
   async getFbsSupplyDeliveryOptions(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'write');
-    // ADDED: use a fresh WB snapshot so the dialog never confirms a stale
-    // supply destination or orders that have already changed status.
-    const freshResponse = await this.refreshFbsOrdersCache(clientId);
-    const { orders } = await this.resolveSelectedFbsOrders(
-      clientId,
-      dto.orders,
-      freshResponse,
-    );
+    // FIX: fetch fresh selected WB orders only; retain the legacy sold path.
+    const orders = wbShippingEnabled()
+      ? await this.resolveFbsShippingOrders(clientId, dto.orders)
+      : (await this.resolveSelectedFbsOrders(clientId, dto.orders, await this.refreshFbsOrdersCache(clientId))).orders;
     const unavailable = orders.filter(
       (order) =>
         order.marketplace !== MarketplaceType.WILDBERRIES ||
