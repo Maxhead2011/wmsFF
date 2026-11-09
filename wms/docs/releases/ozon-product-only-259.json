@@ -1,5 +1,5 @@
 {
-  "status": "prepared",
+  "status": "published",
   "versionCode": 259,
   "artifacts": [
     {
@@ -38,5 +38,10 @@
   "apiPassed": 4643,
   "webPassed": 622,
   "physicalTerminalVerified": false,
-  "apiWebChanged": false
+  "apiWebChanged": false,
+  "pullRequest": 960,
+  "mergeCommit": "1dffcac05058ceb612991c517cc5bfd4aa6ec4c3",
+  "publicHashesVerified": true,
+  "containersUnchanged": true,
+  "sourceParityVerified": false
 }
