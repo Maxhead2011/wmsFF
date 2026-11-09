@@ -1,6 +1,10 @@
+import { PDFDocument } from 'pdf-lib';
+import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
 import { preserveFabricBinding } from '../warehouse/fabric-catalog';
+import { readWbSupplyLabels, buildWbSupplyLabelsPdf } from './wb-supply-label';
 import { fabricPairedLabels } from './fbs-paired-labels';
+import { wbLabelOrders } from './wb-label-orders';
 import { fabricReservationOrders, untouchedFabricReservation, decorateFabricReservationResponse } from './fbs-fabric-reservation';
 import { scanWbFabric } from '../warehouse/fabric-fbs-scan';
 import { refreshLinkedWbStatuses, startLinkedWbRefresh } from './wb-linked-status-refresh';
@@ -346,6 +350,10 @@ type FbsSupplyReconciliationPreview = {
     orderCount: number;
   }>;
 };
+
+type FbsLabelOrder = Pick<FbsOrderSummary, 'id' | 'connectionId' | 'marketplace' | 'accountName' |
+  'supplierStatus' | 'wbStatus' | 'category' | 'barcodes' | 'product' | 'itemCount' | 'supplyId' |
+  'crossBorderType' | 'requiredMeta' | 'optionalMeta' | 'shipmentPlan'>;
 
 type FbsOrdersResponse = {
   client: { id: string; code: string; name: string };
@@ -11771,6 +11779,39 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: a separate post-pick path can only queue labels, not claim/ship stock.
+  async listSosPostPickRequests(user: AuthUser) {
+    return listPostPick(this.prisma, this.clientScopes, user);
+  }
+  async printSosPostPick(body: any, user: AuthUser) {
+    return queuePostPick(this.prisma, this.clientScopes, user, body, async task => {
+      const connection = await this.prisma.clientMarketplaceConnection.findFirst({ where: {
+        id: task.connectionId, clientId: task.clientId, marketplace: task.marketplace, isActive: true,
+      }, select: { apiKey: true, sellerId: true } });
+      if (!connection) throw new BadRequestException('Кабинет маркетплейса отключён.');
+      if (task.marketplace === MarketplaceType.WILDBERRIES) {
+        const response = await marketplaceJson('https://marketplace-api.wildberries.ru/api/v3/orders/stickers?type=png&width=58&height=40', {
+          method: 'POST', headers: wbHeaders(connection.apiKey), body: JSON.stringify({ orders: [numericWbOrderId(task.orderId)] }),
+          signal: AbortSignal.timeout(FBS_TSD_STICKER_TIMEOUT_MS),
+        });
+        const row = asArray<Record<string, unknown>>(response.stickers).find(r => textValue(r.orderId) === task.orderId);
+        return { barcode: textValue(row?.barcode), imageBase64: textValue(row?.file), contentType: 'image/png' };
+      }
+      if (!connection.sellerId) throw new BadRequestException('Кабинет Ozon не настроен.');
+      const label = await marketplaceBinary('https://api-seller.ozon.ru/v2/posting/fbs/package-label', {
+        method: 'POST', headers: { ...ozonHeaders(connection.sellerId, connection.apiKey), Accept: 'application/pdf' },
+        body: JSON.stringify({ posting_number: [task.orderId] }), signal: AbortSignal.timeout(FBS_TSD_STICKER_TIMEOUT_MS),
+      });
+      // FIX: one scan prints one order; never silently drop additional cargo pages.
+      if (label.contentType.toLowerCase().includes('pdf')) {
+        const document = await PDFDocument.load(label.buffer);
+        if (document.getPageCount() !== 1) throw new BadRequestException('В заказе несколько грузомест. Скачайте полный комплект этикеток в WMS.');
+      }
+      const prepared = await this.prepareOzonFbsTsdLabel(label.buffer, label.contentType);
+      return { barcode: task.orderId, imageBase64: prepared.buffer.toString('base64'), contentType: prepared.contentType };
+    });
+  }
+
   async listSosWbRequests(user: AuthUser) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
@@ -17762,7 +17803,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const stale = new Date(Date.now() - 120_000);
     const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' },
       // FIX: an uncertain physical relabel print must not automatically print another pair.
-      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { not: 'TSD_RELABEL' } }] }, orderBy: { createdAt: 'asc' } });
+      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { notIn: ['TSD_RELABEL', SOS_POST_PICK] } }] }, orderBy: { createdAt: 'asc' } });
     if (!job) return null;
     // FIX: the existing quiet agent prints both images. A relabel job contains
     // two identical target-product labels instead of an FBS order/sorting pair.
@@ -17770,7 +17811,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ? { contentType: 'image/png' as const, imageBase64: job.stickerBase64,
           widthMm: 58, heightMm: 40, templateVersion: 'tsd-relabel-lukin-v1' }
       : await buildFbsSortingLabel(job);
-    if (job.source === 'TSD_RELABEL') {
+    if (job.source === 'TSD_RELABEL' || job.source === SOS_POST_PICK) {
       // FIX: two agents polling one station cannot both print the same relabel pair.
       const claimed = await this.prisma.fbsPrintJob.updateMany({ where: { id: job.id, status: 'QUEUED' },
         data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
@@ -17794,7 +17835,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       entity: 'FbsPrintJob', entityId: job.id,
       payload: { stationId: job.stationId, orderId: job.orderId, deviceCode: job.deviceCode, error: job.errorMessage } } });
     // FIX: only the successful print-agent acknowledgement is a shipment trigger.
-    if (success && job.source !== 'TSD_RELABEL' && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
+    if (success && job.source !== 'TSD_RELABEL' && job.source !== SOS_POST_PICK && wbOrderStockLifecycleEnabled() && job.deviceCode?.startsWith('SOS-WB:')) {
       const task = await this.prisma.fbsTsdAssembly.findUniqueOrThrow({ where: { id: job.assemblyId } });
       if (task.marketplace === MarketplaceType.WILDBERRIES) {
         const cached = this.fbsOrdersCache.get(task.clientId)?.value.orders.find(order => order.connectionId === task.connectionId && order.id === task.orderId);
@@ -17847,7 +17888,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             const printed: Array<{assemblyId:string;printedAt:Date|null}> = [];
             for (const ids of chunks(pendingIds, 10000))
                 printed.push(...await this.prisma.fbsPrintJob.findMany({
-                    where: { status: 'PRINTED', deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
+                    where: { status: 'PRINTED', source: { not: SOS_POST_PICK }, deviceCode: { startsWith: 'SOS-WB:' }, assemblyId: { in: ids } },
                     select: { assemblyId: true, printedAt: true }, distinct: ['assemblyId'], orderBy: { printedAt: 'asc' },
                 }));
             for (const print of printed) {
@@ -21504,24 +21545,40 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: one request-local snapshot for the complete ribbon, including split retries.
+  private async resolveFbsLabelOrders(clientId: string, selections: Array<{ connectionId: string; id: string }>, snapshot?: FbsLabelOrder[]) {
+    if (snapshot) {
+      const orders = selections.map(s => snapshot.find(o => o.connectionId === s.connectionId && o.id === s.id));
+      if (orders.some(o => !o)) throw new BadRequestException('Заказ отсутствует в выбранном комплекте этикеток.');
+      return { orders: orders as FbsLabelOrder[] };
+    }
+    if (process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true') {
+      const orders = await wbLabelOrders(this.prisma, clientId, selections, fetchWildberriesFbsHistory, marketplaceJson);
+      if (orders) return { orders: orders as FbsLabelOrder[] };
+    }
+    return this.resolveSelectedFbsOrders(clientId, selections);
+  }
+
   // FIX: validate the complete selection before attempting partial downloads.
   async getFbsAllLabels(dto: FbsOrderSelectionDto, user: AuthUser) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
-    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const { orders } = await this.resolveFbsLabelOrders(clientId, dto.orders);
     return wbAllLabels(orders, {
-      sc: selected => this.getFbsSupplyStickersPdf({ clientId, orders: selected }, user),
-      pvz: selected => this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user),
-      pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user),
+      sc: selected => this.getFbsSupplyStickersPdf({ clientId, orders: selected }, user, orders),
+      pvz: selected => this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user, orders),
+      pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user, orders),
     });
   }
 
-  async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
+  async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser, snapshot?: FbsLabelOrder[]) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     // FIX: fabric downloads contain a product label followed by the official order label.
+    let resolved: Promise<{ orders: FbsLabelOrder[] }> | undefined;
+    const resolve = () => resolved ??= this.resolveFbsLabelOrders(clientId, dto.orders, snapshot);
     const paired = await fabricPairedLabels(this.prisma, clientId, dto.orders,
-      (selection) => this.resolveSelectedFbsOrders(clientId, selection), marketplaceJson, marketplaceBinary);
+      async selection => this.resolveFbsLabelOrders(clientId, selection, (await resolve()).orders), marketplaceJson, marketplaceBinary);
     if (paired) return { ...paired, fileName: `fbs-product-and-order-${fileTimestamp(new Date())}.pdf`, contentType: 'application/pdf' as const };
     // FIX: an Ozon label download must not wait for every marketplace's history.
     const direct = await selectedOzonLabels(this.prisma, clientId, dto.orders, marketplaceJson, marketplaceBinary);
@@ -21531,7 +21588,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       buffer: await mergeFbsStickerPdfs(direct.parts),
       count: direct.count,
     };
-    const { orders } = await this.resolveSelectedFbsOrders(clientId, dto.orders);
+    const { orders } = await resolve();
     const unavailable = orders.filter((order) => {
       if (order.marketplace === MarketplaceType.WILDBERRIES) {
         return !['confirm', 'complete'].includes(order.supplierStatus);
@@ -21556,7 +21613,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const connections = wbOrders.length > 0
       ? await this.loadSelectedConnections(clientId, wbOrders)
       : [];
-    const ordersByConnection = new Map<string, FbsOrderSummary[]>();
+    const ordersByConnection = new Map<string, FbsLabelOrder[]>();
     for (const order of wbOrders) {
       const group = ordersByConnection.get(order.connectionId) ?? [];
       group.push(order);
@@ -21671,11 +21728,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  async getFbsCargoPlaceStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
+  async getFbsCargoPlaceStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser, snapshot?: FbsLabelOrder[]) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     const [{ orders }, deliveryPlan] = await Promise.all([
-      this.resolveSelectedFbsOrders(clientId, dto.orders),
+      this.resolveFbsLabelOrders(clientId, dto.orders, snapshot),
       this.loadFbsDeliveryPlan(clientId),
     ]);
     const unavailable = orders.filter(
@@ -21757,11 +21814,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
-  async getFbsSupplyStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser) {
+  async getFbsSupplyStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser, snapshot?: FbsLabelOrder[]) {
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
+    // FIX: our WMS can print an existing supply before delivery; legacy VM stays unchanged.
+    if (process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true') {
+      const { orders } = await this.resolveFbsLabelOrders(clientId, dto.orders, snapshot);
+      const connections = await this.loadSelectedConnections(clientId, orders);
+      const labels = await readWbSupplyLabels(orders, connections, marketplaceJson);
+      const buffer = await buildWbSupplyLabelsPdf(labels);
+      return { fileName: `fbs-wb-supply-${fileTimestamp(new Date())}.pdf`, contentType: 'application/pdf', buffer, count: labels.length };
+    }
     const [{ orders }, deliveryPlan] = await Promise.all([
-      this.resolveSelectedFbsOrders(clientId, dto.orders),
+      this.resolveFbsLabelOrders(clientId, dto.orders, snapshot),
       this.loadFbsDeliveryPlan(clientId),
     ]);
     const unavailable = orders.filter(
@@ -24394,7 +24459,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
   }
 
-  private async loadSelectedConnections(clientId: string, orders: FbsOrderSummary[]) {
+  private async loadSelectedConnections(clientId: string, orders: Array<{ connectionId: string }>) {
     const connectionIds = uniqueStrings(orders.map((order) => order.connectionId));
     const connections = await this.prisma.clientMarketplaceConnection.findMany({
       where: {
@@ -31867,7 +31932,7 @@ function fbsBillingDayKey(value: Date) {
 }
 
 function fbsOrderDeliveryPlan(
-  order: FbsOrderSummary,
+  order: Pick<FbsOrderSummary, 'shipmentPlan'>,
   fallback: FbsOrdersResponse['deliveryPlan'],
 ): FbsOrdersResponse['deliveryPlan'] {
   return order.shipmentPlan

@@ -6,10 +6,50 @@ import {assertWarehouseAccess} from './client-request-warehouse-scope';
 import {ozonEditDeadline,assertNoOzonAdjustment,bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
 import {cargoMappingWorkbook} from './ozon-cargo-export';
+import {ozonPrintManifest,renderOzonPrintPages} from './ozon-print-labels';
 
 @Injectable()
 export class OzonAssemblySupplyService {
  constructor(private readonly db:PrismaService,private readonly scopes:ClientScopeService){}
+ // FIX: prepare one direction at a time; the browser queues only the complete verified set.
+ async printLabels(id:string,supplyId:string|undefined,user:AuthUser){
+  if(process.env.WMS_PRINT_SERIES_ENABLED!=='true')throw new NotFoundException('Печать через агент выключена.');
+  if(!user.permissionCodes.some(p=>['system:admin','print:write'].includes(p)))throw new BadRequestException('Нет права печати.');
+  const s=await this.load(id,user),link=s.integration as SupplyIntegration|null;
+  const manifest=ozonPrintManifest(s.directions as unknown as Array<{name:string}>,link);
+  if(!supplyId)return {...manifest,clientId:s.request.clientId};
+  const direction=manifest.supplies.find(v=>v.id===supplyId);
+  if(!direction)throw new BadRequestException('Направление не принадлежит этой заявке.');
+  const op=link!.operations[supplyId],c=await this.connection(link!.connectionId,s.request.clientId);
+  const download=async(url:string)=>{
+   const u=new URL(url);
+   if(u.protocol!=='https:'||u.username||u.password||!(u.hostname==='ozone.ru'||u.hostname.endsWith('.ozone.ru')))throw new BadRequestException('Некорректный адрес этикеток Ozon.');
+   return fetch(u,{signal:AbortSignal.timeout(20000),redirect:'error'});
+  };
+  let response=op.labelUrl?await download(op.labelUrl):null;
+  if(!response||response.status===403||response.status===404){
+   await response?.body?.cancel();
+   let operationId=op.labelUrl?null:op.labelOperationId;
+   if(!operationId){
+    const created=await this.call(c,'/v1/cargoes-label/create',{supply_id:Number(supplyId),cargoes:direction.cargoIds.map(cargo_id=>({cargo_id}))},false);
+    operationId=String(created.operation_id??'');
+    if(!operationId)throw new BadGatewayException('Ozon не вернул операцию подготовки этикеток.');
+    await this.locked(id,user,async(cur,tx)=>{const next=cur.integration as SupplyIntegration;next.operations[supplyId].labelOperationId=operationId!;delete next.operations[supplyId].labelUrl;await this.save(tx,id,next,user,'OZON_LABEL_REQUEST');});
+   }
+   const result=await this.call(c,'/v1/cargoes-label/get',{operation_id:operationId});
+   const url=result.result?.file_url??result.file_url;
+   if(!url)throw new BadRequestException(`Этикетки «${direction.name}» готовятся в Ozon. Повторите подготовку через несколько секунд; печать ещё не начата.`);
+   response=await download(url);
+   if(response.ok)await this.locked(id,user,async(cur,tx)=>{const next=cur.integration as SupplyIntegration;next.operations[supplyId].labelUrl=url;await this.save(tx,id,next,user,'OZON_LABEL_READY');});
+  }
+  if(!response.ok)throw new BadGatewayException(`Ozon: HTTP ${response.status}. Этикетки не отправлены в печать.`);
+  const buffer=Buffer.from(await response.arrayBuffer());
+  if(buffer.length>20_000_000)throw new BadRequestException('Файл этикеток слишком велик.');
+  const rendered=await renderOzonPrintPages(buffer,direction.cargoIds);
+  const current=await this.load(id,user);
+  if(ozonPrintManifest(current.directions as unknown as Array<{name:string}>,current.integration as SupplyIntegration).fingerprint!==manifest.fingerprint)throw new ConflictException('Состав грузомест изменился. Подготовьте этикетки заново.');
+  return {...manifest,clientId:s.request.clientId,...rendered};
+ }
  // FIX: scoped read-only export remains available after reopening a completed assembly.
  async cargoMappingFile(id:string,user:AuthUser){
   const s=await this.load(id,user);

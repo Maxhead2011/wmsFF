@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { fabricReservationOrders, untouchedFabricReservation } from './fbs-fabric-reservation';
+import { fabricReservationOrders, untouchedFabricReservation, canIgnoreFabricDisplayReservation } from './fbs-fabric-reservation';
 import { MarketplaceConnectionsService } from './marketplace-connections.service';
 afterEach(() => vi.unstubAllEnvs());
 function fixture() {
@@ -55,4 +55,18 @@ it('does not search finished boxed stock or write waiting tasks for cut-on-deman
   const fresh = await service.syncFbsPalletSortReservations('client', [f.order]);
   expect(fresh.get('shop:order').status).toBe('IN_PROGRESS');
   expect(write).not.toHaveBeenCalled();
+});
+
+// TEST: the display-only cut mode must not block request creation or bypass real picking.
+it('allows fresh verified fabric display rows into auto assembly without recycling tasks', async () => {
+  const f = fixture(); const order = { ...f.order, reservation: { status: 'FABRIC_ON_DEMAND' } };
+  const verified = await fabricReservationOrders(f.db, 'client', [order], new Map());
+  expect(canIgnoreFabricDisplayReservation(order, undefined, verified)).toBe(true);
+  for (const task of [{ status: 'PICKING' }, { status: 'WAITING_STOCK' }, { workerName: 'Worker' }, { scannedItemCount: 1 }])
+    expect(canIgnoreFabricDisplayReservation(order, task, verified)).toBe(false);
+  expect(canIgnoreFabricDisplayReservation(order, undefined, new Set())).toBe(false);
+  expect(canIgnoreFabricDisplayReservation({ ...order, connectionId: 'other' }, undefined, verified)).toBe(false);
+  expect(canIgnoreFabricDisplayReservation({ ...order, reservation: { status: 'RESERVED' } }, undefined, verified)).toBe(false);
+  vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED', 'false');
+  expect(canIgnoreFabricDisplayReservation(order, undefined, await fabricReservationOrders(f.db, 'client', [order], new Map()))).toBe(false);
 });

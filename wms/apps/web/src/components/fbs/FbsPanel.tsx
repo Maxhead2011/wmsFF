@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { filterOrdersByStore } from './store-filter';
+import { openWbRibbonPrint } from '../../lib/wbRibbonPrint';
 const LamodaFbs = lazy(() => import('../lamoda/LamodaPanel').then(m=>({default:m.LamodaPanel})));
 import { fetchWorkspaceClients, workspaceClients, visibleMarket, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { startVisiblePolling } from '../../lib/visiblePolling';
@@ -1359,7 +1360,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     }
   }
 
-  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all = false) {
+  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all: boolean | 'print' = false) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('stickers');
     setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
@@ -1367,11 +1368,12 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setOrderActionError('');
     try {
       // FIX: explicit boolean keeps the existing single-label click unchanged.
-      if (all === true) {
+      if (all === true || all === 'print') {
         const result = await downloadFbsAllLabels(session.accessToken, {
           clientId: selectedClientId,
           orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
         });
+        if (all === 'print') { await openWbRibbonPrint(session.accessToken, selectedClientId, result); return; }
         const bytes = Uint8Array.from(atob(result.fileBase64), char => char.charCodeAt(0));
         downloadFbsBlob(new Blob([bytes], { type: 'application/pdf' }), result.fileName);
         setOrderActionMessage(`Скачана лента: ${result.pageCount} стр.`);
@@ -5720,7 +5722,7 @@ function FbsOrdersView({
   onMoveToNewSupply: (orders: FbsOrderSummary[]) => Promise<void>;
   onCancel: (orders: FbsOrderSummary[]) => Promise<void>;
   onRemoveCancelledOrder: (order: FbsOrderSummary) => Promise<void>;
-  onDownloadStickers: (orders: FbsOrderSummary[], all?: boolean) => Promise<void>;
+  onDownloadStickers: (orders: FbsOrderSummary[], all?: boolean | 'print') => Promise<void>;
   onDownloadCargoStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadSupplyStickers: (orders: FbsOrderSummary[]) => Promise<void>;
   onDownloadPickList: (order: FbsOrderSummary) => Promise<void>;
@@ -6449,26 +6451,9 @@ function FbsOrdersView({
               onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), true)}>
               <Download size={16} aria-hidden="true" />Скачать все ШК
             </button>
-            <button
-              type="button"
-              className="button button-secondary"
-              disabled={cargoStickerOrders.length === 0 || orderAction !== null}
-              onClick={() => void onDownloadCargoStickers(cargoStickerOrders)}
-              title="QR грузомест для сдачи поставки в ПВЗ"
-            >
-              <QrCode size={16} aria-hidden="true" />
-              {orderAction === 'cargo' ? 'Формирую…' : `ШК для ПВЗ (${cargoStickerOrders.length})`}
-            </button>
-            <button
-              type="button"
-              className="button button-secondary"
-              disabled={supplyStickerOrders.length === 0 || orderAction !== null}
-              onClick={() => void onDownloadSupplyStickers(supplyStickerOrders)}
-              title="QR поставки после передачи в доставку для сортировочного центра"
-            >
-              <QrCode size={16} aria-hidden="true" />
-              {orderAction === 'supply' ? 'Формирую…' : `ШК для СЦ (${supplyStickerOrders.length})`}
-            </button>
+            <button type="button" className="button button-secondary"
+              disabled={orderAction !== null || !selectedOrders.some(order => order.marketplace === 'WILDBERRIES')}
+              onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), 'print')}>Печать всех ШК</button>
             </> : null}
           </div>
           {hasWildberriesOrders ? <p className="fbs-order-actions__hint">
@@ -6629,26 +6614,13 @@ function FbsOrdersView({
                         <button type="button" disabled={orderAction !== null}
                           onClick={() => void onDownloadStickers(group.orders, true)}
                           title="Скачать доступные СЦ, ПВЗ и пары товара/заказа одной лентой">
-                          <Download size={14} aria-hidden="true" />Все ШК
+                          <Download size={14} aria-hidden="true" />Скачать все ШК
                         </button>
+                        <button type="button" disabled={orderAction !== null}
+                          onClick={() => void onDownloadStickers(group.orders, 'print')}>Печать всех ШК</button>
                         <button type="button" disabled={groupStickerOrders.length === 0 || orderAction !== null} onClick={() => void onDownloadStickers(groupStickerOrders)}>
-                          <Download size={13} aria-hidden="true" /> ШК заказов
+                          <Download size={13} aria-hidden="true" /> Скачать ШК
                         </button>
-                        {groupCargoOrders.length > 0 ? (
-                          <button type="button" disabled={orderAction !== null} onClick={() => void onDownloadCargoStickers(groupCargoOrders)}>
-                            <QrCode size={13} aria-hidden="true" /> QR грузомест
-                          </button>
-                        ) : null}
-                        {view === 'shipped' && groupSupplyStickerOrders.length > 0 ? (
-                          <button
-                            type="button"
-                            disabled={orderAction !== null}
-                            onClick={() => void onDownloadSupplyStickers(groupSupplyStickerOrders)}
-                            title={`Скачать QR поставки ${group.supplyId}`}
-                          >
-                            <QrCode size={13} aria-hidden="true" /> QR поставки
-                          </button>
-                        ) : null}
                         {groupChangeDestinationOrders.length > 0 ? (
                           <button
                             type="button"
@@ -6689,7 +6661,7 @@ function FbsOrdersView({
                   )}
                   canDownloadPickList={canDownloadPickList}
                   onHideWaitingStock={() => setHiddenWaitingStockKeys((current) => new Set(current).add(fbsOrderSelectionKey(order)))}
-                  onDownloadSticker={(all = false) => void onDownloadStickers([order], all)}
+                  onDownloadSticker={(all: boolean | 'print' = false) => void onDownloadStickers([order], all)}
                   onDownloadCargoStickers={() => void onDownloadCargoStickers([order])}
                   onDownloadSupplyStickers={() => void onDownloadSupplyStickers([order])}
                   onDownloadPickList={() => void onDownloadPickList(order)}
@@ -6753,7 +6725,7 @@ export function FbsOrderRow({
   requiresCargoPlaces: boolean;
   canDownloadPickList: boolean;
   onHideWaitingStock: () => void;
-  onDownloadSticker: (all?: boolean) => void;
+  onDownloadSticker: (all?: boolean | 'print') => void;
   onDownloadCargoStickers: () => void;
   onDownloadSupplyStickers: () => void;
   onDownloadPickList: () => void;
@@ -6920,6 +6892,7 @@ export function FbsOrderRow({
         {order.category === 'shipped' ? <small>{fbsSentToMarketplaceLabel(order)}</small> : null}
       </td>
       <td>
+        {/* FIX: four document actions; PVZ/SC are part of the ribbon. */}
         <div className="fbs-order-documents">
           {order.marketplace === 'WILDBERRIES' ? <button type="button"
             className="fbs-order-document-button"
@@ -6927,6 +6900,8 @@ export function FbsOrderRow({
             title="СЦ, ПВЗ и пары ШК товара + QR заказа. Недоступные части будут перечислены.">
             <Download size={14} aria-hidden="true" />Скачать все ШК
           </button> : null}
+          {order.marketplace === 'WILDBERRIES' ? <button type="button" className="fbs-order-document-button"
+            disabled={actionsDisabled} onClick={() => onDownloadSticker('print')}>Печать всех ШК</button> : null}
           <button
             type="button"
             className="fbs-order-document-button"
@@ -6943,40 +6918,6 @@ export function FbsOrderRow({
             <Download size={14} aria-hidden="true" />
             {stickerBusy ? 'Формирую…' : 'Скачать ШК'}
           </button>
-          {order.marketplace === 'WILDBERRIES' ? <>
-          <button
-            type="button"
-            className="fbs-order-document-button fbs-order-document-button--cargo"
-            disabled={!canDownloadCargoStickers || actionsDisabled}
-            onClick={onDownloadCargoStickers}
-            title={
-              canDownloadCargoStickers
-                ? `Скачать все QR грузомест поставки ${order.supplyId} для ПВЗ`
-                : requiresCargoPlaces
-                  ? 'ШК для ПВЗ появится после создания грузомест и перевода заказа в сборку'
-                  : 'Для клиента выбрана сдача в сортировочный центр'
-            }
-          >
-            <QrCode size={14} aria-hidden="true" />
-            {cargoBusy ? 'Формирую…' : 'ШК для ПВЗ'}
-          </button>
-          <button
-            type="button"
-            className="fbs-order-document-button"
-            disabled={!canDownloadSupplyStickers || actionsDisabled}
-            onClick={onDownloadSupplyStickers}
-            title={
-              canDownloadSupplyStickers
-                ? `Скачать QR поставки ${order.supplyId} для сортировочного центра`
-                : requiresCargoPlaces
-                  ? 'Для клиента выбрана сдача в ПВЗ'
-                  : 'ШК для СЦ появится после передачи поставки в доставку'
-            }
-          >
-            <QrCode size={14} aria-hidden="true" />
-            {supplyBusy ? 'Формирую…' : 'ШК для СЦ'}
-          </button>
-          </> : null}
           {canDownloadPickList && hasActiveRequest ? (
             <button
               type="button"

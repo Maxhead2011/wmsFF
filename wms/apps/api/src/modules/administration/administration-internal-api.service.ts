@@ -151,7 +151,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'client-requests',
     name: 'Заявки клиентов',
     prefixes: ['/client-request-removal', '/client-requests', '/client-requests/:id/wb-fbo-supply', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
-    routeCount: 66, // FIX: include batch target discovery and per-request marketplace reconciliation.
+    routeCount: 67, // FIX: prepare the complete Ozon cargo label set. // FIX: include batch target discovery and per-request marketplace reconciliation.
     description: 'Онлайн-заявки, документы, маршруты сборки и управление заказами FBS.',
     logic: ['Создаёт и изменяет заявки.', 'Считает активные заявки FBO WB/Ozon с учётом доступа и филиала.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
     dependencies: ['Основная БД', 'Склад', 'Подключения маркетплейсов'],
@@ -254,7 +254,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly',
       '/marketplace-connections/multishop'],
     // FIX: four draft handlers plus status, preview, explicit activation and graceful stop.
-    routeCount: 124, // FIX: available WB label ribbon.
+    routeCount: 126, // FIX: available WB label ribbon.
     description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сборка ФБС по номерам: администратор или собственник проверяет WB и доступные короба, создаёт одну обычную заявку в выбранном филиале с сохранением поставок WB; повторный запрос не дублирует заявку.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
@@ -290,7 +290,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'print',
     name: 'Печать',
     prefixes: ['/print', '/print/kiz-duplicates', '/print/series'],
-    routeCount: 33, // FIX: series queue plus branch-scoped station media read/update.
+      routeCount: 34, // FIX: series queue, PDF ribbon and branch-scoped station media read/update.
     description: 'Очереди печати, шаблоны, принтеры и повторная печать этикеток.',
     logic: ['Формирует задания печати.', 'Маршрутизирует задание в группу принтеров.', 'Хранит статус, ошибки и историю повторов.', 'Дубль КИЗ: исходный код, подпись товара и проверка повторным сканом; без изменения остатков и WB. Включается отдельно.'],
     dependencies: ['Основная БД', 'Принтеры/агент печати'],

@@ -1,0 +1,26 @@
+const assert=require('node:assert/strict');
+const root=process.argv[2]||'/app/apps/api/dist';
+const {MarketplaceConnectionsService:S}=require(root+'/modules/marketplace-connections/marketplace-connections.service');
+const {queuePostPick,listPostPick,postPickReady}=require(root+'/modules/marketplace-connections/sos-post-pick');
+process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED='true';process.env.WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED='true';
+(async()=>{
+ let passed=0;
+ const job={id:'j',source:'SOS_POST_PICK',deviceCode:'SOS-WB:legacy',assemblyId:'a',status:'PRINTED'};
+ const service=Object.create(S.prototype);service.prisma={fbsPrintJob:{updateMany:async()=>{},findUniqueOrThrow:async()=>job},auditLog:{create:async()=>{}}};
+ await service.finishFbsPrintJob('j',true,null,{id:'u'});passed++;
+ await service.finishFbsPrintJob('j',false,null,{id:'u'});passed++;
+ let claimWhere;service.prisma={fbsPrintStation:{update:async()=>{}},fbsPrintJob:{findFirst:async q=>{claimWhere=q.where;return null}}};
+ await service.claimFbsPrintJob('s',{});assert(claimWhere.OR[1].source.notIn.includes('SOS_POST_PICK'));passed++;
+ const req={id:'r',number:123,clientId:'c',client:{name:'Balandin'}},t={id:'a',requestId:'r',clientId:'c',connectionId:'co',orderId:'o',marketplace:'OZON',status:'COMPLETED',requiresKiz:false,completedAt:new Date(),marketplaceSubmittedAt:new Date(),barcodes:['123456']};
+ const jobs=[];let policy=false,labels=0;
+ const db={clientRequest:{findMany:async()=>[req]},systemSetting:{findMany:async()=>policy?[{key:'client.receipt-kiz-required.v1:c',value:{required:true}}]:[]},fbsTsdAssembly:{findMany:async()=>[t]},fbsOrderRequestLink:{findMany:async()=>[t]},fbsPrintStation:{findFirst:async()=>({lastSeenAt:new Date()})},fbsPrintJob:{findMany:async()=>jobs,findUnique:async q=>jobs.find(j=>j.historyId===q.where.historyId),findFirst:async()=>jobs.at(-1),create:async({data})=>{const j={...data,status:'QUEUED'};jobs.push(j);return j;}},$queryRaw:async()=>[],auditLog:{create:async()=>{}},$executeRawUnsafe:async()=>0};db.$transaction=async f=>f(db);
+ const user={id:'u',name:'Worker',activeWarehouseId:'wh'},scope={resolveClientFilter:()=> 'c',requireClientAccess:()=>{}};
+ assert.equal((await listPostPick(db,scope,user)).requests.length,1);passed++;
+ policy=true;assert.equal((await listPostPick(db,scope,user)).requests.length,0);passed++;policy=false;
+ const body={requestId:'r',stationId:'s',barcode:'123456',operationId:'11111111-1111-4111-8111-111111111111'};
+ const label=async()=>{labels++;return {imageBase64:'image',barcode:'official',contentType:'image/png'}};
+ const a=await queuePostPick(db,scope,user,body,label);assert.equal(a.printStatus,'QUEUED');assert(jobs[0].deviceCode.startsWith('SOS-POST:'));passed++;
+ assert.equal((await queuePostPick(db,scope,user,body,label)).printJobId,a.printJobId);assert.equal(labels,1);assert.equal(jobs.length,1);passed++;
+ assert.equal(postPickReady({...t,requiresKiz:true}),false);passed++;
+ console.log(JSON.stringify({passed,stockDelegatesAbsent:true}));
+})().catch(e=>{console.error(e);process.exit(1)});
