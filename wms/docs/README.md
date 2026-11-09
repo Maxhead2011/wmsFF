@@ -1,4 +1,4 @@
-Prepared: per-product safety reserve in the FBS product cell (2026-11-09). FbsPanel/FbsProductReserve show the existing reserve override below each name/article, with inheritance, NONE, units/percent and low-stock replacement. Existing versioned SKU rule API, blocked flag preserved; one metadata read on open, no automatic publication, preserve table page. Own-WMS compact-menu gate; sold path unchanged. Web616/2 skipped, TypeScript, SSR/validation2 and actual browser two-row save/reload/conflict tests passed.
+Prepared: per-product safety reserve in the FBS product cell (2026-11-09). FbsPanel/FbsProductReserve show the existing reserve override below each name/article, with inheritance, NONE, units/percent and low-stock replacement. Existing versioned SKU rule API, blocked flag preserved; one metadata read on open, no automatic publication, preserve table page. Own-WMS compact-menu gate; sold path unchanged. Web618/2 skipped after merging PR945, TypeScript, SSR/validation2, actual browser two-row save/reload/conflict, exact runtime product-cell3 and candidate full startup/reload passed.
 
 ## Подготовлено: ткани в складе, новые цвета и привязки
 
