@@ -55,3 +55,9 @@ export async function decorateFabricReservationResponse(db: any, clientId: strin
     return order.reservation?.status === 'FABRIC_ON_DEMAND' ? { ...order, reservation: null } : order;
   }) };
 }
+// FIX: only a fresh, verified fabric display marker with no task can bypass the reservation guard.
+// Existing tasks continue through the original physical-work eligibility check.
+export function canIgnoreFabricDisplayReservation(order: any, task: any, verified: Set<string>): boolean {
+  return !task && order.reservation?.status === 'FABRIC_ON_DEMAND' &&
+    verified.has(`${order.connectionId.trim()}:${order.id.trim()}`);
+}
