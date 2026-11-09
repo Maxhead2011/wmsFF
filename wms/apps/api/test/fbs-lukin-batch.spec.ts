@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ClientRequestStatus, MarketplaceType } from '@prisma/client';
 import { LUKIN_FBS_BATCH_CLIENT_ID, lukinBatchApplies, selectLukinFbsBatch, savedLukinFbsBatchIds } from '../src/modules/marketplace-connections/fbs-lukin-batch';
 import { createRequire } from 'node:module';
@@ -7,6 +7,7 @@ const { MarketplaceConnectionsService } = process.env.FBS_RUNTIME_ENTRY
   ? createRequire(import.meta.url)(process.env.FBS_RUNTIME_ENTRY)
   : await import('../src/modules/marketplace-connections/marketplace-connections.service');
 
+afterEach(()=>vi.unstubAllEnvs());
 const requests = [8, 4, 7, 2, 6, 3, 1].map((number) => ({ requestId: `request-${number}`, requestNumber: number }));
 
 describe('Lukin FBS TSD batch', () => {
@@ -88,6 +89,23 @@ describe('Lukin FBS TSD batch', () => {
     expect(admin.requests.filter((row) => row.client.id === client.id)).toHaveLength(7);
     expect(owner.requests.filter((row) => row.client.id === client.id)).toHaveLength(7);
 
+    // TEST: a proven urgent PVZ delivery is visible and selectable beside the unchanged five.
+    vi.stubEnv('WMS_FBS_PVZ_LOSS_SETTLEMENT_ENABLED','true');
+    const urgent=makeLink(100);urgent.request.fbsEmergencyAssemblyAt=new Date() as never;
+    urgent.lastCategory='cancelled';urgent.lastWbStatus='canceled_by_client' as never;links.push(urgent);
+    const task={id:'urgent-task',requestItemId:'item',requestId:urgent.requestId,clientId:client.id,connectionId:urgent.connectionId,orderId:urgent.orderId,skuId:urgent.lastSkuId,stockWarehouseId:'warehouse',marketplace:'WILDBERRIES'};
+    const value={version:1,purpose:'PVZ_LOSS_SETTLEMENT',...task,taskId:task.id,warehouseId:'warehouse',shipmentId:'proof',originalAttemptId:'old'};
+    (prisma.systemSetting as any).findMany=async()=>[{key:'fbs.pvzLossSettlement.'+urgent.requestId,value}];
+    (prisma.fbsTsdAssembly as any).findUnique=async()=>task;
+    const urgentList=await service.listFbsTsdRequests('TSD-URGENT',user);
+    expect(urgentList.requests.filter(row=>row.client.id===client.id).map(row=>row.requestNumber)).toEqual([100,5,4,3,2,1]);
+    expect(setting!.value.requestIds).toEqual([1,2,3,4,5].map(n=>`${client.id}-${n}`));
+    (prisma as any).clientRequest={findUnique:async()=>({...urgent.request,clientId:client.id})};
+    (prisma as any).clientMarketplaceConnection={findMany:async()=>{throw Error('PAST_PVZ_BATCH_GUARD')}};
+    await expect((service as any).getNextFbsTsdAssemblyUnlocked('TSD-URGENT',user,urgent.requestId)).rejects.toThrow('PAST_PVZ_BATCH_GUARD');
+    vi.stubEnv('WMS_FBS_PVZ_LOSS_SETTLEMENT_ENABLED','false');
+    await expect((service as any).getNextFbsTsdAssemblyUnlocked('TSD-URGENT',user,urgent.requestId)).rejects.toThrow('пять');
+    links=links.filter(row=>row.requestId!==urgent.requestId);
     links = links.filter((link) => link.requestId !== `${client.id}-1`);
     const afterOne = await service.listFbsTsdRequests('TSD-2', user);
     expect(afterOne.requests.filter((row) => row.client.id === client.id).map((row) => row.requestNumber))
