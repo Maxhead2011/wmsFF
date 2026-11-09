@@ -1,3 +1,4 @@
+import { FbsProductReserve } from './FbsProductReserve';
 import { lazy, Suspense } from 'react';
 import { filterOrdersByStore } from './store-filter';
 import { openWbRibbonPrint } from '../../lib/wbRibbonPrint';
@@ -4072,6 +4073,7 @@ export function FbsStocksView({
     connectionId?: string,
     warehouseId?: string,
     refreshReserves = false,
+    preservePage = false,
   ) => {
     setState((current) => ({ status: 'loading', data: current.data, error: '' }));
     try {
@@ -4083,7 +4085,7 @@ export function FbsStocksView({
         refreshReserves,
       );
       setState({ status: 'ready', data, error: '' });
-      setPage(0);
+      if (!preservePage) setPage(0);
       return data;
     } catch (caught) {
       setState((current) => ({
@@ -4914,6 +4916,8 @@ export function FbsStocksView({
                         Передано в переклейку: {item.relabeling.allocatedToTargets.toLocaleString('ru-RU')} шт.
                       </small>
                     ) : null}
+                    {/* FIX: individual reserve is under the product, never hidden in routing menus. */}
+                    {compactMenuEnabled ? <FbsProductReserve key={`${clientId}:${selectedConnectionId}:${item.skuId}`} session={session} clientId={clientId} connectionId={selectedConnectionId ?? ''} skuId={item.skuId} onSaved={() => loadStocks(selectedConnectionId, selectedWarehouseId, false, true)} /> : null}
                   </td>
                   <td>
                     <strong>{item.barcode || item.clientSku || item.internalSku}</strong>
