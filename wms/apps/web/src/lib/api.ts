@@ -3882,6 +3882,7 @@ export type FbsOrderActionResult = {
 };
 
 export type FbsSupplyDeliveryOptions = {
+  shippingPointsEnabled?: boolean;
   supplies: Array<{
     connectionId: string;
     supplyId: string;
@@ -3889,6 +3890,9 @@ export type FbsSupplyDeliveryOptions = {
     itemCount: number;
     destinationOfficeId: string | null;
     destinationOfficeName: string | null;
+    shippingPointId?: string | null;
+    shippingDt?: string | null;
+    cargoPlaceIds?: string[];
   }>;
   offices: Array<{
     id: string;
@@ -12766,5 +12770,13 @@ export async function fetchFbsProductReserve(accessToken: string, clientId: stri
 export async function saveFbsProductReserve(accessToken: string, clientId: string, row: FbsProductReserveRow, reserve: FbsSafetyReserveRule | null) {
   return request('/administration/marketplace-stock-control/' + encodeURIComponent(clientId) + '/skus/' + encodeURIComponent(row.skuId), {
     accessToken, method: 'PUT', body: { reserve, blocked: row.blocked, expectedUpdatedAt: row.ruleUpdatedAt },
+  });
+}
+
+// FIX: separate configuration actions; creating cargo places never delivers a supply.
+export type WbShippingPoint = { id: string; name: string; address: string; city: string; officeType: string; available: boolean };
+export async function configureFbsShipping(accessToken: string, mode: 'points' | 'save' | 'cargo', payload: FbsOrderSelectionPayload & { shippingCity: string; shippingPointId?: string; cargoPlaceTotal?: number }) {
+  return request<{ points?: WbShippingPoint[]; saved?: boolean; point?: WbShippingPoint; cargoPlaceIds?: string[] }>(`/marketplace-connections/fbs/supplies/shipping-${mode}`, {
+    method: 'POST', accessToken, body: { ...sanitizeFbsOrderSelectionPayload(payload), shippingCity: payload.shippingCity, shippingPointId: payload.shippingPointId, cargoPlaceTotal: payload.cargoPlaceTotal },
   });
 }

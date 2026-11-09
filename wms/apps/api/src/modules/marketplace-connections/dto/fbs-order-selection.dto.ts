@@ -10,6 +10,9 @@ import {
   Matches,
   IsOptional,
   IsString,
+  IsInt,
+  Min,
+  Max,
   Length,
   ValidateNested,
 } from 'class-validator';
@@ -41,6 +44,24 @@ export class FbsOrderSelectionItemDto {
 }
 
 export class FbsOrderSelectionDto {
+  // FIX: explicit WB shipping point, never reused as destination warehouse.
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  shippingCity?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  @Length(1, 16)
+  shippingPointId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  cargoPlaceTotal?: number;
+
   @IsString()
   @Length(1, 100)
   clientId!: string;
