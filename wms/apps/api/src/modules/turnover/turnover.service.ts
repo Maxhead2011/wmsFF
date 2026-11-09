@@ -441,12 +441,48 @@ export class TurnoverService {
       ...(query.limit ? { take: query.limit } : {}),
     });
 
-    const [requestMap, storagePlacementMap] = await Promise.all([
+    // FIX: aggregate all authorized movements in PostgreSQL, independently of the 250-row detail preview.
+    const movementTotalsWhere: Prisma.StockMovementWhereInput = {
+      skuId: { in: skus.map((sku) => sku.id) },
+      AND: [
+        ...(movementDateRange ? [{ createdAt: movementDateRange }] : []),
+        ...(movementScopeWhere ? [movementScopeWhere] : []),
+        ...(movementVisibilityWhere ? [movementVisibilityWhere] : []),
+      ],
+    };
+    const [requestMap, storagePlacementMap, receipts, exits] = await Promise.all([
       this.loadRequestMap(skus.flatMap((sku) => sku.movements)),
       this.loadStoragePlacementMap(skus),
+      skus.length ? this.prisma.stockMovement.groupBy({
+        by: ['skuId'],
+        where: {
+          ...movementTotalsWhere,
+          type: { in: [MovementType.INITIAL_IMPORT, MovementType.RECEIPT, MovementType.RETURN, MovementType.INVENTORY_ADJUSTMENT] },
+          quantity: { gt: 0 },
+        },
+        _sum: { quantity: true },
+      }) : Promise.resolve([]),
+      skus.length ? this.prisma.stockMovement.groupBy({
+        by: ['skuId', 'type'],
+        where: {
+          ...movementTotalsWhere,
+          type: { in: [MovementType.SHIP, MovementType.INVENTORY_ADJUSTMENT] },
+          quantity: { lt: 0 },
+        },
+        _sum: { quantity: true },
+      }) : Promise.resolve([]),
     ]);
-
-    const items = skus.map((sku) => this.mapSkuReport(sku, requestMap, storagePlacementMap));
+    const receivedBySku = new Map(receipts.map((row) => [row.skuId, row._sum.quantity ?? 0]));
+    const shippedBySku = new Map(exits.filter((row) => row.type === MovementType.SHIP)
+      .map((row) => [row.skuId, -(row._sum.quantity ?? 0)]));
+    const writtenOffBySku = new Map(exits.filter((row) => row.type === MovementType.INVENTORY_ADJUSTMENT)
+      .map((row) => [row.skuId, -(row._sum.quantity ?? 0)]));
+    const items = skus.map((sku) => ({
+      ...this.mapSkuReport(sku, requestMap, storagePlacementMap),
+      receivedQuantity: receivedBySku.get(sku.id) ?? 0,
+      shippedQuantity: shippedBySku.get(sku.id) ?? 0,
+      writtenOffQuantity: writtenOffBySku.get(sku.id) ?? 0,
+    }));
     const totals = items.reduce(
       (acc, item) => ({
         skuCount: acc.skuCount + 1,
