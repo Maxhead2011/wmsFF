@@ -5672,3 +5672,13 @@
 :root .app-layout .fbs-marketplace-picker--four { grid-template-columns: repeat(2, minmax(0, 1fr))!important; }
 @media (min-width:1800px) { :root .app-layout .fbs-marketplace-picker--four { grid-template-columns: repeat(4, minmax(0, 1fr))!important; } }
 @media (max-width:700px) { :root .app-layout .fbs-marketplace-picker--four { grid-template-columns: minmax(0, 1fr)!important; } }
+
+/* FIX: keep per-position safety settings within the product cell in both themes. */
+.fbs-product-reserve { margin-top: 10px; max-width: 32rem; font-size: .9em; }
+.fbs-product-reserve summary { cursor: pointer; font-weight: 600; }
+.fbs-product-reserve > div { display: grid; gap: 10px; margin-top: 10px; padding: 12px; border: 1px solid var(--border, #dce5ee); border-radius: 12px; background: var(--surface, #fff); color: inherit; }
+.fbs-product-reserve label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fbs-product-reserve select, .fbs-product-reserve input[type="number"] { min-width: 0; max-width: 100%; padding: 7px 9px; border: 1px solid var(--border, #dce5ee); border-radius: 8px; background: var(--surface, #fff); color: inherit; font: inherit; }
+.fbs-product-reserve input[type="number"] { width: 7em; }
+.fbs-product-reserve button { justify-self: start; padding: 8px 12px; border: 1px solid var(--border, #dce5ee); border-radius: 9px; background: var(--surface, #fff); color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.fbs-product-reserve button:disabled { opacity: .6; cursor: default; }

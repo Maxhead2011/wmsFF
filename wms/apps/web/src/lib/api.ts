@@ -12753,3 +12753,17 @@ export function saveSkuStores(accessToken:string,clientId:string,skuId:string,st
 export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
  return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
 }
+// FIX: individual safety reserves use the existing versioned server rule, independently of sale caps.
+export type FbsSafetyReserveRule = { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
+export type FbsProductReserveRow = { skuId: string; blocked: boolean; reserveOverride: FbsSafetyReserveRule | null; ruleUpdatedAt: string | null };
+export async function fetchFbsProductReserve(accessToken: string, clientId: string, connectionId: string, skuId: string) {
+  const data = await fetchFbsStockAllocation(accessToken, clientId, connectionId) as FbsStockAllocationResponse & { reserve: FbsSafetyReserveRule; analysis?: { rows: FbsProductReserveRow[] } };
+  const row = data.analysis?.rows.find(item => item.skuId === skuId);
+  if (!row || typeof row.blocked !== 'boolean' || (row.ruleUpdatedAt !== null && typeof row.ruleUpdatedAt !== 'string')) throw new Error('Настройка этого товара не найдена. Обновите остатки.');
+  return { row, inherited: data.reserve };
+}
+export async function saveFbsProductReserve(accessToken: string, clientId: string, row: FbsProductReserveRow, reserve: FbsSafetyReserveRule | null) {
+  return request('/administration/marketplace-stock-control/' + encodeURIComponent(clientId) + '/skus/' + encodeURIComponent(row.skuId), {
+    accessToken, method: 'PUT', body: { reserve, blocked: row.blocked, expectedUpdatedAt: row.ruleUpdatedAt },
+  });
+}
