@@ -28,4 +28,4 @@ for name in ['published.json','browser-proof.json','panel-proof.json','postgres-
 for p in new.iterdir():
  if p.name not in artifacts:artifacts[p.name]={'size':p.stat().st_size,'sha256':sha(p.read_bytes())}
 manifest={'sourceParityVerified':False,'containers':{'infra-api-1':{'image':pub['images']['api']},'infra-web-1':{'image':pub['images']['web']}},'release':{'pr':pub['pr'],'apiFiles':5,'webFiles':2,'soldUnchanged':True},'artifacts':artifacts}
-(new/'manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8');print('PASS: published API/web baseline',len(api),len(web))
+(new/'manifest.json').write_bytes(json.dumps(manifest,indent=2).encode('utf-8'));print('PASS: published API/web baseline',len(api),len(web))
