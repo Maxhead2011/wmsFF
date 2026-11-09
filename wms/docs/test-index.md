@@ -1,3 +1,7 @@
+## Подготовлено: ткани в складе, новые цвета и привязки
+
+Ветка `feature/warehouse-fabric-colors`; не опубликовано. [Описание и проверки](warehouse-fabric-catalog.md). Пункт «Склад → Ткани: хранение и учёт», новый цвет до привязки SKU, точный метраж отреза и сохранение привязки при синхронизации. Кандидат только для нашей WMS; production и проданная WMS не изменены.
+
 Published PR925 (2026-11-08): scoped Yandex FBY active counter; API1/web2 exact overlay from PR922, PR924 preserved. API4568/web608 passed, 9/2 skipped; dedicated DB integration excluded. Runtime API6/browser4, full isolated API/PostgreSQL boot, controls24, request header and startup/reload passed; public counter4 passed. Web build passes; two pre-existing API nullable-SKU type errors remain. Business data, environment, other containers and sold WMS unchanged. Baseline `2026-11-08-yandex-counter`; sourceParityVerified=false. API sha256:6a1c602f6766a3609f175e9b380c3a083f655b670ad38cde28f622fdc78faff7; web sha256:1d09014b4aa7defdff0db3100a9a6d52af3ff283248a2363e88ccd510866b32a.
 
 Подготовка публикации FBY: повторный API4568/web608, runtime API6/browser4, изолированный полный API/PostgreSQL, оформление24 и шапка/раскрывающиеся блоки, загрузка/reload приложения прошли. Точный delta API1/web2 от PR922; PR924 сохранён.
