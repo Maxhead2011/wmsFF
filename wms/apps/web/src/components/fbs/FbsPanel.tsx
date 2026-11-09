@@ -1,3 +1,5 @@
+import { FbsSupplyDeliveryDialog, canSubmitFbsSupplyDelivery } from './FbsSupplyDeliveryDialog';
+export { canSubmitFbsSupplyDelivery } from './FbsSupplyDeliveryDialog';
 import { FbsProductReserve } from './FbsProductReserve';
 import { lazy, Suspense } from 'react';
 import { filterOrdersByStore } from './store-filter';
@@ -2295,6 +2297,8 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       {deliveryDialog ? (
         <FbsSupplyDeliveryDialog
           state={deliveryDialog}
+          accessToken={session.accessToken}
+          clientId={selectedClientId ?? ""}
           isSubmitting={orderAction === 'deliver'}
           onOfficeChange={(destinationOfficeId) =>
             setDeliveryDialog((current) => current ? { ...current, destinationOfficeId, error: '' } : current)
@@ -3766,132 +3770,6 @@ function FbsAssemblyDestinationDialog({
             {isSubmitting ? 'Создаю поставку…' : destination === 'PICKUP_POINT'
               ? `${mode === 'reship' ? 'Переотгрузить' : 'Собрать'} и создать ${cargoPlaceCount} мест`
               : mode === 'reship' ? 'Переотгрузить через СЦ' : 'Собрать для СЦ'}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-export function canSubmitFbsSupplyDelivery(
-  options: Pick<FbsSupplyDeliveryOptions, 'requiredDestinationOfficeId' | 'blockers'>,
-  destinationOfficeId: string,
-  plannedDeliveryDate: string,
-) {
-  // FIX: require the WB destination and a real calendar date before sending.
-  const date = new Date(`${plannedDeliveryDate}T00:00:00.000Z`);
-  return Boolean(
-    options.blockers.length === 0 &&
-      options.requiredDestinationOfficeId &&
-      destinationOfficeId === options.requiredDestinationOfficeId &&
-      /^\d{4}-\d{2}-\d{2}$/.test(plannedDeliveryDate) &&
-      Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === plannedDeliveryDate,
-  );
-}
-
-function FbsSupplyDeliveryDialog({
-  state,
-  isSubmitting,
-  onOfficeChange,
-  onDateChange,
-  onCancel,
-  onSubmit,
-}: {
-  state: {
-    orders: FbsOrderSummary[];
-    options: FbsSupplyDeliveryOptions;
-    destinationOfficeId: string;
-    plannedDeliveryDate: string;
-    error: string;
-  };
-  isSubmitting: boolean;
-  onOfficeChange: (value: string) => void;
-  onDateChange: (value: string) => void;
-  onCancel: () => void;
-  onSubmit: () => void;
-}) {
-  const supplyCount = state.options.supplies.length;
-  const itemCount = state.options.supplies.reduce((sum, supply) => sum + supply.itemCount, 0);
-  const canSubmit = canSubmitFbsSupplyDelivery(
-    state.options,
-    state.destinationOfficeId,
-    state.plannedDeliveryDate,
-  );
-  return (
-    <div className="fbs-assembly-dialog-backdrop" role="presentation">
-      <section
-        className="fbs-assembly-dialog fbs-supply-delivery-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="fbs-supply-delivery-title"
-      >
-        <div className="fbs-assembly-dialog__icon fbs-supply-delivery-dialog__icon">
-          <Send size={23} aria-hidden="true" />
-        </div>
-        <div className="fbs-assembly-dialog__heading">
-          <p className="eyebrow">Передача поставки в Wildberries</p>
-          <h3 id="fbs-supply-delivery-title">Подтвердите склад и дату</h3>
-          <p>{supplyCount} поставк(и) · {state.orders.length} заказов · {itemCount} единиц</p>
-        </div>
-
-        <div className="fbs-supply-delivery-dialog__fields">
-          <label>
-            <span>Склад назначения WB</span>
-            <select
-              value={state.destinationOfficeId}
-              onChange={(event) => onOfficeChange(event.target.value)}
-              disabled={isSubmitting}
-            >
-              <option value="">Выберите склад</option>
-              {state.options.offices.map((office) => (
-                <option key={office.id} value={office.id} disabled={!office.compatible}>
-                  {office.name}{office.city ? ` · ${office.city}` : ''}{!office.compatible ? ' · другая поставка' : ''}
-                </option>
-              ))}
-            </select>
-            <small>
-              WMS загрузил склады из WB. Выбрать можно только склад, закреплённый за текущими заказами и поставкой.
-            </small>
-          </label>
-          <label>
-            <span>Плановая дата доставки</span>
-            <input
-              type="date"
-              min={fbsLocalIsoDate(new Date())}
-              value={state.plannedDeliveryDate}
-              onChange={(event) => onDateChange(event.target.value)}
-              disabled={isSubmitting}
-            />
-            <small>
-              Дата сохраняется в WMS для логистики. Склад повторно сверяется с WB непосредственно перед отправкой.
-              {state.options.earliestWbDeliveryDate
-                ? ` Ближайшая дата по выбранным заказам WB: ${formatFbsPenaltyDate(state.options.earliestWbDeliveryDate)}.`
-                : ''}
-            </small>
-          </label>
-        </div>
-
-        <div className="fbs-supply-delivery-dialog__supplies">
-          {state.options.supplies.map((supply) => (
-            <div key={`${supply.connectionId}:${supply.supplyId}`}>
-              <strong>{supply.supplyId}</strong>
-              <span>{supply.destinationOfficeName || `Склад WB №${supply.destinationOfficeId ?? '—'}`}</span>
-              <small>{supply.orderCount} заказов · {supply.itemCount} единиц</small>
-            </div>
-          ))}
-        </div>
-
-        {state.options.blockers.map((blocker) => (
-          <p className="fbs-assembly-dialog__warning" key={blocker}>{blocker}</p>
-        ))}
-        {state.error ? <p className="fbs-assembly-dialog__warning">{state.error}</p> : null}
-
-        <div className="fbs-assembly-dialog__actions">
-          <button type="button" className="button button-secondary" onClick={onCancel} disabled={isSubmitting}>
-            Отмена
-          </button>
-          <button type="button" className="button button-primary" onClick={onSubmit} disabled={!canSubmit || isSubmitting}>
-            {isSubmitting ? 'Проверяю и передаю…' : 'Подтвердить и передать WB'}
           </button>
         </div>
       </section>

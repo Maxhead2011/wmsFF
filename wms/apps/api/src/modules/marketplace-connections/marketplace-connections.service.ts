@@ -1,3 +1,5 @@
+import { wbShippingEnabled } from './wb-shipping-points';
+import { wbShippingWorkflow, assertShippingBeforeDelivery, withWbShippingLock } from './wb-shipping-workflow';
 import { isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
@@ -20968,18 +20970,27 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
     }
+    const configurationFailures = new Set<string>();
     const delivered: string[] = [];
     const failed: Array<{ supplyId: string; message: string }> = [];
     await Promise.all(
       [...supplies.values()].map(async (supply) => {
         const connection = connectionById.get(supply.connectionId);
         if (!connection) return;
+        let deliveryAttempted = false;
         try {
+          await withWbShippingLock(this, supply.connectionId, supply.supplyId, async () => {
+          // FIX: validate the actual WB point/date immediately before delivery.
+          await assertShippingBeforeDelivery(this, supplyPlanByKey.get(`${supply.connectionId}:${supply.supplyId}`)?.id, supply.supplyId, fbsDateOnly(plannedDeliveryDate)!,
+            (path, init = {}) => marketplaceJson(`https://marketplace-api.wildberries.ru${path}`, { ...init, method: init.method ?? 'GET', headers: wbHeaders(connection.apiKey) }));
+          deliveryAttempted = true;
           await marketplaceJson(
             `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/deliver`,
             { method: 'PATCH', headers: wbHeaders(connection.apiKey) },
           );
+          });
         } catch (caught) {
+          if (!deliveryAttempted) configurationFailures.add(`${supply.connectionId}:${supply.supplyId}`);
           failed.push({
             supplyId: supply.supplyId,
             message: caught instanceof Error ? caught.message : 'Wildberries не принял поставку в доставку.',
@@ -21020,7 +21031,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
                   plannedDeliveryDate: fbsDateOnly(plannedDeliveryDate),
                   // The official FBS API derives the office from the supply and
                   // does not accept a delivery-date field in /deliver.
-                  wbDeliveryDateSubmitted: false,
+                  wbDeliveryDateSubmitted: wbShippingEnabled(),
                 },
               },
             });
@@ -21037,10 +21048,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     let refreshedOrders = await this.refreshFbsOrdersCache(clientId);
     let recovery: FbsDeliveryRecovery = { rescanOrders: [], cancelledOrders: [] };
-    if (failed.length > 0) {
+    if (failed.length > 0 && failed.some((failure) => [...supplies.values()].some((supply) => supply.supplyId === failure.supplyId && !configurationFailures.has(`${supply.connectionId}:${supply.supplyId}`)))) {
       const failedSupplyIds = new Set(failed.map((item) => item.supplyId));
       const failedOrders = orders.filter(
-        (order) => order.supplyId && failedSupplyIds.has(order.supplyId),
+        (order) => order.supplyId && failedSupplyIds.has(order.supplyId) && !configurationFailures.has(`${order.connectionId}:${order.supplyId}`),
       );
       recovery = await this.prepareFbsDeliveryRecovery(
         clientId,
@@ -21055,6 +21066,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
     return { delivered: delivered.length, failed, recovery, orders: refreshedOrders };
+  }
+
+  // FIX: own-WMS point/cargo configuration, with existing client authorization.
+  async configureFbsShipping(dto: FbsOrderSelectionDto, user: AuthUser, mode: 'points' | 'save' | 'cargo') {
+    return wbShippingWorkflow(this, dto, user, mode, marketplaceJsonOnce);
   }
 
   async getFbsSupplyDeliveryOptions(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -21169,6 +21185,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           ),
           destinationOfficeId: destinationOfficeId || null,
           destinationOfficeName: office?.name || null,
+          ...(wbShippingEnabled() ? {
+            shippingPointId: textValue(details.shippingPointId) || null,
+            shippingDt: textValue(details.shippingDt) || null,
+            cargoPlaceIds: asArray<Record<string, unknown>>((await marketplaceJson(
+              `https://marketplace-api.wildberries.ru/api/v3/supplies/${encodeURIComponent(supply.supplyId)}/trbx`,
+              { method: 'GET', headers: wbHeaders(connection.apiKey) },
+            )).trbxes).map((item) => textValue(item.id)).filter(Boolean),
+          } : {}),
         };
       }),
     );
@@ -21197,6 +21221,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     ).sort();
     const earliestWbDeliveryDate = wbDeliveryDates[0] ?? null;
     return {
+      shippingPointsEnabled: wbShippingEnabled(),
       supplies: supplyRows.filter((supply): supply is NonNullable<typeof supply> => Boolean(supply)),
       offices: [...officeMap.values()]
         .map((office) => ({

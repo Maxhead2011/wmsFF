@@ -579,6 +579,24 @@ export class MarketplaceConnectionsController {
   }
 
   // FIX: preserve the deployed delivery confirmation endpoint.
+  @Post('fbs/supplies/shipping-points')
+  @RequirePermissions()
+  fbsShippingPoints(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.configureFbsShipping(dto, user, 'points');
+  }
+
+  @Post('fbs/supplies/shipping-save')
+  @RequirePermissions()
+  fbsShippingSave(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.configureFbsShipping(dto, user, 'save');
+  }
+
+  @Post('fbs/supplies/shipping-cargo')
+  @RequirePermissions()
+  fbsShippingCargo(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.configureFbsShipping(dto, user, 'cargo');
+  }
+
   @Post('fbs/supplies/delivery-options')
   @RequirePermissions()
   getFbsSupplyDeliveryOptions(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
