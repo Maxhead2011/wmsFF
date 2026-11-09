@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 258 // FIX: show WMS request number and physical unit quantity.
-            versionName = "0.1.258-request-summary"
+            versionCode = 259 // FIX: Ozon packing starts by product, preserving pending operations.
+            versionName = "0.1.259-ozon-product"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

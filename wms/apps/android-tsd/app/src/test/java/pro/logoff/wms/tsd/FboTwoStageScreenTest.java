@@ -190,7 +190,7 @@ public class FboTwoStageScreenTest {
     @Test public void destinationRejectsBarcodeBeforeAskingForKiz() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
         try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
-            Activity a=controller.get();TsdFboPlan p=productPlan();
+            Activity a=controller.get();TsdFboPlan p=productPlan();p.marketplace="LAMODA";
             TsdFboPlan.Box b=new TsdFboPlan.Box();b.code="FFL_KRD";b.direction="Краснодар";p.boxes.add(b);
             TsdFboPlan.DirectionItem item=new TsdFboPlan.DirectionItem();item.barcode="999";item.quantity=1;p.directions.get(0).items.add(item);
             AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
@@ -231,7 +231,7 @@ public class FboTwoStageScreenTest {
             TsdSession session=new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList());
             FboTwoStageScreen screen=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",true,()->{});waitIdle(screen);
             try {
-                findAction(a.findViewById(android.R.id.content),"По товару").performClick();
+                assertNull(findAction(a.findViewById(android.R.id.content),"По товару"));
                 screen.scannerField().setText("123");screen.submit();
                 findAction(a.findViewById(android.R.id.content),"Отменить последнюю единицу").performClick();assertEquals(0,sent.size());
                 screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("FFL_KRD");screen.submit();waitIdle(screen);
@@ -254,15 +254,15 @@ public class FboTwoStageScreenTest {
             try {
                 TextView mode=findAction(a.findViewById(android.R.id.content),"По товару");
                 if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(mode);return;}
-                mode.performClick();
+                assertNull(mode);
                 screen.scannerField().setText("123");screen.submit();assertEquals(0,writes.get());
-                assertFalse(findAction(a.findViewById(android.R.id.content),"По направлению").isEnabled());
+                assertNull(findAction(a.findViewById(android.R.id.content),"По направлению"));
                 screen.scannerField().setText("FFL_WRONG");screen.submit();assertEquals(0,writes.get());
                 screen.scannerField().setText("010123456789012321SERIAL");screen.submit();assertEquals(0,writes.get());
                 assertNotNull(find(a.findViewById(android.R.id.content),"Сканируйте короб FFL_KRD"));
                 screen.scannerField().setText("FFL_WRONG");screen.submit();assertEquals(0,writes.get());
                 screen.scannerField().setText("FFL_KRD");screen.submit();waitIdle(screen);assertEquals(1,writes.get());
-                assertTrue(findAction(a.findViewById(android.R.id.content),"По направлению").isEnabled());
+                assertNull(findAction(a.findViewById(android.R.id.content),"По направлению"));
             } finally {screen.close();}
         }
     }
@@ -273,7 +273,7 @@ public class FboTwoStageScreenTest {
             Activity a=controller.get();TsdFboPlan p=productPlan();p.lines.get(0).requiresKiz=false;AtomicInteger writes=new AtomicInteger();
             FboTwoStageScreen screen=open(a,p,true,writes);
             try {
-                findAction(a.findViewById(android.R.id.content),"По товару").performClick();
+                assertNull(findAction(a.findViewById(android.R.id.content),"По товару"));
                 screen.scannerField().setText("123");screen.submit();
                 p.packingSuggestions.get(0).direction="Москва";p.packingSuggestions.get(0).targetBoxCode="FFL_MSK";
                 findAction(a.findViewById(android.R.id.content),"Обновить").performClick();waitIdle(screen);
@@ -302,7 +302,7 @@ public class FboTwoStageScreenTest {
             TsdSession session=new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList());
             FboTwoStageScreen screen=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",true,()->{});waitIdle(screen);
             try {
-                findAction(a.findViewById(android.R.id.content),"По товару").performClick();
+                assertNull(findAction(a.findViewById(android.R.id.content),"По товару"));
                 screen.scannerField().setText("123");screen.submit();screen.scannerField().setText("FFL_KRD");screen.submit();waitIdle(screen);
                 assertEquals(1,sent.size());assertFalse(screen.canLeave());screen.close();
                 screen=new FboTwoStageScreen(a,session,api,"https://example.invalid","request",true,()->{});waitIdle(screen);
@@ -311,6 +311,53 @@ public class FboTwoStageScreenTest {
                 String saved=a.getSharedPreferences("fbo-pending",0).getString(session.userId+":request:position","");
                 assertEquals("",new org.json.JSONObject(saved).getString("barcode"));
             }finally{screen.close();}
+        }
+    }
+    // TEST: Ozon starts by product and safely upgrades a saved destination scan, without writes.
+    @Test public void ozonDefaultsToProductWithoutModeButtons() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=productPlan();p.lines.get(0).requiresKiz=false;
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try {
+                View root=a.findViewById(android.R.id.content);
+                assertNull(findAction(root,"По направлению"));assertNull(findAction(root,"По товару"));
+                assertEquals("ШК товара",screen.scannerField().getHint().toString());
+                screen.scannerField().setText("123");screen.submit();
+                assertNotNull(find(a.findViewById(android.R.id.content),"Сканируйте короб FFL_KRD"));
+                assertEquals(0,writes.get());
+            } finally {screen.close();}
+        }
+    }
+    // TEST: checkpoint migration retains box/undo and never rewrites a pending old-mode command.
+    @Test public void oldDestinationCheckpointAndPendingArePreserved() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        for(boolean pending:new boolean[]{false,true})try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=productPlan();p.lines.get(0).requiresKiz=false;
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try {
+                var field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);FboScanState state=(FboScanState)field.get(screen);
+                state.productMode=false;state.barcode="123";state.target="FFL_KRD";state.direction="Краснодар";state.lastPackingOperation="undo-original";
+                Map<String,String> command=pending?state.prepare("PACK_UNIT","saved-kiz"):null;
+                var render=FboTwoStageScreen.class.getDeclaredMethod("render");render.setAccessible(true);render.invoke(screen);
+                assertEquals(!pending,state.productMode);assertEquals(command,state.pending());assertEquals("123",state.barcode);
+                assertEquals("FFL_KRD",state.target);assertEquals("undo-original",state.lastPackingOperation);assertEquals(0,writes.get());
+                if(!pending)assertTrue(state.productReady);
+            } finally {screen.close();}
+        }
+    }
+    // TEST: capability loss fails closed rather than returning to destination packing; Lamoda keeps both modes.
+    @Test public void ozonCapabilityLossAndLamodaIsolation() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()) {
+            Activity a=controller.get();TsdFboPlan p=productPlan();p.packingByProductSupported=false;
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
+            try {screen.scannerField().setText("123");screen.submit();assertEquals(0,writes.get());
+                assertNull(findAction(a.findViewById(android.R.id.content),"Отложить товар и вернуться к направлениям"));
+            } finally {screen.close();}
+            p.marketplace="LAMODA";p.packingByProductSupported=true;screen=open(a,p,true,writes);
+            try {assertNotNull(findAction(a.findViewById(android.R.id.content),"По направлению"));assertNotNull(findAction(a.findViewById(android.R.id.content),"По товару"));}
+            finally {screen.close();}
         }
     }
     private TsdFboPlan productPlan(){
@@ -328,18 +375,19 @@ public class FboTwoStageScreenTest {
             AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,true,writes);
             try {
                 find(a.findViewById(android.R.id.content),"Краснодар · упаковано 1 из 5").performClick();
-                View root=a.findViewById(android.R.id.content);
+                View root="logoff".equals(BuildConfig.FLAVOR)?ShadowAlertDialog.getLatestAlertDialog().getWindow().getDecorView():a.findViewById(android.R.id.content);
                 if(!"logoff".equals(BuildConfig.FLAVOR)){assertNull(find(root,"ШК: 00123"));return;}
                 assertNotNull(find(root,"ШК: 00123"));assertNotNull(find(root,"Костюм"));assertNotNull(find(root,"Размер: XL / 50"));
                 assertNotNull(find(root,"Количество: 5 · упаковано 1 из 5 · осталось 4"));assertNull(find(root,"ШК: 00999"));
-                find(root,"Москва · упаковано 0 из 2").performClick();root=a.findViewById(android.R.id.content);
+                ShadowAlertDialog.getLatestAlertDialog().dismiss();find(a.findViewById(android.R.id.content),"Москва · упаковано 0 из 2").performClick();root=ShadowAlertDialog.getLatestAlertDialog().getWindow().getDecorView();
                 assertNull(find(root,"ШК: 00123"));assertNotNull(find(root,"ШК: 00999"));assertNotNull(find(root,"Размер: —"));
-                find(root,"Краснодар · упаковано 1 из 5").performClick();
+                ShadowAlertDialog.getLatestAlertDialog().dismiss();find(a.findViewById(android.R.id.content),"Краснодар · упаковано 1 из 5").performClick();
                 p.directions.get(0).packed=2;
                 // Decode a new response just as Retrofit does, without changing any stock.
                 p.directions=new com.squareup.moshi.Moshi.Builder().build().<List<TsdFboPlan.Direction>>adapter(com.squareup.moshi.Types.newParameterizedType(List.class,TsdFboPlan.Direction.class)).fromJson("[{\"name\":\"Краснодар\",\"needed\":5,\"packed\":2,\"items\":[{\"skuId\":\"sku1\",\"barcode\":\"00123\",\"quantity\":5,\"packed\":2}]}]");
-                find(a.findViewById(android.R.id.content),"Обновить").performClick();waitIdle(screen);
-                assertNotNull(find(a.findViewById(android.R.id.content),"Количество: 5 · упаковано 2 из 5 · осталось 3"));assertEquals(0,writes.get());
+                ShadowAlertDialog.getLatestAlertDialog().dismiss();find(a.findViewById(android.R.id.content),"Обновить").performClick();waitIdle(screen);
+                find(a.findViewById(android.R.id.content),"Краснодар · упаковано 2 из 5").performClick();
+                assertNotNull(find(ShadowAlertDialog.getLatestAlertDialog().getWindow().getDecorView(),"Количество: 5 · упаковано 2 из 5 · осталось 3"));assertEquals(0,writes.get());
             }finally{screen.close();}
         }
     }
@@ -813,7 +861,7 @@ public class FboTwoStageScreenTest {
         FboTwoStageScreen s=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",packing,()->{},move,feedback);
         java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("busy");field.setAccessible(true);
         for(int i=0;i<200;i++){Shadows.shadowOf(Looper.getMainLooper()).idle();if(!field.getBoolean(s)){
- if(packing&&!"OZON".equals(p.marketplace)&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(FboScanState.screenPhase(p,true)))find(a.findViewById(android.R.id.content),p.wholeBoxes.isEmpty()?"Собрать новые короба":"Отсканировать целые короба").performClick();
+ if(packing&&!"OZON".equals(p.marketplace)&&!"LAMODA".equals(p.marketplace)&&"logoff".equals(BuildConfig.FLAVOR)&&"PACKING".equals(FboScanState.screenPhase(p,true)))find(a.findViewById(android.R.id.content),p.wholeBoxes.isEmpty()?"Собрать новые короба":"Отсканировать целые короба").performClick();
  if(!packing&&"PICKING".equals(p.phase))FboPickingModeTest.choose(a,!p.route.isEmpty()&&FboPickingRoute.whole(p,p.route.get(0)));
  return s;}Thread.sleep(10);}
         fail("Plan did not load");return s;
@@ -841,12 +889,13 @@ public class FboTwoStageScreenTest {
     @Test public void ozonTopUpReopensThenUsesNormalPacking() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
         try(var controller=Robolectric.buildActivity(Activity.class).setup()){
-            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.marketplace="OZON";p.reopenPackingBoxSupported=true;
+            Activity a=controller.get();TsdFboPlan p=plan("PACKING");p.marketplace="OZON";p.reopenPackingBoxSupported=true;p.packingByProductSupported=true;
+            TsdFboPlan.PackingSuggestion suggestion=new TsdFboPlan.PackingSuggestion();suggestion.skuId="sku";suggestion.direction="Москва";suggestion.targetBoxCode="FFL_CLOSED";p.packingSuggestions=new ArrayList<>();p.packingSuggestions.add(suggestion);
             p.directions=new ArrayList<>();TsdFboPlan.Direction direction=new TsdFboPlan.Direction();direction.name="Москва";direction.needed=2;direction.packed=1;
             TsdFboPlan.Line line=new TsdFboPlan.Line();line.skuId="sku";line.barcode="123";line.needed=2;line.picked=2;line.packed=1;p.lines.add(line);
             direction.items=new ArrayList<>();
             TsdFboPlan.DirectionItem item=new TsdFboPlan.DirectionItem();item.skuId="sku";item.barcode="123";item.quantity=2;item.packed=1;direction.items.add(item);p.directions.add(direction);
-            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="CLOSED";box.direction="Москва";box.closed=true;box.quantity=1;p.boxes.add(box);
+            TsdFboPlan.Box box=new TsdFboPlan.Box();box.code="FFL_CLOSED";box.direction="Москва";box.closed=true;box.quantity=1;p.boxes.add(box);
             java.util.List<Map<String,String>> calls=new ArrayList<>();
             WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->{
                 if(m.getName().equals("actFbo")){
@@ -859,9 +908,9 @@ public class FboTwoStageScreenTest {
             try{
                 waitIdle(screen);find(a.findViewById(android.R.id.content),"Добавить в закрытый короб").performClick();
                 org.robolectric.shadows.ShadowAlertDialog.getLatestAlertDialog().getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick();waitIdle(screen);
-                assertEquals(1,calls.size());assertEquals("REOPEN_BOX",calls.get(0).get("action"));assertEquals("CLOSED",calls.get(0).get("targetBoxCode"));assertEquals("Москва",calls.get(0).get("direction"));
-                screen.scannerField().setText("123");screen.submit();waitIdle(screen);
-                assertEquals(2,calls.size());assertEquals("PACK_UNIT",calls.get(1).get("action"));assertEquals("CLOSED",calls.get(1).get("targetBoxCode"));assertEquals("Москва",calls.get(1).get("direction"));
+                assertEquals(1,calls.size());assertEquals("REOPEN_BOX",calls.get(0).get("action"));assertEquals("FFL_CLOSED",calls.get(0).get("targetBoxCode"));assertEquals("Москва",calls.get(0).get("direction"));
+                screen.scannerField().setText("123");screen.submit();assertEquals(1,calls.size());screen.scannerField().setText("FFL_CLOSED");screen.submit();waitIdle(screen);
+                assertEquals(2,calls.size());assertEquals("PACK_PRODUCT",calls.get(1).get("action"));assertEquals("FFL_CLOSED",calls.get(1).get("targetBoxCode"));assertEquals("Москва",calls.get(1).get("direction"));
             }finally{screen.close();}
         }
     }

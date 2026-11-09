@@ -93,6 +93,16 @@ final class FboTwoStageScreen {
     private boolean lamoda(){return plan!=null&&"LAMODA".equals(plan.marketplace);}
     private boolean directed(){return ozon()||lamoda();}
     private boolean productAvailable(){return packing&&directed()&&"logoff".equals(BuildConfig.FLAVOR)&&plan.packingByProductSupported;}
+    // FIX: only our Ozon packing uses the product-first flow; other marketplaces retain their modes.
+    private boolean productOnly(){return packing&&ozon()&&"logoff".equals(BuildConfig.FLAVOR);}
+    private void resumeProductOnly(){
+        if(!productOnly()||!"PACKING".equals(screenPhase())||state.productMode||state.pending()!=null)return;
+        // Keep the saved box, undo identity and pending commands. A saved barcode still needs a box scan.
+        state.productMode=true;
+        state.productReady=!state.productKiz.isEmpty();
+        if(!state.barcode.isEmpty()&&plan.lines!=null)for(TsdFboPlan.Line line:plan.lines)
+            if(FboScanState.matches(plan,line,state.barcode)&&!line.requiresKiz)state.productReady=true;
+    }
     private boolean productActive(){return productAvailable()&&state.productMode&&"PACKING".equals(screenPhase());}
     private TsdFboPlan.PackingSuggestion productSuggestion(){
         if(plan.packingSuggestions==null||plan.lines==null)return null;
@@ -339,10 +349,17 @@ final class FboTwoStageScreen {
     }
 
     // FIX: show only the selected destination; no additional stock requests or local counting.
-    private void directionContents(LinearLayout root) {
+    private void directionContents(LinearLayout root) {directionContents(root,state.direction);}
+    // FIX: inspect any destination without selecting it for packing or changing the scanned product.
+    private void showDirectionContents(String name){
+        LinearLayout content=new LinearLayout(activity);content.setOrientation(LinearLayout.VERTICAL);content.setPadding(24,16,24,16);
+        directionContents(content,name);ScrollView scroll=new ScrollView(activity);scroll.addView(content);
+        new AlertDialog.Builder(activity).setTitle("Состав направления").setView(scroll).setPositiveButton("Закрыть",null).show();
+    }
+    private void directionContents(LinearLayout root,String direction) {
         if(!"logoff".equals(BuildConfig.FLAVOR)||!packing||!"PACKING".equals(screenPhase()))return;
         for(TsdFboPlan.Direction d:plan.directions) {
-            if(!d.name.equals(state.direction))continue;
+            if(!d.name.equals(direction))continue;
             text(root,"Состав направления · "+d.name+" · упаковано "+d.packed+" из "+d.needed);
             if(d.items==null){text(root,"Состав направления недоступен. Обновите заявку.");return;}
             for(TsdFboPlan.DirectionItem item:d.items) {
@@ -367,6 +384,7 @@ final class FboTwoStageScreen {
             state.productMode=false;state.productReady=false;state.productKiz="";
             state.barcode="";state.target="";state.direction="";
         }
+        resumeProductOnly();
         if(productActive()&&state.pending()==null){TsdFboPlan.PackingSuggestion suggestion=productSuggestion();if(suggestion!=null)state.direction=suggestion.direction;}
         if(pickingChoices())prefs.edit().putString(pendingKey+":picking-mode",pickingMode.name()).commit();
         prefs.edit().putString(pendingKey+":position",new JSONObject(state.checkpoint()).toString()).commit();
@@ -382,21 +400,22 @@ final class FboTwoStageScreen {
             text(root,"Отобрано "+plan.picked+" из "+plan.needed+" · Упаковано "+plan.packed+" из "+plan.needed);
             text(root,"Проверено коробов "+FboFeedback.confirmed(plan)+" из "+plan.boxes.size());
             if(directed()&&plan.directions!=null){
-                if(productAvailable()&&"PACKING".equals(screenPhase())){
+                if(!productOnly()&&productAvailable()&&"PACKING".equals(screenPhase())){
                     button(root,"По направлению",ready()&&state.barcode.isEmpty()&&state.productMode,()->chooseProductMode(false));
                     button(root,"По товару",ready()&&state.barcode.isEmpty()&&!state.productMode,()->chooseProductMode(true));
                 }
                 text(root,"Одна сборка · "+plan.directions.size()+" направлений");
                 for(TsdFboPlan.Direction d:plan.directions){
-                    if(productActive()&&!d.name.equals(state.direction))continue;
+                    if(productActive()&&!productOnly()&&!d.name.equals(state.direction))continue;
                     String label=d.name+" · упаковано "+d.packed+" из "+d.needed;
-                    if("PACKING".equals(screenPhase())&&state.target.isEmpty()&&!productActive())button(root,label,ready(),()->{state.direction=d.name;render();});
+                    if(productOnly()&&"PACKING".equals(screenPhase()))button(root,label,ready(),()->showDirectionContents(d.name));
+                    else if("PACKING".equals(screenPhase())&&state.target.isEmpty()&&!productActive())button(root,label,ready(),()->{state.direction=d.name;render();});
                     else text(root,label);
                 }
                 text(root,"Направление короба: "+state.direction);
                 if(packing&&state.productMode&&!productAvailable()&&"logoff".equals(BuildConfig.FLAVOR)){
                     text(root,"Упаковка по товару сейчас недоступна. Сохранённый товар не вложен.");
-                    button(root,"Отложить товар и вернуться к направлениям",ready(),()->{state.barcode="";state.productKiz="";state.productReady=false;chooseProductMode(false);});
+                    if(!productOnly())button(root,"Отложить товар и вернуться к направлениям",ready(),()->{state.barcode="";state.productKiz="";state.productReady=false;chooseProductMode(false);});
                 }
                 // FIX: explicit Ozon top-up keeps ordinary barcode/KIZ packing and destination checks.
                 if(packing&&"logoff".equals(BuildConfig.FLAVOR)&&plan.reopenPackingBoxSupported&&"PACKING".equals(screenPhase())&&state.target.isEmpty()&&state.barcode.isEmpty()){
@@ -413,7 +432,7 @@ final class FboTwoStageScreen {
                         });
                     }
                 }
-                if(!productActive())directionContents(root);
+                if(!productOnly()&&!productActive())directionContents(root);
             }
             if(plan.parallelPackingSupported)text(root,"\u041e\u0436\u0438\u0434\u0430\u0435\u0442 \u0443\u043f\u0430\u043a\u043e\u0432\u043a\u0438: "+Math.max(0,plan.picked-plan.packed));
             if(packingChoices()&&("PACKING".equals(plan.phase)||"PICKING".equals(plan.phase)))wholeCartonProgress(root);
