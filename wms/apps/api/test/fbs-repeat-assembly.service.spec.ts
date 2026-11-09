@@ -62,6 +62,23 @@ describe('repeat assembly service safety', () => {
     const dto = { clientId: 'client', orders: tasks.map(task => ({ id: task.orderId, connectionId: 'wb', assemblyId: task.id })) };
     return { service, db, tasks, links, source, balances, connections, scopes, dto };
   }
+  // TEST: cancelled PVZ replacement keeps actual WB state and immutable shipment proof.
+  it.each([false,true])('creates a scoped PVZ replacement preserving cancellation (shortage=%s)',async shortage=>{
+    vi.stubEnv('WMS_FBS_ORIGINAL_STICKER_ENABLED','true');vi.stubEnv('WMS_FBS_PVZ_LOSS_SETTLEMENT_ENABLED','true');
+    const f=fixture();if(shortage)f.db.stockBalance.findMany.mockResolvedValue([]);Object.assign(f.tasks[0],{status:'RELEASED',kiz:null,stickerPartA:'5908010',stickerPartB:'9672',stickerBarcode:'*DcFy7mhD'});
+    const proof={id:'shipment',clientId:'client',connectionId:'wb',orderId:'100',assemblyId:'attempt-0',requestId:'source',warehouseId:'moscow',skuId:'sku',quantity:1,kiz:'old-kiz',shippedAt:new Date('2026-09-01'),assemblySnapshot:{kiz:'old-kiz',barcode:'4600'}};
+    const settings={create:vi.fn().mockResolvedValue({})};Object.assign(f.db,{wbOrderShipment:{findUnique:vi.fn().mockResolvedValue(proof)},systemSetting:settings});
+    Object.assign(f.connections,{readOriginalRepeatSticker:vi.fn().mockResolvedValue({partA:'5908010',partB:'9672',barcode:'*DcFy7mhD',imageBase64:'iVBORw0KGgoAAA=='})});
+    f.connections.readRepeatAssemblyWbStatuses.mockResolvedValue(new Map([['100',{supplierStatus:'complete',wbStatus:'canceled_by_client'}]]));
+    const dto={...f.dto,preserveOriginalSticker:true,pvzLossSettlement:true,settlementReason:'Урегулирование потерь ПВЗ'};
+    const preview=await f.service.preview(dto,user);await f.service.create({...dto,previewToken:preview.previewToken,confirmAdditionalStockConsumption:true},user);
+    expect(f.db.fbsTsdAssembly.updateMany.mock.calls[0][0].where.status).toBe('RELEASED');
+    expect(f.db.fbsTsdAssembly.updateMany.mock.calls[0][0].data).toMatchObject({status:shortage?'WAITING_STOCK':'RESERVED',kiz:null});
+    if(shortage){expect(preview.orders[0].boxCode).toBeNull();expect(f.db.clientRequestBoxSelection.upsert).not.toHaveBeenCalled();}
+    expect(f.db.fbsOrderRequestLink.updateMany.mock.calls[0][0].data).toMatchObject({lastCategory:'cancelled',lastSupplierStatus:'complete',lastWbStatus:'canceled_by_client'});
+    expect(settings.create.mock.calls[0][0].data.value).toMatchObject({purpose:'PVZ_LOSS_SETTLEMENT',clientId:'client',warehouseId:'moscow',orderId:'100',shipmentId:'shipment'});
+    expect(f.db.fbsAssemblyAttemptHistory.create.mock.calls[0][0].data.taskSnapshot.kiz).toBeNull();
+  });
   async function confirmed(f: ReturnType<typeof fixture>) {
     const preview = await f.service.preview(f.dto, user);
     return { ...f.dto, previewToken: preview.previewToken, confirmAdditionalStockConsumption: true as const };

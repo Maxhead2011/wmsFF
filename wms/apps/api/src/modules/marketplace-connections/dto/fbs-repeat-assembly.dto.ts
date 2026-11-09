@@ -9,6 +9,8 @@ class RepeatAssemblyOrderDto {
 }
 
 export class PreviewFbsRepeatAssemblyDto {
+  @IsOptional() @IsBoolean() pvzLossSettlement?: boolean;
+  @IsOptional() @IsString() @Length(1,1000) settlementReason?: string;
   @IsOptional() @IsBoolean() preserveOriginalSticker?: boolean;
   @IsString() @Length(1, 100) clientId!: string;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100)
@@ -23,6 +25,8 @@ export class CreateFbsRepeatAssemblyDto extends PreviewFbsRepeatAssemblyDto {
 }
 
 export class LookupOriginalRepeatDto {
+  @IsOptional() @IsBoolean() pvzLossSettlement?: boolean;
+  @IsOptional() @IsString() @Length(1,1000) settlementReason?: string;
   @IsString() @Length(1,100) clientId!: string;
   @IsString() @Length(1,100) orderId!: string;
 }

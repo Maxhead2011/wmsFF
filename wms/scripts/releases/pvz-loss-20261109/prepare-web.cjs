@@ -1,0 +1,13 @@
+// FIX: replace only the original-sticker panel inside the actual singleton host.
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{createRequire}=require('node:module');
+const ts=require('../../../node_modules/typescript'),root=path.resolve(process.argv[2]),web=path.resolve('apps/web');const req=createRequire(require.resolve('vite',{paths:[web+'/node_modules']}));
+const old='assets/warehouse-fabric-host-root-20261109.js',next='assets/pvz-loss-host-root-20261109.js';
+const original=fs.readFileSync(root+'/web-base/'+old,'utf8'),ast=ts.createSourceFile('host.js',original,99,true);
+const statement=ast.statements.find(n=>ts.isVariableStatement(n)&&n.declarationList.declarations.some(d=>d.name.getText(ast)==='__OriginalSticker'));assert(statement,'original panel declaration');
+(async()=>{
+const result=await req('esbuild').build({entryPoints:[web+'/src/components/service/FbsOriginalStickerPanel.tsx'],bundle:true,write:false,format:'iife',globalName:'__OriginalSticker',minify:true,tsconfigRaw:{compilerOptions:{jsx:'react'}},jsx:'transform',jsxFactory:'React.createElement',jsxFragment:'React.Fragment',define:{'import.meta.env':'{}'},plugins:[{name:'host-react',setup(b){b.onResolve({filter:/^react$/},()=>({path:'host',namespace:'host'}));b.onLoad({filter:/.*/,namespace:'host'},()=>({contents:'export default {createElement:(...a)=>x.createElement(...a),Fragment:x.Fragment};export const useState=(...a)=>x.useState(...a),useEffect=(...a)=>x.useEffect(...a),useRef=(...a)=>x.useRef(...a);',loader:'js'}));}}]});
+const bundle=result.outputFiles[0].text;assert(!bundle.includes('ReactCurrentDispatcher'));const patched=original.slice(0,statement.getStart(ast))+bundle+original.slice(statement.end);assert.equal(ts.createSourceFile('candidate.js',patched,99,true).parseDiagnostics.length,0);
+const put=(name,text)=>{const p=root+'/web-payload/'+name;fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,text)};put(next,patched);
+const html=fs.readFileSync(root+'/web-base/index.html','utf8'),match=html.match(/<script type="importmap">(.*?)<\/script>/s),map=JSON.parse(match[1]);let count=0;for(const k of Object.keys(map.imports))if(map.imports[k]==='/'+old){map.imports[k]='/'+next;count++}assert(count);map.imports['/'+old]='/'+next;const mapped=html.replace(match[1],()=>JSON.stringify(map));assert.equal(mapped.split('src="/'+old+'"').length,2);put('index.html',mapped.replace('src="/'+old+'"','src="/'+next+'"'));
+fs.writeFileSync(root+'/web-changes.json',JSON.stringify([next,'index.html']));fs.writeFileSync(root+'/panel.js',bundle);console.log('Web2: singleton import aliases retained; one panel replaced, classic JSX');
+})().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,3 +1,4 @@
+import { isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
@@ -226,6 +227,7 @@ type FbsOrderSummary = {
   connectionId: string;
   accountName: string | null;
   marketplace: MarketplaceType;
+  pvzLossSettlementVerified?: boolean;
   category: 'active' | 'shipped' | 'cancelled' | 'archive';
   supplierStatus: string;
   wbStatus: string;
@@ -4298,7 +4300,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         connectionId: true, orderId: true, marketplace: true, lastCategory: true,
         lastSupplierStatus: true, lastWbStatus: true,
       } });
-      const terminalKeys = new Set(links.filter(isFbsTerminalQueueOrder)
+      const pvzKeys = await pvzLossOrderKeys(this.prisma, links.map(link=>({...link,requestId})));
+      const terminalKeys = new Set(links.filter(link=>isFbsTerminalQueueOrder(link) && !pvzKeys.has(pvzOrderKey({...link,requestId})))
         .map(link => selectionKey(link.connectionId, link.orderId)));
       // FIX: preserve gathered history but never send a picker to a terminal order's box.
       tasks = tasks.filter(task => task.status === 'COMPLETED' ||
@@ -5406,9 +5409,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
 
     // Completed WB orders do not belong in the TSD picker unless an
     // administrator explicitly enabled local emergency assembly.
+    const pvzKeys = await pvzLossOrderKeys(this.prisma, links);
     const activeLinks = links.filter(
       (link) =>
-        !isFbsTerminalQueueOrder(link) && (Boolean(link.request.fbsEmergencyAssemblyAt) ||
+        (!isFbsTerminalQueueOrder(link) || pvzKeys.has(pvzOrderKey(link))) && (Boolean(link.request.fbsEmergencyAssemblyAt) ||
         !link.lastCategory ||
         link.lastCategory === 'active'),
     );
@@ -5444,7 +5448,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     if (archive) {
       const archiveLinksByRequest = new Map<string, typeof links>();
       for (const link of links) {
-        if (link.lastCategory === 'cancelled') continue;
+        if (link.lastCategory === 'cancelled' && !pvzKeys.has(pvzOrderKey(link))) continue;
         const requestLinks = archiveLinksByRequest.get(link.requestId) ?? [];
         requestLinks.push(link);
         archiveLinksByRequest.set(link.requestId, requestLinks);
@@ -5626,7 +5630,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           } },
           select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true },
         }) : null;
-    const currentIsTerminal = isFbsTerminalQueueOrder(currentQueueLink);
+    const currentIsTerminal = isFbsTerminalQueueOrder(currentQueueLink) && !(current && await isPvzLossTask(this.prisma,current));
     if (current && !currentIsTerminal && !choices.has(current.requestId)) {
       const currentRequest = await this.prisma.clientRequest.findUnique({
         where: { id: current.requestId },
@@ -5650,8 +5654,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       for (const task of activeTasks) {
         const choice = choices.get(task.requestId);
         if (!choice) continue;
-        if (task.status === 'IN_PROGRESS' && !isFbsTerminalQueueOrder(links.find(link =>
-          link.requestId === task.requestId && link.connectionId === task.connectionId && link.orderId === task.orderId))) {
+        if (task.status === 'IN_PROGRESS' && (pvzKeys.has(pvzOrderKey(task)) || !isFbsTerminalQueueOrder(links.find(link =>
+          link.requestId === task.requestId && link.connectionId === task.connectionId && link.orderId === task.orderId)))) {
           choice.inProgressOrders += 1;
         }
       }
@@ -12638,7 +12642,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         'Заказ уже не является активной строкой этой FBS-заявки. Сначала обновите данные Wildberries.',
       );
     }
-    if (link.lastCategory !== 'active') {
+    if (link.lastCategory !== 'active' && !await isPvzLossTask(this.prisma, task)) {
       throw new BadRequestException(
         'Заказ уже отменён или изменён на стороне маркетплейса. Используйте решение для проблемного заказа.',
       );
@@ -15064,7 +15068,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const link = await this.prisma.fbsOrderRequestLink.findUnique({ where: {
       marketplace_connectionId_orderId: { marketplace: task.marketplace, connectionId: task.connectionId, orderId: task.orderId },
     }, select: { marketplace: true, lastCategory: true, lastSupplierStatus: true, lastWbStatus: true } });
-    if (isFbsTerminalQueueOrder(link)) throw new BadRequestException(
+    if (isFbsTerminalQueueOrder(link) && !await isPvzLossTask(this.prisma,task)) throw new BadRequestException(
       `Заказ WB №${task.orderId} не требуется собирать. Статус WB: ${link?.lastSupplierStatus}/${link?.lastWbStatus}. ` +
       'Сканы и списания сохранены. Отложите задание; решение по уже взятому товару принимает менеджер.',
     );
@@ -25050,6 +25054,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const reshipmentRun = ['true', 'read-only'].includes(process.env.WMS_FBS_RESHIPMENT_ENABLED ?? '')
         ? await tx.fbsReshipmentRun.findUnique({ where: { requestId } }) : null;
       const explicitBatch = repeatRun || reshipmentRun;
+      if (await syncPvzLossBatch(tx, requestId, [...orderByKey.values()])) {
+        return {changed:false,summary:'Довоз ПВЗ: фактические статусы WB обновлены, локальная сборка сохранена'};
+      }
       // FIX: a repeat is an explicitly selected physical batch, not a mirror
       // of every order that later appears in one of its original WB supplies.
       if (!explicitBatch && FBS_REQUEST_COMPOSITION_STATUSES.has(requestHeader.status)) {
@@ -26467,7 +26474,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           lastSkuId: requestedSkuIds.length > 0
             ? { in: requestedSkuIds }
             : { not: null },
-          lastCategory: { not: 'cancelled' },
+          ...(pvzLossEnabled() ? {} : {lastCategory: { not: 'cancelled' }}),
           request: {
             status: {
               notIn: [
@@ -26517,7 +26524,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }
 
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
-    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId) && !isFbsTerminalQueueOrder(link));
+    const pvzKeys = await pvzLossOrderKeys(this.prisma, links);
+    const relevantLinks = links.filter((link) => connectionById.has(link.connectionId) && (!isFbsTerminalQueueOrder(link) || pvzKeys.has(pvzOrderKey(link))));
     const skuIds = uniqueStrings(relevantLinks.map((link) => link.lastSkuId ?? ''));
     const skus = skuIds.length > 0
       ? await this.prisma.sku.findMany({
@@ -26555,7 +26563,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         return [];
       }
       const emergencyAssembly = Boolean(link.request.fbsEmergencyAssemblyAt);
-      const supplierStatus = emergencyAssembly ? 'confirm' : link.lastSupplierStatus || 'confirm';
+      const pvzLossSettlementVerified = pvzKeys.has(pvzOrderKey(link));
+      const supplierStatus = pvzLossSettlementVerified ? link.lastSupplierStatus || '' : emergencyAssembly ? 'confirm' : link.lastSupplierStatus || 'confirm';
       const wbStatus = link.lastWbStatus || 'waiting';
       return [{
         id: link.orderId,
@@ -26563,6 +26572,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         connectionId: link.connectionId,
         accountName: connection.accountName,
         marketplace: link.marketplace,
+        pvzLossSettlementVerified,
         category: 'active' as const,
         supplierStatus,
         wbStatus,
@@ -31881,7 +31891,7 @@ function normalizeFbsWarehouseRouteMode(
 
 function isFbsTsdAssemblyOrderEligible(order: FbsOrderSummary) {
   // FIX: emergency mode does not revive cancelled, sold or defective WB orders.
-  if (isFbsTerminalQueueOrder({ marketplace: order.marketplace, lastCategory: order.category,
+  if (!(pvzLossEnabled() && order.pvzLossSettlementVerified) && isFbsTerminalQueueOrder({ marketplace: order.marketplace, lastCategory: order.category,
     lastSupplierStatus: order.supplierStatus, lastWbStatus: order.wbStatus })) return false;
   return (
     Boolean(order.request?.fbsEmergencyAssemblyAt) ||
