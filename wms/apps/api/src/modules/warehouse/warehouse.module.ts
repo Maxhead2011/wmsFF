@@ -10,10 +10,11 @@ import { WarehouseService } from './warehouse.service';
 import { StorageLocationsController } from './storage-locations.controller';
 import { StorageLocationsService } from './storage-locations.service';
 import { ReceiptChannelsController } from './receipt-channels.controller';
+import { FabricCatalogController } from './fabric-catalog.controller';
 
 @Module({
   imports: [AuthModule, BillingModule, ClientNotificationsModule, StockModule],
-  controllers: [WarehouseController, StorageLocationsController, ReceiptChannelsController],
+  controllers: [WarehouseController, StorageLocationsController, ReceiptChannelsController, FabricCatalogController],
   providers: [
     WarehouseService,
     StorageLocationsService,

@@ -20,7 +20,7 @@ export async function fabricReservationOrders(db: any, clientId: string, orders:
     db.systemSetting.findUnique({ where: { key: prefix + clientId } })));
   if (!enabled.every(s => s?.value?.enabled === true)) return result;
   const skus = await db.sku.findMany({ where: { clientId, id: { in: [...new Set(candidates.map(o => o.product.id))] } },
-    select: { id: true, clientId: true, name: true, internalSku: true, needsChestnyZnak: true, isUnmarked: true, needsRelabel: true } });
+    select: { id: true, clientId: true, name: true, internalSku: true, marketplacePayload: true, needsChestnyZnak: true, isUnmarked: true, needsRelabel: true } });
   const eligible = new Set(skus.filter((s: any) => s.clientId === clientId && identifyFabricSku(s) &&
     !(s.needsChestnyZnak && !s.isUnmarked) && !s.needsRelabel).map((s: any) => s.id));
   for (const o of candidates) if (eligible.has(o.product.id)) result.add(`${o.connectionId.trim()}:${o.id.trim()}`);

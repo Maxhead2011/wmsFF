@@ -1,0 +1,27 @@
+'use strict';
+// TEST: actual candidate controllers and ledger on a disposable PostgreSQL database.
+const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+if(!process.env.DATABASE_URL?.includes('fabric-catalog-test-pg'))throw Error('Isolated database only');
+process.env.WMS_FBS_FABRIC_CUT_ENABLED='true';
+const{PrismaClient}=require('@prisma/client'),db=new PrismaClient();
+const{FabricCatalogController}=require('./dist/modules/warehouse/fabric-catalog.controller');
+const{FabricRollsController,fabricSku}=require('./dist/modules/warehouse/fabric-rolls');
+const{fabricMaterialAvailability}=require('./dist/modules/warehouse/fabric-fbs-availability');
+const{preserveFabricBinding}=require('./dist/modules/warehouse/fabric-catalog');
+const{ClientScopeService}=require('./dist/modules/auth/client-scope.service');
+(async()=>{const clientId=randomUUID(),warehouseId=randomUUID(),id=randomUUID();
+ await db.user.create({data:{id,email:id,name:'Synthetic admin',passwordHash:'synthetic'}});await db.client.create({data:{id:clientId,code:clientId,name:'Synthetic fabric'}});await db.warehouse.create({data:{id:warehouseId,code:warehouseId,name:'Synthetic branch'}});await db.warehouseClient.create({data:{warehouseId,clientId}});
+ const actor={id,isDemo:false,name:'Synthetic admin',roleCodes:['ADMIN'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:warehouseId,warehouseIds:[warehouseId],writableWarehouseIds:[warehouseId]};
+ const scopes=new ClientScopeService(db),catalog=new FabricCatalogController(db,scopes),rolls=new FabricRollsController(db,scopes,{});
+ const a=await catalog.save(clientId,{action:'CREATE_COLOR',material:'SATIN',name:'Пудровый',version:null},actor);assert.equal(a.result.color.name,'Пудровый');
+ const dup=await catalog.save(clientId,{action:'CREATE_COLOR',material:'SATIN',name:' ПУДРОВЫЙ ',version:a.catalog.version},actor);assert.equal(dup.result.color.id,a.result.color.id);assert.equal(dup.catalog.colors.length,1);
+ await rolls.enable(clientId,{enabled:true},actor);let state=await rolls.get(clientId,actor);const operationKey=randomUUID();state=await rolls.save(clientId,{action:'RECEIVE',material:'SATIN',color:a.result.color.id,count:1,version:state.version,operationKey},actor);assert.equal(state.groups[0].rawMeters,100);assert.equal(state.groups[0].colorName,'Пудровый');
+ const sku=await db.sku.create({data:{clientId,internalSku:'pink5',name:'Ткань пудровая 5м',marketplace:'WILDBERRIES',marketplaceOfferId:'pink5',barcodes:{create:{value:'synthetic123',isPrimary:true}}}});
+ const bound=await catalog.save(clientId,{action:'BIND_SKU',material:'SATIN',colorId:a.result.color.id,skuId:sku.id,lengthMm:5000,version:dup.catalog.version},actor);assert.equal(bound.result.binding.lengthMm,5000);
+ const saved=await db.sku.findUnique({where:{id:sku.id},include:{barcodes:true}});assert.equal(fabricSku(saved).meters,5);
+ const ledger=(await db.systemSetting.findUnique({where:{key:'fabric.rolls.v1:'+clientId}})).value;assert.equal(fabricMaterialAvailability(ledger,saved,warehouseId,2).totalMm,10000);assert.equal(fabricMaterialAvailability(ledger,saved,'other',2).available,false);
+ await assert.rejects(catalog.save(clientId,{action:'BIND_SKU',material:'SATIN',colorId:a.result.color.id,skuId:sku.id,lengthMm:10000,version:bound.catalog.version},actor),/привязку ткани менять нельзя/);
+ const refreshed=preserveFabricBinding({offerId:'new'},saved.marketplacePayload);await db.sku.update({where:{id:sku.id},data:{marketplacePayload:refreshed}});assert.equal(fabricSku(await db.sku.findUnique({where:{id:sku.id},include:{barcodes:true}})).meters,5);
+ await assert.rejects(catalog.get(clientId,{...actor,clientScopeMode:'ASSIGNED',clientIds:[],writableClientIds:[],permissionCodes:['stock:read']}));
+ console.log('PASS isolated PostgreSQL: color, deduplication, receipt, binding, exact metres, immutable mapping, refresh, scope.');
+})().finally(()=>db.$disconnect()).catch(e=>{console.error(e);process.exitCode=1});

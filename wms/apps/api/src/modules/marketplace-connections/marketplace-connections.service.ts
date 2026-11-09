@@ -1,6 +1,7 @@
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
+import { preserveFabricBinding } from '../warehouse/fabric-catalog';
 import { readWbSupplyLabels, buildWbSupplyLabelsPdf } from './wb-supply-label';
 import { fabricPairedLabels } from './fbs-paired-labels';
 import { wbLabelOrders } from './wb-label-orders';
@@ -29419,6 +29420,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       existing?.volumeSource === VolumeSource.MANUAL && Number(existing.volumeLiters) > 0;
     const data = {...marketplaceSkuData(clientId, product, preserveManualVolume),
       ...await clientReceiptMarking(this.prisma, clientId)};
+    // FIX: a product refresh must retain its explicitly configured roll consumption.
+    if (process.env.WMS_FBS_FABRIC_CUT_ENABLED === 'true') data.marketplacePayload = preserveFabricBinding(data.marketplacePayload, existing?.marketplacePayload) as Prisma.InputJsonValue;
     const sku = existing
       ? await this.prisma.sku.update({
           where: { id: existing.id },

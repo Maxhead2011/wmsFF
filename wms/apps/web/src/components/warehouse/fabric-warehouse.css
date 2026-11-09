@@ -1,0 +1,15 @@
+.fabric-warehouse { font-family: inherit; color: var(--text, #263747); }
+.fabric-warehouse > h2 { margin-top: 0; }
+.fabric-warehouse label { display: inline-grid; gap: 6px; min-width: 180px; max-width: 100%; margin: 8px 12px 8px 0; font-weight: 600; }
+.fabric-warehouse input, .fabric-warehouse select, .fabric-warehouse textarea { box-sizing: border-box; width: 100%; min-height: 42px; padding: 9px 12px; border: 1px solid var(--line, #ced8e2); border-radius: 9px; background: var(--surface, #fff); color: inherit; font: inherit; }
+.fabric-warehouse textarea { min-height: 90px; }
+.fabric-warehouse button { min-height: 42px; padding: 9px 16px; border: 1px solid var(--line, #ced8e2); border-radius: 9px; background: var(--surface, #fff); color: inherit; font: inherit; font-weight: 600; cursor: pointer; }
+.fabric-warehouse form { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; padding: 14px 0; }
+.fabric-warehouse form > button { margin-bottom: 8px; background: var(--accent, #2855d9); color: #fff; }
+.fabric-warehouse button:disabled { opacity: .55; cursor: default; }
+.fabric-warehouse > .warehouse-topic-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 18px 0; }
+.fabric-warehouse .warehouse-topic-grid > article { padding: 16px; border: 1px solid var(--line, #dce3ea); border-radius: 12px; background: var(--surface, #fff); }
+.fabric-warehouse summary { cursor: pointer; font-weight: 600; padding: 12px 0; }
+.fabric-warehouse [role=alert] { padding: 12px; background: #fff0f1; color: #a32635; border-radius: 8px; }
+.fabric-warehouse [role=status] { padding: 12px; background: #eef8f2; color: #256342; border-radius: 8px; }
+@media (max-width: 640px) { .fabric-warehouse form, .fabric-warehouse label { display: grid; width: 100%; margin-right: 0; } }
