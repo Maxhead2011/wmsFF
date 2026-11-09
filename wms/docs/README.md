@@ -1,3 +1,5 @@
+Published PR945 (2026-11-09): Warehouse fabrics workspace, client/material color creation before SKU mapping, and immutable exact-length bindings to existing marketplace-linked WMS SKUs. Current printing and fabric auto assembly retained. Exact API9/web4; all API/web hashes, environment and other containers verified. API4643/web616 passed; dedicated database suites excluded. Isolated PostgreSQL receipt/binding/metre workflow, full Nest startup, public startup/reload and synthetic fabric workflow passed. Controls24 and request header/disclosures12 passed before/after. Live Bushkova catalog/roll reads passed without business writes. No schema changes; physical TSD/printer untested. Baseline `2026-11-09-warehouse-fabric`; sourceParityVerified=false. [Proof](releases/warehouse-fabric-20261109.json).
+
 ## Подготовлено: ткани в складе, новые цвета и привязки
 
 Ветка `feature/warehouse-fabric-colors`; не опубликовано. [Описание и проверки](warehouse-fabric-catalog.md). Пункт «Склад → Ткани: хранение и учёт», новый цвет до привязки SKU, точный метраж отреза и сохранение привязки при синхронизации. Кандидат только для нашей WMS; production и проданная WMS не изменены.
