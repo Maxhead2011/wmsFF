@@ -26,11 +26,12 @@ if mode=='stage':
   tag='wms-local-'+service+':fbs-reserve-settings-20261109'
   docker('build','--network','none','-q','-t',tag,'-f',str(R/('Dockerfile.'+service)),str(R));new=docker('image','inspect',tag,'--format','{{.Id}}');actual=hashes(new,service)
   expected=set(json.loads((R/(service+'-changes.json')).read_text()));changed={n for n in actual if before[service].get(n)!=actual[n]}
-  assert set(before[service])<=set(actual) and changed==expected and len(changed)==(1 if service=='api' else 3),(service,changed,expected)
+  assert set(before[service])<=set(actual) and changed==expected and len(changed)==(2 if service=='api' else 3),(service,changed,expected)
   result['images'][service]=new;result['changes'][service]={n:actual[n]for n in changed}
  docker('run','--rm','--network','none','-w','/app/apps/api','--entrypoint','node',result['images']['api'],'-e',"require('./dist/modules/marketplace-connections/marketplace-connections.module');console.log('Module load OK')")
  docker('run','--rm','--network','none','-v',str(R/'runtime.test.cjs')+':/tmp/runtime.test.cjs:ro','--entrypoint','node',result['images']['api'],'/tmp/runtime.test.cjs','/app/apps/api/dist/modules/marketplace-connections/marketplace-connections.service.js')
- (R/'stage.json').write_text(json.dumps(result));print('Stage PASS: exact API1/web3, module loading, all other files retained')
+ docker('run','--rm','--network','none','-v',str(R/'write-rule.test.cjs')+':/tmp/write-rule.test.cjs:ro','--entrypoint','node',result['images']['api'],'/tmp/write-rule.test.cjs','/app/apps/api/dist/modules/marketplace-connections/marketplace-stock-control.service.js')
+ (R/'stage.json').write_text(json.dumps(result));print('Stage PASS: exact API2/web3, module loading, all other files retained')
 elif mode=='publish':
  locks=[]
  for n in ['/run/logoff-wms-release.lock','/opt/logoff-wms/.release.lock','/run/logoff-wms-web-release.lock']:
