@@ -11,3 +11,5 @@ Regression: Sofia standard-audio test and receipt PUT test both failed against o
 Publication: APK-only through PR to feature/la_panthera, two package identities and the published259 signing certificate. Immutable download files, metadata channels and default original-package alias update together with rollback and unchanged-container verification. Physical audio/scanner check remains required after installation.
 
 Validation completed: LOGOFF352 passed; ffullhab/platform each342 passed,8 skipped,2 previously documented receipt failures. API4660 passed/9 skipped (dedicated DB integration excluded), web622 passed/2 skipped. Both signed package manifests/certificates and actual APK receipt helper payload verified.
+
+Published via PR966 after successful CI. Both active-VM update channels now advertise260; public APK hashes and original-package download alias verified. API/web and other container identities unchanged.
