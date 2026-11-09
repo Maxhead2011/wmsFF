@@ -85,7 +85,8 @@ describe('AdministrationInternalApiService', () => {
     // TEST: suspicious receipt review adds one independently gated group.
     // TEST: Lamoda preparation is registered without being advertised as a shipping connector.
     // TEST: FBY adds one independently gated group with ten declared routes.
-    expect(INTERNAL_API_DEFINITIONS).toHaveLength(37);
+    // TEST: fabric colors and SKU bindings add one independently gated group.
+    expect(INTERNAL_API_DEFINITIONS).toHaveLength(38);
     expect(INTERNAL_API_DEFINITIONS.find(d => d.id === 'yandex-fby')?.routeCount).toBe(10);
   });
 

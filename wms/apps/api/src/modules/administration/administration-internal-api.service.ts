@@ -25,6 +25,13 @@ export type InternalApiDefinition = {
 // ADDED: Explicit registry documents every controller group loaded by AppModule.
 // Keeping it declarative avoids a global interceptor and therefore does not touch normal API traffic.
 export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object.freeze([
+  // FIX: expose the two gated catalog routes in the maintained route inventory.
+  {
+    id: 'fabric-catalog', name: 'Ткани — цвета и привязки', prefixes: ['/warehouse/fabric-catalog/:clientId'], routeCount: 2,
+    description: 'Каталог цветов ткани клиента и привязка карточки маркетплейса к длине отреза.',
+    logic: ['Проверяются клиент, филиал и права записи.', 'Цвет можно создать до привязки товара.', 'Изменение существующей привязки материала и метража запрещено.'],
+    dependencies: ['Основная БД', 'WMS_FBS_FABRIC_CUT_ENABLED'],
+  },
   // FIX: keep the internal route inventory complete for the opt-in FBY module.
   {
     id: 'yandex-fby', name: 'Яндекс Маркет FBY', prefixes: ['/yandex-fby'], routeCount: 10,
