@@ -1,0 +1,81 @@
+{
+  "release": "bushkova-cut-length-20261109",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/964",
+  "sourceCommit": "f804718eeb067eb8f5b35811f604f3c3560ea5b7",
+  "mergeCommit": "36d2b168ccf0280f04d9e7cd79a55374a6cf6d15",
+  "publishedAt": "2026-11-09T16:53:32Z",
+  "target": "our-wms-home-server",
+  "images": {
+    "api": "sha256:8bd422fc7382a16bb073dd2f9fbf2ca96544e3a8f53e596c8f704844ed5a2a9b",
+    "web": "sha256:ad43bdb5be7bd7c30469cd83d4498ac98985615ee9b356f51e3986a1f92b5388"
+  },
+  "runtimeBaseline": {
+    "directory": "/opt/wms-restore/releases/bushkova-cut-length-20261109/published-baseline",
+    "manifestSha256": "a1df53fd5c1be0a444a6a18eb4da3c9653ad2edafba15bd1ddb95c3553ccb0f3",
+    "apiArchiveSha256": "1797a28a87f8c83d55af3cb726556ca6d7e5efbb79a5a7f5a59b50dd37b22f72",
+    "webManifestSha256": "1c8c8e123c588721e9f4a42790c326360312e3158a4b7ce225650036824051c4"
+  },
+  "sourceParityVerified": false,
+  "apiChangedFiles": {
+    "modules/billing/bushkova-cut-tariff.js": "bdc923d5aeed89a7ef78f6d45f826698384f12937fdf39a36634841ef63be060",
+    "modules/marketplace-connections/marketplace-connections.service.js": "e288afc6d2166aa4b12c41e83c7e5048b282f87af14c47e2920d1f45b52d1c02"
+  },
+  "webChangedFiles": {},
+  "behavior": {
+    "clientId": "1757a389-c0d4-49b5-9347-2bde0c549260",
+    "exactSavedRulesFirst": true,
+    "fallbackMeters": [
+      1,
+      3,
+      5,
+      10,
+      20,
+      30,
+      50
+    ],
+    "input": "product name or cut article suffix",
+    "dimensions": "length first; explicit width is excluded",
+    "unknownOrConflictingLength": "no inferred charge",
+    "otherClientsUnchanged": true,
+    "soldWmsUpdated": false,
+    "existingFinancialDataUnchanged": true
+  },
+  "checks": {
+    "apiPassed": 4341,
+    "apiSkipped": 156,
+    "webPassed": 591,
+    "webSkipped": 2,
+    "newRegressionTests": 20,
+    "excludedDedicatedIntegration": "kiz-duplicate.integration.spec.ts",
+    "apiBuild": "passed",
+    "apiTypecheck": "passed",
+    "candidateExactDeltaFiles": 2,
+    "isolatedCandidate": "passed",
+    "publishedRuntime": {
+      "readOnly": true,
+      "existingShipmentGroupsUnchanged": 88,
+      "existingUnitsUnchanged": 167,
+      "newArticlesAndBarcodesMatched": 84,
+      "otherClientExamplesUnchanged": 84,
+      "dimensionCases": 7,
+      "missingLengthUnpriced": true,
+      "financialPreserved": true,
+      "financialSha256": "ca886d0deeb59f7de85c36cbf2a4417cb1c49e5462bd73eaa3f8fd4234c8bf55",
+      "publicLinkedServices": 7,
+      "fbsUnitPriceRub": 45,
+      "publicApi": "passed",
+      "health": "ok"
+    },
+    "environmentPreserved": true,
+    "mountsPreserved": true,
+    "networksPreserved": true,
+    "otherContainersPreserved": true
+  },
+  "rollback": {
+    "apiImage": "sha256:f85762c0b6fea9a3bc4e20cab57a9c4350f9ed8cc37e8c108cc023fe8934cd13",
+    "apiTag": "wms-bushkova-cut-length-api:before-964-20261109",
+    "composeBackup": "/opt/wms-restore/releases/bushkova-cut-length-20261109/compose-before.json",
+    "automaticRollbackExercised": true,
+    "initialAttemptAudit": "/opt/wms-restore/releases/bushkova-cut-length-20261109/rollback-initial-attempt.json"
+  }
+}
