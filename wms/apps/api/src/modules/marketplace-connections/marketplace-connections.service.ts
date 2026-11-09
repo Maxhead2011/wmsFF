@@ -1,4 +1,4 @@
-import { isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
+import { isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
@@ -5687,7 +5687,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: a completed request disappears from the fixed five, but a sixth cannot
     // enter until every member has been picked. SystemSetting keeps this stable
     // across TSD devices and API restarts; other clients remain unrestricted.
-    const lukinRequests = requests.filter((choice) => choice.client.id === LUKIN_FBS_BATCH_CLIENT_ID);
+    const pvzRequestIds = new Set(activeLinks.filter(link=>pvzKeys.has(pvzOrderKey(link))).map(link=>link.requestId));
+    const lukinRequests = requests.filter((choice) => choice.client.id === LUKIN_FBS_BATCH_CLIENT_ID && !pvzRequestIds.has(choice.requestId));
     if (lukinRequests.length > 0 && lukinBatchApplies(user.roleCodes)) {
       const batch = await this.prisma.$transaction(async (tx) => {
         // FIX: simultaneous TSD refreshes cannot overwrite one another's batch.
@@ -5703,7 +5704,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         }
         return selection;
       });
-      const visible = new Set(batch.visible.map((choice) => choice.requestId));
+      const visible = new Set([...batch.visible.map((choice) => choice.requestId), ...pvzRequestIds]);
       if (currentHasScans && current?.clientId === LUKIN_FBS_BATCH_CLIENT_ID) visible.add(current.requestId);
       requests = requests.filter((choice) => choice.client.id !== LUKIN_FBS_BATCH_CLIENT_ID || visible.has(choice.requestId));
     }
@@ -5880,7 +5881,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       if (FBS_REQUEST_CLOSED_STATUSES.has(selectedRequest.status)) {
         throw new BadRequestException('Эта FBS-заявка уже закрыта. Обновите список заявок на ТСД.');
       }
-      if (selectedRequest.clientId === LUKIN_FBS_BATCH_CLIENT_ID && lukinBatchApplies(user.roleCodes)) {
+      if (selectedRequest.clientId === LUKIN_FBS_BATCH_CLIENT_ID && lukinBatchApplies(user.roleCodes) && !await isPvzLossRequest(this.prisma, selectedRequestId, selectedRequest.clientId)) {
         // FIX: old TSD versions cannot bypass a saved batch by asking directly
         // for a hidden request. Do not recalculate the whole queue here.
         const setting = await this.prisma.systemSetting.findUnique({ where: { key: LUKIN_FBS_BATCH_SETTING_KEY } });

@@ -32,3 +32,5 @@ Source/runtime parity=false: выпуск меняет только провер
 API4660/web622 passed; 9/2 skipped, dedicated DB integration suites excluded. Отдельный PostgreSQL-сценарий нового режима прошёл. Web TypeScript прошёл; общий API TypeScript имеет прежние ошибки сгенерированных типов Lamoda, в изменённых файлах ошибок нет.
 
 Физический отбор новых единиц выполняют сотрудники. Создание заявок не означает, что товар уже отобран или передан.
+
+Priority follow-up: verified PVZ requests appear alongside the ordinary fixed five in the worker list; direct selection uses the same exact-purpose proof. Ordinary window membership is unchanged.
