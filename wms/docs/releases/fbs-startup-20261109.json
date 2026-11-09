@@ -1,0 +1,15 @@
+{
+  "image": "sha256:ba314572d10c5fa77b023834fa11a840814c4e0558c46d8da6115f5dcdeb9f9d",
+  "changes": {
+    "assets/inline-reserve-fbs-startup-20261109.js": "4e7368d6a3aa21828448165cc566771295044d8f715b5edf490651806d26ccb1",
+    "index.html": "c15d24205995e51fef13adf7ffe39d1291b380ae4d9c2499d647cc94bdf018d3",
+    "assets/inline-product-reserve-startup-20261109.js": "978af05617a927802ddd553f5397fb90ffb5a3d423cd202a36128672f2db9153"
+  },
+  "pr": 952,
+  "apiImage": "sha256:aa5badfb7d1731c457826163a91a790468a011e1a0024fd9168d2526fe0bd010",
+  "apiContainerUnchanged": true,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "health": true,
+  "releaseGuardPr": 953
+}
