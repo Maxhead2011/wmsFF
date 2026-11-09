@@ -22,3 +22,6 @@ const actual=bodies(compiled);for(const [name,body] of bodies(before))assert.equ
 write(helper,compiled);
 fs.writeFileSync(root+'/overlay-proof.json',JSON.stringify({apiFiles:2,inverseVerified:true,freshCheckUnderLock:true}));
 console.log('API2 guard prepared; inverse proof passed');
+
+for(const name of [file,helper]){const target=root+'/api-payload/'+name;fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(root+'/api-candidate/'+name,target);}
+fs.writeFileSync(root+'/api-changes.json',JSON.stringify([file,helper]));
