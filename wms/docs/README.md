@@ -534,3 +534,5 @@ Prepared / 2026-10-28: shared guarded removal in Lamoda FBO cards; scope reset a
 Prepared, not published: [explicit receipt corrections](receipt-linked-adjustments.md) add already-posted signed inventory corrections to receipt reporting and XLSX. Default-off flag; no second stock receipt.
 
 Prepared follow-up (2026-11-08): [saved FBS snapshots and blue fabric](fbs-fabric-reservation-display.md). Post-scope display decoration covers cold/merged saved orders; fresh physical/marking guards and client flags retained. Exact blue SKU support across availability/receipt/accounting. Source7/API4557/web605, runtime9, baseline8 and isolated boot passed; 9/2 skipped, dedicated DB suites excluded. API7/web0; sold WMS/data untouched; source parity false. PR target feature/la_panthera.
+
+Prepared LOGOFF TSD259: Ozon packing defaults to product scan, with read-only destination composition, checkpoint migration and unchanged pending command identity. Lamoda/WB/Yandex/sold behavior isolated. [Scope and checks](ozon-product-only.md).
