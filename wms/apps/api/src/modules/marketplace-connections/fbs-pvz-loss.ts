@@ -59,6 +59,16 @@ export async function isPvzLossTask(db: any, task: any) {
   return (await pvzLossOrderKeys(db, [task])).has(pvzOrderKey(task));
 }
 
+// FIX: a worker can open a proven urgent delivery outside the ordinary fixed window.
+export async function isPvzLossRequest(db: any, requestId: string, clientId: string) {
+  if (!pvzLossEnabled() || !db.systemSetting?.findMany) return false;
+  const records = await db.systemSetting.findMany({where:{key:{in:[pvzLossKey(requestId)]}}});
+  const value=records[0]?.value;
+  if (!value?.taskId) return false;
+  const task=await db.fbsTsdAssembly.findUnique({where:{id:value.taskId}});
+  return Boolean(task && task.requestId===requestId && task.clientId===clientId && await isPvzLossTask(db,task));
+}
+
 // FIX: marketplace refresh may update its actual snapshot, never cancel/auto-finish a local settlement.
 export async function syncPvzLossBatch(db: any, requestId: string, orders: readonly any[]) {
   if (!pvzLossEnabled() || !db.systemSetting?.findMany) return false;

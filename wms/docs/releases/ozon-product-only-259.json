@@ -1,0 +1,47 @@
+{
+  "status": "published",
+  "versionCode": 259,
+  "artifacts": [
+    {
+      "file": "logoff-tsd-ozon-product-259.apk",
+      "packageId": "pro.logoff.wms.tsd",
+      "versionCode": 259,
+      "sha256": "11130e73429cf32092372b51e22da643a44047308255c83d2dd2043901e7b881",
+      "size": 5977199,
+      "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da"
+    },
+    {
+      "file": "logoff-tsd-servers-ozon-product-259.apk",
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 259,
+      "sha256": "eaadf8122e596353a5c15340b3d3fe3f6206bbe12f20aed256883948aa84e84a",
+      "size": 5977199,
+      "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da"
+    }
+  ],
+  "android": {
+    "logoff": {
+      "passed": 349,
+      "failed": 0
+    },
+    "ffullhab": {
+      "passed": 339,
+      "skipped": 8,
+      "knownFailures": 2
+    },
+    "platform": {
+      "passed": 339,
+      "skipped": 8,
+      "knownFailures": 2
+    }
+  },
+  "apiPassed": 4643,
+  "webPassed": 622,
+  "physicalTerminalVerified": false,
+  "apiWebChanged": false,
+  "pullRequest": 960,
+  "mergeCommit": "1dffcac05058ceb612991c517cc5bfd4aa6ec4c3",
+  "publicHashesVerified": true,
+  "containersUnchanged": true,
+  "sourceParityVerified": false
+}
