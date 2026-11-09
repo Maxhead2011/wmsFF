@@ -1,0 +1,22 @@
+{
+  "image": "sha256:12b9c7132fd56f94a06c2a7c09f860370bc518902cbaefb528da19292585bbc8",
+  "changes": {
+    "assets/warehouse-fabric-host-root-20261109.js": "bea17786a8cdc9befd114247f8d2db1d72bedb20b3b0eb2a814af49e3380b1e6",
+    "index.html": "407e520294662f341be7dfc50c915b895baad02dc02d76fbdb7f45baf6c44eaa"
+  },
+  "pr": 949,
+  "apiImage": "sha256:aa5badfb7d1731c457826163a91a790468a011e1a0024fd9168d2526fe0bd010",
+  "apiContainerUnchanged": true,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "health": true,
+  "webTestsPassed": 619,
+  "webTestsSkipped": 2,
+  "typecheck": true,
+  "runtimeHostTests": 2,
+  "guardTests": 1,
+  "controlsBeforeAfter": 24,
+  "requestLayoutScenarios": 12,
+  "businessDataWrites": false,
+  "sourceParityVerified": false
+}
