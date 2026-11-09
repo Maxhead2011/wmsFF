@@ -1,4 +1,5 @@
 import { receiptStockIndexEnabled, readIndexedReceiptState } from './receipt-stock-index';
+import { readPvzApprovedReceiptSource } from '../marketplace-connections/fbs-pvz-loss';
 import { receiptReportEvidence } from './receipt-report-evidence';
 import { applyReceiptLinkedAdjustments } from './receipt-linked-adjustments';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
@@ -85,7 +86,9 @@ export function receiptAllows(rule: ReceiptRule | undefined, channel:'fbs'|'fbo'
 export async function receiptBlockedBoxes(db: Db, clientId: string, channel:'fbs'|'fbo', taskId?: string, identity?:{marketplace?:string;connectionId:string;orderId:string}) {
   if(!receiptChannelsEnabled())return [] as string[];
   const task=identity||(taskId?await db.fbsTsdAssembly.findUnique({where:{id:taskId},select:{marketplace:true,connectionId:true,orderId:true}}):null);
-  return [...await receiptRules(db,clientId)].filter(([,rule])=>!receiptAllows(rule,channel,task||undefined)).map(([id])=>id);
+  // FIX: generic approval and publication stay blocked; only the approved task may use its one box.
+  const approved=channel==='fbs'&&taskId?await readPvzApprovedReceiptSource(db,taskId):null;
+  return [...await receiptRules(db,clientId)].filter(([id,rule])=>!(approved?.id===id&&approved.clientId===clientId)&&!receiptAllows(rule,channel,task||undefined)).map(([id])=>id);
 }
 // FIX: protected demand is fulfilled from excluded receipts and must not also
 // reserve the ordinary stock which is still allowed for new FBS orders.
@@ -111,6 +114,9 @@ export async function receiptPublicationPolicy(db:Db,clientId:string,warehouseId
 export async function assertReceiptFbsBox(db: Db, task: {id?:string;clientId:string;boxId?:string|null;marketplace?:string;connectionId:string;orderId:string}, boxId=task.boxId) {
   if(!receiptChannelsEnabled()||!boxId)return;
   const rule=(await receiptRules(db,task.clientId,undefined,[boxId])).get(boxId);
+  // FIX: recheck the exact single-unit approval inside the physical claim transaction.
+  const approved=task.id?await readPvzApprovedReceiptSource(db,task.id):null;
+  if(approved?.id===boxId&&approved.clientId===task.clientId)return;
   if(rule?.stockAvailable===false)throw new ConflictException('Приёмка на согласовании. Сначала подтвердите доступ в остатках.');
   if(!receiptAllows(rule,'fbs',task))throw new ConflictException('Приёмка предназначена только для ФБО. Этот новый заказ ФБС нельзя отобрать из её коробов.');
 }
@@ -233,7 +239,7 @@ export async function receiptBlockedByTasks(db:Db,clientId:string,ids:string[]){
   const result=new Map<string,string[]>();if(!receiptChannelsEnabled()||!ids.length)return result;
   const rules=await receiptRules(db,clientId);if(!rules.size)return result;
   const tasks=await db.fbsTsdAssembly.findMany({where:{clientId,id:{in:ids}},select:{id:true,marketplace:true,connectionId:true,orderId:true}});
-  for(const task of tasks)result.set(task.id,[...rules].filter(([,rule])=>!receiptAllows(rule,'fbs',task)).map(([id])=>id));
+  for(const task of tasks){const approved=await readPvzApprovedReceiptSource(db,task.id);result.set(task.id,[...rules].filter(([id,rule])=>approved?.id!==id&&!receiptAllows(rule,'fbs',task)).map(([id])=>id));}
   return result;
 }
 

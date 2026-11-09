@@ -1,4 +1,4 @@
-import { isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
+import { readPvzApprovedReceiptSource, resolvePvzReceiptStockSource, isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
@@ -6059,7 +6059,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             continue;
           }
           // FIX: the one-off approved adjacent size must reach the TSD queue, not only the route preview.
-          const stockSource = await this.resolveDovoz1049TsdStockSource(existing) ?? await this.resolveFbsTsdStockSource(
+          const stockSource = await resolvePvzReceiptStockSource(this,existing) ?? await this.resolveDovoz1049TsdStockSource(existing) ?? await this.resolveFbsTsdStockSource(
             clientId,
             product,
             order.storageBoxes,
@@ -16080,6 +16080,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       };
     }
     const excludedReceiptBoxes=await receiptBlockedBoxes(this.prisma,task.clientId,'fbs',task.id);
+    // FIX: an explicitly approved source is routed by its real box, without a fictional pallet.
+    const approvedReceiptSource=await readPvzApprovedReceiptSource(this.prisma,task);
     const multiline = await handleOzonPickLines(this, task, user, 'view', {}, message);
     if (multiline) return multiline;
     // FIX: covers assignment, source switching and resuming after a lost response.
@@ -16119,7 +16121,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               boxId: { not: null, ...(excludedReceiptBoxes.length?{notIn:excludedReceiptBoxes}:{}) },
               box: {
                 status: { notIn: ['deleted', 'archived'] },
-                storagePlacement: { isNot: null },
+                OR: [{storagePlacement:{isNot:null}},...(approvedReceiptSource?[{id:approvedReceiptSource.id}]:[])],
               },
             },
             select: { boxId: true, quantity: true, box: { select: { code: true } } },

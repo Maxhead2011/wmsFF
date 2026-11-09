@@ -59,6 +59,41 @@ export async function isPvzLossTask(db: any, task: any) {
   return (await pvzLossOrderKeys(db, [task])).has(pvzOrderKey(task));
 }
 
+// FIX: an owner-approved single unit is an exception for this task, never receipt-wide approval.
+export async function readPvzApprovedReceiptSource(db: any, input: any) {
+  if (!pvzLossEnabled() || !input || !db.fbsTsdAssembly?.findUnique) return null;
+  const task = typeof input === 'string' ? await db.fbsTsdAssembly.findUnique({where:{id:input}}) : input;
+  if (!task?.id || task.itemCount !== 1 || !['RESERVED','IN_PROGRESS'].includes(task.status) ||
+      !await isPvzLossTask(db,task)) return null;
+  const records=await db.systemSetting.findMany({where:{key:{in:[pvzLossKey(task.requestId)]}}});
+  const value=records.find((r:any)=>r.key===pvzLossKey(task.requestId))?.value;
+  const approval=value?.receiptSourceApproval;
+  if (!approval || value.taskId!==task.id || approval.taskId!==task.id || approval.skuId!==task.skuId || approval.quantity!==1 ||
+      !approval.boxId || !approval.approvedByUserId || !approval.approvedAt ||
+      !Number.isFinite(Date.parse(approval.approvedAt)) || task.sourceSkuId || task.relabelRequired ||
+      (task.reservedBoxId && task.reservedBoxId!==approval.boxId) ||
+      (task.boxId && task.boxId!==approval.boxId)) return null;
+  const box=await db.box.findUnique({where:{id:approval.boxId}});
+  if (!box || box.clientId!==task.clientId || box.warehouseId!==value.warehouseId ||
+      ['deleted','archived','shipped'].includes(box.status)) return null;
+  return box;
+}
+
+// FIX: explicit source remains scannable without inventing pallet placement or touching other stock.
+export async function resolvePvzReceiptStockSource(service: any, task: any) {
+  const box=await readPvzApprovedReceiptSource(service.prisma,task);
+  if (!box) return null;
+  const [balance,reservations]=await Promise.all([
+    service.prisma.stockBalance.aggregate({where:{clientId:task.clientId,warehouseId:box.warehouseId,
+      skuId:task.skuId,boxId:box.id,status:'AVAILABLE'},_sum:{quantity:true}}),
+    service.fbsTsdReservationRows({clientId:task.clientId,skuId:task.skuId,excludeTaskId:task.id}),
+  ]);
+  const reserved=reservations.filter((r:any)=>r.boxId===box.id).reduce((n:number,r:any)=>n+r.itemCount,0);
+  if ((balance._sum.quantity||0)-reserved<1) return null;
+  return {sourceSkuId:null,sourceProductName:null,sourceArticle:null,sourceBarcodes:[],
+    storageBoxes:[{code:box.code,quantity:1,status:'AVAILABLE'}],withoutBoxQuantity:0,relabelRequired:false};
+}
+
 // FIX: a worker can open a proven urgent delivery outside the ordinary fixed window.
 export async function isPvzLossRequest(db: any, requestId: string, clientId: string) {
   if (!pvzLossEnabled() || !db.systemSetting?.findMany) return false;
