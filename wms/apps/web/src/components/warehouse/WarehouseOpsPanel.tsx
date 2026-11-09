@@ -10,6 +10,7 @@ import { GoodsArrivalPanel } from './GoodsArrivalPanel';
 import { ReceiptBatchesPanel } from './ReceiptBatchesPanel';
 import { PickWavePanel } from './PickWavePanel';
 import { WaveOverviewPanel, ourWaveOverviewEnabled } from './WaveOverviewPanel';
+import { fabricWarehouseEnabled } from './fabricWarehouseScope';
 import { BoxIntegrityPanel } from './BoxIntegrityPanel';
 import { ShipmentHistoryPanel } from './ShipmentHistoryPanel';
 import './warehouse.css';
@@ -54,7 +55,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
         </button>
       ) : null}
       {activeTopic === 'statistics' ? <OperationsStatisticsPanel session={session} /> : null}
-      {activeTopic === 'fabrics' && ourWaveOverviewEnabled(window.location.hostname) ? <FabricWarehousePanel session={session} /> : null}
+      {activeTopic === 'fabrics' && fabricWarehouseEnabled(window.location.hostname) ? <FabricWarehousePanel session={session} /> : null}
       {activeTopic === 'waves' && ourWaveOverviewEnabled(window.location.hostname) ? <WaveOverviewPanel session={session} /> : null}
 
       {activeTopic === 'online-receipts' ? <section className="warehouse-panel warehouse-panel--online-receipts" aria-label="Онлайн приемка">
@@ -151,7 +152,7 @@ export function WarehouseOpsPanel({ onOpenCatalog, session }: WarehouseOpsPanelP
 
 function WarehouseTopicPicker({ onOpen, clientView = false }: { onOpen: (topic: WarehouseTopic) => void; clientView?: boolean }) {
   const topics: Array<{ id: WarehouseTopic; eyebrow: string; title: string; description: string; icon: ReactNode }> = [
-    ...(ourWaveOverviewEnabled(window.location.hostname) ? [{ id: 'fabrics' as const, eyebrow: 'Рулоны и отрезы', title: 'Ткани: хранение и учёт', description: 'Приёмка рулонов, цвета, остатки и привязка к товарам маркетплейсов.', icon: <PackagePlus size={23} /> }] : []),
+    ...(fabricWarehouseEnabled(window.location.hostname) ? [{ id: 'fabrics' as const, eyebrow: 'Рулоны и отрезы', title: 'Ткани: хранение и учёт', description: 'Приёмка рулонов, цвета, остатки и привязка к товарам маркетплейсов.', icon: <PackagePlus size={23} /> }] : []),
     { id: 'statistics', eyebrow: 'Сроки обработки', title: 'Статистика', description: 'От заказа до передачи в доставку WB/Ozon, по клиентам, филиалам и складам.', icon: <BarChart3 size={23} /> },
     { id: 'online-receipts', eyebrow: 'ТСД и приемка', title: 'Онлайн-приёмка', description: 'Проверяйте приёмку, которую ведут сотрудники на ТСД.', icon: <PackageCheck size={23} /> },
     { id: 'arrivals', eyebrow: 'Приход и ППР', title: 'Приход товара', description: 'Создайте и ведите приход товаров на склад.', icon: <Truck size={23} /> },

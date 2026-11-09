@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {build}=require('../../../apps/web/node_modules/vite');
+const {fixFabricHostScope}=require('./host-scope.cjs');
 const root=path.resolve(process.argv[2]),old=fs.readFileSync(path.join(root,'entry.txt'),'utf8').trim(),next='/assets/warehouse-fabric-root-20261109.js';
 const read=p=>fs.readFileSync(p,'utf8'),write=(p,s)=>{fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s)};
 function once(s,a,b){assert.equal(s.split(a).length,2,a);return s.replace(a,b)}
@@ -12,6 +13,7 @@ function once(s,a,b){assert.equal(s.split(a).length,2,a);return s.replace(a,b)}
  js='import{FabricWarehousePanel as __FabricWarehousePanel}from"./warehouse-fabric-20261109.js";\n'+js;
  js=once(js,'function m5({onOpen:t,clientView=false}){const n=[','function m5({onOpen:t,clientView=false}){const n=[...(window.location.hostname==="wms.logoff.pro"?[{id:"fabrics",eyebrow:"Рулоны и отрезы",title:"Ткани: хранение и учёт",description:"Приёмка рулонов, цвета, остатки и привязка к товарам маркетплейсов.",icon:e.jsx(ki,{size:23})}]:[]),');
  js=once(js,'r==="statistics"?e.jsx(n2,{session:n}):null,','r==="statistics"?e.jsx(n2,{session:n}):null,r==="fabrics"&&window.location.hostname==="wms.logoff.pro"?e.jsx(__FabricWarehousePanel,{session:n}):null,');
+ js=fixFabricHostScope(js);
  write(path.join(root,'web-payload',next),js);
  let html=read(path.join(root,'web-base/index.html'));const match=html.match(/<script type="importmap">(.*?)<\/script>/s);const map=JSON.parse(match[1]);
  for(const key of Object.keys(map.imports))if(map.imports[key]===old)map.imports[key]=next;map.imports[old]=next;
