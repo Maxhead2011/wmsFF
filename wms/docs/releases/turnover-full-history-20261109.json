@@ -1,0 +1,96 @@
+{
+  "release": "turnover-full-history-20261109",
+  "pullRequest": "https://github.com/Maxhead2011/wmsFF/pull/956",
+  "sourceCommit": "61463ba62bdc0ff405ff72957b7f846c1748e3b7",
+  "mergeCommit": "8127a295b8f46c3525ce1edd8203dee3105b0f93",
+  "publishedAt": "2026-11-09T13:12:57Z",
+  "target": "our-wms-home-server",
+  "images": {
+    "api": "sha256:156f3d3556437d6f0d6facfee3a428e096b75616a239e5f8c61008b9980c094b",
+    "web": "sha256:ba314572d10c5fa77b023834fa11a840814c4e0558c46d8da6115f5dcdeb9f9d"
+  },
+  "runtimeBaseline": {
+    "directory": "/opt/wms-restore/releases/turnover-full-history-20261109/published-baseline",
+    "manifestSha256": "b8b70ab23f7bbc737fc812472a19e8768223ff865b8df0a71d12880cb32575ee",
+    "apiArchiveSha256": "863c6ffe7eb90bc9a238f53981a00f02e3f1956c4b095e2f4d17ebcd8e5fcf31",
+    "webManifestSha256": "98d443a9cdce73bc40bf3c81ac79a54052863040f062ee47bf0798f4b7545439"
+  },
+  "sourceParityVerified": false,
+  "apiChangedFiles": {
+    "modules/turnover/turnover.service.js": "b0e05b010ea8a412219fbf10c018f115dbaaa696f9cd89980a3482d192901d21"
+  },
+  "webChangedFiles": {},
+  "behavior": {
+    "scope": "all authorized SKUs and clients, preserving selected period, warehouse and client visibility",
+    "movementCounterLimit": null,
+    "movementDetailPreviewLimit": 250,
+    "databaseWrites": false,
+    "soldWmsUpdated": false
+  },
+  "checks": {
+    "apiPassed": 4321,
+    "apiSkipped": 156,
+    "webPassed": 591,
+    "webSkipped": 2,
+    "newRegressionTests": 4,
+    "excludedDedicatedIntegration": "kiz-duplicate.integration.spec.ts",
+    "apiBuild": "passed",
+    "apiTypecheck": "passed",
+    "exactRuntimeDelta": "one file",
+    "live": {
+      "readOnly": true,
+      "checks": [
+        {
+          "period": {},
+          "totals": {
+            "skuCount": 5,
+            "currentQuantity": 51,
+            "receivedQuantity": 352,
+            "shippedQuantity": 274,
+            "writtenOffQuantity": 27
+          },
+          "movementCount": 1345,
+          "independentFullHistory": {
+            "receivedQuantity": 352,
+            "shippedQuantity": 274,
+            "writtenOffQuantity": 27
+          },
+          "internalApi": "passed",
+          "publicHttpsApi": "passed",
+          "perSku": "passed"
+        },
+        {
+          "period": {
+            "dateFrom": "2026-11-01",
+            "dateTo": "2026-11-08"
+          },
+          "totals": {
+            "skuCount": 4,
+            "currentQuantity": 51,
+            "receivedQuantity": 0,
+            "shippedQuantity": 58,
+            "writtenOffQuantity": 0
+          },
+          "movementCount": 52,
+          "independentFullHistory": {
+            "receivedQuantity": 0,
+            "shippedQuantity": 58,
+            "writtenOffQuantity": 0
+          },
+          "internalApi": "passed",
+          "publicHttpsApi": "passed",
+          "perSku": "passed"
+        }
+      ],
+      "health": "ok"
+    },
+    "environmentPreserved": true,
+    "mountsPreserved": true,
+    "otherContainersPreserved": true
+  },
+  "rollback": {
+    "apiImage": "sha256:aa5badfb7d1731c457826163a91a790468a011e1a0024fd9168d2526fe0bd010",
+    "apiTag": "wms-turnover-full-history-api:before-956-20261109",
+    "composeBackup": "/opt/wms-restore/releases/turnover-full-history-20261109/compose-before.json"
+  }
+}
