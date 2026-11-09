@@ -5,6 +5,7 @@ R=Path(sys.argv[1]);mode=sys.argv[2];C=Path('/opt/wms-restore/compose.json')
 def docker(*args):return subprocess.check_output(['docker',*args],text=True).strip()
 def sha(b):return hashlib.sha256(b).hexdigest()
 def inspect(name,field):return docker('inspect',name,'--format','{{'+field+'}}')
+def environment():return sorted(json.loads(inspect('wms-local-web','json .Config.Env')))
 def hashes(img):
  prefix='/usr/share/nginx/html/'
  raw=docker('run','--rm','--network','none','--entrypoint','sh',img,'-c','find '+prefix+' -type f -exec sha256sum {} +')
@@ -30,11 +31,11 @@ elif mode=='publish':
  assert inspect('wms-local-web','.Image')==base['web'] and inspect('wms-local-api','.Image')==base['api'] and inspect('wms-local-api','.Id')==base['apiContainer'] and sha(C.read_bytes())==base['composeHash']
  old=C.read_bytes();(R/'compose.before.json').write_bytes(old);config=json.loads(old)
  others={n:inspect(n,'.Id')for n in docker('ps','--format','{{.Names}}').splitlines()if n!='wms-local-web'}
- env=inspect('wms-local-web','json .Config.Env')
+ env=environment()
  def start():docker('compose','-f',str(C),'up','-d','--no-deps','--no-build','--pull','never','web')
  try:
   config['services']['web']['image']=stage['image'];C.write_text(json.dumps(config,indent=2));start()
-  assert inspect('wms-local-web','.Image')==stage['image'] and inspect('wms-local-web','json .Config.Env')==env
+  assert inspect('wms-local-web','.Image')==stage['image'] and environment()==env
   assert hashes(stage['image'])=={**base['hashes'],**stage['changes']}
   assert all(inspect(n,'.Id')==v for n,v in others.items())
   docker('exec','wms-local-api','node','-e',"fetch('http://127.0.0.1:3000/api/v1/health').then(r=>{if(!r.ok)throw Error()}).catch(()=>process.exit(1))")
