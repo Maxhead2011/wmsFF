@@ -10,7 +10,16 @@ export const hasFbsAttemptHistory = () => ['true', 'read-only'].includes(process
 // FIX: restoration is read-only; never write a historical snapshot to live stock.
 export function restoreAttemptSnapshot(value: Prisma.JsonValue): HistoricalFbsAttempt {
   const snapshot = structuredClone(value) as unknown as HistoricalFbsAttempt;
-  if (!snapshot || typeof snapshot.id !== 'string' || snapshot.status !== 'COMPLETED') {
+  // FIX: PVZ legacy archives retain RELEASED truth, accepted only with exact immutable shipment proof.
+  const proof = (snapshot as unknown as {pvzShipmentEvidence?: Record<string, unknown>})?.pvzShipmentEvidence;
+  const shippedLegacy = snapshot?.status === 'RELEASED' && Boolean(snapshot.completedAt) && proof &&
+    proof.assemblyId === snapshot.id && proof.clientId === snapshot.clientId &&
+    proof.connectionId === snapshot.connectionId && proof.orderId === snapshot.orderId &&
+    proof.requestId === snapshot.requestId && proof.skuId === snapshot.skuId &&
+    proof.quantity === 1 && typeof proof.id === 'string' && typeof proof.barcode === 'string' &&
+    Boolean(proof.shippedAt) && Number.isFinite(Date.parse(String(proof.shippedAt))) &&
+    (!snapshot.requiresKiz || (typeof proof.kiz === 'string' && proof.kiz.length > 0));
+  if (!snapshot || typeof snapshot.id !== 'string' || (snapshot.status !== 'COMPLETED' && !shippedLegacy)) {
     throw new Error('Invalid completed FBS attempt snapshot');
   }
   restoreDates(snapshot as unknown as Record<string, unknown>);

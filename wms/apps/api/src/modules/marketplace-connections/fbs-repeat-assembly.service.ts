@@ -1,3 +1,4 @@
+import { assertPvzLossMode, assertPvzShipment, pvzLossEnabled, pvzLossKey } from './fbs-pvz-loss';
 import { assertOriginalStickerEnabled, assertOriginalStickerIdentity, type OriginalRepeatSticker } from './fbs-original-sticker';
 import { pendingReceiptBoxIds } from '../warehouse/receipt-channel-policy';
 import { createHash, randomUUID } from 'node:crypto';
@@ -25,11 +26,12 @@ export class FbsRepeatAssemblyService {
   ) {}
 
   capabilities(user: AuthUser) {
-    return { enabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true', originalStickerEnabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true' && process.env.WMS_FBS_ORIGINAL_STICKER_ENABLED === 'true' };
+    return { pvzLossSettlementEnabled: allowed(user) && pvzLossEnabled(), enabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true', originalStickerEnabled: allowed(user) && process.env.WMS_FBS_REPEAT_ASSEMBLY_ENABLED === 'true' && process.env.WMS_FBS_ORIGINAL_STICKER_ENABLED === 'true' };
   }
 
   private authorize(dto: PreviewFbsRepeatAssemblyDto, user: AuthUser) {
     assertRepeatAssemblyEnabled();
+    assertPvzLossMode(dto);
     if(dto.preserveOriginalSticker){assertOriginalStickerEnabled();if(dto.orders.length!==1)throw new BadRequestException('Выберите один прежний заказ.');}
     if (!allowed(user)) throw new ForbiddenException('Повторную физическую сборку создаёт администратор или владелец.');
     this.scopes.requireClientAccess(user, dto.clientId, 'write');
@@ -47,7 +49,7 @@ export class FbsRepeatAssemblyService {
     return warehouseId;
   }
 
-  async lookupOriginal(dto:{clientId:string;orderId:string},user:AuthUser) {
+  async lookupOriginal(dto:{clientId:string;orderId:string;pvzLossSettlement?:boolean;settlementReason?:string},user:AuthUser) {
     assertRepeatAssemblyEnabled();assertOriginalStickerEnabled();
     if(!allowed(user))throw new ForbiddenException('Доступно администратору и собственнику.');
     this.scopes.requireClientAccess(user,dto.clientId,'write');
@@ -55,7 +57,7 @@ export class FbsRepeatAssemblyService {
     const tasks=await this.prisma.fbsTsdAssembly.findMany({where:{clientId:dto.clientId,marketplace:'WILDBERRIES',orderId:dto.orderId.trim()},take:2});
     if(tasks.length!==1)throw new BadRequestException('Заказ не найден или найден в нескольких кабинетах клиента.');
     const task=tasks[0];
-    const selection={clientId:dto.clientId,preserveOriginalSticker:true,orders:[{id:task.orderId,connectionId:task.connectionId,assemblyId:task.id}]};
+    const selection={clientId:dto.clientId,preserveOriginalSticker:true,...(dto.pvzLossSettlement ? {pvzLossSettlement:true,settlementReason:dto.settlementReason} : {}),orders:[{id:task.orderId,connectionId:task.connectionId,assemblyId:task.id}]};
     const preview=await this.preview(selection,user);
     return {...preview,selection};
   }
@@ -84,7 +86,7 @@ export class FbsRepeatAssemblyService {
     if (dto.confirmAdditionalStockConsumption !== true) throw new BadRequestException('Подтвердите дополнительное физическое списание.');
     if (dto.orders.some(order => !order.assemblyId)) throw new BadRequestException('Сначала выполните предварительную проверку сборок.');
     const selectionFingerprint = repeatSelectionFingerprint(dto.clientId, warehouseId, dto.orders);
-    const fingerprint = dto.preserveOriginalSticker ? createHash('sha256').update('original-sticker:'+selectionFingerprint).digest('hex') : selectionFingerprint;
+    const fingerprint = dto.pvzLossSettlement ? createHash('sha256').update('pvz-loss:'+selectionFingerprint).digest('hex') : dto.preserveOriginalSticker ? createHash('sha256').update('original-sticker:'+selectionFingerprint).digest('hex') : selectionFingerprint;
     const previous = await this.existing(fingerprint);
     if (previous) return previous;
     const statuses = await this.wb(dto, user);
@@ -115,10 +117,10 @@ export class FbsRepeatAssemblyService {
         }
         const created = await tx.clientRequest.create({ data: {
           clientId: dto.clientId, warehouseId, type: 'OUTBOUND', status: 'IN_WORK', priority: 'HIGH',
-          title: `${dto.preserveOriginalSticker ? "Повтор со старым стикером" : "Повторная сборка WB"} — ${plan.rows.length} заказов`, destinationCity: 'Повторный довоз WB',
+          title: `${dto.pvzLossSettlement ? "Довоз ПВЗ" : dto.preserveOriginalSticker ? "Повтор со старым стикером" : "Повторная сборка WB"} — ${plan.rows.length} заказов`, destinationCity: 'Повторный довоз WB',
           comment: `ОТДЕЛЬНАЯ ПОВТОРНАЯ СБОРКА. Дополнительный физический расход подтверждён ${user.name}. ` +
             `Исходные заявки: ${sourceNumbers.join(', ')}. Поставки: ${sourceSupplies.join(', ')}. ` +
-            'Прежние КИЗ, печать, списания и выработка сохранены. Статусы и КИЗ в WB не изменяются.' + (dto.preserveOriginalSticker ? ' Печать прежнего стикера; новая физическая единица и новый КИЗ.' : ''),
+            (dto.pvzLossSettlement ? `ДОВОЗ ДЛЯ УРЕГУЛИРОВАНИЯ ПОТЕРЬ ПВЗ. Основание: ${dto.settlementReason!.trim()}. ` : '') + 'Прежние КИЗ, печать, списания и выработка сохранены. Статусы и КИЗ в WB не изменяются.' + (dto.preserveOriginalSticker ? ' Печать прежнего стикера; новая физическая единица и новый КИЗ.' : ''),
           createdByUserId: user.id, fbsEmergencyAssemblyAt: now,
           fbsEmergencyAssemblyByUserId: user.id, fbsEmergencyAssemblyByName: user.name,
           items: { create: [...itemGroups.values()] },
@@ -133,33 +135,34 @@ export class FbsRepeatAssemblyService {
             id: row.task.id, clientId: row.task.clientId, requestId: row.task.requestId,
             orderId: row.task.orderId, workerUserId: row.task.workerUserId,
             completedAt: row.task.completedAt!, successorId, repeatRunId: runId,
-            taskSnapshot: jsonSnapshot(row.task), kiz: row.task.kiz, linkSnapshot: jsonSnapshot(row.link), archivedByUserId: user.id,
+            taskSnapshot: jsonSnapshot({...row.task,...(row.shipment ? {pvzShipmentEvidence:{id:row.shipment.id,assemblyId:row.shipment.assemblyId,clientId:row.shipment.clientId,connectionId:row.shipment.connectionId,orderId:row.shipment.orderId,requestId:row.shipment.requestId,skuId:row.shipment.skuId,quantity:row.shipment.quantity,kiz:row.shipment.kiz,barcode:(row.shipment.assemblySnapshot as any).barcode,shippedAt:row.shipment.shippedAt}} : {})}), kiz: row.task.kiz, linkSnapshot: jsonSnapshot(row.link), archivedByUserId: user.id,
           } });
           const allocation = row.allocation;
           const source = row.source;
           const relabel = source.id !== row.task.skuId;
           const changed = await tx.fbsTsdAssembly.updateMany({
-            where: { id: row.task.id, updatedAt: row.task.updatedAt, status: 'COMPLETED', requestId: row.task.requestId },
+            where: { id: row.task.id, updatedAt: row.task.updatedAt, status: row.task.status, requestId: row.task.requestId },
             data: {
               ...createRepeatAttemptData(row.task, successorId, created.id, item.id, now),
               ...(row.originalSticker ? {marketplaceLabelBase64:row.originalSticker.imageBase64,marketplaceLabelContentType:'image/png; purpose=original-repeat'} : {}),
-              status: 'RESERVED', reservedBoxId: allocation.boxId, reservedBoxCode: allocation.box!.code, reservedAt: now,
+              status: allocation ? 'RESERVED' : 'WAITING_STOCK', reservedBoxId: allocation?.boxId ?? null, reservedBoxCode: allocation?.box?.code ?? null, reservedAt: allocation ? now : null,
               sourceSkuId: relabel ? source.id : null, sourceProductName: relabel ? source.name : null,
               sourceArticle: relabel ? source.article : null,
               sourceBarcodes: relabel ? source.barcodes.map(barcode => barcode.value) : [],
               relabelRequired: relabel,
-              storageBoxes: [{ code: allocation.box!.code, quantity: 1 }],
+              storageBoxes: allocation ? [{ code: allocation.box!.code, quantity: 1 }] : [],
             },
           });
           if (changed.count !== 1) throw new ConflictException(`Сборка заказа ${row.task.orderId} изменилась; все изменения отменены.`);
           const linked = await tx.fbsOrderRequestLink.updateMany({
             where: { id: row.link.id, updatedAt: row.link.updatedAt, requestId: row.task.requestId },
             data: { requestId: created.id, syncStatus: 'ACTIVE', syncIssue: null,
-              lastCategory: 'shipped', lastSupplierStatus: 'complete', lastWbStatus: 'waiting',
+              ...(dto.pvzLossSettlement ? {lastCategory: ['waiting','sorted'].includes(statuses.get(row.task.orderId)!.wbStatus) ? 'shipped' : 'cancelled', lastSupplierStatus:statuses.get(row.task.orderId)!.supplierStatus, lastWbStatus:statuses.get(row.task.orderId)!.wbStatus} : {lastCategory:'shipped',lastSupplierStatus:'complete',lastWbStatus:'waiting'}),
               lastSeenAt: now, createdByUserId: user.id },
           });
           if (linked.count !== 1) throw new ConflictException(`Привязка заказа ${row.task.orderId} изменилась; все изменения отменены.`);
-          await tx.clientRequestBoxSelection.upsert({
+          if (dto.pvzLossSettlement) await tx.systemSetting.create({data:{key:pvzLossKey(created.id),updatedByUserId:user.id,value:jsonSnapshot({version:1,purpose:"PVZ_LOSS_SETTLEMENT",requestId:created.id,taskId:successorId,clientId:dto.clientId,warehouseId,connectionId:row.task.connectionId,orderId:row.task.orderId,skuId:row.task.skuId,originalAttemptId:row.task.id,shipmentId:row.shipment!.id,reason:dto.settlementReason!.trim(),wbStatus:statuses.get(row.task.orderId),createdAt:now})}});
+          if (allocation) await tx.clientRequestBoxSelection.upsert({
             where: { requestItemId_boxId: { requestItemId: item.id, boxId: allocation.boxId! } },
             create: { requestItemId: item.id, skuId: source.id, boxId: allocation.boxId!, quantity: 1 },
             update: { quantity: { increment: 1 } },
@@ -169,7 +172,7 @@ export class FbsRepeatAssemblyService {
           entity: 'ClientRequest', entityId: created.id,
           payload: { runId, fingerprint, clientId: dto.clientId, warehouseId,
             orderIds: plan.rows.map(row => row.task.orderId), previousAttemptIds: plan.rows.map(row => row.task.id),
-            additionalStockConsumptionApproved: true, originalStickerPreserved: dto.preserveOriginalSticker===true, wbMutationPerformed: false },
+            pvzLossSettlement:dto.pvzLossSettlement===true, settlementReason:dto.settlementReason ?? null, additionalStockConsumptionApproved: true, originalStickerPreserved: dto.preserveOriginalSticker===true, wbMutationPerformed: false },
         } });
         await tx.clientRequestEvent.create({ data: { requestId: created.id, clientId: dto.clientId,
           eventType: 'CREATED', title: 'Создана отдельная повторная сборка',
@@ -208,23 +211,26 @@ export class FbsRepeatAssemblyService {
       db.warehouse.findFirst({ where: { id: warehouseId, isActive: true } }),
     ]);
     if (!warehouse || client.isDemo) throw new ForbiddenException('Рабочий филиал или клиент недоступен.');
+    const shipments = dto.pvzLossSettlement ? await Promise.all(tasks.map(task => db.wbOrderShipment.findUnique({where:{assemblyId:task.id}}))) : [];
     const selected = dto.orders.map(order => {
       const task = tasks.find(task => (!order.assemblyId || task.id === order.assemblyId) && task.orderId === order.id);
       const link = links.find(link => link.orderId === order.id && link.requestId === task?.requestId);
       if (!task || !link || link.request.warehouseId !== warehouseId || ['REMOVED', 'MOVING', 'RETURN_REQUIRED'].includes(link.syncStatus)) {
         throw new ConflictException(`Заказ ${order.id} изменился или относится к другому филиалу.`);
       }
-      assertRepeatCandidate(task, wb.get(order.id) ?? null, dto.preserveOriginalSticker === true);
+      const shipment=shipments.find(row=>row?.assemblyId===task.id);
+      if(dto.pvzLossSettlement) assertPvzShipment(task,shipment,warehouseId,wb.get(order.id));
+      else assertRepeatCandidate(task, wb.get(order.id) ?? null, dto.preserveOriginalSticker === true);
       const originalSticker=stickers.get(order.id);
       if(dto.preserveOriginalSticker){if(!originalSticker)throw new BadRequestException('Прежний стикер не найден.');assertOriginalStickerIdentity(task,originalSticker);}
       const target = skus.find(sku => sku.id === task.skuId);
       if (!target) throw new BadRequestException(`Карточка товара заказа ${order.id} не найдена.`);
-      const rules = client.relabelingEnabled ? mappings.filter(mapping =>
+      const rules = !dto.pvzLossSettlement && client.relabelingEnabled ? mappings.filter(mapping =>
         [target.article, target.clientSku, target.internalSku, task.article].map(key).includes(key(mapping.targetArticle))) : [];
       const candidateSkuIds = [target.id, ...skus.filter(sku => key(sku.size) === key(target.size) && rules.some(mapping =>
         [sku.article, sku.clientSku, sku.internalSku].map(key).includes(key(mapping.sourceArticle)) ||
         key(sku.internalSku).startsWith(`${key(mapping.sourceArticle)}-`))).map(sku => sku.id)];
-      return { task, link, candidateSkuIds, originalSticker };
+      return { task, link, candidateSkuIds, originalSticker, shipment };
     });
     const skuIds = [...new Set(selected.flatMap(row => row.candidateSkuIds))];
     const pendingBoxes=await pendingReceiptBoxIds(db,[dto.clientId],warehouseId);
@@ -241,12 +247,13 @@ export class FbsRepeatAssemblyService {
     const usable = balances.filter(balance => client.stockBalanceMode !== 'PALLET_SORT' || placements.some(row => row.boxCode === balance.box!.code));
     const buckets = usable.map(balance => ({ ...balance, boxId: balance.boxId!, quantity: Math.max(0, balance.quantity -
       (reservations.get(balance.skuId) ?? []).filter(row => row.boxId === balance.boxId).reduce((sum, row) => sum + row.itemCount, 0)) }));
-    const allocations = allocateRepeatStock(selected.map(row => ({ id: row.task.orderId, candidateSkuIds: row.candidateSkuIds })), buckets);
+    const allocations = dto.pvzLossSettlement && !buckets.some(row=>row.quantity >= 1) ? new Map<string,typeof buckets[number]>() : allocateRepeatStock(selected.map(row => ({ id: row.task.orderId, candidateSkuIds: row.candidateSkuIds })), buckets);
     // The existing selection key is item+box, not item+box+physical-SKU.
     // Fail closed instead of silently recording the wrong relabel source.
     const sourceByItemBox = new Map<string, string>();
     for (const row of selected) {
       const allocation = allocations.get(row.task.orderId)!;
+      if (!allocation) continue;
       const selectionKey = `${row.task.skuId}:${allocation.boxId}`;
       const previousSource = sourceByItemBox.get(selectionKey);
       if (previousSource && previousSource !== allocation.skuId) {
@@ -255,9 +262,9 @@ export class FbsRepeatAssemblyService {
       sourceByItemBox.set(selectionKey, allocation.skuId);
     }
     return { rows: selected.map(row => {
-      const allocation = usable.find(balance => balance.id === allocations.get(row.task.orderId)!.id)!;
-      return { ...row, allocation, source: skus.find(sku => sku.id === allocation.skuId)!,
-        palletCode: placements.find(placement => placement.boxCode === allocation.box!.code)?.pallet.code ?? null };
+      const allocation = usable.find(balance => balance.id === allocations.get(row.task.orderId)?.id) ?? null;
+      return { ...row, allocation, source: skus.find(sku => sku.id === (allocation?.skuId ?? row.task.skuId))!,
+        palletCode: placements.find(placement => placement.boxCode === allocation?.box?.code)?.pallet.code ?? null };
     }) };
   }
 
@@ -265,11 +272,11 @@ export class FbsRepeatAssemblyService {
     const orders = plan.rows.map(row => ({ id: row.task.orderId, connectionId: row.task.connectionId,
       assemblyId: row.task.id, productName: row.task.productName, article: row.task.article,
       sourceRequestNumber: row.link.request.number, sourceSupplyId: row.task.supplyId,
-      boxCode: row.allocation.box!.code, palletCode: row.palletCode, sourceSkuId: row.source.id,
+      boxCode: row.allocation?.box?.code ?? null, palletCode: row.palletCode, sourceSkuId: row.source.id,
       originalStickerNumber:row.originalSticker ? row.originalSticker.partA+row.originalSticker.partB : null,
     }));
     const revision = plan.rows.map(row => [row.task.id, row.task.updatedAt, row.link.updatedAt,
-      row.allocation.id, row.allocation.updatedAt, row.source.id, row.originalSticker ? [row.originalSticker.partA,row.originalSticker.partB,row.originalSticker.barcode] : null]);
+      row.allocation?.id ?? null, row.allocation?.updatedAt ?? null, row.source.id, row.shipment?.id ?? null, row.originalSticker ? [row.originalSticker.partA,row.originalSticker.partB,row.originalSticker.barcode] : null]);
     return { orders, orderCount: orders.length, additionalUnits: orders.length,
       previewToken: createHash('sha256').update(JSON.stringify(revision)).digest('hex'),
       warning: 'Это дополнительная физическая сборка с новым расходом остатков. Прежняя сборка и её списания сохраняются. КИЗ и статусы в WB не изменяются.' };
