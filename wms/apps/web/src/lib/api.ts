@@ -12757,9 +12757,10 @@ export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:st
 export type FbsSafetyReserveRule = { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };
 export type FbsProductReserveRow = { skuId: string; blocked: boolean; reserveOverride: FbsSafetyReserveRule | null; ruleUpdatedAt: string | null };
 export async function fetchFbsProductReserve(accessToken: string, clientId: string, connectionId: string, skuId: string) {
-  const data = await fetchFbsStockAllocation(accessToken, clientId, connectionId) as FbsStockAllocationResponse & { reserve: FbsSafetyReserveRule; analysis?: { rows: FbsProductReserveRow[] } };
-  const row = data.analysis?.rows.find(item => item.skuId === skuId);
-  if (!row || typeof row.blocked !== 'boolean' || (row.ruleUpdatedAt !== null && typeof row.ruleUpdatedAt !== 'string')) throw new Error('Настройка этого товара не найдена. Обновите остатки.');
+  const data = await fetchFbsStockAllocation(accessToken, clientId, connectionId) as FbsStockAllocationResponse & { reserve: FbsSafetyReserveRule; reserveRows?: FbsProductReserveRow[] };
+  // FIX: editable rules exist independently of the optional allocation analysis.
+  const row = data.reserveRows?.find(item => item.skuId === skuId);
+  if (!row || row.reserveOverride === undefined || typeof row.blocked !== 'boolean' || (row.ruleUpdatedAt !== null && typeof row.ruleUpdatedAt !== 'string')) throw new Error('Настройка этого товара не найдена. Обновите остатки.');
   return { row, inherited: data.reserve };
 }
 export async function saveFbsProductReserve(accessToken: string, clientId: string, row: FbsProductReserveRow, reserve: FbsSafetyReserveRule | null) {

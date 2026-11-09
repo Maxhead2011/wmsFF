@@ -8,7 +8,7 @@ const root=path.resolve('wms/apps/web'),r=createRequire(require.resolve('vite',{
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({channel:'msedge',headless:true});
  try{
  const page=await browser.newPage();const writes=[],errors=[];page.on('pageerror',e=>errors.push(e.message));let override=null,conflict=false;
- await page.route('**/api/v1/**',async route=>{const req=route.request();if(req.method()==='GET'){await route.fulfill({json:{reserve:{mode:'UNITS',value:3},analysis:{rows:['sku-one','sku-two'].map(skuId=>({skuId,blocked:skuId==='sku-one',reserveOverride:skuId==='sku-one'?override:null,ruleUpdatedAt:override?'v2':null}))}}});return;}
+ await page.route('**/api/v1/**',async route=>{const req=route.request();if(req.method()==='GET'){await route.fulfill({json:{reserve:{mode:'UNITS',value:3},analysis:null,reserveRows:['sku-one','sku-two'].map(skuId=>({skuId,blocked:skuId==='sku-one',reserveOverride:skuId==='sku-one'?override:null,ruleUpdatedAt:override?'v2':null}))}});return;}
  writes.push({url:req.url(),body:req.postDataJSON()});if(conflict){await route.fulfill({status:409,json:{message:'Резерв уже изменён. Обновите список.'}});return;}override=req.postDataJSON().reserve;await route.fulfill({json:{ok:true}});});
  await page.goto('http://127.0.0.1:'+server.address().port);
  const rows=page.locator('tr');assert.equal(await rows.count(),2);
