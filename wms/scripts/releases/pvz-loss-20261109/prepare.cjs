@@ -31,4 +31,3 @@ for(const name of ['modules/marketplace-connections/fbs-repeat-assembly.service'
 }
 for(const name of ['modules/marketplace-connections/fbs-pvz-loss','modules/marketplace-connections/dto/fbs-repeat-assembly.dto'])put(name+'.js',compile(fs.readFileSync(src+'/'+name+'.ts','utf8')));
 fs.writeFileSync(root+'/api-changes.json',JSON.stringify(changes));fs.writeFileSync(root+'/overlay-proof.json',JSON.stringify(proof,null,2));console.log(proof);
-

@@ -36,4 +36,3 @@ const link=await p.fbsOrderRequestLink.findFirstOrThrow({where:{requestId:a.requ
 await connections.requireFbsOrderStillCollectable(task);await require('/app/apps/api/dist/modules/marketplace-connections/fbs-pvz-loss').syncPvzLossBatch(p,a.request.id,[{id:old.orderId,connectionId:conn.id,category:'cancelled',supplierStatus:'complete',wbStatus:'canceled_by_client'}]);assert.equal((await p.fbsTsdAssembly.findUniqueOrThrow({where:{id:task.id}})).status,'RESERVED');
 console.log(JSON.stringify({passed:8,concurrentCreate:true,originalLabel:true,newKiz:true,stockConsumedOnce:true,productionChanged:false}));
 })().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());
-

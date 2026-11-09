@@ -15,4 +15,3 @@ try:
  (r/'postgres-proof.json').write_text(result);print(result)
 finally:
  d('rm','-f','-v','pvz-loss-test-pg');d('network','rm','pvz-loss-test')
-
