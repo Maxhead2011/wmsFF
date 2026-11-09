@@ -687,6 +687,8 @@ public class MainActivity extends Activity {
     }
 
     private void renderMainScreen() {
+        // FIX: cancel a receipt sample still loading before leaving its screen.
+        if(screen==Screen.RECEIPT)closeAssemblyScanVoice();
         fboTransferRequestId="";
         if (kizLocationScreen != null) { kizLocationScreen.close(); kizLocationScreen = null; }
         TsdSession session = safeSession();
@@ -1334,6 +1336,7 @@ public class MainActivity extends Activity {
     }
 
     private void renderSettingsScreen() {
+        if(screen==Screen.RECEIPT)closeAssemblyScanVoice();
         if (kizLocationScreen != null) { kizLocationScreen.close(); kizLocationScreen = null; }
         screen = Screen.SETTINGS;
         TsdSession session = safeSession();
@@ -6875,6 +6878,25 @@ public class MainActivity extends Activity {
         speakAssemblyScan(AssemblyScanVoice.fbs(action,state,code,status,result),code,"fbs:"+action+":"+state+":"+status+":"+(result==null?"rejected":String.valueOf(result.message)));
     }
 
+    // FIX: receipt reuses existing packing audio only on the active LOGOFF receipt screen.
+    private FboScanFeedback receiptVoice() {
+        TsdSession session=safeSession();
+        if(screen!=Screen.RECEIPT||assemblyVoicePaused||session==null||isFinishing()||isDestroyed()
+            ||!"logoff".equals(BuildConfig.FLAVOR))return null;
+        if(!java.util.Objects.equals(session.userId,assemblyScanVoiceOwner))closeAssemblyScanVoice();
+        if(assemblyScanVoice==null){assemblyScanVoice=new FboScanFeedback.Voice(this,session.userId);assemblyScanVoiceOwner=session.userId;}
+        return assemblyScanVoice;
+    }
+    private void speakReceiptPrompt(FboPackingVoice.Cue cue) {
+        FboScanFeedback voice=receiptVoice();if(voice!=null)voice.prompt(cue);
+    }
+    // FIX: a local queue entry or unrelated sync success is not a confirmed receipt.
+    private void speakReceiptResult(PendingOperation operation) {
+        if(operation==null||operation.status==pro.logoff.wms.tsd.data.OperationStatus.PENDING)return;
+        FboScanFeedback voice=receiptVoice();
+        if(voice!=null)voice.scan(operation.status==pro.logoff.wms.tsd.data.OperationStatus.SYNCED,"receipt:"+operation.operationKey);
+    }
+
     private void playFbsSuccess() {
         playFbsTone(ToneGenerator.TONE_PROP_ACK, 120, 45);
     }
@@ -8765,6 +8787,7 @@ public class MainActivity extends Activity {
             ? "Клиент выбран. Сканируйте ШК товара."
             : "Клиент выбран. Сканируйте новый бокс/короб.";
         renderReceiptScreen();
+        if (!receiptUsesBoxes() && (receiptStores().isEmpty() || !receiptStoreId.isEmpty())) speakReceiptPrompt(FboPackingVoice.Cue.BARCODE);
         if ("logoff".equals(BuildConfig.FLAVOR)) refreshQueue(null);
     }
 
@@ -8801,6 +8824,7 @@ public class MainActivity extends Activity {
         }
         String kizError = receiptKizError(kiz);
         if (!kizError.isEmpty()) {
+            speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
             statusMessage = kizError;
             receiptFeedbackColor = BOX_NOT_NEEDED_RED;
             scanInput.setText("");
@@ -8842,6 +8866,7 @@ public class MainActivity extends Activity {
                     receiptCheckingKiz = false;
                     online = true;
                     if (result.duplicate) {
+                        speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
                         statusMessage = "КИЗ уже принят в WMS"
                             + (result.boxCode == null || result.boxCode.trim().isEmpty()
                                 ? "."
@@ -8942,6 +8967,7 @@ public class MainActivity extends Activity {
                     online = true;
                     receiptOpeningBox = false;
                     if (sameBox(receiptBoxCode, boxCode)) {
+                        speakReceiptPrompt(FboPackingVoice.Cue.BARCODE);
                         statusMessage = "Короб открыт в WMS. Сканируйте товар.";
                         refreshHeaderText();
                     }
@@ -8980,6 +9006,7 @@ public class MainActivity extends Activity {
         }
         String barcodeError = receiptBarcodeError(barcode);
         if (!barcodeError.isEmpty()) {
+            speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
             statusMessage = barcodeError;
             scanInput.setText("");
             renderReceiptScreen();
@@ -8987,6 +9014,7 @@ public class MainActivity extends Activity {
         }
         // FIX: LOGOFF requires a matching rescan before adding a suspicious unit.
         if ("logoff".equals(BuildConfig.FLAVOR) && !receiptBarcodeRescan.scan(receiptClientId + "/" + receiptSourceDocument + "/" + receiptBoxCode, barcode)) {
+            speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
             statusMessage = receiptBarcodeRescan.message();
             scanInput.setText("");
             renderReceiptScreen();
@@ -9011,6 +9039,7 @@ public class MainActivity extends Activity {
                         pendingReceiptBarcode = barcode;
                         pendingReceiptSku = sku;
                         pendingReceiptRequiresKiz = true;
+                        if(session.hasSameAccessToken(safeSession())) speakReceiptPrompt(FboPackingVoice.Cue.KIZ);
                         statusMessage = "Нужен КИЗ. Сканируйте КИЗ товара.";
                         renderReceiptScreen();
                     } else {
@@ -9051,6 +9080,7 @@ public class MainActivity extends Activity {
         }
         String kizError = receiptKizError(kiz);
         if (!kizError.isEmpty()) {
+            speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
             statusMessage = kizError;
             scanInput.setText("");
             renderReceiptScreen();
@@ -9060,6 +9090,7 @@ public class MainActivity extends Activity {
         String normalizedKiz = receiptKizKey(kiz);
         if (receiptKizValues.contains(normalizedKiz)) {
             String duplicateBox = receiptKizBoxes.get(normalizedKiz);
+            speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
             statusMessage = duplicateKizMessage(kiz, duplicateBox, true);
             if ("logoff".equals(BuildConfig.FLAVOR) && receiptClientKizGuardEnabled) {
                 TsdKizDuplicateInfo info = new TsdKizDuplicateInfo();
@@ -9104,6 +9135,7 @@ public class MainActivity extends Activity {
                     online = true;
                     receiptClientKizGuardEnabled = "logoff".equals(BuildConfig.FLAVOR) && result.clientKizGuardEnabled;
                     if (result.duplicate) {
+                        speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
                         statusMessage = result.message == null || result.message.trim().isEmpty()
                             ? duplicateKizMessage(kiz, result.boxCode, false)
                             : result.message + "\nКИЗ: " + kiz;
@@ -9120,6 +9152,7 @@ public class MainActivity extends Activity {
                     receiptCheckingKiz = false;
                     online = false;
                     receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                    speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
                     statusMessage = "КИЗ не принят: не удалось проверить уникальность в WMS.\n"
                         + "Восстановите связь и отсканируйте этот КИЗ еще раз.";
                     renderReceiptScreen();
@@ -9148,6 +9181,8 @@ public class MainActivity extends Activity {
                 session == null ? null : session.userName, System.currentTimeMillis());
         }
         receiptCurrentItems.add(added);
+        // FIX: PUT is a local-carton instruction, not a server acceptance claim.
+        speakReceiptPrompt(FboPackingVoice.Cue.PUT);
         if (kiz != null && !kiz.trim().isEmpty()) {
             String normalizedKiz = receiptKizKey(kiz);
             receiptKizValues.add(normalizedKiz);
@@ -9207,6 +9242,7 @@ public class MainActivity extends Activity {
             mainHandler.post(() -> {
                 if ("logoff".equals(BuildConfig.FLAVOR) && (!session.hasSameAccessToken(safeSession()) || !clientId.equals(receiptClientId))) return;
                 online = summary.retried == 0;
+                if(sourceDocument.equals(receiptSourceDocument)) speakReceiptResult(savedReceipt);
                 captureReceiptKizConflicts(summary);
                 if (summary.rejected > 0) {
                     receiptFeedbackColor = BOX_NOT_NEEDED_RED;
@@ -9370,6 +9406,8 @@ public class MainActivity extends Activity {
                     receiptClosingBox = false;
                     receiptCloseBatch = null;
                     online = summary.retried == 0;
+                    if (confirmed) speakReceiptResult(close);
+                    else if (summary.rejected > 0) speakReceiptPrompt(FboPackingVoice.Cue.ERROR);
                     if (confirmed) {
                         receiptClosedBoxes++;
                         receiptAcceptedItems += acceptedQuantity;

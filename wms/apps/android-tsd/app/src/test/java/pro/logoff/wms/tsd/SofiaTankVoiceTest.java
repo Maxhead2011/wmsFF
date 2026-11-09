@@ -47,82 +47,34 @@ public class SofiaTankVoiceTest {
         assertEquals(clip, before + 1, sound.getResourcePlaybacks(id).size());
     }
 
-    // TEST: Sofia's immutable account ID selects personal audio only in our application.
-    @Test public void identityAndRepeatedErrorsAreAccountBound() {
-        PersonalScanVoice voice = new PersonalScanVoice(SOFIA);
-        boolean enabled = "logoff".equals(BuildConfig.FLAVOR);
-        assertEquals(enabled, voice.personal);
-        for (String name : new String[]{"Соня", "София", "софия", "another-user", null,
-                SOFIA + " ", "d65d6258-d4e8-4bc1-b1cf-583d1a1e4c82"}) {
-            assertFalse(new PersonalScanVoice(name).personal);
-        }
-        assertEquals(enabled, new PersonalScanVoice(PersonalScanVoice.ACCOUNT).personal);
-        assertFalse(voice.repeated("wrong-box"));
-        assertEquals(enabled, voice.repeated("wrong-box"));
-        assertFalse(voice.repeated("wrong-barcode"));
-        voice.success();
-        assertFalse(voice.repeated("wrong-barcode"));
-    }
-
-    // TEST: exercise actual SoundPool resource routing for all 17 approved TSD events.
-    @Test public void everyApprovedEventUsesItsTankRecording() throws Exception {
-        if (!"logoff".equals(BuildConfig.FLAVOR)) return;
+    // TEST: Sofia now uses the same existing WB packing recordings as ordinary operators.
+    @Test public void sofiaUsesStandardPackingAndScanAudio() throws Exception {
+        assertFalse(new PersonalScanVoice(SOFIA).personal);
         FboScanFeedback.Voice voice = new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(), SOFIA);
         try {
             ShadowSoundPool sound = sound(voice);
-            loaded(sound);
-            plays(sound, "hit", () -> voice.scan(true, "ok"));
-            plays(sound, "miss", () -> voice.scan(false, "wrong-code"));
-            plays(sound, "repeat", () -> voice.scan(false, "wrong-code"));
-            FboPackingVoice.Cue[] prompts = FboPackingVoice.Cue.values();
-            String[] promptClips = {"begin", "target", "locked", "put", "armor", "ready", "reset", "hit"};
-            assertEquals(promptClips.length, prompts.length);
-            for (int i = 0; i < prompts.length; i++) {
-                FboPackingVoice.Cue cue = prompts[i];
-                plays(sound, promptClips[i], () -> voice.prompt(cue));
+            int[] clips = {R.raw.fbo_pack_box, R.raw.fbo_pack_barcode, R.raw.fbo_pack_kiz,
+                R.raw.fbo_pack_put, R.raw.fbo_pack_error, R.raw.fbo_pack_closed,
+                R.raw.fbs_new_barcode, R.raw.fbo_scan_hit};
+            FboPackingVoice.Cue[] cues = FboPackingVoice.Cue.values();
+            for (int i=0;i<cues.length;i++) {
+                sound.notifyResourceLoaded(clips[i],true);
+                voice.prompt(cues[i]);
+                assertTrue(sound.wasResourcePlayed(clips[i]));
             }
-            PersonalEventVoice.Cue[] events = PersonalEventVoice.Cue.values();
-            String[] eventClips = {"start", "ready", "empty", "begin", "start", "move"};
-            assertEquals(eventClips.length, events.length);
-            for (int i = 0; i < events.length; i++) {
-                PersonalEventVoice.Cue cue = events[i];
-                plays(sound, eventClips[i], () -> voice.event(cue));
-            }
+            sound.notifyResourceLoaded(R.raw.fbo_scan_miss,true);
+            voice.scan(false,"wrong-code"); voice.scan(false,"wrong-code");
+            assertEquals(2,sound.getResourcePlaybacks(R.raw.fbo_scan_miss).size());
+            for (PersonalEventVoice.Cue cue : PersonalEventVoice.Cue.values()) voice.event(cue);
+            for (String clip : CLIPS) assertFalse(sound.wasResourcePlayed(raw(clip)));
             assertFalse(sound.wasResourcePlayed(R.raw.eleonora_hit));
-            assertFalse(sound.wasResourcePlayed(R.raw.eleonora_event_fbs_open));
-            assertFalse(sound.wasResourcePlayed(R.raw.fbo_scan_hit));
-            assertFalse(sound.wasResourcePlayed(R.raw.fbs_new_barcode));
-        } finally { voice.close(); }
-    }
-
-    // TEST: a different error or confirmed success resets the repeated-error response.
-    @Test public void repeatedErrorsResetAfterSuccessAndConfirmedPacking() throws Exception {
-        if (!"logoff".equals(BuildConfig.FLAVOR)) return;
-        FboScanFeedback.Voice voice = new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(), SOFIA);
-        try {
-            ShadowSoundPool sound = sound(voice);
-            loaded(sound);
-            plays(sound, "armor", () -> voice.error("bad-kiz"));
-            plays(sound, "repeat", () -> voice.error("bad-kiz"));
-            plays(sound, "armor", () -> voice.error("wrong-box"));
-            plays(sound, "repeat", () -> voice.error("wrong-box"));
-            voice.success();
-            plays(sound, "armor", () -> voice.error("wrong-box"));
-            voice.prompt(FboPackingVoice.Cue.PUT);
-            plays(sound, "armor", () -> voice.error("wrong-box"));
-            voice.prompt(FboPackingVoice.Cue.CLOSED);
-            plays(sound, "armor", () -> voice.error("wrong-box"));
-            voice.prompt(FboPackingVoice.Cue.PACKED_BOX);
-            plays(sound, "armor", () -> voice.error("wrong-box"));
-            voice.scan(true, "ok");
-            plays(sound, "miss", () -> voice.scan(false, "wrong-box"));
         } finally { voice.close(); }
     }
 
     // TEST: common users and sold flavors keep their existing default sounds and silence for personal events.
     @Test public void soldFlavorsAndOtherAccountsNeverUseTanks() throws Exception {
         boolean own = "logoff".equals(BuildConfig.FLAVOR);
-        String[] owners = own ? new String[]{"another-user", "София", null}
+        String[] owners = own ? new String[]{SOFIA, "another-user", "София", null}
             : new String[]{SOFIA, PersonalScanVoice.ACCOUNT, "another-user", null};
         for (String owner : owners) {
             FboScanFeedback.Voice voice = new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(), owner);
@@ -146,10 +98,10 @@ public class SofiaTankVoiceTest {
         if (!"logoff".equals(BuildConfig.FLAVOR)) return;
         FboScanFeedback.Voice sofia = new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(), SOFIA);
         ShadowSoundPool oldSound = sound(sofia);
-        sofia.event(PersonalEventVoice.Cue.FBS_OPEN);
+        sofia.prompt(FboPackingVoice.Cue.BARCODE);
         sofia.close();
-        oldSound.notifyResourceLoaded(raw("start"), true);
-        assertFalse(oldSound.wasResourcePlayed(raw("start")));
+        oldSound.notifyResourceLoaded(R.raw.fbo_pack_barcode, true);
+        assertFalse(oldSound.wasResourcePlayed(R.raw.fbo_pack_barcode));
         FboScanFeedback.Voice eleonora = new FboScanFeedback.Voice(RuntimeEnvironment.getApplication(), PersonalScanVoice.ACCOUNT);
         try {
             ShadowSoundPool sound = sound(eleonora);

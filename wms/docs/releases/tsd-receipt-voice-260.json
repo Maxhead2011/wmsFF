@@ -1,0 +1,49 @@
+{
+  "status": "published",
+  "versionCode": 260,
+  "artifacts": [
+    {
+      "file": "logoff-tsd-receipt-voice-260.apk",
+      "packageId": "pro.logoff.wms.tsd",
+      "versionCode": 260,
+      "sha256": "bb86b6a078e8760a412d54ef5e0c023e7ef85e26d4f45ba58223a3dc68446c87",
+      "size": 5977199,
+      "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da"
+    },
+    {
+      "file": "logoff-tsd-servers-receipt-voice-260.apk",
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 260,
+      "sha256": "0115239cb0abb26c33b37a06fadfd1d6409213fa32ee9aad8a1c99b684f8ac98",
+      "size": 5977199,
+      "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da"
+    }
+  ],
+  "android": {
+    "logoff": {
+      "passed": 352,
+      "failed": 0
+    },
+    "ffullhab": {
+      "passed": 342,
+      "skipped": 8,
+      "knownFailures": 2
+    },
+    "platform": {
+      "passed": 342,
+      "skipped": 8,
+      "knownFailures": 2
+    }
+  },
+  "apiPassed": 4660,
+  "apiSkipped": 9,
+  "webPassed": 622,
+  "webSkipped": 2,
+  "physicalTerminalVerified": false,
+  "apiWebChanged": false,
+  "sourceParityVerified": false,
+  "pullRequest": 966,
+  "mergeCommit": "3d6ddf12ed1cde53430f11602e6abf6111ad6c67",
+  "publicHashesVerified": true,
+  "containersUnchanged": true
+}
