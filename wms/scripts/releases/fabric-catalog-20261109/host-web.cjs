@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
+const {fixFabricHostScope}=require('./host-scope.cjs');
+const root=path.resolve(process.argv[2]),old='/assets/warehouse-fabric-root-20261109.js',next='/assets/warehouse-fabric-host-root-20261109.js';
+const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const write=(p,s)=>{const f=path.join(root,p);fs.mkdirSync(path.dirname(f),{recursive:true});fs.writeFileSync(f,s)};
+const original=read('web-base'+old),fixed=fixFabricHostScope(original);
+write('web-payload'+next,fixed);
+let html=read('web-base/index.html');const match=html.match(/<script type="importmap">(.*?)<\/script>/s);assert(match);
+const map=JSON.parse(match[1]);for(const key of Object.keys(map.imports))if(map.imports[key]===old)map.imports[key]=next;map.imports[old]=next;
+html=html.replace(match[1],()=>JSON.stringify(map));assert.equal(html.split('src="'+old+'"').length,2);html=html.replace('src="'+old+'"','src="'+next+'"');
+write('web-payload/index.html',html);write('web-changes.json',JSON.stringify(['index.html',next.slice(1)]));
+console.log('Prepared exact web2 overlay: existing own-host scope shared by fabric tile and panel.');
