@@ -1,0 +1,4 @@
+{
+  "sourceParityVerified": false,
+  "note": "Runtime is a guarded overlay on the verified current images. Full local builds must not replace production."
+}

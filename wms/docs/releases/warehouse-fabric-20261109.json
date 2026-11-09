@@ -1,0 +1,20 @@
+{
+  "pr": 945,
+  "images": {
+    "api": "sha256:aa5badfb7d1731c457826163a91a790468a011e1a0024fd9168d2526fe0bd010",
+    "web": "sha256:f3b6fce84fd2ee2cc3aa08258065a2caa69d9e82e00cf89554187815eb91dda6"
+  },
+  "apiFiles": 9,
+  "webFiles": 4,
+  "apiTestsPassed": 4643,
+  "webTestsPassed": 616,
+  "isolatedPostgresWorkflow": true,
+  "fullApiHealth": true,
+  "publicStartupReloadWorkflow": true,
+  "controlsBeforeAfter": 24,
+  "requestLayoutScenarios": 12,
+  "businessDataWrites": false,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "sourceParityVerified": false
+}
