@@ -858,3 +858,5 @@ Prepared receipt reporting correction: `receipt-linked-adjustments.ts` validates
 Prepared follow-up (2026-11-08): [saved FBS snapshots and blue fabric](fbs-fabric-reservation-display.md). Post-scope display decoration covers cold/merged saved orders; fresh physical/marking guards and client flags retained. Exact blue SKU support across availability/receipt/accounting. Source7/API4557/web605, runtime9, baseline8 and isolated boot passed; 9/2 skipped, dedicated DB suites excluded. API7/web0; sold WMS/data untouched; source parity false. PR target feature/la_panthera.
 
 Published PR960 / 2026-11-09, LOGOFF TSD259: Ozon packing defaults to product scan, with read-only destination composition, checkpoint migration and unchanged pending command identity. Lamoda/WB/Yandex/sold behavior isolated. [Scope and checks](ozon-product-only.md).
+
+Prepared WB shipping search correction: [scope and timings](wb-fbs-shipping.md#first-search-and-latency-correction). Empty optional ID compatibility, selected fresh WB reads without full client refresh, official orderIds cargo response. API4/web3, own flow only; no stock/billing changes.

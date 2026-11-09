@@ -68,6 +68,8 @@ export async function wbLabelOrders(db: any, clientId: string, input: Selection[
       ['canceled', 'canceled_by_client', 'declined_by_client', 'defect', 'canceled_by_carrier'].includes(o.wbStatus);
     return { ...s, marketplace: 'WILDBERRIES', accountName: o.accountName,
       supplierStatus: o.supplierStatus, wbStatus: o.wbStatus,
+      // FIX: preserve destination/date when selected reads prepare shipping.
+      officeId: text(o.officeId) || null, deliveryDate: text(o.deliveryDate) || null,
       category: cancelled ? 'cancelled' : o.wbStatus === 'sold' ? 'archive' : o.supplierStatus === 'complete' ? 'shipped' : 'active',
       barcodes, product, itemCount: 1, supplyId, crossBorderType: text(o.crossBorderType) || null,
       requiredMeta: list(o.requiredMeta), optionalMeta: list(o.optionalMeta),

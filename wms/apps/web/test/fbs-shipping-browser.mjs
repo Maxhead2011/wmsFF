@@ -46,6 +46,7 @@ try {
   await page.goto('http://127.0.0.1:5197/__fbs_delivery_qa');
   await page.getByRole('button', {name:'Найти пункты сдачи'}).click();
   await page.getByLabel('ПВЗ / пункт приёма').waitFor();
+  assert.equal(submissions[0].body.shippingPointId,undefined,'First search must omit an unselected point');
   assert.equal(await page.locator('option[value="43"]').evaluate(n=>n.disabled),true);
   await page.getByLabel('ПВЗ / пункт приёма').selectOption('42');
   await page.getByRole('button',{name:'Сохранить пункт и дату в WB'}).click();
