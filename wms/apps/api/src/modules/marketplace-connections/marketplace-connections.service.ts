@@ -47,6 +47,7 @@ import { recordReshipmentTransition } from './fbs-reshipment-transition';
 import { requireFbsReshipmentClientAccess } from './fbs-reshipment-access';
 import { fbsAttemptPageWindow, mergeFbsAttemptPage } from '../../common/shipment-history/fbs-attempt-page';
 import { isDeepStrictEqual } from 'node:util';
+import { resolveBushkovaCutTariff, type CutTariffContext } from '../billing/bushkova-cut-tariff';
 import {
   BadRequestException,
   ConflictException,
@@ -29925,6 +29926,7 @@ function matchFbsPrimaryServicesToOrders(
 ) {
   const rules = selections.map((selection) => ({
     serviceId: selection.service.serviceId,
+    serviceCode: selection.service.service.code,
     matchKeywords: selection.matchKeywords,
   }));
   const quantities = new Map<string, number>();
@@ -29938,7 +29940,11 @@ function matchFbsPrimaryServicesToOrders(
       order.article,
       order.nmId,
       ...order.barcodes,
-    ], rules);
+    ], rules, {
+      clientId: selections[0]?.service.clientId ?? '',
+      productName: order.product?.name,
+      articles: [order.product?.article, order.product?.clientSku, order.article],
+    });
     if (serviceId) {
       quantities.set(
         serviceId,
@@ -29951,7 +29957,8 @@ function matchFbsPrimaryServicesToOrders(
 
 export function resolveFbsPrimaryServiceMatch(
   searchValues: Array<string | null | undefined>,
-  rules: Array<{ serviceId: string; matchKeywords: string }>,
+  rules: Array<{ serviceId: string; matchKeywords: string; serviceCode?: string }>,
+  context?: CutTariffContext,
 ) {
   const searchable = normalizeFbsPrimaryMatchText(
     searchValues.filter((value): value is string => Boolean(value)).join(' '),
@@ -29971,7 +29978,8 @@ export function resolveFbsPrimaryServiceMatch(
       bestMatch = candidate;
     }
   }
-  return bestMatch?.serviceId ?? null;
+  // FIX: exact saved rules keep priority; only Bushkova gets the measured-length fallback.
+  return bestMatch?.serviceId ?? resolveBushkovaCutTariff(context, rules);
 }
 
 function parseFbsPrimaryMatchKeywords(value: string) {
