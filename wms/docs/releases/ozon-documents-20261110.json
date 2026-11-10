@@ -1,0 +1,26 @@
+{
+  "base": {
+    "api": "sha256:43108daee3cfbdb154e1a7d820ccf689015089b418a6608ed79884b68e367147",
+    "web": "sha256:a22a115fe461bf9758d2c46ae3674162bff7c16507a0a92ca1d32f240b0253d9"
+  },
+  "images": {
+    "api": "sha256:28393123cec174a1c04c0cb73385175cf0e1207bed325dee225c50db97b30b6b",
+    "web": "sha256:e1e6f6d42e80f7216410f8b668adae579dd797179ec2c18a0373b046274367e0"
+  },
+  "changes": {
+    "api": {
+      "modules/marketplace-connections/marketplace-connections.service.js": "5612dda89882a23259e5da7aa3fcc8cbd43670c4083a1b7d2533c7a4a9a01c71",
+      "modules/marketplace-connections/wb-all-labels.js": "380bea32917e753902eaccc0db542d6660fa087ecb581d8b80edbaa3fb52a6de"
+    },
+    "web": {
+      "assets/ozon-documents-fbs-20261110.js": "cebd8f9670aa1bcff435fd325b7cc998031e6d1b69a39748a75433c5e0d6579e",
+      "assets/ozon-documents-print-dialog-20261110.js": "5972030a8187e5565beef8c43784633a36264c570d6e3aa9952ddb1ecd9f4882",
+      "index.html": "6f37832324b1c1d1a686165734ee9893c7aeda702c04053ef6f402cb2da3d74d"
+    }
+  },
+  "composeHash": "c90a579a000d0f31278231d64cc19b5666a41a24a40044cd998d948ec748d08d",
+  "pr": 979,
+  "health": true,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true
+}
