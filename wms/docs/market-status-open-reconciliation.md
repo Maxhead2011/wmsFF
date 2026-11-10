@@ -13,3 +13,7 @@
 Регрессии: тесты воспроизвели отказ ранних стадий, молчаливый пропуск и пропуск в планировщике до исправления. Проверяются оба МП, четыре ранние стадии, изоляция проданной ВМС, частичная передача, повторная сборка, конкурирующее изменение, запрет изменения конечных статусов, права и перенос привязки. Перед публикацией требуется проверка свежего runtime и отдельного кандидата: sourceParityVerified=false.
 
 Проверено: API 4744 passed / 9 skipped (отдельные `*.integration.spec.ts` с БД исключены); web 625 passed / 2 skipped; web typecheck прошёл. API typecheck: три ошибки в неизменённых Ozon label test/Yandex FBY; независимая компиляция HEAD до правки воспроизводит те же три ошибки. Кандидат четырёх модулей подготовлен из baseline PR985: все токены старого исходника совпали с runtime, 38 сценариев скомпилированных функций прошли. Изменения бизнес-данных и публикация не выполнялись.
+
+## Release candidate verification (2026-11-10)
+
+Merged current PR985/986 with both documentation records preserved by user approval. API 4760 passed / 9 skipped; web 625 passed / 2 skipped. Dedicated database integration suites excluded. Exact current-runtime API4/web2 overlay passes 38 compiled helper scenarios and six actual-module browser checks. Full candidate startup/reload and published CSS controls24 pass. Runtime/source parity remains false; no full source replacement.
