@@ -21658,7 +21658,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       sc: selected => this.getFbsSupplyStickersPdf({ clientId, orders: selected }, user, orders),
       pvz: selected => this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user, orders),
       pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user, orders),
-    });
+    }, process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true');
   }
 
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser, snapshot?: FbsLabelOrder[]) {

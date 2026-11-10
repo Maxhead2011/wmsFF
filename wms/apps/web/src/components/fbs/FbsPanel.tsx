@@ -1376,7 +1376,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           clientId: selectedClientId,
           orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
         });
-        if (all === 'print') { await openWbRibbonPrint(session.accessToken, selectedClientId, result); return; }
+        if (all === 'print') { await openWbRibbonPrint(session.accessToken, selectedClientId, result, orders.every(order => order.marketplace === 'OZON') ? 'Ozon' : 'WB'); return; }
         const bytes = Uint8Array.from(atob(result.fileBase64), char => char.charCodeAt(0));
         downloadFbsBlob(new Blob([bytes], { type: 'application/pdf' }), result.fileName);
         setOrderActionMessage(`Скачана лента: ${result.pageCount} стр.`);
@@ -6327,15 +6327,15 @@ function FbsOrdersView({
               <Download size={16} aria-hidden="true" />
               {orderAction === 'stickers' ? 'Формирую…' : `ШК заказов (${stickerOrders.length})`}
             </button>
-            {hasWildberriesOrders ? <>
+            {visibleOrders.some(fbsCompleteLabelsSupported) ? <>
             <button type="button" className="button button-secondary"
-              disabled={orderAction !== null || !selectedOrders.some(order => order.marketplace === 'WILDBERRIES')}
-              onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), true)}>
+              disabled={orderAction !== null || !selectedOrders.some(fbsCompleteLabelsSupported)}
+              onClick={() => void onDownloadStickers(selectedOrders.filter(fbsCompleteLabelsSupported), true)}>
               <Download size={16} aria-hidden="true" />Скачать все ШК
             </button>
             <button type="button" className="button button-secondary"
-              disabled={orderAction !== null || !selectedOrders.some(order => order.marketplace === 'WILDBERRIES')}
-              onClick={() => void onDownloadStickers(selectedOrders.filter(order => order.marketplace === 'WILDBERRIES'), 'print')}>Печать всех ШК</button>
+              disabled={orderAction !== null || !selectedOrders.some(fbsCompleteLabelsSupported)}
+              onClick={() => void onDownloadStickers(selectedOrders.filter(fbsCompleteLabelsSupported), 'print')}>Печать всех ШК</button>
             </> : null}
           </div>
           {hasWildberriesOrders ? <p className="fbs-order-actions__hint">
@@ -6495,7 +6495,7 @@ function FbsOrdersView({
                         ) : null}
                         <button type="button" disabled={orderAction !== null}
                           onClick={() => void onDownloadStickers(group.orders, true)}
-                          title="Скачать доступные СЦ, ПВЗ и пары товара/заказа одной лентой">
+                          title="Скачать доступные товарные этикетки и документы маркетплейса одним PDF">
                           <Download size={14} aria-hidden="true" />Скачать все ШК
                         </button>
                         <button type="button" disabled={orderAction !== null}
@@ -6776,13 +6776,13 @@ export function FbsOrderRow({
       <td>
         {/* FIX: four document actions; PVZ/SC are part of the ribbon. */}
         <div className="fbs-order-documents">
-          {order.marketplace === 'WILDBERRIES' ? <button type="button"
+          {fbsCompleteLabelsSupported(order) ? <button type="button"
             className="fbs-order-document-button"
             disabled={actionsDisabled} onClick={() => onDownloadSticker(true)}
-            title="СЦ, ПВЗ и пары ШК товара + QR заказа. Недоступные части будут перечислены.">
+            title={order.marketplace === 'OZON' ? 'Товарные этикетки и официальные стикеры отправления Ozon. Недоступные части будут перечислены.' : 'СЦ, ПВЗ и пары ШК товара + QR заказа. Недоступные части будут перечислены.'}>
             <Download size={14} aria-hidden="true" />Скачать все ШК
           </button> : null}
-          {order.marketplace === 'WILDBERRIES' ? <button type="button" className="fbs-order-document-button"
+          {fbsCompleteLabelsSupported(order) ? <button type="button" className="fbs-order-document-button"
             disabled={actionsDisabled} onClick={() => onDownloadSticker('print')}>Печать всех ШК</button> : null}
           <button
             type="button"
@@ -8329,6 +8329,11 @@ function fbsRequestStatusLabel(status: string) {
     REJECTED: 'Отклонена',
   };
   return labels[status] ?? status;
+}
+
+// FIX: reuse the own-installation document rollout for Ozon actions.
+export function fbsCompleteLabelsSupported(order: { marketplace: string }) {
+  return order.marketplace === 'WILDBERRIES' || (order.marketplace === 'OZON' && import.meta.env.VITE_FBS_COMPACT_MENU_ENABLED === 'true');
 }
 
 function fbsOrderStickerIsAvailable(order: FbsOrderSummary) {
