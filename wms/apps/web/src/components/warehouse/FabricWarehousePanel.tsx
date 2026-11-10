@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { fetchClients, request, type AuthSession, type ClientSummary } from '../../lib/api';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 import './fabric-warehouse.css';
+import { FabricColorLabel } from './FabricColorLabel';
 
 type Color = { id: string; material: string; name: string };
 type Roll = { id: string; code: string; material: string; color: string; remainingMm: number; warehouseId: string };
@@ -49,24 +50,30 @@ export function FabricWarehousePanel({ session }: { session: AuthSession }) {
   }
   const colors = [...Object.entries(catalog?.baseColors ?? {}).map(([id, label]) => ({ id, name: label })), ...(catalog?.colors.filter(c => c.material === material) ?? [])];
   return <section className="warehouse-panel fabric-warehouse" aria-label="Ткани: хранение и учёт">
-    <h2>Ткани: хранение и учёт</h2>
+    {/* FIX: scoped visual layout, existing stock and write handlers preserved. */}
+    <header className="fabric-heading"><div><span className="fabric-eyebrow">Склад · ткани</span><h2>Ткани: хранение и учёт</h2><p>Рулоны, готовые отрезы и движение ткани</p></div></header>
+    <div className="fabric-toolbar">
     <label>Клиент<select value={clientId} disabled={busy} onChange={e => setClientId(e.target.value)}><option value="">Выберите клиента</option>{clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-    {error ? <p role="alert">{error}</p> : null}{message ? <p role="status">{message}</p> : null}
+
     {clientId ? <button type="button" disabled={busy} onClick={() => void load()}>Обновить</button> : null}
+    </div>
+    {error ? <p role="alert">{error}</p> : null}{message ? <p role="status">{message}</p> : null}
     {rolls && !rolls.enabled ? <div><p>Рулонный учёт у клиента выключен.</p>{canConfigure ? <button disabled={busy} onClick={() => void enableRolls()}>Включить «Товар в рулонах»</button> : <p>Для включения обратитесь к администратору.</p>}</div> : null}
     {rolls?.enabled && catalog ? <>
       <p>Рулон — 100 м. Остатки рулонов и готовые отрезы учитываются отдельно.</p>
       <div className="warehouse-topic-grid">{rolls.groups?.map(g => <article className="warehouse-panel" key={g.key}>
-        <h3>{MATERIALS[g.material]} · {g.colorName}</h3><p>Целых: {g.whole} · открытых: {g.open} · в рулонах: {g.rawMeters.toLocaleString('ru-RU')} м</p><p>Объём хранения: {g.rawLiters.toLocaleString('ru-RU')} л</p>
+        <h3 className="fabric-card-title"><span className="fabric-material">{MATERIALS[g.material]}</span><FabricColorLabel name={g.colorName} /></h3><p>Целых: {g.whole} · открытых: {g.open} · в рулонах: {g.rawMeters.toLocaleString('ru-RU')} м</p><p>Объём хранения: {g.rawLiters.toLocaleString('ru-RU')} л</p>
         <p>Готовые отрезы: {g.ready.reduce((n, r) => n + r.pieces, 0)} шт.</p><p>FBS: {g.fbs.pieces} отрезов / {g.fbs.meters} м · FBO: {g.fbo.pieces} отрезов / {g.fbo.meters} м</p>
         <details><summary>Остаток каждого рулона</summary>{g.rolls.map(r => <p key={r.id}>{r.code}: {(r.remainingMm / 1000).toLocaleString('ru-RU')} м</p>)}</details>
       </article>)}</div>
       {canManage ? <>
-        <h3>Приёмка новых рулонов</h3>
+        <section className="fabric-intake"><div className="fabric-section-heading"><h3>Приёмка новых рулонов</h3><span>1 рулон = 100 м</span></div><div className="fabric-intake-selects">
         <label>Ткань<select disabled={busy} value={material} onChange={e => { setMaterial(e.target.value); setColor('black'); }}>{Object.entries(MATERIALS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
         <label>Цвет<select disabled={busy} value={color} onChange={e => setColor(e.target.value)}>{colors.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+        <span className="fabric-selected-color"><FabricColorLabel name={colors.find(c => c.id === color)?.name ?? color} /></span></div>
         <form onSubmit={e => { e.preventDefault(); void saveCatalog('CREATE_COLOR'); }}><label>Новый цвет<input value={name} maxLength={80} disabled={busy} onChange={e => setName(e.target.value)} placeholder="Например, Пудровый" /></label><button disabled={busy || !name.trim()}>Добавить цвет</button></form>
         <form onSubmit={e => { e.preventDefault(); void saveRoll({ action: 'RECEIVE', material, color, count }); }}><label>Количество рулонов<input type="number" min={1} max={500} step={1} value={count} disabled={busy} onChange={e => setCount(Number(e.target.value))} /></label><button disabled={busy || !Number.isInteger(count) || count < 1 || count > 500}>Принять рулоны</button></form>
+        </section>
         <details><summary>Операции с рулоном</summary>
           <form onSubmit={e => { e.preventDefault(); void saveRoll(operation === 'CUT' ? { action: operation, rollId, barcode, boxCode, kiz, count: pieces } : operation === 'ADJUST' ? { action: operation, rollId, deltaMm: Math.round(delta * 1000), reason } : { action: operation, rollId, reason }); }}>
             <label>Рулон<select value={rollId} disabled={busy} onChange={e => setRollId(e.target.value)}><option value="">Выберите рулон</option>{rolls.groups?.flatMap(g => g.rolls).filter(r => r.warehouseId === session.user.activeWarehouseId && r.remainingMm > 0).map(r => <option key={r.id} value={r.id}>{r.code} · {r.remainingMm / 1000} м</option>)}</select></label>
