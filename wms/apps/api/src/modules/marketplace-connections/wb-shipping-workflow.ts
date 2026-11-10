@@ -36,9 +36,9 @@ export async function assertShippingBeforeDelivery(host: any, planId: string | u
     const closed = await host.prisma.fbsCargoPlacePacking.findMany({ where: { clientId: plan.clientId, connectionId: plan.connectionId, supplyId, cargoPlaceId: { in: ids }, status: 'CLOSED' }, select: { id: true, cargoPlaceId: true } });
     if (ids.some((id) => !closed.some((row: any) => row.cargoPlaceId === id))) throw new BadRequestException('Закройте все грузоместа на ТСД перед передачей.');
     const wbOrders = await request(`/api/marketplace/v3/supplies/${encodeURIComponent(supplyId)}/order-ids`);
-    if (!Array.isArray(wbOrders.orders) || !wbOrders.orders.length) throw new BadRequestException('WB не подтвердил состав поставки.');
+    if (!Array.isArray(wbOrders.orderIds) || !wbOrders.orderIds.length) throw new BadRequestException('WB не подтвердил состав поставки.');
     const packed = await host.prisma.fbsTsdAssembly.findMany({ where: { clientId: plan.clientId, connectionId: plan.connectionId, supplyId, status: 'COMPLETED', cargoPackingId: { in: closed.map((row: any) => row.id) } }, select: { orderId: true } });
-    if (wbOrders.orders.some((id: unknown) => !packed.some((row: any) => row.orderId === String(id)))) throw new BadRequestException('Не все заказы WB распределены по грузоместам.');
+    if (wbOrders.orderIds.some((id: unknown) => !packed.some((row: any) => row.orderId === String(id)))) throw new BadRequestException('Не все заказы WB распределены по грузоместам.');
   }
 }
 
@@ -47,8 +47,8 @@ export async function assertShippingBeforeDelivery(host: any, planId: string | u
 export async function wbShippingWorkflow(host: any, dto: any, user: any, mode: 'points' | 'save' | 'cargo', json: (url: string, init: RequestInit) => Promise<any>) {
   if (!wbShippingEnabled()) throw new BadRequestException('Настройка пункта сдачи отключена.');
   host.clientScopes.requireClientAccess(user, dto.clientId, 'write');
-  const snapshot = await host.refreshFbsOrdersCache(dto.clientId);
-  const { orders } = await host.resolveSelectedFbsOrders(dto.clientId, dto.orders, snapshot);
+  // FIX: no full-client refresh for each point/cargo operation.
+  const orders = await host.resolveFbsShippingOrders(dto.clientId, dto.orders);
   if (!orders.length || orders.some((o: any) => o.marketplace !== 'WILDBERRIES' || o.supplierStatus !== 'confirm' || !o.supplyId)) {
     throw new BadRequestException('Выберите открытую поставку WB на сборке.');
   }
@@ -90,9 +90,9 @@ export async function wbShippingWorkflow(host: any, dto: any, user: any, mode: '
     if (!pickup || details.shippingDt !== date) throw new BadRequestException('Сначала сохраните ПВЗ и дату отгрузки в WB.');
     const target = Number(dto.cargoPlaceTotal);
     const orderIds = await request(`/api/marketplace/v3/supplies/${encodeURIComponent(supplyId)}/order-ids`);
-    if (!Array.isArray(orderIds.orders)) throw new BadRequestException('WB не подтвердил состав поставки.');
-    if (!Number.isInteger(target) || target < 1 || target > Math.floor(orderIds.orders.length / 2)) {
-      throw new BadRequestException(`Для ${orderIds.orders.length} заказов WB разрешает не больше ${Math.floor(orderIds.orders.length / 2)} грузомест.`);
+    if (!Array.isArray(orderIds.orderIds)) throw new BadRequestException('WB не подтвердил состав поставки.');
+    if (!Number.isInteger(target) || target < 1 || target > Math.floor(orderIds.orderIds.length / 2)) {
+      throw new BadRequestException(`Для ${orderIds.orderIds.length} заказов WB разрешает не больше ${Math.floor(orderIds.orderIds.length / 2)} грузомест.`);
     }
     let ids = cargoIds(await request(`${path}/trbx`));
     const pending = await host.prisma.auditLog.findFirst({ where: { entity: 'FbsSupplyPlan', entityId: plan.id, action: PENDING }, orderBy: { createdAt: 'desc' } });
