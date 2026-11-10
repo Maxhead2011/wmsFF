@@ -17,8 +17,8 @@
   "parentBaseline": "2026-11-10-market-status-open",
   "artifacts": {
     "all-web-hashes.json": {
-      "size": 403779,
-      "sha256": "074a38cfd81818e9fa118e7ef7af40a9a4ec40194cf58fc0215766df70c17cef"
+      "size": 400461,
+      "sha256": "aa4b555ebf728395799c1456e16a404041d05ce2b1882aba8657abedc5ca8b38"
     },
     "api-runtime.tar.gz": {
       "size": 1793885,
