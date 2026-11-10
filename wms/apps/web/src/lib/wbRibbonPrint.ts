@@ -23,15 +23,15 @@ export async function sendWbRibbon(token: string, clientId: string, stationId: s
 }
 
 // FIX: native top-layer dialog, one printer-bound station and one whole-ribbon job.
-export async function openWbRibbonPrint(token: string, clientId: string, ribbon: Ribbon) {
+export async function openWbRibbonPrint(token: string, clientId: string, ribbon: Ribbon, marketplace: 'WB' | 'Ozon' = 'WB') {
   const dialog = document.createElement('dialog');
-  dialog.setAttribute('aria-label', 'Печать всех ШК WB');
+  dialog.setAttribute('aria-label', 'Печать всех ШК ' + marketplace);
   dialog.style.cssText = 'border:1px solid #d6e2e7;border-radius:20px;padding:24px;width:min(560px,90vw);max-height:85vh;overflow:auto;color:#263b49;background:white;font:16px/1.5 system-ui,sans-serif;box-shadow:0 18px 65px #0004';
   const add = <K extends keyof HTMLElementTagNameMap>(tag: K, text: string) => {
     const element = document.createElement(tag); element.textContent = text; dialog.append(element); return element;
   };
-  add('h2', 'Печать всех ШК WB');
-  add('p', `${ribbon.pageCount} стр. · СЦ → ПВЗ → ШК товара + QR заказа · 58 × 40 мм`);
+  add('h2', 'Печать всех ШК ' + marketplace);
+  add('p', `${ribbon.pageCount} стр. · ${marketplace === 'Ozon' ? 'ШК товара + этикетка отправления Ozon' : 'СЦ → ПВЗ → ШК товара + QR заказа'} · 58 × 40 мм`);
   if (ribbon.warnings.length) { const warning = add('p', `Неполный комплект: ${ribbon.warnings.join(' ')}`); warning.setAttribute('role', 'alert'); warning.style.color = '#925400'; }
   const label = add('label', 'Станция и принтер');
   const select = document.createElement('select'); select.setAttribute('aria-label', 'Станция и принтер'); label.append(select);

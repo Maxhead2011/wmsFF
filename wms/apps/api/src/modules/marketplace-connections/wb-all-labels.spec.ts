@@ -8,6 +8,14 @@ async function file(width: number) { const pdf = await PDFDocument.create(); pdf
 const readers = () => ({ sc: vi.fn(() => file(11)), pvz: vi.fn(() => file(22)), pairs: vi.fn((_orders: any[]) => file(33)) });
 // TEST: page dimensions identify parts without relying on implementation text.
 describe('WB available-label ribbon', () => {
+  // TEST: Ozon has order/product labels, but no WB SC or pickup-point labels.
+  it('downloads Ozon pairs without requesting WB documents when enabled', async () => {
+    const read = readers();
+    const result = await wbAllLabels([{ ...order(), marketplace: 'OZON', supplyId: null }], read, true);
+    expect(result.pageCount).toBe(1); expect(result.warnings).toEqual([]);
+    expect(result.fileName).toBe('FBS_OZON_all_labels.pdf');
+    expect(read.sc).not.toHaveBeenCalled(); expect(read.pvz).not.toHaveBeenCalled();
+  });
   it('keeps SC, PVZ, paired pages in order and deduplicates supplies', async () => {
     const read = readers();
     const result = await wbAllLabels([order(), order(), order('2')], read);
