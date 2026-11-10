@@ -1,4 +1,5 @@
 import { wbShippingEnabled } from './wb-shipping-points';
+import { restoreSavedFbsArchive } from './fbs-saved-archive';
 import { wbShippingWorkflow, assertShippingBeforeDelivery, withWbShippingLock } from './wb-shipping-workflow';
 import { isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzOrderKey, syncPvzLossBatch } from './fbs-pvz-loss';
 import { PDFDocument } from 'pdf-lib';
@@ -2175,6 +2176,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return (user.warehouseIds ?? []).includes(activeWarehouseId)
       ? activeWarehouseId
       : '';
+  }
+
+  // FIX: display-only archive enrichment; run branch rules again before store scoping.
+  async restoreFbsArchiveForDisplay(clientId: string, response: FbsOrdersResponse, user: AuthUser, allBranches = false, displayWarehouseId?: string, archiveFrom?: string, archiveTo?: string) {
+    if (process.env.WMS_FBS_SAVED_ARCHIVE_ENABLED !== 'true') return response;
+    this.clientScopes.requireClientAccess(user, clientId, 'read');
+    const restored = await restoreSavedFbsArchive(this.prisma, clientId, response, archiveFrom, archiveTo);
+    return (this.scopeFbsOrdersForUser as (...args: any[]) => Promise<FbsOrdersResponse>)(restored, user, allBranches, displayWarehouseId);
   }
 
   private async scopeFbsOrdersForUser(
