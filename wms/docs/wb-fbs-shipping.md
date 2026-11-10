@@ -2,7 +2,7 @@
 
 ## B2B supply separation
 
-Prepared 2026-11-10, not published. Request 2870 exposed a mixed WB supply: four retail orders were accepted, while a B2B order was rejected. WB reports this distinction as `options.isB2B`; the supply itself uses `isB2b`.
+Published PR977 on 2026-11-10. Request 2870 exposed a mixed WB supply: four retail orders were accepted, while a B2B order was rejected. WB reports this distinction as `options.isB2B`; the supply itself uses `isB2b`.
 
 With `WMS_AUTO_ASSEMBLY_DURABLE_ENABLED=true`, `moveFbsOrdersToSupply` fetches selected current WB metadata before creating any supply. It requires an explicit boolean for every selected order, then adds B2B/retail to the existing cabinet/warehouse/cargo/cross-border grouping. Missing metadata or a changed new-order status stops creation. The flag-off path remains unchanged for sold deployments. No schema, inventory or billing changes.
 
@@ -10,7 +10,7 @@ Regression: `wb-b2b-supplies.spec.ts` runs the actual creation handler with a WB
 
 Validation: focused 24 passed; merged API suite 4697 passed / 9 skipped, dedicated `*.integration.spec.ts` database suites excluded. Full TypeScript check reports two errors in unchanged `yandex-fby.service.ts` (nullable SKU IDs, lines 46 and 54), none in changed files. No live shipment or physical TSD test was performed.
 
-The current server API image was inspected before development and remains unchanged. Source/runtime parity is false: a release must overlay only the two changed runtime modules onto a freshly verified baseline, retaining the runtime durable-operation journal. Do not deploy the complete locally compiled service.
+The server image was rechecked after PR975 and the exact API2 overlay published. Source/runtime parity is false: a release must overlay only the two changed runtime modules onto a freshly verified baseline, retaining the runtime durable-operation journal. Do not deploy the complete locally compiled service.
 
 The delivery dialog separates the destination warehouse from the hand-in point. Select city, point type, date and an available address; save the selection in WB. Self-shipping is supported. Enter the desired total cargo-place count and create missing places. Use existing Documents labels and TSD packing/closing.
 
@@ -36,3 +36,5 @@ Prepared follow-up: the browser omits shippingPointId until saving a selected po
 Regression: wb-shipping-search.spec.ts (empty DTO RED/GREEN, malformed ID, no full refresh), workflow point-search request count, browser first request without point ID, exact runtime DTO/service tests. Read-only live selected-supply check: two orders, options1471ms, points1620ms/5432 points; no mutations. Network/browser latency is not included in those server timings.
 
 Release candidate: exact API2 additive overlay on the PR975 runtime, preserving manual request linkage and the durable auto-assembly journal. Inverse-byte proof, full image file hashes, actual-runtime6 RED/GREEN and module loading passed. Release scripts: `scripts/releases/wb-b2b-20261110/`. Web and environment remain unchanged.
+
+Post-release verification: public health OK and entry HTTP200; live request2870 returns four explicit retail flags and one B2B flag with correct separate supply IDs. No order, inventory or billing writes in release checks. Snapshot verifies all771 API files; web bytes/environment/other containers unchanged.
