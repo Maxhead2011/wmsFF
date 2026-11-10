@@ -8690,9 +8690,43 @@ public class MainActivity extends Activity {
             return;
         }
 
+        // FIX: reopening must not erase unsent scans; another box must wait for closure.
+        pro.logoff.wms.tsd.data.ReceiptBoxDraft.Snapshot restoredDraft = null;
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            try {
+                if (!receiptCurrentItems.isEmpty() || receiptCloseBatch != null) {
+                    if (!sameBox(receiptBoxCode, boxCode)) {
+                        statusMessage = "Сначала закройте текущий короб. Его сканы сохранены.";
+                        renderReceiptScreen();
+                        return;
+                    }
+                    saveReceiptBoxDraft(receiptCurrentItems, receiptCloseBatch);
+                    // FIX: still retry the server open if the first request lost its connection.
+                }
+                restoredDraft = receiptBoxDraft(boxCode).load();
+            } catch (IllegalStateException error) {
+                statusMessage = error.getMessage();
+                receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                renderReceiptScreen();
+                return;
+            }
+        }
         receiptOpeningBox = true;
         receiptBoxCode = boxCode;
         receiptCurrentItems.clear();
+        if (restoredDraft != null) {
+            for (Map<String, String> row : restoredDraft.items) {
+                ReceiptItem item = new ReceiptItem(row.get("barcode"), row.get("kiz"), row.get("name"));
+                item.secondBarcodeScan = nonEmpty(row.get("secondBarcodeScan"), "");
+                receiptCurrentItems.add(item);
+                if (item.kiz != null && !item.kiz.trim().isEmpty()) {
+                    String key = receiptKizKey(item.kiz);
+                    receiptKizValues.add(key);
+                    receiptKizBoxes.put(key, receiptBoxCode);
+                }
+            }
+            receiptCloseBatch = restoredDraft.batch;
+        }
         clearPendingReceiptProductFields();
         receiptFeedbackColor = 0;
         statusMessage = "Короб открыт. Сканируйте товар.";
@@ -8924,6 +8958,18 @@ public class MainActivity extends Activity {
         }
         ReceiptItem added = new ReceiptItem(barcode, kiz, sku == null ? null : sku.name);
         added.secondBarcodeScan = receiptBarcodeRescan.evidence();
+        // FIX: acknowledge a scan only after its draft has reached persistent storage.
+        if ("logoff".equals(BuildConfig.FLAVOR)) {
+            List<ReceiptItem> next = new ArrayList<>(receiptCurrentItems);
+            next.add(added);
+            try { saveReceiptBoxDraft(next, null); }
+            catch (IllegalStateException error) {
+                statusMessage = error.getMessage();
+                receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+                renderReceiptScreen();
+                return;
+            }
+        }
         receiptCurrentItems.add(added);
         if (kiz != null && !kiz.trim().isEmpty()) {
             String normalizedKiz = receiptKizKey(kiz);
@@ -9011,6 +9057,25 @@ public class MainActivity extends Activity {
         pendingReceiptSku = null;
         pendingReceiptRequiresKiz = false;
         receiptCheckingKiz = false;
+    }
+
+    // FIX: the document key contains operator and device; clients/boxes never share drafts.
+    private pro.logoff.wms.tsd.data.ReceiptBoxDraft receiptBoxDraft(String box) {
+        return new pro.logoff.wms.tsd.data.ReceiptBoxDraft(uiStore, receiptDocumentPreferenceKey,
+            receiptClientId, receiptSourceDocument, normalizeBoxCode(box));
+    }
+
+    private void saveReceiptBoxDraft(List<ReceiptItem> items, ReceiptCloseBatch batch) {
+        List<Map<String, String>> rows = new ArrayList<>();
+        for (ReceiptItem item : items) {
+            Map<String, String> row = new LinkedHashMap<>();
+            row.put("barcode", item.barcode);
+            row.put("kiz", nonEmpty(item.kiz, ""));
+            row.put("name", nonEmpty(item.name, ""));
+            row.put("secondBarcodeScan", nonEmpty(item.secondBarcodeScan, ""));
+            rows.add(row);
+        }
+        receiptBoxDraft(receiptBoxCode).save(rows, batch);
     }
 
     private void closeReceiptBox() {
@@ -9113,13 +9178,21 @@ public class MainActivity extends Activity {
             }
             try {
                 receiptCloseBatch = ReceiptCloseBatch.create(receiptClientId, closedBoxCode, receiptSourceDocument, payloads);
-            } catch (IllegalArgumentException error) {
+                saveReceiptBoxDraft(items, receiptCloseBatch);
+            } catch (IllegalArgumentException | IllegalStateException error) {
                 // FIX: keep the scanned items on validation failure instead of crashing the UI.
                 statusMessage = error.getMessage();
                 receiptFeedbackColor = BOX_NOT_NEEDED_RED;
                 renderReceiptScreen();
                 return;
             }
+        }
+        try { saveReceiptBoxDraft(items, receiptCloseBatch); }
+        catch (IllegalStateException error) {
+            statusMessage = error.getMessage();
+            receiptFeedbackColor = BOX_NOT_NEEDED_RED;
+            renderReceiptScreen();
+            return;
         }
         ReceiptCloseBatch batch = receiptCloseBatch;
         receiptClosingBox = true;
@@ -9141,6 +9214,14 @@ public class MainActivity extends Activity {
                 final int acceptedQuantity = acceptedScans;
                 mainHandler.post(() -> {
                     if (!session.hasSameAccessToken(safeSession()) || receiptCloseBatch != batch) return;
+                    // FIX: the outbox now owns every stable scan/close key, even offline.
+                    try { receiptBoxDraft(closedBoxCode).clear(); }
+                    catch (IllegalStateException error) {
+                        receiptClosingBox = false;
+                        statusMessage = error.getMessage();
+                        renderReceiptScreen();
+                        return;
+                    }
                     receiptClosingBox = false;
                     receiptCloseBatch = null;
                     online = summary.retried == 0;

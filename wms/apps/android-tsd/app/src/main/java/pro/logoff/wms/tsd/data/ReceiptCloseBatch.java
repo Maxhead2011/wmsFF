@@ -49,6 +49,25 @@ public final class ReceiptCloseBatch {
         return new ReceiptCloseBatch(closeKey, operations);
     }
 
+    // FIX: reload the same idempotency keys after a restart during outbox handoff.
+    public static ReceiptCloseBatch restore(List<PendingOperation> operations) {
+        if (operations == null || operations.size() < 2 || operations.size() > 1001)
+            throw new IllegalArgumentException("Некорректный сохранённый пакет приёмки.");
+        Set<String> keys = new HashSet<>();
+        List<String> scans = new ArrayList<>();
+        for (int i=0;i<operations.size();i++) {
+            PendingOperation operation=operations.get(i);
+            if (blank(operation.operationKey) || !keys.add(operation.operationKey)
+                || !(i==operations.size()-1 ? "receipt_close" : "receipt_scan").equals(operation.operationType))
+                throw new IllegalArgumentException("Некорректные операции сохранённой приёмки.");
+            if (i<operations.size()-1) scans.add(operation.operationKey);
+        }
+        PendingOperation close=operations.get(operations.size()-1);
+        if (!("[\""+String.join("\",\"",scans)+"\"]").equals(close.payload.get("receiptOperationKeys")))
+            throw new IllegalArgumentException("Неполный сохранённый пакет приёмки.");
+        return new ReceiptCloseBatch(close.operationKey, new ArrayList<>(operations));
+    }
+
     public List<String> operationKeys() {
         List<String> keys = new ArrayList<>();
         for (PendingOperation operation : operations) keys.add(operation.operationKey);

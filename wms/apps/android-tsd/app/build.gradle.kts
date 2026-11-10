@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 250 // FIX: display store context while preserving shared physical inventory.
-            versionName = "0.1.250-fbo-deficit"
+            versionCode = 251 // FIX: persist receipt box drafts across reopen and process restart.
+            versionName = "0.1.251-receipt-draft"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
