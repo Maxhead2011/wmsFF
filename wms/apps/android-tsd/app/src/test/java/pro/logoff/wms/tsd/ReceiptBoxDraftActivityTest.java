@@ -23,8 +23,10 @@ public class ReceiptBoxDraftActivityTest {
             Class<?> item=Class.forName(MainActivity.class.getName()+"$ReceiptItem");Constructor<?> ctor=item.getDeclaredConstructor(String.class,String.class,String.class);ctor.setAccessible(true);
             List<Object> items=(List<Object>)get(a,"receiptCurrentItems");for(int i=0;i<99;i++)items.add(ctor.newInstance("2037359944196","unique-kiz-"+i,"Scarf"));
             EditText input=new EditText(a);input.setText("FFL_ELE0811_06");set(a,"boxCodeInput",input);
+            QuietExecutor openRequests=new QuietExecutor();set(a,"executor",openRequests);
             invoke(a,"openReceiptBoxFromInput");
             assertEquals("logoff".equals(BuildConfig.FLAVOR)?99:0,items.size());
+            assertEquals("The server-open retry must still run",1,openRequests.calls);
             a.getSharedPreferences("logoff_wms_tsd_session",0).edit().clear().commit();
         }
     }
@@ -68,5 +70,5 @@ public class ReceiptBoxDraftActivityTest {
     static Object get(Object o,String name)throws Exception{Field f=MainActivity.class.getDeclaredField(name);f.setAccessible(true);return f.get(o);}
     static void set(Object o,String name,Object value)throws Exception{Field f=MainActivity.class.getDeclaredField(name);f.setAccessible(true);f.set(o,value);}
     static void invoke(Object o,String name)throws Exception{Method m=MainActivity.class.getDeclaredMethod(name);m.setAccessible(true);m.invoke(o);}
-    static class QuietExecutor extends AbstractExecutorService{public void execute(Runnable r){}public void shutdown(){}public List<Runnable> shutdownNow(){return new ArrayList<>();}public boolean isShutdown(){return false;}public boolean isTerminated(){return false;}public boolean awaitTermination(long n,TimeUnit u){return false;}}
+    static class QuietExecutor extends AbstractExecutorService{int calls;public void execute(Runnable r){calls++;}public void shutdown(){}public List<Runnable> shutdownNow(){return new ArrayList<>();}public boolean isShutdown(){return false;}public boolean isTerminated(){return false;}public boolean awaitTermination(long n,TimeUnit u){return false;}}
 }

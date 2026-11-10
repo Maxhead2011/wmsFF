@@ -6,7 +6,7 @@ Prepared LOGOFF 251 (`0.1.251-receipt-draft`); not published or installed yet.
 
 Opening a box cleared `receiptCurrentItems` before the unsent scans reached the Room outbox. Reopening the same box or switching to another one could discard the receipt while the local duplicate cache still remembered its KIZs. Queue zero did not prove receipt completion.
 
-Only the `logoff` flavor now persists each accepted box scan synchronously before showing success. Reopening retains the current list; opening another box is blocked until the unfinished one is closed. After Activity/process recreation, opening the same box restores its scans, barcode-rescan evidence and local duplicate guard. Preferences are scoped by operator/device receipt key, client, receipt document and normalized box. Damaged drafts fail closed.
+Only the `logoff` flavor now persists each accepted box scan synchronously before showing success. Reopening retains the current list and retries the server-open request if its original response was lost; opening another box is blocked until the unfinished one is closed. After Activity/process recreation, opening the same box restores its scans, barcode-rescan evidence and local duplicate guard. Preferences are scoped by operator/device receipt key, client, receipt document and normalized box. Damaged drafts fail closed.
 
 The close batch is persisted with its original operation keys before Room handoff. A restarted or retried handoff reuses those keys; Room's existing IGNORE insert retains terminal rows. The draft is removed only after its batch has entered the durable outbox. Network failure leaves the existing queue responsible for retry.
 

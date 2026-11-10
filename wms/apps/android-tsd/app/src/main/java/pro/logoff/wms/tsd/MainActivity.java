@@ -8701,9 +8701,7 @@ public class MainActivity extends Activity {
                         return;
                     }
                     saveReceiptBoxDraft(receiptCurrentItems, receiptCloseBatch);
-                    statusMessage = "Короб уже открыт. Все сканы сохранены: " + receiptCurrentItems.size();
-                    renderReceiptScreen();
-                    return;
+                    // FIX: still retry the server open if the first request lost its connection.
                 }
                 restoredDraft = receiptBoxDraft(boxCode).load();
             } catch (IllegalStateException error) {
