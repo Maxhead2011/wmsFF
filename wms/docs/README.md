@@ -1,3 +1,5 @@
+Prepared (2026-11-10): [FBS archive persistence and bounded three-day date range](fbs-saved-archive.md). Own flag, read-only API3/web2 overlay; active reads and sold WMS retained.
+
 Published PR983 (2026-11-10): own-WMS FBS employee-action stages for WB/Ozon. Bushkova/Khrupova start on acknowledged ribbon printing; other clients retain TSD start. PACKED requires SOS print acknowledgement coverage; DONE remains marketplace-confirmed for FBS/FBO. Moscow checks 08:00/12:00/15:00/18:00/21:00. Both own flags enabled and two client policies configured. Exact API11 overlay on PR981; public health, all776 API hashes, unchanged web/environment except two flags, and other containers verified. API4732/web624 passed (9/2 skipped; dedicated DB integrations excluded), runtime17 and isolated PostgreSQL/full API passed; CI passed. Baseline `2026-11-10-fbs-action-status`; sourceParityVerified=false. Physical printing not verified; Lamoda/Yandex excluded from new scheduler. Sold unchanged.
 
 [Employee-action FBS stages and marketplace schedule](fbs-employee-action-stages.md): published own-WMS release PR983; see validation and limitations.

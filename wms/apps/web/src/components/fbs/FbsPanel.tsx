@@ -1,3 +1,8 @@
+// FIX: last three calendar days in Moscow; archive is loaded only for this range.
+export function defaultFbsArchivePeriod(now = new Date()) {
+  const to = new Date(now.getTime() + 3 * 3600000).toISOString().slice(0,10);
+  return { from: new Date(Date.parse(to + 'T00:00:00Z') - 2 * 86400000).toISOString().slice(0,10), to };
+}
 import { FbsSupplyDeliveryDialog, canSubmitFbsSupplyDelivery } from './FbsSupplyDeliveryDialog';
 export { canSubmitFbsSupplyDelivery } from './FbsSupplyDeliveryDialog';
 import { FbsProductReserve } from './FbsProductReserve';
@@ -560,6 +565,9 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     setSelectedClientId(current => choices.some(c => c.id === current) ? current : choices.length === 1 ? choices[0].id : '');
   }, [clients, marketplace]);
 
+  // FIX: load persisted history only when opening the archive, not every active-order poll.
+  const [archivePeriod, setArchivePeriod] = useState(defaultFbsArchivePeriod);
+  const loadArchive = activeView === 'shipped' || activeView === 'archive';
   const loadOrders = useCallback(
     async (refresh = false) => {
       if (!selectedClientId || !marketplace) {
@@ -569,7 +577,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       const sequence = ++loadSequence.current;
       setOrdersState((current) => ({ status: 'loading', data: current.data, error: '' }));
       try {
-        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh);
+        const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, loadArchive ? 'archive' : 'snapshot', loadArchive ? archivePeriod : undefined);
         if (loadSequence.current === sequence) {
           setOrdersState({ status: 'ready', data, error: '' });
         }
@@ -583,7 +591,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
         }
       }
     },
-    [marketplace, selectedClientId, session.accessToken],
+    [marketplace, selectedClientId, session.accessToken, loadArchive, archivePeriod.from, archivePeriod.to],
   );
 
   async function runFbsSynchronizationAudit() {
@@ -2224,6 +2232,8 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
           <FbsCostView data={data} />
         ) : activeView === 'active' || activeView === 'shipped' || activeView === 'cancelled' || activeView === 'archive' ? (
           <FbsHistoryOrdersView
+            archivePeriod={archivePeriod}
+            onArchivePeriodChange={setArchivePeriod}
             data={data}
             session={session}
             view={activeView}
@@ -5555,6 +5565,7 @@ export function FbsHistoryOrdersView(props: Parameters<typeof FbsOrdersView>[0])
 }
 
 function FbsOrdersView({
+  archivePeriod, onArchivePeriodChange,
   data,
   session,
   search,
@@ -5586,6 +5597,8 @@ function FbsOrdersView({
   onRunSynchronizationAudit,
   onCloseSynchronizationAudit,
 }: {
+  archivePeriod?: { from: string; to: string };
+  onArchivePeriodChange?: (period: { from: string; to: string }) => void;
   data: ClientFbsOrders | null;
   session: AuthSession;
   search: string;
@@ -5631,8 +5644,11 @@ function FbsOrdersView({
   const [storeSelection, setStoreSelection] = useState({ clientId: '', id: 'all' });
   const stores = data?.stores ?? [];
   const selectedStoreId = storeSelection.clientId === data?.client.id ? storeSelection.id : 'all';
-  const [shippedDateFrom, setShippedDateFrom] = useState('');
-  const [shippedDateTo, setShippedDateTo] = useState('');
+  const [localPeriod, setLocalPeriod] = useState(defaultFbsArchivePeriod);
+  const { from: shippedDateFrom, to: shippedDateTo } = archivePeriod ?? localPeriod;
+  const setPeriod = onArchivePeriodChange ?? setLocalPeriod;
+  const setShippedDateFrom = (from: string) => setPeriod({ from, to: shippedDateTo });
+  const setShippedDateTo = (to: string) => setPeriod({ from: shippedDateFrom, to });
   const [cancelledExportBusy, setCancelledExportBusy] = useState(false);
   const [cancelledExportError, setCancelledExportError] = useState('');
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -5665,7 +5681,7 @@ function FbsOrdersView({
     ordersLayout === 'warehouses' && selectedWarehouseKey !== 'all'
       ? orders.filter((order) => fbsOrderWarehouseKey(order) === selectedWarehouseKey)
       : orders;
-  const dateScopedOrders = view === 'shipped'
+  const dateScopedOrders = view === 'shipped' && !archivePeriod
     ? filterFbsShippedOrdersByDate(
         warehouseScopedOrders,
         shippedDateFrom,
@@ -5895,7 +5911,7 @@ function FbsOrdersView({
     archive: {
       icon: Archive,
       title: 'Архив FBS пока пуст',
-      text: 'Завершённые заказы за последние 30 дней будут храниться здесь.',
+      text: 'Завершённые заказы за выбранный период.',
     },
     cancelled: {
       icon: XCircle,
@@ -6063,7 +6079,7 @@ function FbsOrdersView({
             <CalendarDays size={18} aria-hidden="true" />
             <div>
               <strong>Дата отгрузки</strong>
-              <small>Заказы ниже автоматически свёрнуты по дням.</small>
+              <small>Загружается выбранный период. Если дата отгрузки не сохранена — используется дата заказа.</small>
             </div>
           </div>
           <label>
@@ -6078,9 +6094,9 @@ function FbsOrdersView({
             type="button"
             className="button button-secondary"
             disabled={!shippedDateFrom && !shippedDateTo}
-            onClick={() => { setShippedDateFrom(''); setShippedDateTo(''); }}
+            onClick={() => setPeriod(defaultFbsArchivePeriod())}
           >
-            Сбросить даты
+            Последние 3 дня
           </button>
         </section>
       ) : null}
