@@ -24635,7 +24635,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const value = cached ?? (await this.refreshFbsOrdersCache(clientId));
     const shippedOrders = value.orders.filter((order) => order.category === 'shipped');
     const billingByOrder = cached
-      ? await this.ensureFbsProcessingCharges(clientId, shippedOrders)
+      ? await this.ensureFbsProcessingCharges(clientId, wbOrderStockLifecycleEnabled() ? value.orders : shippedOrders)
       : new Map(
           shippedOrders
             .filter((order) => order.billing)
@@ -27168,6 +27168,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     );
     ordersWithStockSources=await filterReceiptOrderBoxes(this.prisma,clientId,ordersWithStockSources);
     // FIX: local shipment facts survive later cancellation/return/supply changes in WB.
+    // FIX: retain actual WB statuses before display overlays replace them with local shipment snapshots.
+    const billingWbObservations = ordersWithStockSources;
     if (wbOrderStockLifecycleEnabled()) {
       ordersWithStockSources = await this.applyLocalWbShipments(clientId, ordersWithStockSources);
     }
@@ -27209,7 +27211,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     }));
     const billingByOrder = options.billingMode === 'skip' ? new Map() : await this.ensureFbsProcessingCharges(
       clientId,
-      ordersWithReservations.filter((order) => order.category === 'shipped'),
+      wbOrderStockLifecycleEnabled() ? ordersWithReservations : ordersWithReservations.filter((order) => order.category === 'shipped'),
+      ...(wbOrderStockLifecycleEnabled() ? [billingWbObservations] : []),
     );
     const orders = ordersWithReservations.map((order) => ({
       ...order,
@@ -27580,22 +27583,41 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     });
   }
 
-  private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[]) {
+  private async ensureFbsProcessingCharges(clientId: string, orders: FbsOrderSummary[], wbObservedOrders: FbsOrderSummary[] = orders) {
     // FIX: bill durable local facts, including successful prints and orders no longer returned by WB.
     if (wbOrderStockLifecycleEnabled()) {
-      orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES);
+      // FIX: WB acknowledgement can exist without a local pick (fabric/on-demand).
+      const observedWb = new Map(wbObservedOrders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES)
+        .map(order => [selectionKey(order.connectionId, order.id), order]));
+      const acceptedWb = (order: FbsOrderSummary) => order.supplierStatus === 'complete' &&
+        ['sorted', 'ready_for_pickup', 'sold'].includes(order.wbStatus);
+      orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES
+        ? order.category === 'shipped' : acceptedWb(observedWb.get(selectionKey(order.connectionId, order.id)) ?? order));
+      const accountedWb = new Set<string>();
       // FIX: decode bounded JSON batches rather than three full historical snapshots at once.
       for (let skip = 0; ; skip += 1000) {
         const facts = await this.prisma.wbOrderShipment.findMany({ where: { clientId, source: { not: 'LEGACY_WMS_SHIPMENT' } }, skip, take: 1000,
           orderBy: [{ shippedAt: 'asc' }, { id: 'asc' }],
           select: { assemblyId: true, assemblySnapshot: true, orderSnapshot: true, quantity: true, shippedAt: true } });
-        orders.push(...facts.map(fact => {
+        const localOrders = facts.map(fact => {
           const evidence = asRecord(fact.assemblySnapshot);
           return { ...(fact.orderSnapshot as unknown as FbsOrderSummary), category: 'shipped' as const, processingAssemblyId: fact.assemblyId,
             ...(typeof evidence.billingAttemptId === 'string' ? { processingAttemptId: evidence.billingAttemptId } : {}),
             processingEvidence: { itemCount: fact.quantity, boxCode: textValue(evidence.boxCode) || null, relabelRequired: Boolean(evidence.relabelConfirmedAt) },
             supplierStatus: 'complete', deliveryDate: fact.shippedAt.toISOString() };
-        }));
+        });
+        for (const order of localOrders) {
+          const identity = selectionKey(order.connectionId, order.id);
+          const observed = observedWb.get(identity);
+          // FIX: an explicitly pending/cancelled WB order is not confirmed handover.
+          if (!acceptedWb(observed ?? order)) continue;
+          if (!order.processingAttemptId && !accountedWb.has(identity)) {
+            orders = orders.filter(existing => existing.marketplace !== MarketplaceType.WILDBERRIES ||
+              selectionKey(existing.connectionId, existing.id) !== identity || !!existing.processingAttemptId);
+            accountedWb.add(identity);
+          }
+          orders.push(order);
+        }
         if (facts.length < 1000) break;
       }
     }
