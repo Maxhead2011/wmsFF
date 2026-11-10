@@ -57,8 +57,11 @@ export class RequestMarketStatusService {
     if (r.type !== 'OUTBOUND' || ['DONE','CANCELLED','REJECTED'].includes(r.status))
       throw new ConflictException('Проверка доступна для открытой заявки на отгрузку.');
     let message: string;
+    let needsAttention = false;
     if (r.fbsOrderLinks.length) {
-      message = await this.checkFbs(id,r.clientId,r.fbsOrderLinks,user);
+      const result = await this.checkFbs(id,r.clientId,r.fbsOrderLinks,user);
+      message = result.message;
+      needsAttention = result.needsAttention;
     } else if (r.lamodaAssembly) {
       const {plan} = r.lamodaAssembly;
       const account = await this.db.lamodaAccount.findFirst({where:{id:plan.accountId,clientId:r.clientId,isActive:true}});
@@ -98,7 +101,12 @@ export class RequestMarketStatusService {
         message += ' · В WMS требуется отметка загрузки в автомобиль';
     } else throw new ConflictException('У заявки нет поддерживаемой привязки к маркетплейсу.');
     const current = await this.db.clientRequest.findUniqueOrThrow({where:{id},select:{status:true}});
-    return {status:current.status,message,checkedAt:new Date().toISOString()};
+    // FIX: a successful refresh can still carry a business blocker, not an API error.
+    if (current.status !== 'DONE' && !r.fbsOrderLinks.length) {
+      needsAttention = /не привязана|требуется отметка|VALIDATION_ERROR/.test(message);
+      message += ' · Статус ВМС не изменён; требуется подтверждение сдачи и выполнение условий отгрузки.';
+    }
+    return {status:current.status,message,needsAttention,checkedAt:new Date().toISOString()};
   }
 
   private async checkFbs(id:string, clientId:string, links:Link[],user:AuthUser) {
@@ -128,7 +136,8 @@ export class RequestMarketStatusService {
         observations.push({id:orderId,connectionId,marketplace:market,supplierStatus:posting.status,wbStatus:posting.status});
       }
     }
-    await this.db.$transaction(async tx=>{
+    // FIX: report why verified marketplace evidence did not close the local request.
+    const outcome = await this.db.$transaction(async tx=>{
       await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${id} FOR UPDATE`;
       const fresh = await tx.clientRequest.findUniqueOrThrow({where:{id},include:{fbsOrderLinks:true}});
       assertWarehouseAccess(user,fresh,'write');
@@ -138,10 +147,21 @@ export class RequestMarketStatusService {
       const special = !!(await tx.fbsRepeatAssemblyRun.findUnique({where:{requestId:id}}) ??
         await tx.fbsReshipmentRun.findUnique({where:{requestId:id}}));
       const close = market==='OZON'?closeOzonPackedRequest:closeWbPackedRequest;
-      await close(tx,fresh,observations,special);
+      const closed = await close(tx,fresh,observations,special);
+      if (closed || fresh.status === 'DONE') return {needsAttention:false,reason:''};
+      if (special || fresh.fbsEmergencyAssemblyAt)
+        return {needsAttention:true,reason:'Для повторной или аварийной сборки требуется отдельная проверка сдачи.'};
+      const acceptedAll = observations.every(o=>market==='OZON'
+        ? ['delivering','delivered'].includes(o.supplierStatus)
+        : o.supplierStatus==='complete' && ['sorted','ready_for_pickup','sold'].includes(o.wbStatus));
+      if (!acceptedAll) return {needsAttention:false,reason:'Маркетплейс подтвердил передачу не всех заказов; статус заявки сохранён.'};
+      if (process.env.WMS_FBS_ACTION_STATUS_ENABLED !== 'true' && fresh.status !== 'PACKED')
+        return {needsAttention:true,reason:'Передача подтверждена, но действующая настройка разрешает закрытие только из «Упакована».'};
+      return {needsAttention:true,reason:'Передача подтверждена, но статус не обновлён: проверьте настройки автозакрытия и текущее состояние заявки.'};
     });
     const counts=new Map<string,number>();
     for(const o of observations){const status=market==='OZON'?o.supplierStatus:o.supplierStatus+'/'+o.wbStatus;counts.set(status,(counts.get(status)??0)+1);}
-    return (market==='OZON'?'Ozon':'WB')+' · '+[...counts].map(([status,n])=>status+' ('+n+')').join(', ');
+    return {needsAttention:outcome.needsAttention,message:(market==='OZON'?'Ozon':'WB')+' · '+
+      [...counts].map(([status,n])=>status+' ('+n+')').join(', ')+(outcome.reason?' · '+outcome.reason:'')};
   }
 }

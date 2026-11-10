@@ -4,14 +4,14 @@ import {checkRequestMarketStatus,marketStatusTargets} from '../../lib/api';
 import {requestStatusLabel} from './clientRequestMeta';
 
 type Target={id:string;number:number};
-type Outcome=Target&{kind:'done'|'pending'|'error';detail:string};
+type Outcome=Target&{kind:'done'|'pending'|'attention'|'error';detail:string};
 export async function checkMarketBatch(targets:Target[],check:(id:string)=>ReturnType<typeof checkRequestMarketStatus>, progress:(rows:Outcome[])=>void,active:()=>boolean) {
   const rows:Outcome[]=[];
   for(const target of targets){
     if(!active())break;
     try{
       const result=await check(target.id);
-      rows.push({...target,kind:result.status==='DONE'?'done':'pending',detail:result.message+' · '+requestStatusLabel(result.status)});
+      rows.push({...target,kind:result.needsAttention?'attention':result.status==='DONE'?'done':'pending',detail:result.message+' · '+requestStatusLabel(result.status)});
     }catch(e){rows.push({...target,kind:'error',detail:e instanceof Error?e.message:'Ошибка проверки'});}
     if(active())progress([...rows]);
   }
@@ -36,10 +36,11 @@ export function MarketStatusBatch({token,reload,disabled,onBusy}:{token:string;r
     }catch(e){if(mounted.current)setError(e instanceof Error?e.message:'Проверка не удалась.');}
     finally{lock.current=false;if(mounted.current){setRunning(false);onBusy(false);}}
   }
-  const problems=rows.filter(r=>r.kind==='error');
+  const problems=rows.filter(r=>r.kind==='error'||r.kind==='attention');
   return <>
     <button type="button" className="primary-button" style={{marginInlineStart:'auto', backgroundColor:'#1754ad', color:'#fff'}} disabled={disabled||running}
-      onClick={()=>void run()}><RefreshCw size={16} aria-hidden="true"/> {running?'Проверяю '+rows.length+' из '+total+'…':'Проверить статусы всех заявок'}</button>
+      onClick={()=>void run()}><RefreshCw size={16} aria-hidden="true"/> {running?'Проверяю '+rows.length+' из '+total+'…':'Проверить статусы открытых заявок'}</button>
+    <p style={{flexBasis:'100%'}}>Проверяются открытые заявки выбранного склада в пределах вашего доступа. Сданные и отменённые заявки не изменяются.</p>
     {error&&<p role="alert">{error}</p>}
     {finished&&<div style={{flexBasis:'100%'}}><p role="status">{total?'Проверено заявок: '+rows.length:'Открытых заявок для проверки нет'} · {finished} МСК</p>
       {total>0&&<><p>Перешли в «Сдано» — {rows.filter(r=>r.kind==='done').length} · Без изменения — {rows.filter(r=>r.kind==='pending').length} · Требуют внимания — {problems.length}</p>
