@@ -20512,7 +20512,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const b2bByOrder = new Map<string, boolean>();
     const splitB2b = process.env.WMS_AUTO_ASSEMBLY_DURABLE_ENABLED === 'true';
     if (splitB2b) {
-      const fresh = await wbLabelOrders(this.prisma, clientId, dto.orders, fetchWildberriesFbsHistory, marketplaceJson);
+      const fresh = await wbLabelOrders(this.prisma, clientId, orders.map(({ id, connectionId }) => ({ id, connectionId })), fetchWildberriesFbsHistory, marketplaceJson);
       for (const order of orders) {
         const matches = fresh?.filter(row => row.connectionId === order.connectionId && row.id === order.id) ?? [];
         if (matches.length !== 1 || typeof matches[0].isB2b !== 'boolean') {

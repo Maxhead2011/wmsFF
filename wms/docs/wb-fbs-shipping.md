@@ -8,7 +8,7 @@ With `WMS_AUTO_ASSEMBLY_DURABLE_ENABLED=true`, `moveFbsOrdersToSupply` fetches s
 
 Regression: `wb-b2b-supplies.spec.ts` runs the actual creation handler with a WB mock rejecting mixed groups, checks 4+1 grouping, homogeneous groups, warehouse/cargo boundaries, missing metadata, changed status and flag-off isolation. `wb-label-orders.spec.ts` verifies true/false/unknown parsing. The mixed-group regression failed before the fix and passes after it. These tests make no live supply writes.
 
-Validation: focused 15 passed; API suite 4688 passed / 9 skipped, dedicated `*.integration.spec.ts` database suites excluded. Full TypeScript check reports two errors in unchanged `yandex-fby.service.ts` (nullable SKU IDs, lines 46 and 54), none in changed files. No live shipment or physical TSD test was performed.
+Validation: focused 24 passed; merged API suite 4697 passed / 9 skipped, dedicated `*.integration.spec.ts` database suites excluded. Full TypeScript check reports two errors in unchanged `yandex-fby.service.ts` (nullable SKU IDs, lines 46 and 54), none in changed files. No live shipment or physical TSD test was performed.
 
 The current server API image was inspected before development and remains unchanged. Source/runtime parity is false: a release must overlay only the two changed runtime modules onto a freshly verified baseline, retaining the runtime durable-operation journal. Do not deploy the complete locally compiled service.
 
@@ -34,3 +34,5 @@ Official contract: https://dev.wildberries.ru/api/swagger/yaml/ru/03-orders-fbs.
 Prepared follow-up: the browser omits shippingPointId until saving a selected point; the DTO normalizes the empty value sent by older tabs but still rejects malformed IDs. Shipping options and point/cargo operations use the selected-order reader with fresh WB statuses instead of full client refresh. Destination and date metadata are retained. Final delivery retains its existing fresh checks. Official SupplyOrderIDsAPI uses orderIds; cargo and final membership validation now follow that shape.
 
 Regression: wb-shipping-search.spec.ts (empty DTO RED/GREEN, malformed ID, no full refresh), workflow point-search request count, browser first request without point ID, exact runtime DTO/service tests. Read-only live selected-supply check: two orders, options1471ms, points1620ms/5432 points; no mutations. Network/browser latency is not included in those server timings.
+
+Release candidate: exact API2 additive overlay on the PR975 runtime, preserving manual request linkage and the durable auto-assembly journal. Inverse-byte proof, full image file hashes, actual-runtime6 RED/GREEN and module loading passed. Release scripts: `scripts/releases/wb-b2b-20261110/`. Web and environment remain unchanged.
