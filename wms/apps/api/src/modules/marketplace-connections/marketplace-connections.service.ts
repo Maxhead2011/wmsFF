@@ -20528,6 +20528,20 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       cargoPlaceCount: number;
       cargoPlaceIds: string[];
     }> = [];
+    // FIX: isolate automatic manual-supply linkage to our installation.
+    const createManualRequest = mode === 'assemble' &&
+      process.env.WMS_FBS_MANUAL_SUPPLY_REQUEST_ENABLED === 'true';
+    if (createManualRequest) {
+      // Validate all groups before the first external write.
+      await assertOrdersNotRemoved(this.prisma, clientId, orders.map((order) => ({ connectionId: order.connectionId, id: order.id })));
+      const unmapped = orders.filter((order) => !order.product);
+      if (unmapped.length) {
+        throw new BadRequestException(`Не найдены карточки товаров WMS для заказов: ${unmapped.map((order) => order.id).join(', ')}. Сначала синхронизируйте товары.`);
+      }
+      for (const group of groupedOrders.values()) {
+        await this.resolveFbsRequestWarehouseId(clientId, user, group);
+      }
+    }
     let supplyIndex = 0;
     for (const group of groupedOrders.values()) {
       supplyIndex += 1;
@@ -20638,6 +20652,32 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           orderIds: group.map((order) => order.id),
         },
       });
+      // FIX: persist WMS linkage before optional cargo creation/cache refresh can fail.
+      if (createManualRequest) {
+        try {
+          const links = await this.prisma.fbsOrderRequestLink.findMany({
+            where: { clientId, marketplace: MarketplaceType.WILDBERRIES,
+              connectionId: connection.id, orderId: { in: group.map((order) => order.id) } },
+            select: { connectionId: true, orderId: true, syncStatus: true,
+              request: { select: { status: true } } },
+          });
+          const linked = new Set(links.filter((link) =>
+            link.request.status !== ClientRequestStatus.CANCELLED && link.syncStatus !== FBS_REQUEST_LINK_REMOVED,
+          ).map((link) => selectionKey(link.connectionId, link.orderId)));
+          const unlinked = group.filter((order) => !linked.has(selectionKey(order.connectionId, order.id)));
+          if (unlinked.length) {
+            // WB membership was verified above; do not depend on an eventually consistent list.
+            const confirmed = unlinked.map((order): FbsOrderSummary => ({ ...order,
+              supplyId, supplierStatus: 'confirm', category: 'active' }));
+            await this.createFbsRequest({ clientId,
+              orders: confirmed.map((order) => ({ connectionId: order.connectionId, id: order.id })),
+            }, user, { ...response, orders: confirmed });
+          }
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : 'неизвестная ошибка';
+          throw new BadRequestException(`Поставка ${supplyId} создана в WB, но привязка заявки WMS не завершена: ${message}. Откройте эту поставку и выберите «Создать заявку». Повторно создавать поставку WB не нужно.`);
+        }
+      }
       if (deliveryPlan.requiresCargoPlaces) {
         const cargoPlaceCount = Math.ceil(itemCount / deliveryPlan.itemsPerCargoPlace);
         try {
