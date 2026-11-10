@@ -30,6 +30,21 @@ function fixture(marketplace = 'WILDBERRIES') {
 beforeEach(() => vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'true'));
 afterEach(() => vi.unstubAllEnvs());
 describe('SOS post-pick printing', () => {
+  // TEST: Ozon must have a usable SOS printing path before ACK-only packing is enabled.
+  it('prints completed marked Ozon only with confirmed KIZ and submission', async () => {
+    vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED', 'true');
+    const f = fixture('OZON');
+    f.task.requiresKiz = true; f.task.kiz = 'confirmed-mark'; f.task.wbMetaStatus = 'ACCEPTED';
+    f.db.systemSetting.findMany.mockResolvedValue([{key:'client.receipt-kiz-required.v1:korolev',value:{required:true}}]);
+    expect((await listPostPick(f.db,f.clients,user)).requests).toHaveLength(1);
+    expect((await f.run()).printStatus).toBe('QUEUED');
+    for (const override of [{wbMetaStatus:'PENDING'}, {kiz:null}, {marketplaceSubmittedAt:null}, {status:'IN_PROGRESS'}, {sourceBoxPending:true}]) {
+      expect(postPickReady({...f.task,...override})).toBe(false);
+    }
+    vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED', 'false');
+    expect(postPickReady(f.task)).toBe(false);
+  });
+
   // TEST: the same active-request scope is enforced for listing and direct scans.
   it.each(['DONE','CANCELLED','REJECTED','PACKED','IN_WORK'])('filters request status %s', async status => {
     const f=fixture(); f.request.status=status;

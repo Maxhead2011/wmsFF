@@ -1,4 +1,6 @@
 import { RequestMarketStatusController } from './request-market-status.controller';
+import { RequestMarketStatusService } from './request-market-status.service';
+import { RequestMarketStatusScheduler } from './request-market-status-scheduler.service';
 import { OzonLinkImportService } from './ozon-link-import.service';
 import { FboDeliverySyncService } from './fbo-delivery-sync.service';
 import {WbFboSupplyController} from './wb-fbo-supply.controller';
@@ -32,6 +34,8 @@ import { ClientRequestsService } from './client-requests.service';
   // FIX: Lamoda preview reuses scoped availability; no duplicate stock calculator.
   exports: [ClientRequestsService],
   providers: [
+    RequestMarketStatusService,
+    RequestMarketStatusScheduler,
     FboDeliverySyncService,
     WbFboSupplyService,
     ClientRequestRemovalService,

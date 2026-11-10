@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
 import { pdfSeries } from './pdf-series';
+import {readRibbon,confirmRibbon} from '../../common/stock/fbs-ribbon-evidence';
 
 type Page = { value: string; imageBase64: string };
 type Body = { requestId?: unknown; stationId?: unknown; clientId?: unknown; widthMm?: unknown; heightMm?: unknown; pages?: unknown };
@@ -72,7 +73,7 @@ export class PrintSeriesService {
       return saved;
     });
   }
-  async create(body: Body, user: AuthUser) {
+  async create(body: Body, user: AuthUser, verifiedRibbon?: unknown[]) {
     const warehouseId=this.scope(user),clientId=text(body.clientId),stationId=text(body.stationId),requestId=text(body.requestId);
     if(!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new BadRequestException('Неверный номер операции.');
     this.clients.requireClientAccess(user,clientId,'read');
@@ -93,7 +94,7 @@ export class PrintSeriesService {
       return {value,imageBase64};
     });
     // FIX: the UUID binds the entire series, including order, to one durable job.
-    const payload={source:'SERIES_V1',warehouseId,clientId,requestedById:user.id,widthMm:w,heightMm:h,pages};
+    const payload={source:'SERIES_V1',warehouseId,clientId,requestedById:user.id,widthMm:w,heightMm:h,pages,...(verifiedRibbon?.length?{fbsRibbon:verifiedRibbon}:{})};
     const digest=createHash('sha256').update(JSON.stringify({stationId,...payload})).digest('hex');
     const id=`series:${requestId}`;
     const match=(job:any)=> {if(job.payload?.digest!==digest)throw new ConflictException('Номер операции уже использован для другой серии.');return {id:job.id,status:job.status,pages:pages.length};};
@@ -119,7 +120,9 @@ export class PrintSeriesService {
     if (!station || station.labelWidthMm !== 58 || station.labelHeightMm !== 40)
       throw new BadRequestException('Для ленты WB выберите принтер с этикетками 58 × 40 мм.');
     const pages = await pdfSeries(body.fileBase64, 58, 40);
-    return this.create({ requestId, stationId, clientId, widthMm: 58, heightMm: 40, pages }, user);
+    const ribbon=await readRibbon(this.prisma,clientId,user.id,Buffer.from(String(body.fileBase64),'base64'),warehouseId);
+    if(ribbon.length)this.clients.requireClientAccess(user,clientId,'write');
+    return this.create({ requestId, stationId, clientId, widthMm: 58, heightMm: 40, pages }, user,ribbon);
   }
   async claim(stationId: string,user: AuthUser) {
     await this.binding(stationId,user,true);
@@ -139,7 +142,13 @@ export class PrintSeriesService {
     if(!job)throw new NotFoundException();
     const status=success?'printed':'failed';if(job.status===status)return {id,status};
     if(job.status!=='sent')throw new ConflictException('Задание уже завершено.');
-    const changed=await this.prisma.printJob.updateMany({where:{id,status:'sent'},data:{status,processedAt:new Date(),payload:{...job.payload as object,error:success?null:String(error??'Ошибка печати').slice(0,500)} as Prisma.InputJsonValue}});
-    if(!changed.count)throw new ConflictException('Результат изменился.');return {id,status};
+    // FIX: ACK and request stages commit together; retry cannot leave a printed job without its event.
+    return this.prisma.$transaction(async tx=>{
+      const at=new Date();
+      const changed=await tx.printJob.updateMany({where:{id,status:'sent'},data:{status,processedAt:at,payload:{...job.payload as object,error:success?null:String(error??'Ошибка печати').slice(0,500)} as Prisma.InputJsonValue}});
+      if(!changed.count){const latest=await tx.printJob.findUnique({where:{id}});if(latest?.status===status)return {id,status};throw new ConflictException('Результат изменился.');}
+      if(success)await confirmRibbon(tx,job.payload,id,at);
+      return {id,status};
+    },{timeout:30_000});
   }
 }

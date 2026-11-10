@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { clientReceiptKizPolicyKey } from '../../common/client-receipt-kiz-policy';
 import { randomUUID } from 'node:crypto';
+import { fbsActionStatusEnabled } from '../../common/stock/fbs-request-auto-status';
 
 // FIX: completed unmarked orders use a printing-only ledger, never SOS picking.
 export const SOS_POST_PICK = 'SOS_POST_PICK';
@@ -13,7 +14,10 @@ const text = (v: unknown, label: string) => {
   return v.trim();
 };
 export function postPickReady(t: any) {
-  return t.status === 'COMPLETED' && !!t.completedAt && t.requiresKiz === false && !t.kiz &&
+  // FIX: marked Ozon is printing-only after completed, confirmed picking.
+  const markingReady = t.requiresKiz === false && !t.kiz ||
+    fbsActionStatusEnabled() && t.marketplace === 'OZON' && t.requiresKiz === true && !!t.kiz && t.wbMetaStatus === 'ACCEPTED';
+  return t.status === 'COMPLETED' && !!t.completedAt && markingReady &&
     !t.sourceBoxPending && ['WILDBERRIES', 'OZON'].includes(t.marketplace) &&
     (t.marketplace !== 'OZON' || !!t.marketplaceSubmittedAt);
 }
@@ -43,12 +47,13 @@ export async function postPickTasks(db: any, clients: any, user: any, requestId?
     select: { key: true, value: true },
   }));
   const marked = new Set(policies.filter(p => p.value?.required === true).map(p => p.key));
-  requests = requests.filter((r: any) => !marked.has(clientReceiptKizPolicyKey(r.clientId)));
+  requests = requests.filter((r: any) => fbsActionStatusEnabled() || !marked.has(clientReceiptKizPolicyKey(r.clientId)));
   const tasks: any[] = [];
   for (let offset = 0; offset < requests.length; offset += 500) {
     const ids = requests.slice(offset, offset + 500).map((r: any) => r.id);
     const rows = await db.fbsTsdAssembly.findMany({ where: { requestId: { in: ids },
-      clientId: clients.resolveClientFilter(user), requiresKiz: false, status: 'COMPLETED',
+      clientId: clients.resolveClientFilter(user), status: 'COMPLETED',
+      ...(fbsActionStatusEnabled() ? { OR: [{ requiresKiz: false }, { marketplace: 'OZON', requiresKiz: true, wbMetaStatus: 'ACCEPTED' }] } : { requiresKiz: false }),
       marketplace: { in: ['WILDBERRIES', 'OZON'] } },
       orderBy: [{ completedAt: 'asc' }, { id: 'asc' }] });
     // FIX: deployed Prisma predates the relation; use the existing parameterized state table.
@@ -62,7 +67,8 @@ export async function postPickTasks(db: any, clients: any, user: any, requestId?
       syncStatus: 'ACTIVE', lastCategory: { in: ['active', 'shipped'] } },
       select: { requestId: true, connectionId: true, orderId: true } });
     const allowed = new Set(links.map(key));
-    tasks.push(...rows.filter((t: any) => postPickReady(t) && allowed.has(key(t))));
+    tasks.push(...rows.filter((t: any) => postPickReady(t) && allowed.has(key(t)) &&
+      (!marked.has(clientReceiptKizPolicyKey(t.clientId)) || fbsActionStatusEnabled() && t.marketplace === 'OZON')));
   }
   return { requests, tasks };
 }
