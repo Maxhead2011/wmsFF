@@ -20508,12 +20508,29 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const connections = await this.loadSelectedConnections(clientId, orders);
     const connectionById = new Map(connections.map((connection) => [connection.id, connection]));
     const groupedOrders = new Map<string, FbsOrderSummary[]>();
+    // FIX: fresh WB options avoid treating old cached orders without B2B metadata as retail.
+    const b2bByOrder = new Map<string, boolean>();
+    const splitB2b = process.env.WMS_AUTO_ASSEMBLY_DURABLE_ENABLED === 'true';
+    if (splitB2b) {
+      const fresh = await wbLabelOrders(this.prisma, clientId, dto.orders, fetchWildberriesFbsHistory, marketplaceJson);
+      for (const order of orders) {
+        const matches = fresh?.filter(row => row.connectionId === order.connectionId && row.id === order.id) ?? [];
+        if (matches.length !== 1 || typeof matches[0].isB2b !== 'boolean') {
+          throw new BadRequestException(`WB не подтвердил признак B2B заказа ${order.id}. Поставки не создавались; обновите данные и повторите.`);
+        }
+        if (mode === 'assemble' && matches[0].supplierStatus !== 'new') {
+          throw new BadRequestException(`Статус заказа ${order.id} изменился в WB. Обновите список перед созданием поставки.`);
+        }
+        b2bByOrder.set(JSON.stringify([order.connectionId, order.id]), matches[0].isB2b);
+      }
+    }
     for (const order of orders) {
       const groupKey = [
         order.connectionId,
         order.cargoType ?? 'unknown-cargo',
         order.warehouseId ?? 'unknown-warehouse',
         order.crossBorderType ?? 'regular',
+        ...(splitB2b ? [b2bByOrder.get(JSON.stringify([order.connectionId, order.id])) ? 'b2b' : 'retail'] : []),
       ].join(':');
       const group = groupedOrders.get(groupKey) ?? [];
       group.push(order);

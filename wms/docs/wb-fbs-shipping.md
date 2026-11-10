@@ -1,5 +1,17 @@
 # WB FBS shipping points and cargo places
 
+## B2B supply separation
+
+Prepared 2026-11-10, not published. Request 2870 exposed a mixed WB supply: four retail orders were accepted, while a B2B order was rejected. WB reports this distinction as `options.isB2B`; the supply itself uses `isB2b`.
+
+With `WMS_AUTO_ASSEMBLY_DURABLE_ENABLED=true`, `moveFbsOrdersToSupply` fetches selected current WB metadata before creating any supply. It requires an explicit boolean for every selected order, then adds B2B/retail to the existing cabinet/warehouse/cargo/cross-border grouping. Missing metadata or a changed new-order status stops creation. The flag-off path remains unchanged for sold deployments. No schema, inventory or billing changes.
+
+Regression: `wb-b2b-supplies.spec.ts` runs the actual creation handler with a WB mock rejecting mixed groups, checks 4+1 grouping, homogeneous groups, warehouse/cargo boundaries, missing metadata, changed status and flag-off isolation. `wb-label-orders.spec.ts` verifies true/false/unknown parsing. The mixed-group regression failed before the fix and passes after it. These tests make no live supply writes.
+
+Validation: focused 15 passed; API suite 4688 passed / 9 skipped, dedicated `*.integration.spec.ts` database suites excluded. Full TypeScript check reports two errors in unchanged `yandex-fby.service.ts` (nullable SKU IDs, lines 46 and 54), none in changed files. No live shipment or physical TSD test was performed.
+
+The current server API image was inspected before development and remains unchanged. Source/runtime parity is false: a release must overlay only the two changed runtime modules onto a freshly verified baseline, retaining the runtime durable-operation journal. Do not deploy the complete locally compiled service.
+
 The delivery dialog separates the destination warehouse from the hand-in point. Select city, point type, date and an available address; save the selection in WB. Self-shipping is supported. Enter the desired total cargo-place count and create missing places. Use existing Documents labels and TSD packing/closing.
 
 Before delivery, verify the saved point/date/type, current availability, cargo IDs and complete closed-box membership. Point/cargo configuration does not write stock or billing.
