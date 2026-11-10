@@ -1,0 +1,22 @@
+{
+  "base": {
+    "api": "sha256:28393123cec174a1c04c0cb73385175cf0e1207bed325dee225c50db97b30b6b",
+    "web": "sha256:e1e6f6d42e80f7216410f8b668adae579dd797179ec2c18a0373b046274367e0"
+  },
+  "images": {
+    "api": "sha256:8f46b539b6021ee5344c76d03f425a8664eb69b5488eb247411692e9382e8296",
+    "web": "sha256:e1e6f6d42e80f7216410f8b668adae579dd797179ec2c18a0373b046274367e0"
+  },
+  "changes": {
+    "api": {
+      "modules/marketplace-connections/ozon-current-label.js": "7779fa0263bee7353379050f4349f2bcdf9e055f4ab6691994052b6a02a5a95b",
+      "modules/marketplace-connections/marketplace-connections.service.js": "042ce46f8c8551c864e31b5a51944f873340ec627e17675d9a6ab76ab7e9ef9f"
+    },
+    "web": {}
+  },
+  "composeHash": "1ef8cfc6bb0754764de063ec725f74f29e028c391f091e172abc333790766e26",
+  "pr": 981,
+  "health": true,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true
+}
