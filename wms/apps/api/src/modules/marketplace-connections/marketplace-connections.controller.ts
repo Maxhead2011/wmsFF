@@ -110,9 +110,14 @@ export class MarketplaceConnectionsController {
     @CurrentUser() user: AuthUser,
     @Query('clientId') clientId: string,
     @Query('refresh') refresh?: string,
+    @Query('view') view?: string,
+    @Query('archiveFrom') archiveFrom?: string,
+    @Query('archiveTo') archiveTo?: string,
   ) {
     const scoped = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
-    const result = this.stores ? await this.stores.decorateOrders(clientId, scoped, user) : scoped;
+    // FIX: restore persisted shipment history before the existing store filter.
+    const archived = view === 'archive' ? await this.connections.restoreFbsArchiveForDisplay(clientId, scoped, user, false, undefined, archiveFrom, archiveTo) : scoped;
+    const result = this.stores ? await this.stores.decorateOrders(clientId, archived, user) : archived;
     // FIX: apply after access/branch/store scoping, including a cold saved snapshot.
     const display = await this.connections.decorateFbsFabricDisplay?.(clientId, result) ?? result;
     return { ...display, ...(process.env.WMS_FBS_NO_STOCK_TRANSFER_ENABLED === 'true' && process.env.WMS_FBS_RESHIPMENT_ENABLED === 'true' ? { stockTransferEnabled: true } : {}) };

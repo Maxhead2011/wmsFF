@@ -9849,11 +9849,13 @@ export async function connectAnalyticsApi(accessToken: string, clientId: string,
   });
 }
 
-export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, view?: 'snapshot') {
+export async function fetchFbsOrders(accessToken: string, clientId: string, refresh = false, view?: 'snapshot' | 'archive', archivePeriod?: { from: string; to: string }) {
   return request<ClientFbsOrders>(
     withQuery('/marketplace-connections/fbs/orders', {
       clientId,
       view,
+      archiveFrom: archivePeriod?.from,
+      archiveTo: archivePeriod?.to,
       refresh: refresh ? '1' : undefined,
     }),
     { accessToken },
