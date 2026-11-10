@@ -9,3 +9,5 @@
 Контур: `WMS_FBS_SAVED_ARCHIVE_ENABLED=true` только в нашей WMS. Флаг выключен по умолчанию; проданный контур не меняется. Runtime накладывается точечно: API3/web2, исходники не объявлены полной копией сервера.
 
 Проверки: 16 тестов архива/дат; API 4748 passed / 9 skipped (выделенные DB integration suites отдельно); web 624 passed / 2 skipped; web typecheck; runtime RED/GREEN, browser5; полный запуск с изолированным PostgreSQL; чтение диапазона у 12 клиентов без записей в БД. Startup/reload и 24 проверки оформления прошли. Скрипты: `scripts/releases/fbs-archive-20261110/`.
+
+Published PR985; baseline `2026-11-10-fbs-archive`. Both current server images and all changed public files verified after restart.
