@@ -5,6 +5,8 @@ import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
 import { currentOzonLabel } from './ozon-current-label';
+import { rememberRibbon } from '../../common/stock/fbs-ribbon-evidence';
+import { fbsActionStatusEnabled } from '../../common/stock/fbs-request-auto-status';
 import { preserveFabricBinding } from '../warehouse/fabric-catalog';
 import { readWbSupplyLabels, buildWbSupplyLabelsPdf } from './wb-supply-label';
 import { fabricPairedLabels } from './fbs-paired-labels';
@@ -17832,8 +17834,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
   async finishFbsPrintJob(id: string, success: boolean, error: unknown, user: AuthUser) {
     const data: Prisma.FbsPrintJobUpdateManyMutationInput = success ? { status: 'PRINTED', printedAt: new Date(), errorMessage: null } : { status: 'FAILED', failedAt: new Date(), errorMessage: textValue(error).trim() || 'Ошибка печати' };
     // FIX: a late failed ACK or duplicate success cannot undo the first confirmed print.
-    if (wbOrderStockLifecycleEnabled()) await this.prisma.fbsPrintJob.updateMany({ where: { id, status: { not: 'PRINTED' } }, data });
-    const job = wbOrderStockLifecycleEnabled()
+    if (wbOrderStockLifecycleEnabled() || fbsActionStatusEnabled()) await this.prisma.fbsPrintJob.updateMany({ where: { id, status: { not: 'PRINTED' } }, data });
+    const job = (wbOrderStockLifecycleEnabled() || fbsActionStatusEnabled())
       ? await this.prisma.fbsPrintJob.findUniqueOrThrow({ where: { id } })
       : await this.prisma.fbsPrintJob.update({ where: { id }, data });
     await this.prisma.auditLog.create({ data: { userId: user.id,
@@ -17853,11 +17855,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         await withClientKizReview(this.prisma, user, () => this.prisma.$transaction(async tx => {
           await finalizeWbOrderShipment(tx, task.id, 'PRINT_CONFIRMED', cleanJson(order), job.printedAt ?? undefined);
           await enqueueFbsPrintBilling(tx, task.clientId);
-          if (job.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: user.id }, statusChanges);
+          if (job.printedAt) await reconcileFbsRequestStatus(tx, task.requestId, { stage: 'SOS_PRINT', occurredAt: job.printedAt, actorId: fbsActionStatusEnabled() ? job.requestedById : user.id }, statusChanges);
         }, { timeout: 30_000 }));
         this.fbsOrdersCache.delete(task.clientId);
         await this.notifyFbsAutoStatusChanges(statusChanges);
       }
+    }
+    // FIX: post-pick SOS is printing-only: advance the request, never repeat stock/billing.
+    if (fbsActionStatusEnabled() && success && job.source === SOS_POST_PICK && job.status === 'PRINTED' && job.printedAt) {
+      const changes: FbsAutoStatusChange[] = [];
+      await this.prisma.$transaction(tx => reconcileFbsRequestStatus(tx, job.requestId,
+        {stage:'SOS_PRINT',occurredAt:job.printedAt!,actorId:job.requestedById},changes),{timeout:30_000});
+      await this.notifyFbsAutoStatusChanges(changes);
     }
     return job;
   }
@@ -21655,11 +21664,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const clientId = dto.clientId.trim();
     this.clientScopes.requireClientAccess(user, clientId, 'read');
     const { orders } = await this.resolveFbsLabelOrders(clientId, dto.orders);
-    return wbAllLabels(orders, {
+    const result = await wbAllLabels(orders, {
       sc: selected => this.getFbsSupplyStickersPdf({ clientId, orders: selected }, user, orders),
       pvz: selected => this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user, orders),
       pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user, orders),
     }, process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true');
+    // FIX: only a server-generated ribbon with every order pair is eligible for an agent ACK.
+    if (!result.warnings.some(w=>w.startsWith('ШК товара / заказа')))
+      await rememberRibbon(this.prisma,clientId,user.id,orders,Buffer.from(result.fileBase64,'base64'));
+    return result;
   }
 
   async getFbsOrderStickersPdf(dto: FbsOrderSelectionDto, user: AuthUser, snapshot?: FbsLabelOrder[]) {
@@ -21670,7 +21683,10 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const resolve = () => resolved ??= this.resolveFbsLabelOrders(clientId, dto.orders, snapshot);
     const paired = await fabricPairedLabels(this.prisma, clientId, dto.orders,
       async selection => this.resolveFbsLabelOrders(clientId, selection, (await resolve()).orders), marketplaceJson, marketplaceBinary);
-    if (paired) return { ...paired, fileName: `fbs-product-and-order-${fileTimestamp(new Date())}.pdf`, contentType: 'application/pdf' as const };
+    if (paired) {
+      if (fbsActionStatusEnabled()) await rememberRibbon(this.prisma,clientId,user.id,(await resolve()).orders,paired.buffer);
+      return { ...paired, fileName: `fbs-product-and-order-${fileTimestamp(new Date())}.pdf`, contentType: 'application/pdf' as const };
+    }
     // FIX: an Ozon label download must not wait for every marketplace's history.
     const direct = await selectedOzonLabels(this.prisma, clientId, dto.orders, marketplaceJson, marketplaceBinary);
     if (direct) return {

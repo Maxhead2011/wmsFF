@@ -10,6 +10,7 @@ import {assertNoOzonAdjustment,supplyOrders} from './ozon-supply-policy';
 import {deliveryKey,deliveryVersion,deliveryRetryMs,fboDeliveryEnabled,ozonDeliveryProof,wbDeliveryAccepted} from './fbo-delivery-policy';
 import {assertRequestNotRemoved} from './request-removal-policy';
 import {readFbsAttemptHistory} from '../../common/shipment-history/fbs-attempt-history';
+import {marketStatusScheduleEnabled} from './market-status-schedule';
 
 // FIX: durable per-request cooldown/lease; no transaction remains open during marketplace HTTP calls.
 export async function claimDelivery(db:any,id:string,now=Date.now()){
@@ -42,6 +43,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
  async tick(){
   if(this.running||this.stopped||!fboDeliveryEnabled())return;this.running=true;
   try{
+   if(marketStatusScheduleEnabled())return; // FIX: the Moscow schedule owns periodic checks.
    const rows=await this.db.clientRequest.findMany({where:{type:'OUTBOUND',status:'PACKED',warehouseId:{not:null},client:{isDemo:false},fboAssembly:{phase:'COMPLETED'},fbsOrderLinks:{none:{}},...(this.cursor?{id:{gt:this.cursor}}:{})},orderBy:{id:'asc'},take:100,select:{id:true}});
    if(!rows.length)this.cursor='';
    let count=0;
