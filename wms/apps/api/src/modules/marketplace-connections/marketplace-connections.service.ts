@@ -4,6 +4,7 @@ import { isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzO
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
+import { currentOzonLabel } from './ozon-current-label';
 import { preserveFabricBinding } from '../warehouse/fabric-catalog';
 import { readWbSupplyLabels, buildWbSupplyLabelsPdf } from './wb-supply-label';
 import { fabricPairedLabels } from './fbs-paired-labels';
@@ -30747,6 +30748,9 @@ async function marketplaceJsonOnce(url: string, init: RequestInit) {
 }
 
 async function marketplaceBinary(url: string, init: RequestInit) {
+  // FIX: migrate every own-WMS caller, including paired labels and TSD.
+  if (url === 'https://api-seller.ozon.ru/v2/posting/fbs/package-label' && process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true')
+    return currentOzonLabel(init, marketplaceJson);
   const response = await marketplaceFetch(url, init);
   const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'application/pdf';
   const buffer = Buffer.from(await response.arrayBuffer());
