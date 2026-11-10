@@ -11,6 +11,13 @@ import pro.logoff.wms.tsd.data.ReceiptCloseBatch;
 
 // FIX: verified APK260 adapter. Original methods, voice and server selection stay intact.
 public final class ReceiptDraftHooks {
+    // FIX: .servers must never download the distinct main Android package.
+    public static void beforeUpdate(Object a) {
+        if(!((android.content.Context)a).getPackageName().equals("pro.logoff.wms.tsd.servers"))return;
+        try {
+            set(a,"activeApkUrl","https://wms.logoff.pro/downloads/logoff-tsd-server-choice.apk");
+        }catch(Exception e){throw new IllegalStateException("Не удалось выбрать совместимое обновление ТСД",e);}
+    }
     private static final Map<Object,Open> openings=Collections.synchronizedMap(new WeakHashMap<Object,Open>());
     private static final Map<String,ReceiptBoxDraft> handoffs=new ConcurrentHashMap<>();
     private static final ThreadLocal<Object> closing=new ThreadLocal<>();

@@ -18,6 +18,12 @@ AUX_SHA = '44f28e701c6dfcbe9208e9ced90dc31ee62656a1b5083e4e0b9a62f6e059079c'
 CERT = '70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da'
 OLD, NEW = b'0.1.260-receipt-voice', b'0.1.261-receipt-draft'
 
+def variant_settings(variant):
+    # FIX: the server-choice installation is a separate Android package, not main.
+    return {'main':(BASE_SHA,'logoff-tsd-receipt-draft-261.apk','pro.logoff.wms.tsd'),
+            'servers':('0115239cb0abb26c33b37a06fadfd1d6409213fa32ee9aad8a1c99b684f8ac98',
+                       'logoff-tsd-servers-receipt-draft-261.apk','pro.logoff.wms.tsd.servers')}[variant]
+
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -86,9 +92,11 @@ def verify_classes(before, after):
 
 def main():
     p=argparse.ArgumentParser()
+    p.add_argument('--variant',choices=('main','servers'),default='main')
     for arg in ('baseline','reviewed-apk','reviewed-classes','sdk','jdk','signing','out'):
         p.add_argument('--'+arg,required=True,type=Path)
-    a=p.parse_args(); require_hash(a.baseline,BASE_SHA); require_hash(a.reviewed_apk,AUX_SHA)
+    a=p.parse_args();baseline_sha,filename,package=variant_settings(a.variant)
+    require_hash(a.baseline,baseline_sha); require_hash(a.reviewed_apk,AUX_SHA)
     out=a.out; out.mkdir(parents=True,exist_ok=True); here=Path(__file__).parent
     java=a.jdk/'bin/java.exe'; javac=a.jdk/'bin/javac.exe'
     bt=a.sdk/'build-tools/35.0.0'; android=a.sdk/'platforms/android-35/android.jar'
@@ -114,7 +122,7 @@ def main():
             dst.writestr(entry,data)
     run(bt/'zipalign.exe','-f','-p','4',unsigned,out/'aligned.apk')
     config=json.loads(a.signing.read_text()); env['TSD261_SIGNING_PASS']=config['password']
-    apk=out/'logoff-tsd-receipt-draft-261.apk'
+    apk=out/filename
     key=Path(config['keystore']); key=key if key.exists() else a.signing.parent/key.name
     run(bt/'apksigner.bat','sign','--ks',key,'--ks-key-alias',config['alias'],'--ks-pass','env:TSD261_SIGNING_PASS','--key-pass','env:TSD261_SIGNING_PASS','--out',apk,out/'aligned.apk')
     cert=run(bt/'apksigner.bat','verify','--print-certs',apk)
@@ -124,7 +132,7 @@ def main():
             if entry not in ('classes.dex','AndroidManifest.xml') and not entry.startswith('META-INF/'):
                 if old.read(entry)!=new.read(entry): raise ValueError('Resource changed: '+entry)
     proof.update(versionCode=261,apkSha256=sha(apk),apkSize=apk.stat().st_size,
-                 baselineApkSha256=BASE_SHA,reviewedAuxApkSha256=AUX_SHA,certificateSha256=CERT,
+                 baselineApkSha256=baseline_sha,packageId=package,reviewedAuxApkSha256=AUX_SHA,certificateSha256=CERT,
                  sourceParityVerified=False,allOtherResourcesPreserved=True)
     (out/'proof.json').write_text(json.dumps(proof,indent=2)+'\n')
     print(json.dumps(proof,indent=2))

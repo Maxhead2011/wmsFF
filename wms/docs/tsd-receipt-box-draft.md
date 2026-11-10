@@ -38,6 +38,16 @@ Android35 instrumentation used a disposable emulator, fake credentials and inert
 
 Konstantin confirmed expected total 2598, including МШБК8 = 398 and МШБК4 = 300. WMS has 2594: МШБК8 = 397 (short 1; box17 is the first search candidate), МШБК4 = 297 (short 3; box25 is the first search candidate). Those locations are approximate, not a physical determination. All 2594 unique KIZ identities that reached the receipt-check logs are already registered. The 2598 HTTP requests include repeated identities and one retried request; they do not establish four additional pieces. No inventory quantities were increased without identifiable KIZs.
 
+## Follow-up: installed260 cannot discover/install the update (2026-11-11)
+
+Three observed channel faults: LAN HTTP returned stale main249 from the web container; `.servers` metadata stayed260; the generic `/downloads/logoff-tsd-server-choice.apk` returned253. Installing that downloaded253 over the actual signed `.servers`260 reproduces `INSTALL_FAILED_VERSION_DOWNGRADE` on Android35. In addition, `.servers`260 still points its built-in updater at the main package feed. Its actual updater requests `logoff-tsd.json`, reproduced by instrumentation with an in-process HTTP connection stub and no production writes.
+
+The follow-up builds `.servers`261 over its own exact baseline (`0115239cb0abb26c33b37a06fadfd1d6409213fa32ee9aad8a1c99b684f8ac98`), keeping package `pro.logoff.wms.tsd.servers` and certificate70715a. Five receipt wrappers remain; a sixth wrapper selects the matching trusted HTTPS server-choice update URL before invoking the original downloader. It does not change server selection for API calls. The ordinary main261 APK and metadata are not replaced. All original method bodies and other resources are preserved; source parity remains false. Candidate binary proof is in `servers-runtime-proof.json`.
+
+`publish_channels.py` adds exact host nginx aliases for both feeds, generic APKs and261 archives to the LAN HTTP listener, plus the missing server-choice HTTPS aliases. It updates only server-choice metadata after both APK URLs return the expected hash. Release locks, preflight, nginx validation, unchanged-container checks and rollback are retained. API, inventory and sold WMS are outside this change. Signing inputs and raw APKs remain outside Git.
+
+Tests cover distinct pinned variants, separate main/server-choice aliases, preserved WMS/video routes, and fail-closed unknown configuration. The Android updater regression runs only for the `.servers` package; the native draft tests continue to cover reopening, process restart, stable operation keys and durable outbox handoff. Publication and external download verification are recorded separately from candidate validation.
+
 ## Eletskaya recovery on 2026-11-10
 
 The original TSD version did not persist the lost drafts. Recovery therefore used surviving nginx `check-kiz` request records, receipt-open timelines, the local-duplicate review record, existing registry/mark claims, and standard receipt API duplicate guards.

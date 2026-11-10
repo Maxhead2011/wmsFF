@@ -1,0 +1,26 @@
+{
+  "baselineClasses": 4626,
+  "candidateClasses": 4630,
+  "changedClasses": [
+    "pro/logoff/wms/tsd/BuildConfig.smali",
+    "pro/logoff/wms/tsd/MainActivity.smali",
+    "pro/logoff/wms/tsd/data/OperationOutbox.smali",
+    "pro/logoff/wms/tsd/data/ReceiptCloseBatch.smali"
+  ],
+  "addedClasses": [
+    "pro/logoff/wms/tsd/ReceiptDraftHooks$Open.smali",
+    "pro/logoff/wms/tsd/ReceiptDraftHooks.smali",
+    "pro/logoff/wms/tsd/data/ReceiptBoxDraft$Snapshot.smali",
+    "pro/logoff/wms/tsd/data/ReceiptBoxDraft.smali"
+  ],
+  "originalMethodsPreserved": true,
+  "versionCode": 261,
+  "apkSha256": "a09aa749d6c9540b4df866feb33210ae8e1510a513e5467432cac870964e6858",
+  "apkSize": 5997593,
+  "baselineApkSha256": "0115239cb0abb26c33b37a06fadfd1d6409213fa32ee9aad8a1c99b684f8ac98",
+  "packageId": "pro.logoff.wms.tsd.servers",
+  "reviewedAuxApkSha256": "44f28e701c6dfcbe9208e9ced90dc31ee62656a1b5083e4e0b9a62f6e059079c",
+  "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+  "sourceParityVerified": false,
+  "allOtherResourcesPreserved": true
+}
