@@ -1,4 +1,18 @@
-import {describe,it,expect,vi} from 'vitest';
+import {afterEach,describe,it,expect,vi} from 'vitest';
+import {RequestMarketStatusScheduler} from '../src/modules/client-requests/request-market-status-scheduler.service';
+afterEach(()=>{vi.unstubAllEnvs();vi.useRealTimers();});
+// TEST: scheduled reconciliation must include the same early FBS stages as manual checks.
+it('selects early FBS stages only on our installation while keeping FBO packed-only',async()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T09:00:00Z'));
+ vi.stubEnv('WMS_MARKET_STATUS_SCHEDULE_ENABLED','true');vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');
+ const db:any={clientRequest:{findMany:vi.fn(async()=>[])}};
+ const scheduler=new RequestMarketStatusScheduler(db,{} as any);
+ await scheduler.tick();scheduler.onModuleDestroy();
+ const where=db.clientRequest.findMany.mock.calls[0][0].where;
+ expect(where.status).toBeUndefined();
+ expect(where.OR[0]).toMatchObject({status:{in:['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK','PACKED']},fbsOrderLinks:{some:{marketplace:{in:['WILDBERRIES','OZON']}}}});
+ expect(where.OR[1].status).toBe('PACKED');expect(where.OR[2].status).toBe('PACKED');
+});
 import {marketStatusSlot,claimMarketSlot,finishMarketSlot} from '../src/modules/client-requests/market-status-schedule';
 // TEST: fixed Moscow wall-clock, restart deduplication, failed requests and stale workers.
 describe('marketplace schedule',()=>{

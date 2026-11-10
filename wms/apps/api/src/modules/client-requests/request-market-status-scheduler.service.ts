@@ -17,9 +17,12 @@ export class RequestMarketStatusScheduler implements OnModuleInit,OnModuleDestro
   if(this.running||this.stopped||!marketStatusScheduleEnabled())return;this.running=true;
   try {
    const slot=marketStatusSlot();if(!slot)return;
-   const rows=await this.db.clientRequest.findMany({where:{type:'OUTBOUND',status:'PACKED',client:{isDemo:false},warehouseId:{not:null},
+   const rows=await this.db.clientRequest.findMany({where:{type:'OUTBOUND',client:{isDemo:false},warehouseId:{not:null},
     ...(this.cursor?{id:{gt:this.cursor}}:{}),yandexFbyShipment:null,lamodaAssembly:null,
-    OR:[{fbsOrderLinks:{some:{marketplace:{in:['WILDBERRIES','OZON']}}}},{ozonShipment:{isNot:null}},{fboAssembly:{isNot:null}}]},select:{id:true,clientId:true,warehouseId:true},orderBy:{id:'asc'},take:100});
+    // FIX: missed local FBS stages must not exclude confirmed marketplace handovers.
+    OR:[{status:process.env.WMS_FBS_ACTION_STATUS_ENABLED==='true'?{in:['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK','PACKED']}:'PACKED',
+      fbsOrderLinks:{some:{marketplace:{in:['WILDBERRIES','OZON']}}}},
+      {status:'PACKED',ozonShipment:{isNot:null}},{status:'PACKED',fboAssembly:{isNot:null}}]},select:{id:true,clientId:true,warehouseId:true},orderBy:{id:'asc'},take:100});
    if(!rows.length)this.cursor='';
    let checked=0;
    for(const r of rows){
@@ -28,7 +31,7 @@ export class RequestMarketStatusScheduler implements OnModuleInit,OnModuleDestro
     let success=false,code='ERROR';
     try {
      const user:AuthUser={id:undefined as unknown as string,email:'',name:'Автоматическая сверка статусов',roleCodes:[],permissionCodes:['client-requests:write','client-requests:status'],clientScopeMode:'LIMITED',clientIds:[r.clientId],writableClientIds:[r.clientId],activeWarehouseId:r.warehouseId!,warehouseIds:[r.warehouseId!],writableWarehouseIds:[r.warehouseId!]};
-     const result=await this.statuses.check(r.id,user);success=true;code=result.status;
+     const result=await this.statuses.check(r.id,user);success=true;code=result.needsAttention?'ATTENTION':result.status;
     } catch(e){code=String((e as any)?.getStatus?.()??'INTERNAL');}
     await finishMarketSlot(this.db,r.id,claim,success,code);
     this.log.log(JSON.stringify({event:'request_market_schedule',requestId:r.id,slot,result:code,success}));

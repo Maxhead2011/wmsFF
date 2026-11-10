@@ -24,6 +24,44 @@ function setup() {
   return {row,db,scopes,ozon,wb,delivery,connections,check,ctl};
 }
 afterEach(()=>vi.unstubAllEnvs());
+// TEST: marketplace handover must reconcile skipped local stages without inventory writes.
+describe('confirmed handover from early stages',()=>{
+  it.each(['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK'])('closes %s for WB and Ozon',async status=>{
+    for(const market of ['OZON','WILDBERRIES']) {
+      const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');f.row.status=status;
+      f.row.fbsOrderLinks.forEach((l:any)=>l.marketplace=market);
+      f.connections.readWbStatusesForConnection.mockResolvedValue(new Map(['1','2'].map(id=>[id,{supplierStatus:'complete',wbStatus:'sorted'}])));
+      expect((await f.check()).status).toBe('DONE');
+      expect(f.db.clientRequest.updateMany.mock.calls[0][0].where.status).toBe(status);
+      expect(f.db.clientRequestEvent.create.mock.calls[0][0].data.statusFrom).toBe(status);
+    }
+  });
+  it('retains sold-installation policy and explains the blocked transition',async()=>{
+    const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','false');f.row.status='SUBMITTED';
+    const result=await f.check();expect(result.status).toBe('SUBMITTED');expect(result.needsAttention).toBe(true);
+    expect(result.message).toContain('Упакована');expect(f.db.clientRequest.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not close partial handover and explains waiting orders',async()=>{
+    const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');f.row.status='IN_WORK';
+    f.ozon.call.mockResolvedValueOnce({result:{posting_number:'1',status:'awaiting_deliver'}});
+    const result=await f.check();expect(result.status).toBe('IN_WORK');expect(result.message).toContain('не всех');
+    expect(f.db.clientRequest.updateMany).not.toHaveBeenCalled();
+  });
+  it('reports special repeat assembly as attention instead of silently skipping',async()=>{
+    const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');f.db.fbsRepeatAssemblyRun.findUnique.mockResolvedValue({id:'special'});
+    const result=await f.check();expect(result.status).toBe('PACKED');expect(result.needsAttention).toBe(true);
+    expect(result.message).toContain('повторной');expect(f.db.clientRequest.updateMany).not.toHaveBeenCalled();
+  });
+  it.each(['DONE','CANCELLED','REJECTED'])('does not reopen or query a terminal %s request',async status=>{
+    const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');f.row.status=status;
+    await expect(f.check()).rejects.toThrow();expect(f.ozon.call).not.toHaveBeenCalled();expect(f.db.clientRequest.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not report completion when a concurrent update prevents the CAS',async()=>{
+    const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');f.row.status='SUBMITTED';
+    f.db.clientRequest.updateMany.mockImplementation(async()=>({count:0}));
+    expect((await f.check()).needsAttention).toBe(true);expect(f.db.clientRequestEvent.create).not.toHaveBeenCalled();
+  });
+});
 describe('manual request status check',()=>{
   it('loads every eligible open row in the active branch and keeps only writable clients',async()=>{
     const db:any={clientRequest:{findMany:vi.fn(async()=>[{id:'a',number:1,clientId:'c'},{id:'b',number:2,clientId:'read-only'}])}};
@@ -61,7 +99,7 @@ describe('manual request status check',()=>{
   it('uses the ordinary FBO reconciliation guard after forced WB refresh',async()=>{
     const {check,row,wb,delivery}=setup();row.fbsOrderLinks=[];row.fboAssembly={phase:'COMPLETED'};
     wb.refresh.mockResolvedValue({binding:{statusId:6,status:'Сдано'},dispatch:null});
-    expect((await check()).message).toContain('загрузки');expect(wb.refresh.mock.calls[0][2]).toBe(true);
+    const result=await check();expect(result.message).toContain('загрузки');expect(result.needsAttention).toBe(true);expect(wb.refresh.mock.calls[0][2]).toBe(true);
     expect(delivery.reconcile).toHaveBeenCalledWith('r',undefined,row,true);
   });
 });

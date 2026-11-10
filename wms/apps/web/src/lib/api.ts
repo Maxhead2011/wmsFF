@@ -1543,7 +1543,7 @@ export type ClientRequestTimeline = {
 };
 
 export const checkRequestMarketStatus = (accessToken: string, id: string) =>
-  request<{status:ClientRequestStatus;message:string;checkedAt:string}>(
+  request<{status:ClientRequestStatus;message:string;checkedAt:string;needsAttention?:boolean}>(
     '/client-requests/'+encodeURIComponent(id)+'/market-status',{accessToken,method:'POST'});
 export const marketStatusTargets = (accessToken:string) =>
   request<Array<{id:string;number:number}>>('/client-requests/market-status/targets',{accessToken});
