@@ -4,13 +4,13 @@ Usage on our server: python3 publish.py RELEASE_DIR [--publish]
 Default is validation only. Inputs: APK and build_runtime.py proof.json.
 """
 from pathlib import Path
-import fcntl
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 FILE='logoff-tsd-receipt-draft-261.apk'
@@ -20,6 +20,14 @@ CERT='70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da'
 def sha(data):return hashlib.sha256(data).hexdigest()
 def run(*args):return subprocess.check_output(args).decode().strip()
 def fetch(path):return subprocess.check_output(['curl','-fsS','--max-time','45','https://wms.logoff.pro'+path])
+def wait_hash(path,expected,attempts=30):
+    # FIX: nginx reload returns before new workers replace old routes.
+    for attempt in range(attempts):
+        try:
+            if sha(fetch(path))==expected:return
+        except subprocess.CalledProcessError:pass
+        if attempt+1<attempts:time.sleep(.25)
+    raise AssertionError('Public APK did not become ready: '+path)
 def updated_config(config):
     # FIX: change only the main APK alias; all other applications keep their channel.
     marker=' listen 443 ssl default_server;'
@@ -30,6 +38,7 @@ def updated_config(config):
     return result.replace(marker,marker+'\n location = /downloads/'+FILE+' {\n  alias /var/www/wms-updates/'+FILE+';\n  default_type application/vnd.android.package-archive;\n }\n',1)
 
 def main():
+    import fcntl
     root=Path(sys.argv[1]); publish='--publish' in sys.argv[2:]
     target=Path('/var/www/wms-updates'); cfg=Path('/etc/nginx/sites-available/default')
     locks=[]
@@ -43,6 +52,7 @@ def main():
     assert previous['versionCode']==260 and previous['packageId']=='pro.logoff.wms.tsd'
     assert previous['sha256']==BASE_SHA and sha((target/'logoff-tsd-receipt-voice-260.apk').read_bytes())==BASE_SHA
     assert json.loads(fetch('/downloads/logoff-tsd.json'))==previous
+    assert json.loads(fetch('/api/v1/health'))['status']=='ok'
     servers=(target/'logoff-tsd-server-choice.json').read_bytes()
     before=cfg.read_bytes();after=updated_config(before.decode())
     containers=run('docker','inspect','--format','{{.Id}} {{.Image}}','wms-local-api','wms-local-web')
@@ -56,8 +66,8 @@ def main():
         assert not dest.exists() or sha(dest.read_bytes())==proof['apkSha256']
         tmp=target/(FILE+'.tmp');tmp.write_bytes(payload);tmp.chmod(0o644);tmp.replace(dest)
         cfg.write_text(after);run('nginx','-t');run('systemctl','reload','nginx')
-        assert sha(fetch('/downloads/'+FILE))==proof['apkSha256']
-        assert sha(fetch('/downloads/logoff-tsd.apk'))==proof['apkSha256']
+        wait_hash('/downloads/'+FILE,proof['apkSha256'])
+        wait_hash('/downloads/logoff-tsd.apk',proof['apkSha256'])
         value=dict(versionCode=261,versionName='0.1.261-receipt-draft',packageId='pro.logoff.wms.tsd',
                    apkUrl='https://wms.logoff.pro/downloads/'+FILE,sha256=proof['apkSha256'],size=proof['apkSize'],
                    releaseNotes='Сканы приёмки сохраняются при повторном открытии короба и перезапуске приложения.',
@@ -66,7 +76,7 @@ def main():
         assert json.loads(fetch('/downloads/logoff-tsd.json'))==value
         assert (target/'logoff-tsd-server-choice.json').read_bytes()==servers
         assert run('docker','inspect','--format','{{.Id}} {{.Image}}','wms-local-api','wms-local-web')==containers
-        fetch('/');fetch('/api/health')
+        fetch('/');assert json.loads(fetch('/api/v1/health'))['status']=='ok'
     except Exception:
         metadata.write_bytes(old);cfg.write_bytes(before);run('nginx','-t');run('systemctl','reload','nginx');raise
     result=dict(versionCode=261,apkSha256=proof['apkSha256'],publicHashesVerified=True,
