@@ -1,0 +1,11 @@
+{
+  "pr": 975,
+  "images": {
+    "api": "sha256:98053dbe64b755a47f36be8db4837c4d10f8b9267f47cabc07c202ea35748282",
+    "web": "sha256:a22a115fe461bf9758d2c46ae3674162bff7c16507a0a92ca1d32f240b0253d9"
+  },
+  "health": true,
+  "otherContainersUnchanged": true,
+  "environmentPreservedExceptApprovedPurposeFlag": true,
+  "runtime": "PASS runtime7: selected fast path, durable journal, no duplicate, partial failures, preflight, default-off"
+}
