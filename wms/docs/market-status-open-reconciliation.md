@@ -1,6 +1,6 @@
 # Сверка сдачи ФБС при пропущенных локальных стадиях
 
-Подготовлено 10.11.2026, пока не опубликовано. Ветка `fix/market-status-open-reconciliation`.
+Опубликовано 10.11.2026 через PR987 в `feature/la_panthera`. Ветка исправления `fix/market-status-open-reconciliation`.
 
 При включённом `WMS_FBS_ACTION_STATUS_ENABLED` подтверждение передачи всех связанных заказов WB/Ozon переводит обычную исходящую заявку из SUBMITTED, IN_REVIEW, APPROVED, IN_WORK или PACKED в DONE. В историю записывается фактический исходный статус. Остатки, списания, задания и факты печати не изменяются; промежуточная упаковка не выдумывается.
 
@@ -17,3 +17,7 @@
 ## Release candidate verification (2026-11-10)
 
 Merged current PR985/986 with both documentation records preserved by user approval. API 4760 passed / 9 skipped; web 625 passed / 2 skipped. Dedicated database integration suites excluded. Exact current-runtime API4/web2 overlay passes 38 compiled helper scenarios and six actual-module browser checks. Full candidate startup/reload and published CSS controls24 pass. Runtime/source parity remains false; no full source replacement.
+
+## Published verification
+
+Exact API4/web2 installed over PR985; all 777 API modules and all web files verified. Environment and other containers unchanged. Public button6, startup/reload and controls24 passed. Baseline records exact deployed bytes. Public browser resource capture initially encountered ECONNRESET; successful complete retry passed without ignored failures. `/tmp` snapshot reached its tmpfs limit; only this task snapshot was relocated to `/opt`, restoring 1.1 GiB free in `/tmp`; main filesystem had 89 GiB free. No unrelated backup/disk changes. No manual bulk status mutation or physical printer operation was performed.
