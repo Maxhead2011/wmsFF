@@ -1,0 +1,47 @@
+{
+  "common/stock/fbs-request-auto-status.js": {
+    "sourceTokenEdits": 8,
+    "baseSha256": "980b90aedc46ed75602be4bf1e9d7cdcd4a3ae72163dd08bb3eda1423fbf316e",
+    "sha256": "461581b8cc07b648d3febde253515329a33bfc3317349583dc26adad02f409c6"
+  },
+  "common/stock/fbs-ribbon-evidence.js": {
+    "sha256": "030cbbeb89125453731851f7e2f0d2858a0a8a139117cd1181464e57155d258d"
+  },
+  "modules/client-requests/client-requests.module.js": {
+    "sha256": "a522626d5cb0fe231f78c078367ae6f89371296f4031816936aefa025f656bd1"
+  },
+  "modules/client-requests/fbo-delivery-sync.service.js": {
+    "sourceTokenEdits": 2,
+    "baseSha256": "3ae7bc1fe66b34075685102fba6b2cb6e8f9841bdd867a0cfa6c2f00b0f8b221",
+    "sha256": "6c26ad24b6dd9c1adb09b25293a63fde7fba7d93f67db76be54bd514c4cbc3f6"
+  },
+  "modules/client-requests/market-status-schedule.js": {
+    "sha256": "cd5d21f65e59d6a457c5eb7a6b8feb99d4ac6d3981c24abe15ee26c97fce88dd"
+  },
+  "modules/client-requests/request-market-status-scheduler.service.js": {
+    "sha256": "fb58a317fc5d0a27577ea8e5d010ab8c3f1286a5ee5b880e379ecbf4fbcfa0bd"
+  },
+  "modules/client-requests/request-market-status.controller.js": {
+    "sourceTokenEdits": 9,
+    "baseSha256": "0b5dcc1a7b93462fd883456985b69c5e5b443b6d0f1a0e9b738d89d41d591249",
+    "sha256": "25531a636f86ec4ef08269a703b7c88aa9bc0179773de8d1ded574aa7a0314ac"
+  },
+  "modules/client-requests/request-market-status.service.js": {
+    "sha256": "63c9d398473cda4b1fe5865cfbd81a2dca494f884e6da7cc811a79c4dbaf4b82"
+  },
+  "modules/marketplace-connections/marketplace-connections.service.js": {
+    "sourceTokenEdits": 19,
+    "baseSha256": "042ce46f8c8551c864e31b5a51944f873340ec627e17675d9a6ab76ab7e9ef9f",
+    "sha256": "5aaf2f31c2dd3683c49c7aa88ffa3c908a48bb608c8fcc22ba52a72ce1fd1375"
+  },
+  "modules/marketplace-connections/sos-post-pick.js": {
+    "sourceTokenEdits": 7,
+    "baseSha256": "8a1ea420c12fdc66bd574d5e1a72ccf2b1b3d51182855d4bc91e6b55be025023",
+    "sha256": "6b32b0e7c2e92a031628ea502de4d459b36c9ea5d73f506a816a1968b2b43ca5"
+  },
+  "modules/print/print-series.service.js": {
+    "sourceTokenEdits": 11,
+    "baseSha256": "cf31d4610ac56f154d28eac9f9c2bd089c9cf5e25b93f225d0f8c4bd841816e8",
+    "sha256": "ae8f73335977f5532119f4909b5c53db50f94791d1cca561e0a2524a63a566fa"
+  }
+}
