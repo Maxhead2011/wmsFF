@@ -70,6 +70,8 @@ export async function wbLabelOrders(db: any, clientId: string, input: Selection[
       supplierStatus: o.supplierStatus, wbStatus: o.wbStatus,
       // FIX: preserve destination/date when selected reads prepare shipping.
       officeId: text(o.officeId) || null, deliveryDate: text(o.deliveryDate) || null,
+      // FIX: absent WB metadata is unknown, never implicitly a retail order.
+      isB2b: typeof o.options?.isB2B === 'boolean' ? o.options.isB2B as boolean : null,
       category: cancelled ? 'cancelled' : o.wbStatus === 'sold' ? 'archive' : o.supplierStatus === 'complete' ? 'shipped' : 'active',
       barcodes, product, itemCount: 1, supplyId, crossBorderType: text(o.crossBorderType) || null,
       requiredMeta: list(o.requiredMeta), optionalMeta: list(o.optionalMeta),

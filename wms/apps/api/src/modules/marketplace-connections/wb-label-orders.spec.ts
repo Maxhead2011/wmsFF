@@ -14,6 +14,13 @@ function setup() {
   return { db, history, json };
 }
 describe('WB print-only selected read', () => {
+  // TEST: WB nests the B2B flag in options; missing metadata must remain unknown.
+  it.each([true, false, undefined])('preserves B2B=%s from raw WB options', async flag => {
+    const x = setup();
+    x.history.mockResolvedValue([{ id: 42, options: flag === undefined ? {} : { isB2B: flag } }] as any);
+    const rows = await wbLabelOrders(x.db, 'client', [{ connectionId: 'cab', id: '42' }], x.history, x.json);
+    expect(rows![0].isB2b).toBe(flag ?? null);
+  });
   it('works after cold restart, reads only selected cabinet and fetches current statuses once', async () => {
     const x = setup();
     const rows = await wbLabelOrders(x.db, 'client', [{ connectionId: 'cab', id: '42' }], x.history, x.json);
