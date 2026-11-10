@@ -20,6 +20,29 @@ import static org.junit.Assert.*;
 // TEST: run against the actual signed APK, with no live session or production mutations.
 @RunWith(AndroidJUnit4.class)
 public class ReceiptBoxDraftInstrumentedTest {
+    // TEST: the real updater requests the installed package's trusted HTTPS channel.
+    @Test public void serverChoiceUsesOwnUpdateChannel()throws Exception {
+        Instrumentation i=InstrumentationRegistry.getInstrumentation();
+        org.junit.Assume.assumeTrue(i.getTargetContext().getPackageName().endsWith(".servers"));
+        MainActivity a=launch(i);
+        try {
+            java.util.concurrent.atomic.AtomicReference<String> request=new java.util.concurrent.atomic.AtomicReference<>();
+            java.net.URL.setURLStreamHandlerFactory(protocol->"https".equals(protocol)?new java.net.URLStreamHandler(){
+                @Override protected java.net.URLConnection openConnection(java.net.URL url){
+                    request.set(url.toString());return new java.net.HttpURLConnection(url){
+                        public void disconnect(){}public boolean usingProxy(){return false;}public void connect(){}
+                        public int getResponseCode(){return 200;}
+                        public java.io.InputStream getInputStream(){return new java.io.ByteArrayInputStream("{\"versionCode\":261}".getBytes(java.nio.charset.StandardCharsets.UTF_8));}
+                    };
+                }
+            }:null);
+            set(a,"activeApkUrl","https://wms.logoff.pro/downloads/logoff-tsd.apk");
+            Method download=MainActivity.class.getDeclaredMethod("downloadAndVerifyUpdateApk");download.setAccessible(true);
+            assertNull(download.invoke(a));
+            assertEquals("https://wms.logoff.pro/downloads/logoff-tsd-server-choice.json",request.get());
+            assertEquals("https://wms.logoff.pro/downloads/logoff-tsd-server-choice.apk",get(a,"activeApkUrl"));
+        }finally{i.runOnMainSync(a::finish);}
+    }
     static final String BOX="FFL_NATIVE0811_06",SCOPE="native-draft261-worker-device-client",DOC="native-draft261-document";
     @Test public void seedAndReopenNinetyNineScans()throws Exception {
         Instrumentation i=InstrumentationRegistry.getInstrumentation();Context ctx=i.getTargetContext();

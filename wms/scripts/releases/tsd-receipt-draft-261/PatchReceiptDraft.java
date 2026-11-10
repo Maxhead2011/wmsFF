@@ -33,6 +33,7 @@ public final class PatchReceiptDraft {
    case "close": regs=5;ins=code(hook("enterClose",1),new ImmutableInstruction11x(Opcode.MOVE_RESULT,0),new ImmutableInstruction21t(Opcode.IF_EQZ,0,8),original(m,1,4),exit(),new ImmutableInstruction10x(Opcode.RETURN_VOID),new ImmutableInstruction11x(Opcode.MOVE_EXCEPTION,0),exit(),new ImmutableInstruction11x(Opcode.THROW,0));tries=List.of(new ImmutableTryBlock(6,3,List.of(new ImmutableExceptionHandler(null,13))));break;
    case "create": regs=5;ins=code(original(m,1,4),new ImmutableInstruction11x(Opcode.MOVE_RESULT_OBJECT,0),hook("afterBatchCreated",0),new ImmutableInstruction11x(Opcode.RETURN_OBJECT,0));break;
    case "enqueue": regs=2;ins=code(original(m,0,2),hook("onBatchEnqueued",1),new ImmutableInstruction10x(Opcode.RETURN_VOID));break;
+   case "update": regs=2;ins=code(hook("beforeUpdate",1),original(m,1,1),new ImmutableInstruction11x(Opcode.MOVE_RESULT_OBJECT,0),new ImmutableInstruction11x(Opcode.RETURN_OBJECT,0));break;
    default:throw new IllegalArgumentException(kind);
   }
   return List.of(copy(m,m.getName()+SUFFIX,(m.getAccessFlags()&~5)|2,m.getImplementation()),copy(m,m.getName(),m.getAccessFlags(),new ImmutableMethodImplementation(regs,ins,tries,List.of())));
@@ -54,6 +55,9 @@ public final class PatchReceiptDraft {
  public static void main(String[] args)throws Exception{
   Opcodes op=Opcodes.forApi(35);DexFile base=DexFileFactory.loadDexFile(new File(args[0]),op),aux=DexFileFactory.loadDexFile(new File(args[1]),op),hooks=DexFileFactory.loadDexFile(new File(args[2]),op);
   Map<String,ClassDef> out=classes(base),auxMap=classes(aux);Set<String> patched=new TreeSet<>();int wrappers=0;
+  String packageId=null;for(Field f:out.get(ROOT+"BuildConfig;").getFields())if(f.getName().equals("APPLICATION_ID")&&f.getInitialValue() instanceof StringEncodedValue v)packageId=v.getValue();
+  if(!List.of("pro.logoff.wms.tsd","pro.logoff.wms.tsd.servers").contains(packageId))throw new IllegalStateException("Unsupported package");
+  boolean servers=packageId.equals("pro.logoff.wms.tsd.servers");
   ClassDef receipt=out.get(ROOT+"MainActivity$ReceiptItem;");if(receipt==null)throw new IllegalStateException("No receipt item class");
   for(Field f:receipt.getFields())if(!List.of("Ljava/lang/String;","Ljava/util/Map;","I","J","Z").contains(f.getType()))throw new IllegalStateException("Unsupported receipt item field: "+f);
   Method restore=null;for(Method m:auxMap.get(ROOT+"data/ReceiptCloseBatch;").getMethods())if(m.getName().equals("restore"))restore=m;
@@ -67,6 +71,7 @@ public final class PatchReceiptDraft {
      if(m.getName().equals("openReceiptBoxFromInput")&&m.getParameterTypes().isEmpty())kind="open";
      if(m.getName().equals("addReceiptItem")&&m.getParameterTypes().size()==4)kind="add";
      if(m.getName().equals("closeReceiptBoxOnServer")&&m.getParameterTypes().size()==3)kind="close";
+     if(servers&&m.getName().equals("downloadAndVerifyUpdateApk")&&m.getParameterTypes().isEmpty()&&m.getReturnType().equals("Ljava/io/File;"))kind="update";
     }
     if(c.getType().equals(ROOT+"data/ReceiptCloseBatch;")&&m.getName().equals("create")&&m.getParameterTypes().size()==4)kind="create";
     if(c.getType().equals(ROOT+"data/OperationOutbox;")&&m.getName().equals("enqueueReceiptBatch")&&m.getParameterTypes().size()==1)kind="enqueue";
@@ -80,7 +85,7 @@ public final class PatchReceiptDraft {
    if(c.getType().equals(ROOT+"data/ReceiptCloseBatch;")){for(Method m:c.getMethods())if(m.getName().equals("restore"))throw new IllegalStateException("Existing restore method");methods.add(restore);changed=true;}
    if(changed){out.put(c.getType(),with(c,fields,methods));patched.add(c.getType());}
   }
-  if(wrappers!=5)throw new IllegalStateException("Expected five exact hook points, got "+wrappers);
+  if(wrappers!=(servers?6:5))throw new IllegalStateException("Unexpected hook count: "+wrappers);
   for(ClassDef c:aux.getClasses())if(c.getType().equals(ROOT+"data/ReceiptBoxDraft;")||c.getType().equals(ROOT+"data/ReceiptBoxDraft$Snapshot;")){if(out.putIfAbsent(c.getType(),c)!=null)throw new IllegalStateException("Draft already exists");}
   for(ClassDef c:hooks.getClasses()){if(!c.getType().startsWith(ROOT+"ReceiptDraftHooks"))throw new IllegalStateException("Unexpected helper "+c.getType());if(out.putIfAbsent(c.getType(),c)!=null)throw new IllegalStateException("Hook already exists");}
   DexFile result=new ImmutableDexFile(op,out.values());DexPool.writeTo(args[3],result);
