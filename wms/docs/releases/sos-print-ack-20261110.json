@@ -1,0 +1,166 @@
+{
+  "pr": 993,
+  "sourceCommit": "5152f23e19786ae435ef7419cbc12fc9221d00a6",
+  "mergeCommit": "4115ba7135dfbab7bc0490ef241d873e9d153070",
+  "sourceParityVerified": false,
+  "publication": {
+    "published": true,
+    "pr": 993,
+    "sourceCommit": "5152f23e19786ae435ef7419cbc12fc9221d00a6",
+    "beforeImage": "sha256:0f3ee5caf7a7caf0b33def450627c60beb3691e25ecd834a7710104eb6842d70",
+    "apiImage": "sha256:f92a8bbeb9fce7924dbf98d06fcb34628af85596855cc41ef1e675117763cf9b",
+    "webImage": "sha256:b225adeb6d331aabf28f50b0893fe28996c6eaea6d8b48bc9ffd82d43ca5d6a5",
+    "apiHealth": "ok",
+    "networksPreserved": true,
+    "environmentPreserved": true,
+    "mountsPreserved": true,
+    "otherContainersPreserved": true,
+    "changedFiles": [
+      "modules/marketplace-connections/marketplace-connections.service.js"
+    ],
+    "publishedAt": "2026-11-10T15:14:00Z",
+    "rollbackTag": "wms-sos-print-ack-api:before-993-20261110"
+  },
+  "baseline": {
+    "directory": "/opt/wms-restore/releases/sos-print-ack-20261110/published-baseline",
+    "manifestSha256": "bccb065affc12457e6277d850ba03e09c1c888b59d89603800e293e222775362",
+    "apiArchiveSha256": "d1580c7091dac9e02799eb60776fcec1034238dfaa215980e94ae13ae164db5d",
+    "webManifestSha256": "91e419ec536f624a21c4c89ad5a95f24389267f1d551b9508cd3853cda272a9d"
+  },
+  "tests": {
+    "apiPassed": 4346,
+    "apiSkipped": 156,
+    "webPassed": 591,
+    "webSkipped": 2,
+    "dedicatedKizDbIntegration": "excluded: isolated database not configured",
+    "runtimeRegressionPassed": 5,
+    "existingAckPassed": 6,
+    "actualRuntimeOldFailsCandidateAndRepeatAckPass": true
+  },
+  "agentVerification": {
+    "now": "2026-11-10T15:14:29.196Z",
+    "targets": [
+      {
+        "id": "effb4998-fbbe-449f-aa37-57b096ccdf3b",
+        "historyId": "41d3a9c7-3b6d-4930-90ca-e6d1f656f1f3",
+        "assemblyId": "9c121e2b-ca72-4ec2-be72-d0b1780756ac",
+        "orderId": "6240109087",
+        "status": "PRINTED",
+        "attempts": 1,
+        "claimedAt": "2026-11-10T15:14:01.034Z",
+        "printedAt": "2026-11-10T15:14:02.070Z",
+        "errorMessage": null,
+        "updatedAt": "2026-11-10T15:14:02.071Z"
+      },
+      {
+        "id": "2d9d2249-7486-44f6-a137-735c82b5cf84",
+        "historyId": "8449d709-97c5-4493-87f1-7d3dc4ea42d3",
+        "assemblyId": "e51bb9dc-0370-4aec-a7ed-8e0dc11b644d",
+        "orderId": "6240670909",
+        "status": "PRINTED",
+        "attempts": 1,
+        "claimedAt": "2026-11-10T15:14:04.680Z",
+        "printedAt": "2026-11-10T15:14:05.493Z",
+        "errorMessage": null,
+        "updatedAt": "2026-11-10T15:14:05.493Z"
+      },
+      {
+        "id": "ca6b0f75-bd1f-4de1-890e-e9cf7696adb6",
+        "historyId": "382e1706-9b50-4674-995e-0fd243bde46e",
+        "assemblyId": "606cb7db-d69b-47d8-9253-483a4b0ee5e6",
+        "orderId": "6241046833",
+        "status": "PRINTED",
+        "attempts": 1,
+        "claimedAt": "2026-11-10T15:14:07.997Z",
+        "printedAt": "2026-11-10T15:14:08.807Z",
+        "errorMessage": null,
+        "updatedAt": "2026-11-10T15:14:08.808Z"
+      },
+      {
+        "id": "a50c9c9c-3d15-4cac-9fa5-53e116d06cbc",
+        "historyId": "d1d009f2-b21b-4363-9fd2-60ed8fb66d21",
+        "assemblyId": "d4a5735f-1799-42d9-89e0-9c3f40a9e8b1",
+        "orderId": "6240312872",
+        "status": "PRINTED",
+        "attempts": 1,
+        "claimedAt": "2026-11-10T15:14:11.255Z",
+        "printedAt": "2026-11-10T15:14:12.050Z",
+        "errorMessage": null,
+        "updatedAt": "2026-11-10T15:14:12.051Z"
+      },
+      {
+        "id": "24645794-5ead-4c64-908b-bcfef9b5c937",
+        "historyId": "a0f5aa7e-34ff-467a-8c2f-aae77b64fe0a",
+        "assemblyId": "1915a295-f3c2-4a39-8d59-ca15cefa0976",
+        "orderId": "6240042003",
+        "status": "PRINTED",
+        "attempts": 1,
+        "claimedAt": "2026-11-10T15:14:14.453Z",
+        "printedAt": "2026-11-10T15:14:15.243Z",
+        "errorMessage": null,
+        "updatedAt": "2026-11-10T15:14:15.244Z"
+      }
+    ],
+    "old": {
+      "id": "a028e258-f383-49a0-817b-1588ea61bc1b",
+      "status": "PRINTED",
+      "attempts": 1,
+      "printedAt": "2026-11-10T14:33:24.156Z"
+    },
+    "related": [
+      {
+        "id": "24645794-5ead-4c64-908b-bcfef9b5c937",
+        "orderId": "6240042003",
+        "historyId": "a0f5aa7e-34ff-467a-8c2f-aae77b64fe0a",
+        "assemblyId": "1915a295-f3c2-4a39-8d59-ca15cefa0976"
+      },
+      {
+        "id": "effb4998-fbbe-449f-aa37-57b096ccdf3b",
+        "orderId": "6240109087",
+        "historyId": "41d3a9c7-3b6d-4930-90ca-e6d1f656f1f3",
+        "assemblyId": "9c121e2b-ca72-4ec2-be72-d0b1780756ac"
+      },
+      {
+        "id": "a50c9c9c-3d15-4cac-9fa5-53e116d06cbc",
+        "orderId": "6240312872",
+        "historyId": "d1d009f2-b21b-4363-9fd2-60ed8fb66d21",
+        "assemblyId": "d4a5735f-1799-42d9-89e0-9c3f40a9e8b1"
+      },
+      {
+        "id": "2d9d2249-7486-44f6-a137-735c82b5cf84",
+        "orderId": "6240670909",
+        "historyId": "8449d709-97c5-4493-87f1-7d3dc4ea42d3",
+        "assemblyId": "e51bb9dc-0370-4aec-a7ed-8e0dc11b644d"
+      },
+      {
+        "id": "ca6b0f75-bd1f-4de1-890e-e9cf7696adb6",
+        "orderId": "6241046833",
+        "historyId": "382e1706-9b50-4674-995e-0fd243bde46e",
+        "assemblyId": "606cb7db-d69b-47d8-9253-483a4b0ee5e6"
+      }
+    ],
+    "station": {
+      "name": "0311",
+      "lastSeenAt": "2026-11-10T15:14:28.598Z",
+      "lastError": null
+    }
+  },
+  "physicalPaperIndependentlyObserved": false,
+  "duplicateQueueRows": 0,
+  "soldVmChanged": false,
+  "runtimeProof": {
+    "originalReferenceErrorReproduced": true,
+    "candidateAckPassed": true,
+    "repeatedAckPassed": true,
+    "noPrintJobCreation": true,
+    "noAttemptIncrement": true,
+    "liveDatabaseWrites": false
+  },
+  "liveProof": {
+    "missingBindingRestored": true,
+    "helperExportsVerified": true,
+    "internalHealth": "ok",
+    "publicHealth": "ok",
+    "queueMutations": 0
+  }
+}
