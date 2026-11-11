@@ -17,6 +17,8 @@ import {
 } from './clientRequestMeta';
 import { isSkuCollectionRequest } from './skuCollectionRow';
 
+import type { RequestSupplyAction } from '../fbs/requestSupplyAction';
+
 type ClientRequestsTableProps = {
   compactMobile?: boolean;
   modernActions?: boolean;
@@ -41,7 +43,7 @@ type ClientRequestsTableProps = {
   onDownloadRequestItems?: (request: ClientRequestSummary) => void;
   onDownloadOriginalFile?: (request: ClientRequestSummary, file: ClientRequestFileSummary) => void;
   onOpenOnlineExecution?: (request: ClientRequestSummary) => void;
-  onOpenFbsOrders?: (request: ClientRequestSummary) => void;
+  onOpenFbsOrders?: (request: ClientRequestSummary, action?: RequestSupplyAction) => void;
   onOpenFbsRoute?: (request: ClientRequestSummary) => void;
   onSelectManualBoxes?: (request: ClientRequestSummary) => void;
   onOpenFbsBoxSearch?: (request: ClientRequestSummary) => void;
@@ -418,6 +420,20 @@ export function ClientRequestsTable({
                               : 'Обновить план'}</span>
                         </button>
                       ) : null}</> : null}
+{onOpenFbsOrders && isFbsRequest(request) && Boolean(request.wbSupplyIds?.length) ? <>
+  <button className="client-request-action-button" type="button"
+    disabled={!request.fbsCompletion?.completed || !canSyncTsdRequest(request)}
+    onClick={() => onOpenFbsOrders(request, 'deliver')}>
+    <Send size={15} aria-hidden="true" /><span>Передать на МП</span>
+  </button>
+  <details className="request-action-menu__group">
+    <summary>Стикеры поставки</summary>
+    <div className="request-action-menu__items">
+      <button type="button" onClick={() => onOpenFbsOrders(request, 'download')}>Скачать все ШК</button>
+      <button type="button" onClick={() => onOpenFbsOrders(request, 'print')}>Распечатать все ШК</button>
+    </div>
+  </details>
+</> : null}
 <details className="request-action-menu__group"><summary>Документы</summary><div className="request-action-menu__items">
 {onDownloadRequestItems ? (
                   <button

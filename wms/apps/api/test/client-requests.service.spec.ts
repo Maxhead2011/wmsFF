@@ -184,7 +184,7 @@ describe('ClientRequestsService', () => {
   });
 
   // ADDED: активные заявки не должны запускать архивный поиск поставок WB.
-  it('не ищет номер поставки WB для активной FBS-заявки', async () => {
+  it('возвращает известную поставку активной FBS-заявки без архивного поиска', async () => {
     const prisma = {
       clientRequest: {
         findMany: vi.fn().mockResolvedValue([
@@ -203,7 +203,7 @@ describe('ClientRequestsService', () => {
             orderId: 'order-active',
             connectionId: 'connection-1',
             marketplace: MarketplaceType.WILDBERRIES,
-            lastSupplyId: null,
+            lastSupplyId: 'WB-GI-ACTIVE',
           },
         ]),
       },
@@ -219,7 +219,7 @@ describe('ClientRequestsService', () => {
     const result = await service.list({}, user({ clientIds: ['client-1'] }));
 
     expect(prisma.fbsSupplyPlan.findMany).not.toHaveBeenCalled();
-    expect(result[0]).not.toHaveProperty('wbSupplyIds');
+    expect(result[0]).toHaveProperty('wbSupplyIds', ['WB-GI-ACTIVE']);
   });
 
   it('показывает 100% только когда собраны все активные FBS-заказы заявки', async () => {

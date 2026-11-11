@@ -99,6 +99,8 @@ const ClientRequestsPanel = lazy(() =>
 const DirectoryPanel = lazy(() =>
   import('./components/directories/DirectoryPanel').then((module) => ({ default: module.DirectoryPanel })),
 );
+import type { RequestSupplyTarget } from './components/fbs/requestSupplyAction';
+
 const FbsPanel = lazy(() =>
   import('./components/fbs/FbsPanel').then((module) => ({ default: module.FbsPanel })),
 );
@@ -187,6 +189,7 @@ export function App() {
   const [clientNotifications, setClientNotifications] = useState<ClientNotificationSummary[]>([]);
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
   const [modernSidebarCollapsed, setModernSidebarCollapsed] = useState(false);
+  const [requestSupplyTarget, setRequestSupplyTarget] = useState<RequestSupplyTarget | null>(null);
   const [focusedRequestId, setFocusedRequestId] = useState<string | null>(null);
   const workspaceContentRef = useRef<HTMLElement | null>(null);
   const modernSearchRef = useRef<HTMLInputElement | null>(null);
@@ -813,7 +816,7 @@ export function App() {
           aria-label={activeWorkspace.title}
         >
           <SoulWorkspace enabled={uiTheme === 'soul'} userId={session.user.id} groups={groupedWorkspaces} activeId={activeWorkspace.id} onOpen={(id) => setActiveWorkspaceId(id as WorkspaceId)}>
-          {uiTheme === 'la_panthera' ? <PantheraWorkspaces key={session.user.id + ":" + session.user.activeWarehouseId} activeId={activeWorkspace.id} onOpen={id => setActiveWorkspaceId(id as WorkspaceId)} render={id => renderWorkspace(
+          {uiTheme === 'la_panthera' ? <PantheraWorkspaces key={session.user.id + ":" + session.user.activeWarehouseId} activeId={activeWorkspace.id} onOpen={id => setActiveWorkspaceId(id as WorkspaceId)} render={(id, active) => renderWorkspace(
             id as WorkspaceId,
             session,
             availableWorkspaces,
@@ -828,6 +831,8 @@ export function App() {
               setActiveWorkspaceId('requests');
             },
             () => setFocusedRequestId(null),
+            active ? requestSupplyTarget : null,
+            setRequestSupplyTarget,
           )} /> : renderWorkspace(
             activeWorkspace.id,
             session,
@@ -843,6 +848,8 @@ export function App() {
               setActiveWorkspaceId('requests');
             },
             () => setFocusedRequestId(null),
+            requestSupplyTarget,
+            setRequestSupplyTarget,
           )}
           </SoulWorkspace>
         </section>
@@ -944,6 +951,8 @@ function renderWorkspace(
   focusedRequestId: string | null,
   openRequestFromFbs: (requestId: string) => void,
   clearFocusedRequest: () => void,
+  requestSupplyTarget: RequestSupplyTarget | null,
+  setRequestSupplyTarget: (target: RequestSupplyTarget | null) => void,
 ) {
   switch (activeWorkspaceId) {
     case 'operations-statistics':
@@ -991,13 +1000,16 @@ function renderWorkspace(
     case 'turnover':
       return <TurnoverPanel session={session} />;
     case 'requests':
-      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel compactMobile={uiTheme === 'soul'} session={session} onOpenFbsOrders={() => setActiveWorkspaceId('fbs')} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel compactMobile={uiTheme === 'soul'} session={session} onOpenFbsOrders={(request, action) => {
+        setRequestSupplyTarget(action ? { request, action } : null);
+        setActiveWorkspaceId('fbs');
+      }} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
     case 'order-assembly':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю сборку заказов…</div>}><OrderAssemblyPanel session={session} /></Suspense>;
     case 'contracts':
       return <ContractsPanel session={session} />;
     case 'fbs':
-      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} requestSupplyTarget={requestSupplyTarget} onRequestSupplyHandled={() => setRequestSupplyTarget(null)} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
     case 'factory':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
     case 'fbs-packed':

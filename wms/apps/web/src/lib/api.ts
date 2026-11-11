@@ -1595,7 +1595,7 @@ export type ClientRequestSummary = {
   _count?: {
     fbsOrderLinks: number;
   };
-  // ADDED: WB supply numbers are returned for shipped requests, including archived ones.
+  // ADDED: WB supply numbers identify active and archived FBS requests.
   wbSupplyIds?: string[];
   fbsCompletion?: {
     totalOrders: number;
