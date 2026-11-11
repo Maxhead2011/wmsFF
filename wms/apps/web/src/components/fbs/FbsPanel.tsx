@@ -149,7 +149,11 @@ import {
 import './fbs.css';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
+import { requestSupplyOrders, type RequestSupplyTarget } from './requestSupplyAction';
+
 type FbsPanelProps = {
+  requestSupplyTarget?: RequestSupplyTarget | null;
+  onRequestSupplyHandled?: () => void;
   session: AuthSession;
   onOpenRequest?: (requestId: string) => void;
 };
@@ -428,7 +432,7 @@ function compactFbsViewGroup(view: FbsView): FbsView {
   return view;
 }
 
-export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
+export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onRequestSupplyHandled }: FbsPanelProps) {
   const compactMenuEnabled = import.meta.env.VITE_FBS_COMPACT_MENU_ENABLED === 'true';
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
   const [activeView, setActiveView] = useState<FbsView>('active');
@@ -441,6 +445,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   const [selectedClientId, setSelectedClientId] = useRememberedClientId(session.user.id, {
     initialClientId: session.user.clientIds.length === 1 ? session.user.clientIds[0] : '',
   });
+  const requestSupplyClient = useRef<string | null>(null);
   const [search, setSearch] = useState('');
   const [orderSearchFeedback, setOrderSearchFeedback] = useState<{
     tone: 'success' | 'error';
@@ -568,6 +573,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   // FIX: load persisted history only when opening the archive, not every active-order poll.
   const [archivePeriod, setArchivePeriod] = useState(defaultFbsArchivePeriod);
   const loadArchive = activeView === 'shipped' || activeView === 'archive';
+  const loadedArchivePeriod = useRef<string | null>(null);
   const loadOrders = useCallback(
     async (refresh = false) => {
       if (!selectedClientId || !marketplace) {
@@ -579,6 +585,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       try {
         const data = await fetchFbsOrders(session.accessToken, selectedClientId, refresh, loadArchive ? 'archive' : 'snapshot', loadArchive ? archivePeriod : undefined);
         if (loadSequence.current === sequence) {
+          loadedArchivePeriod.current = loadArchive ? archivePeriod.from + '/' + archivePeriod.to : null;
           setOrdersState({ status: 'ready', data, error: '' });
         }
       } catch (caught) {
@@ -626,6 +633,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
       const rows = await fetchFbsActiveClients(session.accessToken, marketplace);
       setActiveClients(rows);
       setSelectedClientId((current) => {
+        if (requestSupplyClient.current) return requestSupplyClient.current;
         if (rows.some((item) => item.client.id === current)) return current;
         return rows[0]?.client.id ?? current;
       });
@@ -1593,6 +1601,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   }
 
   function openMarketplace(nextMarketplace: FbsMarketplace) {
+    requestSupplyClient.current = null;
     window.history.pushState(
       { ...(window.history.state ?? {}), [FBS_HISTORY_STATE_KEY]: nextMarketplace },
       '',
@@ -1614,6 +1623,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
   }
 
   function resetMarketplace() {
+    requestSupplyClient.current = null;
     setMarketplace(null);
     setActiveClients([]);
     setActiveView('active');
@@ -1657,6 +1667,49 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
     window.addEventListener('popstate', handleBrowserBack);
     return () => window.removeEventListener('popstate', handleBrowserBack);
   }, []);
+
+  const handledSupplyTarget = useRef<RequestSupplyTarget | null>(null);
+  useEffect(() => {
+    if (!requestSupplyTarget || handledSupplyTarget.current === requestSupplyTarget) return;
+    const target = requestSupplyTarget;
+    if (marketplace !== 'WILDBERRIES') {
+      setLamodaOpen(false);
+      openMarketplace('WILDBERRIES');
+      return;
+    }
+    requestSupplyClient.current = target.request.clientId;
+    if (selectedClientId !== target.request.clientId) {
+      setSelectedClientId(target.request.clientId);
+      return;
+    }
+    if (target.request.status === 'DONE') {
+      const period = { ...defaultFbsArchivePeriod(), from: target.request.createdAt.slice(0, 10) };
+      if (activeView !== 'archive' || archivePeriod.from !== period.from || archivePeriod.to !== period.to) {
+        setArchivePeriod(period);
+        setActiveView('archive');
+        return;
+      }
+      if (ordersState.status !== 'error' && loadedArchivePeriod.current !== period.from + '/' + period.to) return;
+    } else if (activeView !== 'active') {
+      setActiveView('active');
+      return;
+    }
+    if (ordersState.status === 'error') {
+      handledSupplyTarget.current = target;
+      onRequestSupplyHandled?.();
+      return;
+    }
+    if (ordersState.status !== 'ready' || ordersState.data.client.id !== target.request.clientId || orderAction !== null) return;
+    handledSupplyTarget.current = target;
+    onRequestSupplyHandled?.();
+    try {
+      const orders = requestSupplyOrders(target, ordersState.data.orders);
+      if (target.action === 'deliver') void deliverSelectedSupplies(orders);
+      else void downloadSelectedOrderStickers(orders, target.action === 'print' ? 'print' : true);
+    } catch (caught) {
+      setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось открыть поставку.');
+    }
+  }, [requestSupplyTarget, marketplace, activeView, archivePeriod, selectedClientId, ordersState, orderAction, onRequestSupplyHandled]);
 
   if (lamodaOpen) return <section><button className="icon-text-button" onClick={()=>setLamodaOpen(false)}>Назад к площадкам FBS</button><Suspense fallback={<p>Загрузка Lamoda…</p>}><LamodaFbs session={session} mode="fbs"/></Suspense></section>;
   if (!marketplace) {
@@ -1809,6 +1862,7 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
                         type="button"
                         className={item.client.id === selectedClientId ? 'is-selected' : undefined}
                         onClick={() => {
+                          requestSupplyClient.current = null;
                           setSelectedClientId(item.client.id);
                           setActiveView('active');
                           setSearch('');
@@ -1841,7 +1895,10 @@ export function FbsPanel({ session, onOpenRequest }: FbsPanelProps) {
             {clients.length > 1 ? (
               <label>
                 <span>Клиент</span>
-                <select value={selectedClientId} onChange={(event) => setSelectedClientId(event.target.value)}>
+                <select value={selectedClientId} onChange={(event) => {
+                  requestSupplyClient.current = null;
+                  setSelectedClientId(event.target.value);
+                }}>
                   <option value="">Выберите клиента</option>
                   {workspaceClients(clients, marketplace ?? '', 'fbs').map((client) => (
                     <option key={client.id} value={client.id}>

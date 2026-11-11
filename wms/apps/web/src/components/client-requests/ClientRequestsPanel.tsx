@@ -113,11 +113,13 @@ type LoadState<T> = {
   error?: string;
 };
 
+import type { RequestSupplyAction } from '../fbs/requestSupplyAction';
+
 type ClientRequestsPanelProps = {
   compactMobile?: boolean;
   fboOnly?: boolean;
   session: AuthSession;
-  onOpenFbsOrders?: (request: ClientRequestSummary) => void;
+  onOpenFbsOrders?: (request: ClientRequestSummary, action?: RequestSupplyAction) => void;
   focusRequestId?: string | null;
   onFocusRequestHandled?: () => void;
 };
@@ -5305,7 +5307,7 @@ function renderRequests(
   onOpenDocument: (request: ClientRequestSummary) => void,
   onDownloadRequestItems: (request: ClientRequestSummary) => void,
   onDownloadOriginalFile: ((request: ClientRequestSummary, file: ClientRequestFileSummary) => void) | undefined,
-  onOpenFbsOrders: ((request: ClientRequestSummary) => void) | undefined,
+  onOpenFbsOrders: ((request: ClientRequestSummary, action?: RequestSupplyAction) => void) | undefined,
   onOpenFbsRoute: (request: ClientRequestSummary) => void,
   onOpenOnlineExecution: ((request: ClientRequestSummary) => void) | undefined,
   onSelectManualBoxes: ((request: ClientRequestSummary) => void) | undefined,

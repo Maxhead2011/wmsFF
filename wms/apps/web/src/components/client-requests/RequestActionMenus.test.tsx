@@ -17,3 +17,16 @@ it('keeps only approved FBO actions and documents',()=>{
 it('replaces route with online and describes synchronization',()=>{const html=render(true);expect(html).not.toContain('>Маршрут<');expect(html.match(/>Онлайн</g)).toHaveLength(1);expect(html).toContain('К заказам FBS');expect(html).toContain('Остатки и короба');expect(html).toContain('Пересчитать подбор и маршрут');expect(html).toContain('Обновить данные WB / ТСД');expect(html).toContain('Лист подбора PDF');});
 it('puts downloads inside Documents instead of composition',()=>{const html=render(true);const composition=html.split('data-label="Состав">')[1].split('</td>')[0];expect(composition).not.toContain('document-open-button');const docs=html.split('<summary>Документы</summary>')[1].split('</details>')[0];expect(docs).toContain('Состав XLSX');});
 it('preserves legacy controls when modern workflow is disabled',()=>{const html=render(false,{modernActions:false});expect(html).toContain('>В ТСД<');expect(html).toContain('>Собрать<');expect(html).not.toContain('<summary>Ещё</summary>');});
+it('offers WB handover and both supply label commands on a warehouse request', () => {
+  const row = {
+    id: 'r', number: 1550, type: 'OUTBOUND', status: 'IN_WORK', priority: 'NORMAL',
+    title: 'FBS', client: { id: 'c', code: 'CL-1', name: 'Test' }, clientId: 'c', createdAt: '2026-11-11T09:00:00Z', items: [],
+    packages: [], files: [], wbSupplyIds: ['WB-GI-100'],
+    fbsCompletion: { totalOrders: 2, completedOrders: 2, percent: 100, completed: true },
+  };
+  const html = render(true, { items: [row] });
+  for (const label of ['Передать на МП', 'Стикеры поставки', 'Скачать все ШК', 'Распечатать все ШК']) {
+    expect(html).toContain(label);
+  }
+  expect(render()).not.toContain('Стикеры поставки');
+});

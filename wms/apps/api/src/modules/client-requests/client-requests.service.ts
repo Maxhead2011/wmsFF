@@ -211,7 +211,7 @@ export class ClientRequestsService {
       links.push(previous.link);
       assemblies.push(previous.task);
     }
-    // FIX: номер поставки нужен только отгруженным заявкам; активные не запускают архивный fallback-запрос.
+    // FIX: архивный поиск выполняется только для отгруженных заявок без номера поставки.
     const doneFbsRequestIds = new Set(
       requests
         .filter(
@@ -226,7 +226,7 @@ export class ClientRequestsService {
     // ADDED: номер поставки берём из актуальной ссылки, а для старого архива — из сохранённого плана WB.
     const wbSupplyIdsByRequest = new Map<string, Set<string>>();
     const wbLinksWithoutSupply = doneWbLinks.filter((link) => !link.lastSupplyId?.trim());
-    for (const link of doneWbLinks) {
+    for (const link of links.filter(link => link.marketplace === MarketplaceType.WILDBERRIES)) {
       const supplyId = link.lastSupplyId?.trim();
       if (!supplyId) {
         continue;

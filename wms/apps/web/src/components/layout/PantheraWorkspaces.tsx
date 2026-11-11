@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import './panthera-windows.css';
 
-type Props = { activeId: string; onOpen: (id: string) => void; render: (id: string) => ReactNode };
+type Props = { activeId: string; onOpen: (id: string) => void; render: (id: string, active: boolean) => ReactNode };
 type WindowEntry = { element: HTMLElement; button: HTMLButtonElement; title: string; minimized: boolean };
 
 // FIX: retain only pages with minimized windows. Their forms stay mounted in React.
@@ -28,7 +28,7 @@ export function PantheraWorkspaces({ activeId, onOpen, render }: Props) {
     <PantheraWindowSurface key={key} dock={dock} active={key === activeKey} onOpen={() => {
       setState(old => ({ ...old, selected: { ...old.selected, [workspace]: key } }));
       onOpen(workspace);
-    }} onRetain={needed => retain(key, workspace, needed)}>{render(workspace)}</PantheraWindowSurface>)}
+    }} onRetain={needed => retain(key, workspace, needed)}>{render(workspace, key === activeKey)}</PantheraWindowSurface>)}
     {createPortal(<aside ref={setDock} className="panthera-window-dock" aria-label="Свёрнутые окна" />, document.body)}</>;
 }
 
