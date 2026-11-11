@@ -1,3 +1,11 @@
+# Ozon FBO packing modes
+
+Prepared 2026-11-11, not published: LOGOFF restores «По направлению / По товару». A new packing screen starts by direction; existing checkpoints keep their selected mode. Switching is disabled while a product is scanned or a command is pending. Direction mode shows its composition and uses existing carton/product/KIZ checks. Product mode retains suggested-carton packing. Reopening a closed carton resumes ordinary direction packing. No stock, API, schema or sold-flavor changes.
+
+Local validation: the two restoration regressions failed before the fix. Full LOGOFF suite: 352 passed. Ffullhab and platform: each 352 tests, 342 passed, 8 skipped, 2 receipt-test failures already documented below (ReceiptPlacementActivityTest and ReceiptProgressActivityTest). Final FBO screen run: 43/43 tests passed in each of the three flavors after the last edit. No physical terminal or production deployment performed.
+
+## Historical product-only release (superseded by the prepared change)
+
 # Ozon FBO packing by product — LOGOFF TSD 259
 
 Scope: only LOGOFF Ozon packing. Lamoda keeps its two modes; WB, Yandex and sold application flavors retain their flow. No API, stock or schema changes.

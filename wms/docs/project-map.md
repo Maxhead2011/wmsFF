@@ -1,3 +1,5 @@
+Prepared 2026-11-11: restore LOGOFF Ozon FBO direction/product packing selection. `FboTwoStageScreen.java`; regression and checkpoint tests in `FboTwoStageScreenTest.java`. See [packing modes](ozon-product-only.md). No API, stock or sold-flow changes. Not published.
+
 Ozon FBO import: client-scoped EAN-13 and zero-padded GTIN-14 lookup. Ozon import tests: 28 passed. Guarded preview on live data for Ozon 139939408: three items, three units, one direction. Release scripts: ozon-fbo-padded-barcode-20261111.
 
 WB FBS request supply navigation: handover and labels remain inside Requests. TypeScript, 640 web tests and browser replay of real request 2918 passed. See scripts/releases/request-supply-stay-20261111.
