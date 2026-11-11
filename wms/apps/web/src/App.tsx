@@ -1001,15 +1001,23 @@ function renderWorkspace(
       return <TurnoverPanel session={session} />;
     case 'requests':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю заявки…</div>}><ClientRequestsPanel compactMobile={uiTheme === 'soul'} session={session} onOpenFbsOrders={(request, action) => {
-        setRequestSupplyTarget(action ? { request, action } : null);
+        // FIX: supply actions keep the requests workspace mounted.
+        if (action) {
+          setRequestSupplyTarget({ request, action });
+          return;
+        }
         setActiveWorkspaceId('fbs');
-      }} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} /></Suspense>;
+      }} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} />
+        {requestSupplyTarget && <Suspense fallback={<p role="status">Загружаю поставку WB…</p>}>
+          <FbsPanel session={session} requestSupplyTarget={requestSupplyTarget} onRequestSupplyClose={() => setRequestSupplyTarget(null)} />
+        </Suspense>}
+      </Suspense>;
     case 'order-assembly':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю сборку заказов…</div>}><OrderAssemblyPanel session={session} /></Suspense>;
     case 'contracts':
       return <ContractsPanel session={session} />;
     case 'fbs':
-      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} requestSupplyTarget={requestSupplyTarget} onRequestSupplyHandled={() => setRequestSupplyTarget(null)} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
+      return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю FBS…</div>}><FbsPanel session={session} onOpenRequest={availableWorkspaces.some((item) => item.id === 'requests') ? openRequestFromFbs : undefined} /></Suspense>;
     case 'factory':
       return <Suspense fallback={uiTheme === 'la_panthera' && magicEnabled(window.location.hostname) && welcomeStyle(session.user) ? <MagicWelcome user={session.user}/> : <div className="workspace-loading">Загружаю фабрику…</div>}><FactoryPanel session={session} /></Suspense>;
     case 'fbs-packed':
