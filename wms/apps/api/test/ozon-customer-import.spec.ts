@@ -27,6 +27,27 @@ describe('Ozon customer import',()=>{
     expect(data.files.create.content.length).toBeGreaterThan(0);
     expect(data.warehouseId).toBe('warehouse');
   });
+  // TEST: Ozon can send a zero-padded EAN-13 as a GTIN-14.
+  it.each([false, true])('resolves a padded barcode only for one SKU (ambiguous: %s)', async (ambiguous) => {
+    const s = setup();
+    const padded = '04610460840540';
+    const stored = '4610460840540';
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
+      ['Склад хранения', 'Артикул', 'ШК', 'Поставка, шт'],
+      ['Москва', 'a', padded, 2],
+    ]), 'Поставка');
+    const file = { ...s.file, buffer: XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) };
+    const rows = [{ value: stored, skuId: 'sku', sku: { name: 'Товар' } }];
+    if (ambiguous) rows.push({ value: padded, skuId: 'other', sku: { name: 'Другой товар' } });
+    s.db.barcode.findMany.mockImplementation(async ({ where }) =>
+      rows.filter(row => where.value.in.includes(row.value)));
+    const result = s.service.preview(file, dto, user);
+    if (ambiguous) await expect(result).rejects.toThrow('не найден однозначно');
+    else await expect(result).resolves.toMatchObject({
+      items: [{ skuId: 'sku', barcode: padded, quantity: 2 }],
+    });
+  });
   it('returns a previous import after a lost response without duplicating demand',async()=>{
     const s=setup();s.tx.ozonFboShipment.findUnique.mockResolvedValue({request:{id:'old'}} as any);
     expect((await s.service.commit(s.file,dto,user)).existing).toBe(true);

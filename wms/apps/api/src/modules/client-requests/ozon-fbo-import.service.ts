@@ -94,10 +94,15 @@ export class OzonFboImportService {
       const wb = XLSX.read(file.buffer, { type: 'buffer' });
       parsed = parseOzonFboRows(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true }));
     } catch (e) { throw new BadRequestException(e instanceof Error ? e.message : 'Не удалось прочитать Excel.'); }
-    const matches = await this.db.barcode.findMany({ where: { value: { in: [...new Set(parsed.map(l => l.barcode))] }, sku: { clientId: dto.clientId } }, include: { sku: true } });
+    // FIX: look up zero-padded GTIN-14 and EAN-13 within the same client.
+    const alternateBarcode = (value: string) => /^0[0-9]{13}$/.test(value) ? value.slice(1)
+      : /^[0-9]{13}$/.test(value) ? `0${value}` : value;
+    const values = [...new Set(parsed.flatMap(({ barcode }) => [barcode, alternateBarcode(barcode)]))];
+    const matches = await this.db.barcode.findMany({ where: { value: { in: values }, sku: { clientId: dto.clientId } }, include: { sku: true } });
     const directions: OzonDirection[] = [];
     for (const line of parsed) {
-      const found = matches.filter(m => m.value === line.barcode);
+      const alternate = alternateBarcode(line.barcode);
+      const found = matches.filter(m => m.value === line.barcode || m.value === alternate);
       if (new Set(found.map(m => m.skuId)).size !== 1) throw new BadRequestException(`Строка ${line.row}: ШК ${line.barcode} не найден однозначно у выбранного клиента.`);
       let d = directions.find(d => d.name === line.direction);
       if (!d) { d = { name: line.direction, items: [] }; directions.push(d); }
