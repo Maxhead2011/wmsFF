@@ -110,3 +110,11 @@ describe('FBS supply delivery confirmation', () => {
     expect(deliveryDialog()).toBeUndefined();
   });
 });
+
+// TEST: the supply action branches before the ordinary FBS navigation.
+it('opens request supply actions in the requests workspace', () => {
+  const app = readFileSync(new URL('../../App.tsx', import.meta.url), 'utf8');
+  const workspace = app.split("case 'requests':").at(-1)!.split("case 'order-assembly':")[0];
+  expect(workspace).toMatch(/if \(action\) \{\s*setRequestSupplyTarget\(\{ request, action \}\);\s*return;\s*\}\s*setActiveWorkspaceId\('fbs'\)/);
+  expect(workspace).toContain('onRequestSupplyClose={() => setRequestSupplyTarget(null)}');
+});

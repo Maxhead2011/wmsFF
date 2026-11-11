@@ -153,7 +153,7 @@ import { requestSupplyOrders, type RequestSupplyTarget } from './requestSupplyAc
 
 type FbsPanelProps = {
   requestSupplyTarget?: RequestSupplyTarget | null;
-  onRequestSupplyHandled?: () => void;
+  onRequestSupplyClose?: () => void;
   session: AuthSession;
   onOpenRequest?: (requestId: string) => void;
 };
@@ -432,7 +432,7 @@ function compactFbsViewGroup(view: FbsView): FbsView {
   return view;
 }
 
-export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onRequestSupplyHandled }: FbsPanelProps) {
+export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onRequestSupplyClose }: FbsPanelProps) {
   const compactMenuEnabled = import.meta.env.VITE_FBS_COMPACT_MENU_ENABLED === 'true';
   const [marketplace, setMarketplace] = useState<FbsMarketplace | null>(null);
   const [activeView, setActiveView] = useState<FbsView>('active');
@@ -1379,7 +1379,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
     }
   }
 
-  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all: boolean | 'print' = false) {
+  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all: boolean | 'print' = false, onComplete?: () => void) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('stickers');
     setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
@@ -1392,11 +1392,16 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
           clientId: selectedClientId,
           orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
         });
-        if (all === 'print') { await openWbRibbonPrint(session.accessToken, selectedClientId, result, orders.every(order => order.marketplace === 'OZON') ? 'Ozon' : 'WB'); return; }
+        if (all === 'print') {
+          await openWbRibbonPrint(session.accessToken, selectedClientId, result, orders.every(order => order.marketplace === 'OZON') ? 'Ozon' : 'WB');
+          onComplete?.();
+          return;
+        }
         const bytes = Uint8Array.from(atob(result.fileBase64), char => char.charCodeAt(0));
         downloadFbsBlob(new Blob([bytes], { type: 'application/pdf' }), result.fileName);
         setOrderActionMessage(`Скачана лента: ${result.pageCount} стр.`);
         if (result.warnings.length) setOrderActionError(`Скачан неполный комплект. ${result.warnings.join(' ')}`);
+        if (!result.warnings.length) onComplete?.();
         return;
       }
       const blob = await downloadFbsOrderStickersPdf(session.accessToken, {
@@ -1696,20 +1701,52 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
     }
     if (ordersState.status === 'error') {
       handledSupplyTarget.current = target;
-      onRequestSupplyHandled?.();
       return;
     }
     if (ordersState.status !== 'ready' || ordersState.data.client.id !== target.request.clientId || orderAction !== null) return;
     handledSupplyTarget.current = target;
-    onRequestSupplyHandled?.();
     try {
       const orders = requestSupplyOrders(target, ordersState.data.orders);
       if (target.action === 'deliver') void deliverSelectedSupplies(orders);
-      else void downloadSelectedOrderStickers(orders, target.action === 'print' ? 'print' : true);
+      else void downloadSelectedOrderStickers(orders, target.action === 'print' ? 'print' : true, onRequestSupplyClose);
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось открыть поставку.');
     }
-  }, [requestSupplyTarget, marketplace, activeView, archivePeriod, selectedClientId, ordersState, orderAction, onRequestSupplyHandled]);
+  }, [requestSupplyTarget, marketplace, activeView, archivePeriod, selectedClientId, ordersState, orderAction, onRequestSupplyClose]);
+
+  const supplyDeliveryDialog = deliveryDialog ? (
+    <FbsSupplyDeliveryDialog
+      state={deliveryDialog}
+      accessToken={session.accessToken}
+      clientId={selectedClientId ?? ""}
+      isSubmitting={orderAction === 'deliver'}
+      onOfficeChange={(destinationOfficeId) =>
+        setDeliveryDialog((current) => current ? { ...current, destinationOfficeId, error: '' } : current)
+      }
+      onDateChange={(plannedDeliveryDate) =>
+        setDeliveryDialog((current) => current ? { ...current, plannedDeliveryDate, error: '' } : current)
+      }
+      onCancel={() => { setDeliveryDialog(null); onRequestSupplyClose?.(); }}
+      onSubmit={submitFbsSupplyDelivery}
+    />
+  ) : null;
+  if (requestSupplyTarget) {
+    if (supplyDeliveryDialog) return supplyDeliveryDialog;
+    if (deliveryRecovery) return (
+        <FbsDeliveryRecoveryDialog
+          rescanOrders={deliveryRecovery.rescanOrders}
+          cancelledOrders={deliveryRecovery.cancelledOrders}
+          onClose={() => { setDeliveryRecovery(null); onRequestSupplyClose?.(); }}
+        />
+      );
+    const error = orderActionError || (ordersState.status === 'error' ? ordersState.error : '');
+    return (
+      <section aria-label="Поставка WB">
+        <p role={error ? 'alert' : 'status'}>{error || orderActionMessage || 'Загружаю поставку WB…'}</p>
+        <button type="button" className="icon-text-button" onClick={onRequestSupplyClose}>Закрыть</button>
+      </section>
+    );
+  }
 
   if (lamodaOpen) return <section><button className="icon-text-button" onClick={()=>setLamodaOpen(false)}>Назад к площадкам FBS</button><Suspense fallback={<p>Загрузка Lamoda…</p>}><LamodaFbs session={session} mode="fbs"/></Suspense></section>;
   if (!marketplace) {
@@ -2361,22 +2398,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
           onClose={() => setDeliveryRecovery(null)}
         />
       ) : null}
-      {deliveryDialog ? (
-        <FbsSupplyDeliveryDialog
-          state={deliveryDialog}
-          accessToken={session.accessToken}
-          clientId={selectedClientId ?? ""}
-          isSubmitting={orderAction === 'deliver'}
-          onOfficeChange={(destinationOfficeId) =>
-            setDeliveryDialog((current) => current ? { ...current, destinationOfficeId, error: '' } : current)
-          }
-          onDateChange={(plannedDeliveryDate) =>
-            setDeliveryDialog((current) => current ? { ...current, plannedDeliveryDate, error: '' } : current)
-          }
-          onCancel={() => setDeliveryDialog(null)}
-          onSubmit={submitFbsSupplyDelivery}
-        />
-      ) : null}
+      {supplyDeliveryDialog}
     </section>
   );
 }
