@@ -1,0 +1,30 @@
+{
+  "pr": 1008,
+  "webImage": "sha256:90a818b462178ac09c3547bcf287989b3bc9675bc229ea2c29982599bad8dd23",
+  "apiImage": "sha256:c4e26f46b38f01e6e92c2608f89933feb3856cd8b2b3f9c221fe111283325440",
+  "webBefore": "sha256:f1ded60b52eacbc8fac7721e010f5f2fe27251a043a1fa4857c309123ee9bbf9",
+  "rollbackTag": "wms-soul-inter-web:before-1008",
+  "sourceParityVerified": false,
+  "assetHashes": {
+    "index.html": "ca4115acb9bc8ea4938d258b3ead1e55e015c24b156223f832ca36f511e8c5f3",
+    "assets/soul-inter-20261112.js": "8669b647cfdc485c23a520bc50261af0706ba3c42bcc3da96e910cbf33d81cb6",
+    "assets/soul-inter-20261112.css": "6998b660109eddb95938befe3244f9bcfd5a5ffdb1547a5d68debd033cc23334"
+  },
+  "health": "ok",
+  "mergeCommit": "5a904dab8e3f52a09a63d3d11646c8930b3b180e",
+  "runtimeManifest": "/opt/wms-restore/releases/soul-inter-20261112/image-proof.json",
+  "previousBaseline": "releases/arrival-rolls-20261112.json",
+  "verification": {
+    "webPassed": 592,
+    "webSkipped": 2,
+    "webTypecheck": true,
+    "webBuild": true,
+    "publicBrowser": [
+      "Soul 320px",
+      "Soul 1200px",
+      "La Panthera 1200px"
+    ],
+    "publicBrowserUsesFixtureSession": true,
+    "navigationCountsLiveHttpStatus": 200
+  }
+}
