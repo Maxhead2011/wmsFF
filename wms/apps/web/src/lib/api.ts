@@ -5479,6 +5479,7 @@ export type GoodsArrivalSummary = {
   arrivalDate: string;
   bagCount: number;
   boxCount: number;
+  rollCount?: number;
   comment: string | null;
   status: string;
   billingInvoiceId: string | null;
@@ -11029,7 +11030,7 @@ export async function fetchGoodsArrivalEstimate(accessToken: string, clientId: s
 
 export async function createGoodsArrival(
   accessToken: string,
-  payload: { clientId: string; arrivalDate: string; bagCount: number; boxCount: number; comment?: string; ourDelivery?: boolean; deliveryCostRub?: number },
+  payload: { clientId: string; arrivalDate: string; bagCount: number; boxCount: number; rollCount?: number; comment?: string; ourDelivery?: boolean; deliveryCostRub?: number },
 ) {
   return request<GoodsArrivalSummary>('/warehouse/goods-arrivals', { method: 'POST', accessToken, body: payload });
 }

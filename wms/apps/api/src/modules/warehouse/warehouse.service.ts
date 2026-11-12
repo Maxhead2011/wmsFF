@@ -637,8 +637,10 @@ export class WarehouseService {
     const arrivalDate = isoDateField(dto.arrivalDate, 'arrivalDate');
     const bagCount = nonNegativeInteger(dto.bagCount, 'bagCount');
     const boxCount = nonNegativeInteger(dto.boxCount, 'boxCount');
-    if (bagCount + boxCount <= 0) {
-      throw new BadRequestException('Укажите количество мешков или коробов больше нуля.');
+    // FIX: roll counts are part of the arrival, independent of PPR billing.
+    const rollCount = nonNegativeInteger(dto.rollCount, 'rollCount');
+    if (bagCount + boxCount + rollCount <= 0) {
+      throw new BadRequestException('Укажите количество мешков, коробов или рулонов больше нуля.');
     }
     const created = await this.prisma.auditLog.create({
       data: {
@@ -653,6 +655,7 @@ export class WarehouseService {
           ...delivery,
           bagCount,
           boxCount,
+          rollCount,
           comment: optionalString(dto.comment) ?? null,
           status: 'ACTIVE',
           createdByName: user.name,
@@ -691,7 +694,7 @@ export class WarehouseService {
     const periodFrom = isoDateField(dto.periodFrom, 'periodFrom');
     const periodTo = isoDateField(dto.periodTo, 'periodTo');
     if (periodFrom > periodTo) throw new BadRequestException('Начало периода не может быть позже окончания.');
-    const arrivals = (await this.listGoodsArrivals({ clientId, periodFrom, periodTo }, user)).filter((row) => !row.billingInvoiceId);
+    const arrivals = (await this.listGoodsArrivals({ clientId, periodFrom, periodTo }, user)).filter((row) => !row.billingInvoiceId && row.bagCount + row.boxCount > 0);
     const bagCount = arrivals.reduce((sum, row) => sum + row.bagCount, 0);
     const boxCount = arrivals.reduce((sum, row) => sum + row.boxCount, 0);
     if (bagCount + boxCount <= 0) throw new BadRequestException('За выбранный период нет невыставленных приходов товара.');
@@ -2125,6 +2128,7 @@ function goodsArrivalFromAudit(row: { id: string; payload: Prisma.JsonValue | nu
     arrivalDate: text(payload.arrivalDate),
     bagCount: Number(payload.bagCount) || 0,
     boxCount: Number(payload.boxCount) || 0,
+    rollCount: Number(payload.rollCount) || 0,
     comment: text(payload.comment) || null,
     status: text(payload.status) || 'ACTIVE',
     billingInvoiceId: text(payload.billingInvoiceId) || null,

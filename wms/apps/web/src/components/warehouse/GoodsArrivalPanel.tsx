@@ -23,6 +23,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [arrivalDate, setArrivalDate] = useState(today());
   const [bagCount, setBagCount] = useState('0');
+  const [rollCount, setRollCount] = useState('0');
   const [boxCount, setBoxCount] = useState('0');
   const [comment, setComment] = useState('');
   const [ourDelivery, setOurDelivery] = useState(false);
@@ -78,11 +79,13 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
         arrivalDate,
         bagCount: Number(bagCount) || 0,
         boxCount: Number(boxCount) || 0,
+        rollCount: Number(rollCount) || 0,
         comment: comment.trim() || undefined,
         ...(estimate?.cargoPickupEnabled ? {ourDelivery, ...(ourDelivery ? {deliveryCostRub:Number(deliveryCost)} : {})} : {}),
       });
       setBagCount('0');
       setBoxCount('0');
+      setRollCount('0');
       setComment('');
       setOurDelivery(false);
       setDeliveryCost('');
@@ -127,7 +130,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
     finally { setCargoBusy(false); }
   }
 
-  const totals = rows.reduce((sum, row) => ({ bags: sum.bags + row.bagCount, boxes: sum.boxes + row.boxCount }), { bags: 0, boxes: 0 });
+  const totals = rows.reduce((sum, row) => ({ bags: sum.bags + row.bagCount, boxes: sum.boxes + row.boxCount, rolls: sum.rolls + (row.rollCount ?? 0) }), { bags: 0, boxes: 0, rolls: 0 });
 
   return (
     <div className="goods-arrivals">
@@ -136,6 +139,7 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
         {!readOnly && <><label><span>Дата прихода</span><input type="date" value={arrivalDate} onChange={(event) => setArrivalDate(event.target.value)} required /></label>
         <label><span>Мешки</span><input type="number" min="0" value={bagCount} onChange={(event) => setBagCount(event.target.value)} /></label>
         <label><span>Короба</span><input type="number" min="0" value={boxCount} onChange={(event) => setBoxCount(event.target.value)} /></label>
+        <label><span>Рулоны</span><input type="number" min="0" step="1" value={rollCount} onChange={(event) => setRollCount(event.target.value)} /></label>
         {estimate?.cargoPickupEnabled && <fieldset><legend>Доставка</legend>
           <label><input type="radio" name="delivery" checked={ourDelivery} onChange={() => setOurDelivery(true)} />Наша доставка</label>
           <label><input type="radio" name="delivery" checked={!ourDelivery} onChange={() => setOurDelivery(false)} />Не наша доставка</label>
@@ -149,9 +153,9 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
       <div className="goods-arrivals__billing">
         <label><span>Период с</span><input type="date" value={periodFrom} onChange={(event) => setPeriodFrom(event.target.value)} /></label>
         <label><span>Период по</span><input type="date" value={periodTo} onChange={(event) => setPeriodTo(event.target.value)} /></label>
-        <div><span>За период</span><strong>{totals.bags} мешков · {totals.boxes} коробов</strong></div>
+        <div><span>За период</span><strong>{totals.bags} мешков · {totals.boxes} коробов · {totals.rolls} рулонов</strong></div>
         <div><span>Ориентировочно</span><strong>{money(estimate?.estimatedRub ?? 0)} ₽</strong></div>
-        {!readOnly && <button className="primary-button" type="button" onClick={() => void bill()} disabled={!clientId || rows.every((row) => Boolean(row.billingInvoiceId))}>
+        {!readOnly && <button className="primary-button" type="button" onClick={() => void bill()} disabled={!clientId || !rows.some((row) => !row.billingInvoiceId && row.bagCount + row.boxCount > 0)}>
           <ReceiptText size={16} /><span>Сформировать счет ПРР</span>
         </button>}
         {!readOnly && estimate?.cargoPickupEnabled && <button className="primary-button" type="button" disabled={!clientId || cargoBusy || loading} onClick={() => void billCargo()}><ReceiptText size={16}/><span>{cargoBusy ? 'Создаю счёт…' : 'Счёт «Забор товара с карго»'}</span></button>}
@@ -160,10 +164,10 @@ export function GoodsArrivalPanel({ session }: { session: AuthSession }) {
       {message ? <p className={message.includes('создан') || message.includes('записан') ? 'form-success' : 'form-error'}>{message}</p> : null}
       <div className="online-receipts__table-wrap">
         <table className="warehouse-drafts__table">
-          <thead><tr><th>Дата</th><th>Клиент</th><th>Мешки</th><th>Короба</th><th>Комментарий</th>{estimate?.cargoPickupEnabled && <th>Доставка</th>}<th>Счет ПРР</th><th /></tr></thead>
+          <thead><tr><th>Дата</th><th>Клиент</th><th>Мешки</th><th>Короба</th><th>Рулоны</th><th>Комментарий</th>{estimate?.cargoPickupEnabled && <th>Доставка</th>}<th>Счет ПРР</th><th /></tr></thead>
           <tbody>
-            {rows.map((row) => <tr key={row.id}><td>{date(row.arrivalDate)}</td><td>{clients.find((client) => client.id === row.clientId)?.name ?? '-'}</td><td>{row.bagCount}</td><td>{row.boxCount}</td><td>{row.comment || '-'}</td>{estimate?.cargoPickupEnabled && <td>{row.ourDelivery ? `Наша · ${money(row.deliveryCostRub ?? 0)} ₽` : 'Не наша'}{!readOnly && <button type="button" className="secondary-button" onClick={()=>{setEditingCargo(row.id);setOurDelivery(Boolean(row.ourDelivery));setDeliveryCost(String(row.deliveryCostRub ?? ''));}}>Изменить доставку</button>}</td>}<td>{row.billingInvoiceId ? 'Включен' : 'Не выставлен'}</td><td>{!readOnly && !row.billingInvoiceId ? <button className="icon-button danger-icon" type="button" onClick={() => void remove(row.id)} title="Удалить"><Trash2 size={15} /></button> : null}</td></tr>)}
-            {!rows.length ? <tr><td colSpan={estimate?.cargoPickupEnabled ? 8 : 7}>За выбранный период приходов нет.</td></tr> : null}
+            {rows.map((row) => <tr key={row.id}><td>{date(row.arrivalDate)}</td><td>{clients.find((client) => client.id === row.clientId)?.name ?? '-'}</td><td>{row.bagCount}</td><td>{row.boxCount}</td><td>{row.rollCount ?? 0}</td><td>{row.comment || '-'}</td>{estimate?.cargoPickupEnabled && <td>{row.ourDelivery ? `Наша · ${money(row.deliveryCostRub ?? 0)} ₽` : 'Не наша'}{!readOnly && <button type="button" className="secondary-button" onClick={()=>{setEditingCargo(row.id);setOurDelivery(Boolean(row.ourDelivery));setDeliveryCost(String(row.deliveryCostRub ?? ''));}}>Изменить доставку</button>}</td>}<td>{row.billingInvoiceId ? 'Включен' : row.bagCount + row.boxCount > 0 ? 'Не выставлен' : 'Не начисляется'}</td><td>{!readOnly && !row.billingInvoiceId ? <button className="icon-button danger-icon" type="button" onClick={() => void remove(row.id)} title="Удалить"><Trash2 size={15} /></button> : null}</td></tr>)}
+            {!rows.length ? <tr><td colSpan={estimate?.cargoPickupEnabled ? 9 : 8}>За выбранный период приходов нет.</td></tr> : null}
           </tbody>
         </table>
       </div>
