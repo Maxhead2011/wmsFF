@@ -1,0 +1,38 @@
+{
+  "publication": {
+    "pr": 1006,
+    "images": {
+      "api": "sha256:c4e26f46b38f01e6e92c2608f89933feb3856cd8b2b3f9c221fe111283325440",
+      "web": "sha256:f1ded60b52eacbc8fac7721e010f5f2fe27251a043a1fa4857c309123ee9bbf9"
+    },
+    "live": {
+      "rolls": 7,
+      "bags": 0,
+      "boxes": 0,
+      "journal": true,
+      "rolledBack": true
+    },
+    "publicBundleVerified": true,
+    "sourceParityVerified": false
+  },
+  "baseline": {
+    "directory": "/opt/wms-restore/releases/arrival-rolls-20261112/published-baseline",
+    "manifestSha256": "7578600a32373158420964ddb3a808caac0b61a849aac23c9a3a989ef7b1643e",
+    "apiArchiveSha256": "560fd777d7ad2a8e0852a731c3111c8b54ab1045e16727b84f5e7d0826ef3b2c",
+    "webManifestSha256": "eed1c8f91030fe76285a4247a61faa522b37d56ae775247d0b6ded29f7372890"
+  },
+  "sourceCommit": "0376fc3455f8b373f85432621a7464660ab9ca62",
+  "mergeCommit": "9b46d0f1086f012c770f4c8fee159252de0bc64e",
+  "rollbackTags": {
+    "api": "wms-arrival-rolls-api:before-1006",
+    "web": "wms-arrival-rolls-web:before-1006"
+  },
+  "tests": {
+    "apiPassed": 4349,
+    "webPassed": 591,
+    "apiTypecheck": true,
+    "webTypecheck": true,
+    "isolatedKizDb": "not configured",
+    "webRuntime": "roll-only submit, journal and totals"
+  }
+}
