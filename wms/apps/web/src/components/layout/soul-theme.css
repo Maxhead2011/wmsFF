@@ -4,8 +4,9 @@
 @media screen {
 :root[data-ui-variant='soul'] {color-scheme:light;--ink:#282d2b;--text:#282d2b;--text-primary:#282d2b;--text-secondary:#60665e;--text-soft:#60665e;--muted:#60665e;--surface:#fffefa;--surface-muted:#efeee6;--bg:#f3f1eb;--border:#c7cbbf;--line:#d8d9d0;--accent:#285b50;--accent-strong:#234e44;--accent-soft:#e5efe9;--modern-canvas:#f3f1eb;--modern-panel:#fffefa;--modern-line:#d8d9d0;--modern-line-soft:#e4e5dc;--modern-topbar:#fffefa}
 :root[data-ui-variant='soul'] body {background:#f3f1eb;color:#282d2b}
-:root[data-ui-variant='soul'] .app-layout[data-ui-theme='modern'] {display:block;background:#f3f1eb;color:#282d2b;font-family:Cambria,Georgia,serif}
-:root[data-ui-variant='soul'] .app-layout :is(button,input,select,textarea,table,h1,h2,h3) {font-family:Cambria,Georgia,serif}
+/* FIX: use the same bundled Inter family as La Panthera, including controls. */
+:root[data-ui-variant='soul'] .app-layout[data-ui-theme='modern'] {display:block;background:#f3f1eb;color:#282d2b;font-family:'La Panthera Inter','Segoe UI',sans-serif}
+:root[data-ui-variant='soul'] .app-layout :is(button,input,select,textarea,table,h1,h2,h3) {font-family:inherit}
 :root[data-ui-variant='soul'] .app-sidebar,:root[data-ui-variant='soul'] .modern-sidebar-toggle {display:none}
 :root[data-ui-variant='soul'] .app-layout .workspace-header {background:#fffefa;border-bottom:1px solid #d8d9d0;color:#282d2b}
 :root[data-ui-variant='soul'] .app-layout .workspace-content {background:#f3f1eb;min-width:0;padding:24px;overflow-x:hidden}
@@ -37,7 +38,7 @@
 .soul-quick-access p{font-size:14px;color:#60665e;margin:0;line-height:1.4}
 .soul-quick-items{display:flex;flex-wrap:wrap;gap:10px}
 /* FIX: size each tile to its label and wrap only between words on narrow screens. */
-.soul-quick-items button{box-sizing:border-box;flex:0 0 auto;width:max-content;min-width:114px;max-width:100%;min-height:57px;padding:7px 8px;border:1px solid var(--soul-accent);border-radius:8px;background:var(--soul-tint);color:var(--soul-accent);font:700 14px/1.2 Cambria,Georgia,serif;overflow-wrap:normal;word-break:normal;cursor:pointer}
+.soul-quick-items button{box-sizing:border-box;flex:0 0 auto;width:max-content;min-width:114px;max-width:100%;min-height:57px;padding:7px 8px;border:1px solid var(--soul-accent);border-radius:8px;background:var(--soul-tint);color:var(--soul-accent);font-size:14px;font-weight:700;line-height:1.35;overflow-wrap:normal;word-break:normal;cursor:pointer}
 .soul-quick-items button:hover{box-shadow:0 2px 8px #0002;text-decoration:underline}
 :root[data-ui-variant='soul'][data-soul-mode='dark'] .soul-quick-access{background:#292f37;border-color:#64717e}
 :root[data-ui-variant='soul'][data-soul-mode='dark'] .soul-quick-access :is(h2,p){color:#c0cbd5}
@@ -156,9 +157,41 @@
  :root[data-ui-variant='soul'] .app-layout .client-request-table .client-request-wb-supplies strong{margin-left:4px}
  :root[data-ui-variant='soul'] .app-layout .client-request-table :is(.client-request-row-fbs-link,.document-open-button,.client-request-action-button){display:inline-flex;align-items:center;justify-content:center;min-height:28px;height:auto;padding:4px 6px;font-size:12px;line-height:1.2;white-space:normal;margin:2px 3px 0 0}
  :root[data-ui-variant='soul'] .app-layout .client-request-table .client-request-action-button span{white-space:normal;overflow:visible;text-overflow:clip}
- :root[data-ui-variant='soul'] .app-layout .client-request-table :is(.client-request-items-count,.client-request-fbs-completion){font-size:12px;line-height:1.2;padding:3px 6px;margin-bottom:4px}
+ :root[data-ui-variant='soul'] .app-layout .client-request-table :is(.client-request-items-count,.client-request-fbs-completion){padding:3px 6px;margin-bottom:4px}
  :root[data-ui-variant='soul'] .app-layout .client-request-table .client-request-items-preview{font-size:12px;line-height:1.3;margin-bottom:4px}
  :root[data-ui-variant='soul'] .app-layout .client-request-table .client-request-actions{gap:4px}
  :root[data-ui-variant='soul'] .app-layout .client-request-table select{min-height:30px;padding:4px;font-size:12px}
+}
+
+@media screen {
+  /* FIX: fit exact counts and keep the digits legible across Soul appearances. */
+  :root[data-ui-variant='soul'] .soul-items button { flex-wrap: wrap; }
+  :root[data-ui-variant='soul'] .soul-items .soul-item-label { flex: 1 1 9ch; }
+  :root[data-ui-variant='soul'] .soul-item-label { min-inline-size: 0; overflow-wrap: break-word; }
+  :root[data-ui-variant='soul'] .soul-quick-items button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  :root[data-ui-variant='soul'] .soul-workspace .workspace-nav__badge {
+    flex: none;
+    min-block-size: 24px;
+    block-size: auto;
+    padding: 3px 8px;
+    border: 1px solid currentColor;
+    background: var(--soul-tint);
+    color: var(--soul-accent);
+    white-space: nowrap;
+  }
+  :root[data-ui-variant='soul'] .soul-workspace .workspace-nav__badge,
+  :root[data-ui-variant='soul'] .soul-page :is(.client-request-items-count, .client-request-fbs-completion) {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.35;
+  }
 }
 }
