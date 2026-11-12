@@ -813,7 +813,11 @@ export function App() {
           className={`workspace-content workspace-content--${activeWorkspace.id}`}
           aria-label={activeWorkspace.title}
         >
-          <SoulWorkspace enabled={uiTheme === 'soul'} userId={session.user.id} groups={groupedWorkspaces} activeId={activeWorkspace.id} onOpen={(id) => setActiveWorkspaceId(id as WorkspaceId)}>
+          {/* FIX: Soul shares the scoped counters already fetched for the sidebar. */}
+          <SoulWorkspace enabled={uiTheme === 'soul'} userId={session.user.id} groups={groupedWorkspaces} activeId={activeWorkspace.id} onOpen={(id) => setActiveWorkspaceId(id as WorkspaceId)}
+            renderBadge={(id) => id === 'kiz' && kizUnread > 0
+              ? <strong className="workspace-nav__badge" aria-label={`Непрочитанных проблем КИЗ: ${kizUnread}`}>{kizUnread > 99 ? '99+' : kizUnread}</strong>
+              : <SidebarRequestBadge id={id} state={sidebarCounts} />}>
           {uiTheme === 'la_panthera' ? <PantheraWorkspaces key={session.user.id + ":" + session.user.activeWarehouseId} activeId={activeWorkspace.id} onOpen={id => setActiveWorkspaceId(id as WorkspaceId)} render={id => renderWorkspace(
             id as WorkspaceId,
             session,
