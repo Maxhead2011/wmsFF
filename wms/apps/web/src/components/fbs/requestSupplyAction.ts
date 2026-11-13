@@ -5,12 +5,19 @@ export type RequestSupplyTarget = { request: ClientRequestSummary; action: Reque
 
 export function requestSupplyOrders(target: RequestSupplyTarget, orders: FbsOrderSummary[]) {
   const { request, action } = target;
-  const linked = orders.filter(order => order.request?.id === request.id && order.marketplace === 'WILDBERRIES');
+  // FIX: the client snapshot contains every marketplace; select the exact request first.
+  const linked = orders.filter(order => order.request?.id === request.id);
   const expected = request.fbsCompletion?.totalOrders;
   if (!linked.length || (expected && linked.length !== expected)) {
-    throw new Error('Не удалось загрузить полный состав заявки WB.');
+    throw new Error('Не удалось загрузить полный состав заявки FBS.');
+  }
+  if (linked.some(order => !['WILDBERRIES', 'OZON'].includes(order.marketplace))) {
+    throw new Error('Печать стикеров доступна для заявок WB и Ozon.');
   }
   if (action !== 'deliver') return linked;
+  if (linked.some(order => order.marketplace !== 'WILDBERRIES')) {
+    throw new Error('Эта передача доступна только для WB.');
+  }
 
   if (!request.fbsCompletion?.completed ||
       linked.some(order => !order.supplyId || order.supplierStatus !== 'confirm')) {

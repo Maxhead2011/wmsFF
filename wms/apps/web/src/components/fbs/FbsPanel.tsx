@@ -1741,8 +1741,8 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
       );
     const error = orderActionError || (ordersState.status === 'error' ? ordersState.error : '');
     return (
-      <section aria-label="Поставка WB">
-        <p role={error ? 'alert' : 'status'}>{error || orderActionMessage || 'Загружаю поставку WB…'}</p>
+      <section aria-label="Стикеры и действия заявки">
+        <p role={error ? 'alert' : 'status'}>{error || orderActionMessage || 'Загружаю стикеры и действия заявки…'}</p>
         <button type="button" className="icon-text-button" onClick={onRequestSupplyClose}>Закрыть</button>
       </section>
     );
