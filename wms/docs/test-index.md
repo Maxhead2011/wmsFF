@@ -1,3 +1,5 @@
+Published PR1010 (2026-11-13): [KIZ in client receipt exports](receipt-kiz-client-exports.md). Own flag enabled; API3 overlay preserves runtime recovery and client-summary formats. API4771/web640, focused37, runtime RED/GREEN, isolated PostgreSQL/full API, CI, public startup/reload and controls24 passed. Live read-only XLSX verified10 receipt rows/10 full KIZ with unchanged quantities before and after publication. All API hashes verified; only the new flag changed, web/other containers and warehouse data unchanged. Baseline `2026-11-13-receipt-kiz`; sourceParityVerified=false.
+
 Receipt KIZ exports: `test/receipt-kiz-export.spec.ts` (13 tests), compiled current-runtime RED/GREEN `scripts/releases/receipt-kiz-20261113/runtime-test.cjs`, live read-only XLSX verification `preview.cjs`. API4771/web640 passed; see [scope](receipt-kiz-client-exports.md).
 
 Ozon FBO import: client-scoped EAN-13 and zero-padded GTIN-14 lookup. Ozon import tests: 28 passed. Guarded preview on live data for Ozon 139939408: three items, three units, one direction. Release scripts: ozon-fbo-padded-barcode-20261111.
