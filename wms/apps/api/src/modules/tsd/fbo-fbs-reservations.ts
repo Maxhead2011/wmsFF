@@ -1,6 +1,7 @@
 import { receiptRules, receiptAllows, receiptOrderKey, receiptUnassignedOrders, type ReceiptRule } from '../warehouse/receipt-channel-policy';
 import { ConflictException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
+import { loadOzonUnitReservations, ozonUnitReservationsEnabled } from '../../common/ozon-unit-reservations';
 
 type Balance = { boxId: string | null; skuId: string; quantity: number };
 type Reservation = { marketplace?: string; connectionId?: string; orderId?: string; skuId: string; sourceSkuId: string | null; relabelConfirmedAt: Date | null;
@@ -67,7 +68,8 @@ export async function loadFboFbsAvailability(tx: Prisma.TransactionClient,
     warehouseId: request.warehouseId, status: { notIn: ['DONE', 'CANCELLED', 'REJECTED'] } }, select: { id: true } });
   const tasks = await tx.fbsTsdAssembly.findMany({ where: { clientId: request.clientId,
     status: { in: ['WAITING_STOCK', 'RESERVED', 'IN_PROGRESS', 'RESCAN_REQUIRED', 'RETURN_REQUIRED', 'COMPLETED'] },
-    AND: [{ OR: [{ skuId: { in: skuIds } }, { sourceSkuId: { in: skuIds } }] },
+    AND: [{ OR: [{ skuId: { in: skuIds } }, { sourceSkuId: { in: skuIds } },
+      ...(ozonUnitReservationsEnabled() ? [{ marketplace: 'OZON' }] : [])] },
       { OR: [{ stockWarehouseId: request.warehouseId },
         { stockWarehouseId: null, requestId: { in: requestIds.map(r => r.id) } },
         { boxId: { in: balances.flatMap(b => b.boxId ? [b.boxId] : []) } },
@@ -113,10 +115,13 @@ export async function loadFboFbsAvailability(tx: Prisma.TransactionClient,
   }) : [];
   const blockedKeys = new Set(blocked.map(m => key(m.skuId, m.value)));
   const excluded = new Set(candidates.filter(t => doneIds.has(t.requestId) && blockedKeys.has(key(t.skuId!, t.kiz!))).map(t => t.id));
+  const unitReservations = await loadOzonUnitReservations(tx, tasks);
   const pending = tasks.filter(t => !excluded.has(t.id)).filter(t => t.status === 'RETURN_REQUIRED' ||
     (t.status === 'IN_PROGRESS' && !!(t.sourceBarcode || t.barcode || t.kiz || t.relabelConfirmedAt)) ||
     (open.has(t.requestId) && !shippedOrders.has(`${t.connectionId}:${t.orderId}`)))
-    .map(t => ({...t,itemCount:Math.max(1,t.itemCount)-Math.max(0,picked.get(t.id) ?? 0)}))
+    // FIX: replace the first-SKU header with each Ozon product's real demand.
+    .flatMap(t => unitReservations.get(t.id) ?? [{...t,itemCount:Math.max(1,t.itemCount)-Math.max(0,picked.get(t.id) ?? 0)}])
+    .filter(t => skuIds.includes(t.sourceSkuId && !t.relabelConfirmedAt ? t.sourceSkuId : t.skuId!))
     .filter(t => t.itemCount > 0);
   // FIX: only available candidate boxes can contribute stock to this FBO plan.
   // Keep approval reads in the same transaction without loading unrelated receipt history.

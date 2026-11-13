@@ -1,3 +1,5 @@
+import { ozonUnitExemplarPayload, ozonUnitExemplarsPassed } from './ozon-fbs-unit-exemplars';
+import { loadOzonUnitReservations, ozonUnitReservationsEnabled } from '../../common/ozon-unit-reservations';
 import { wbShippingEnabled } from './wb-shipping-points';
 import { restoreSavedFbsArchive } from './fbs-saved-archive';
 import { wbShippingWorkflow, assertShippingBeforeDelivery, withWbShippingLock } from './wb-shipping-workflow';
@@ -10545,6 +10547,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     await this.requireFbsOrderStillCollectable(task);
     task = await this.assertFbsTsdLeaseVersion(task, user);
     requireFbsTaskWithoutSyncConflict(task);
+    // FIX: authenticate first, then dispatch KIZ to the active Ozon product line.
+    const unitScan = await handleOzonPickLines(this, task, user, 'kiz', payload);
+    if (unitScan) return unitScan;
     if (!task.requiresKiz) throw new BadRequestException('Для этого товара КИЗ не требуется.');
     if ((!task.boxId && !fbsTsdUsesNoBox(task)) || !task.barcode) {
       throw new BadRequestException('Сначала подтвердите короб и ШК товара.');
@@ -17042,6 +17047,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     withoutBox?: boolean;
     excludeTaskId: string | null;
   }) {
+    // FIX: single-box callers share the per-product Ozon reservation calculation.
+    if (ozonUnitReservationsEnabled()) {
+      const rows = (await this.fbsTsdReservationRowsBySku({ ...input, skuIds: [input.skuId] })).get(input.skuId) ?? [];
+      return input.boxId ? rows.filter(row => row.boxId === input.boxId) : rows;
+    }
     const tasks = await this.prisma.fbsTsdAssembly.findMany({
       where: {
         id: input.excludeTaskId ? { not: input.excludeTaskId } : undefined,
@@ -17234,6 +17244,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     skuIds.forEach((skuId) => result.set(skuId, []));
     if (skuIds.length === 0) return result;
 
+    const unitReservationsEnabled = ozonUnitReservationsEnabled();
     const tasks = await db.fbsTsdAssembly.findMany({
       where: {
         id: input.excludeTaskId ? { not: input.excludeTaskId } : undefined,
@@ -17241,6 +17252,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         AND: [
           {
             OR: [
+              ...(unitReservationsEnabled ? [{ marketplace: 'OZON' }] : []),
               { skuId: { in: skuIds }, sourceSkuId: null },
               {
                 sourceSkuId: { in: skuIds },
@@ -17252,7 +17264,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             ],
           },
-          input.withoutBox
+          unitReservationsEnabled ? { OR: [{ marketplace: 'OZON' }, input.withoutBox
+            ? { boxId: null, reservedBoxId: null, boxCode: FBS_TSD_NO_BOX_CODE }
+            : { OR: [{ boxId: { not: null } }, { reservedBoxId: { not: null } }] }] } : input.withoutBox
             ? { boxId: null, reservedBoxId: null }
             : {
                 OR: [
@@ -17263,7 +17277,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         ],
         // ADDED: Piece-storage reservations use the same bulk query while
         // retaining the exact filter of fbsTsdReservationRows().
-        ...(input.withoutBox ? { boxCode: FBS_TSD_NO_BOX_CODE } : {}),
+        ...(input.withoutBox && !unitReservationsEnabled ? { boxCode: FBS_TSD_NO_BOX_CODE } : {}),
         status: {
           in: [
             FBS_TSD_RESERVED_STATUS,
@@ -17276,6 +17290,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       },
       select: {
         id: true,
+        marketplace: true,
+        boxCode: true,
         connectionId: true,
         orderId: true,
         skuId: true,
@@ -17292,6 +17308,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         status: true,
       },
     });
+    const unitReservations = await loadOzonUnitReservations(db, tasks);
     const taskRequestIds = uniqueStrings(tasks.map((task) => task.requestId));
     const canCheckCompletedOrderLinks = Boolean(
       db.fbsOrderRequestLink?.findMany,
@@ -17374,6 +17391,18 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
             ));
         if (!keepsReservation) return;
       }
+      const unitRows = unitReservations.get(task.id);
+      if (unitRows) {
+        for (const row of unitRows) {
+          if (input.withoutBox ? row.boxId !== null : row.boxId === null) continue;
+          result.get(row.skuId)?.push({ taskId: task.id, boxId: row.boxId,
+            itemCount: row.itemCount, releasableBackground: false });
+        }
+        return;
+      }
+      // FIX: broadened Ozon candidates without a versioned ledger retain legacy scope.
+      if (input.withoutBox ? (task.boxId || task.reservedBoxId || task.boxCode !== FBS_TSD_NO_BOX_CODE)
+        : (!task.boxId && !task.reservedBoxId)) return;
       const reservationSkuId = task.sourceSkuId && !task.relabelConfirmedAt
         ? task.sourceSkuId
         : task.skuId;
@@ -18433,7 +18462,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const mandatoryProductIds = new Set(
         asArray<unknown>(requirements.products_requiring_mandatory_mark).map(textValue),
       );
-      if (mandatoryProductIds.has(String(productId))) {
+      if (lineState?.unitMarksVersion === 1 && lineState.lines.some(line => line.requiresKiz)) {
+        // FIX: all marked product lines are submitted before shipping the posting.
+        const exemplarResponse = await marketplaceJson('https://api-seller.ozon.ru/v6/fbs/posting/product/exemplar/create-or-get', {
+          method: 'POST', headers, body: JSON.stringify({ posting_number: task.orderId }),
+        });
+        const marksPayload = ozonUnitExemplarPayload(lineState, posting, exemplarResponse, task.orderId);
+        await marketplaceJson('https://api-seller.ozon.ru/v6/fbs/posting/product/exemplar/set', {
+          method: 'POST', headers, body: JSON.stringify(marksPayload),
+        });
+        let passed = false;
+        for (let attempt = 0; attempt < 8 && !passed; attempt++) {
+          if (attempt) await delay(750);
+          const result = await marketplaceJson('https://api-seller.ozon.ru/v5/fbs/posting/product/exemplar/status', {
+            method: 'POST', headers, body: JSON.stringify({ posting_number: task.orderId }),
+          });
+          passed = ozonUnitExemplarsPassed(marksPayload, result);
+        }
+        if (!passed) throw new ConflictException('Ozon ещё не подтвердил все КИЗ. Передача заказа остановлена до сверки.');
+      } else if (mandatoryProductIds.has(String(productId))) {
         if (!task.kiz) {
           throw new BadRequestException(
             `Ozon требует КИЗ для заказа ${task.orderId}. Отсканируйте КИЗ на ТСД.`,
