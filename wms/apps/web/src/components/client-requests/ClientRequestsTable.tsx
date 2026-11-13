@@ -420,12 +420,13 @@ export function ClientRequestsTable({
                               : 'Обновить план'}</span>
                         </button>
                       ) : null}</> : null}
-{onOpenFbsOrders && isFbsRequest(request) && Boolean(request.wbSupplyIds?.length) ? <>
-  <button className="client-request-action-button" type="button"
+{/* FIX: label tools also serve Ozon; only handover requires a WB supply. */}
+{onOpenFbsOrders && isFbsRequest(request) ? <>
+  {Boolean(request.wbSupplyIds?.length) ? <button className="client-request-action-button" type="button"
     disabled={!request.fbsCompletion?.completed || !canSyncTsdRequest(request)}
     onClick={() => onOpenFbsOrders(request, 'deliver')}>
     <Send size={15} aria-hidden="true" /><span>Передать на МП</span>
-  </button>
+  </button> : null}
   <details className="request-action-menu__group">
     <summary>Стикеры поставки</summary>
     <div className="request-action-menu__items">

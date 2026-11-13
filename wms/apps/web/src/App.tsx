@@ -1008,7 +1008,7 @@ function renderWorkspace(
         }
         setActiveWorkspaceId('fbs');
       }} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} />
-        {requestSupplyTarget && <Suspense fallback={<p role="status">Загружаю поставку WB…</p>}>
+        {requestSupplyTarget && <Suspense fallback={<p role="status">Загружаю стикеры и действия заявки…</p>}>
           <FbsPanel session={session} requestSupplyTarget={requestSupplyTarget} onRequestSupplyClose={() => setRequestSupplyTarget(null)} />
         </Suspense>}
       </Suspense>;

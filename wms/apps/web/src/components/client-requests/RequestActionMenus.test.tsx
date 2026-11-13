@@ -30,3 +30,12 @@ it('offers WB handover and both supply label commands on a warehouse request', (
   }
   expect(render()).not.toContain('Стикеры поставки');
 });
+
+// TEST: Ozon FBS has no WB supply IDs but must expose labels in Requests.
+it('offers label download and print for Ozon without a WB handover button', () => {
+ const html=render(true);
+ expect(html).toContain('Стикеры поставки');
+ expect(html).toContain('Скачать все ШК');
+ expect(html).toContain('Распечатать все ШК');
+ expect(html).not.toContain('Передать на МП');
+});

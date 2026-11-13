@@ -29,3 +29,15 @@ it.each(['download', 'print'] as const)('scopes %s to the selected WB request', 
   const own = [order('1'), order('2', { supplierStatus: 'complete' })];
   expect(requestSupplyOrders({ request, action }, [...own, order('3', { request: null })])).toEqual(own);
 });
+
+// TEST: Ozon labels are scoped to the request before assembly; delivery remains WB-only.
+it.each(['download', 'print'] as const)('opens Ozon %s before picking', action => {
+  const own = [order('oz1', {marketplace: 'OZON', supplyId: null}), order('oz2', {marketplace: 'OZON', supplyId: null})];
+  expect(requestSupplyOrders({request, action}, [...own, order('unrelated', {request: null})])).toEqual(own);
+});
+it('rejects Ozon delivery and unsupported or partial label selections', () => {
+  const oz = [order('1', {marketplace:'OZON'}), order('2', {marketplace:'OZON'})];
+  expect(() => requestSupplyOrders({request, action:'deliver'}, oz)).toThrow();
+  expect(() => requestSupplyOrders({request, action:'print'}, oz.slice(0,1))).toThrow('полный состав');
+  expect(() => requestSupplyOrders({request, action:'print'}, [order('1', {marketplace:'YANDEX_MARKET'}),order('2')])).toThrow();
+});
