@@ -8,7 +8,7 @@ function setup() {
   const links=['1','2'].map(orderId=>({orderId,marketplace:'OZON',syncStatus:'ACTIVE',connectionId:'store'}));
   const row:any={id:'r',clientId:'c',warehouseId:'w',type:'OUTBOUND',status:'PACKED',updatedAt:new Date(),
     client:{isDemo:false},fbsEmergencyAssemblyAt:null,fbsOrderLinks:links};
-  const db:any={clientRequest:{findUnique:vi.fn(async()=>row),findUniqueOrThrow:vi.fn(async()=>row),
+  const db:any={fbsOrderRequestLink:{updateMany:vi.fn()},clientRequest:{findUnique:vi.fn(async()=>row),findUniqueOrThrow:vi.fn(async()=>row),
     updateMany:vi.fn(async()=>{row.status='DONE';return {count:1};})},
     clientRequestEvent:{create:vi.fn()},client:{findUnique:vi.fn(async()=>row.client)},
     clientMarketplaceConnection:{findFirst:vi.fn(async()=>({id:'store',apiKey:'fixture'}))},
@@ -18,7 +18,7 @@ function setup() {
   const scopes={requireClientAccess:vi.fn()};
   const ozon={call:vi.fn(async(_account:any,_path:string,body:{posting_number:string})=>({result:{posting_number:body.posting_number,status:'delivering'}})),refresh:vi.fn()};
   const wb={refresh:vi.fn()};const delivery={reconcile:vi.fn()};
-  const connections={readWbStatusesForConnection:vi.fn()};
+  const connections={readWbStatusesForConnection:vi.fn(),invalidateFbsHandoverCache:vi.fn()};
   const ctl=new RequestMarketStatusController(db,scopes as any,connections as any,ozon as any,wb as any,delivery as any);
   const check=()=>ctl.check('r',{roleCodes:['OWNER'],permissionCodes:['system:admin']} as any);
   return {row,db,scopes,ozon,wb,delivery,connections,check,ctl};
@@ -32,6 +32,7 @@ describe('confirmed handover from early stages',()=>{
       f.row.fbsOrderLinks.forEach((l:any)=>l.marketplace=market);
       f.connections.readWbStatusesForConnection.mockResolvedValue(new Map(['1','2'].map(id=>[id,{supplierStatus:'complete',wbStatus:'sorted'}])));
       expect((await f.check()).status).toBe('DONE');
+      expect(f.connections.invalidateFbsHandoverCache).toHaveBeenCalledWith('c');
       expect(f.db.clientRequest.updateMany.mock.calls[0][0].where.status).toBe(status);
       expect(f.db.clientRequestEvent.create.mock.calls[0][0].data.statusFrom).toBe(status);
     }

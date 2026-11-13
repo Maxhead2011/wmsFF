@@ -916,3 +916,5 @@ Prepared, not published (2026-11-10): fabric workspace visual update, branch `fe
 Ozon FBS multi-product TSD picking records a KIZ for each marked unit before advancing the picked count. Enabled only with WMS_OZON_TSD_UNIT_MARKS_ENABLED and the existing unit marks and client guard flags.
 
 WB FBS delivery refreshes the marketplace status for orders masked by local shipment history. Status errors preserve valid assembly scans.
+
+Confirmed WB and Ozon FBS handover persists order status alongside request closure and invalidates the queue cache after the explicit status check commits.

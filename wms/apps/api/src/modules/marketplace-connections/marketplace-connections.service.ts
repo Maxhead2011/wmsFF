@@ -5232,6 +5232,12 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     };
   }
 
+  // FIX: refresh both FBS list and marketplace counters after committed handover.
+  invalidateFbsHandoverCache(clientId: string) {
+    this.fbsOrdersCache.delete(clientId);
+    this.fbsTsdRequestFallbackCache.delete(clientId);
+  }
+
   async listFbsActiveClients(user: AuthUser, marketplaceValue: unknown = undefined) {
     const clientFilter = this.clientScopes.resolveClientFilter(user);
     const requestedMarketplace = textValue(marketplaceValue)?.toUpperCase();

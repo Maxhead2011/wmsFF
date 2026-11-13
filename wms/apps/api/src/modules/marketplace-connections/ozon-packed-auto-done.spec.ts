@@ -4,7 +4,7 @@ import { MarketplaceConnectionsService } from './marketplace-connections.service
 
 const setup = () => {
   vi.stubEnv('WMS_OZON_PACKED_AUTO_DONE_ENABLED', 'true');
-  const tx: any = { client: { findUnique: vi.fn().mockResolvedValue({ isDemo: false }) },
+  const tx: any = { fbsOrderRequestLink: { updateMany: vi.fn() }, client: { findUnique: vi.fn().mockResolvedValue({ isDemo: false }) },
     clientRequest: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
     clientRequestEvent: { create: vi.fn().mockResolvedValue({}) } };
   const request: any = { id: 'r', clientId: 'c', type: 'OUTBOUND', status: 'PACKED', updatedAt: new Date(),
@@ -26,6 +26,10 @@ describe('packed Ozon acceptance', () => {
     const result = await service.syncOneFbsRequest('c', 'r', new Map([['conn:1', orders[0]]]), []);
     expect(result.changed).toBe(true);
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    // TEST: the queue can read the confirmed status immediately after closure.
+    expect(tx.fbsOrderRequestLink.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ lastCategory: 'shipped', lastSupplierStatus: orders[0].supplierStatus }),
+    }));
     expect(tx.clientRequestEvent.create).toHaveBeenCalledTimes(1);
   });
   // TEST: no stock/task APIs exist on this transaction; closure must be status-only.
