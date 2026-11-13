@@ -20958,6 +20958,25 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       dto.orders,
       freshResponse,
     );
+    // FIX: local shipment history can mask a still-open WB order in the list.
+    const selectedSupplyKeys = new Set(orders.map(order => `${order.connectionId}:${order.supplyId}`));
+    const maskedOrders = [...new Map([...orders, ...response.orders]
+      .filter(order => order.marketplace === MarketplaceType.WILDBERRIES && order.supplyId &&
+        selectedSupplyKeys.has(`${order.connectionId}:${order.supplyId}`) && order.statusLabel === 'Отгружен из ВМС')
+      .map(order => [selectionKey(order.connectionId, order.id), order])).values()];
+    if (maskedOrders.length) {
+      const connections = await this.loadSelectedConnections(clientId, maskedOrders);
+      for (const connection of connections) {
+        const ids = maskedOrders.filter(order => order.connectionId === connection.id).map(order => order.id);
+        const statuses = await this.readWbStatusesForConnection(connection.apiKey, ids);
+        for (const order of [...orders, ...response.orders]) {
+          if (order.connectionId !== connection.id || !ids.includes(order.id)) continue;
+          const status = statuses.get(order.id);
+          if (!status) throw new BadRequestException(`WB не подтвердил статус заказа №${order.id}.`);
+          Object.assign(order, status, { category: fbsOrderCategory(status.supplierStatus, status.wbStatus) });
+        }
+      }
+    }
     // FIX: WB fixes the destination when the first order enters a supply. The
     // operator must confirm that exact office and a local logistics date before
     // WMS makes the irreversible delivery call.
@@ -24313,18 +24332,13 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
     }
 
-    const explicitProblemKeys = new Set(
-      affectedOrders
-        .filter((order) => reasonMessage.includes(order.id))
-        .map((order) => selectionKey(order.connectionId, order.id)),
-    );
     const rescanTasks = tasks.filter((task) => {
       const key = selectionKey(task.connectionId, task.orderId);
       if (cancelledKeys.has(key) || task.status !== 'COMPLETED') return false;
       const localScanInvalid =
         !task.barcode ||
         (task.requiresKiz && (!task.kiz || task.wbMetaStatus !== 'ACCEPTED'));
-      return localScanInvalid || explicitProblemKeys.has(key) || remoteKizMismatchKeys.has(key);
+      return localScanInvalid || remoteKizMismatchKeys.has(key);
     });
     const rescanTaskIds = new Set(rescanTasks.map((task) => task.id));
 
