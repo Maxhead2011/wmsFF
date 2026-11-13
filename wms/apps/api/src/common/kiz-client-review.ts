@@ -4,6 +4,8 @@ import {Prisma} from '@prisma/client';
 import {clientKizIdentity, clientKizGuardEnabled, clientKizFilter, lookupClientKiz, lockClientKiz} from './kiz-client-registry';
 
 import {loadShipmentKizReads, ShipmentKizRead} from './kiz-shipment-reads';
+import {expandOzonMarkedTasks, ozonMarkedUnits, ozonUnitMarksEnabled} from './ozon-unit-marks';
+import {readOzonPickState} from '../modules/marketplace-connections/ozon-fbs-pick-lines';
 
 // FIX: one client-scoped, contextual permission for a second dispatch; AVAILABLE is not permission.
 export type ClientKizUse = {scope:'FBS'|'FBO'|'RECEIPT';clientId:string;warehouseId:string;requestId:string;
@@ -58,7 +60,11 @@ async function currentContext(db:any,i:ClientKizUse){
   throw new ConflictException('Заявка или клиент изменились. Повторите проверку КИЗ.');
  if(i.scope==='FBS'){
   const task=await db.fbsTsdAssembly.findUnique({where:{id:i.taskId}});
-  if(!task||task.clientId!==i.clientId||task.requestId!==i.requestId||task.skuId!==i.skuId||task.boxId!==(i.boxId??null))
+  // FIX: a multi-product posting owns each recorded unit, not only the scalar first SKU.
+  const state=ozonUnitMarksEnabled()&&task?.marketplace==='OZON'&&!task.kiz?await readOzonPickState(db,task.id):null;
+  const unit=state?.unitMarksVersion===1
+   ?ozonMarkedUnits(task,state).find(u=>clientKizIdentity(u.kiz)===clientKizIdentity(i.kiz)):task;
+  if(!task||!unit||task.clientId!==i.clientId||task.requestId!==i.requestId||unit.skuId!==i.skuId||unit.boxId!==(i.boxId??null))
    throw new ConflictException('Задание или исходный короб изменились. Повторите проверку КИЗ.');
  }
  return request;
@@ -84,7 +90,9 @@ async function assertNoCompetingClaim(tx:any,i:ClientKizUse,key:string,currentId
    const prior=claim.snapshot?.clientGuard?.input;
    const oldHistory=prior?await history(tx,{...prior,requestId:''}):null;
    const mark=await clientPhysicalMark(tx,i.clientId,i.kiz,read);
-   const tasks=await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,requestId:claim.requestId,kiz:{not:null},status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}});
+   // FIX: scalar-null Ozon tasks can still hold several physical KIZs.
+   const rawTasks=await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,requestId:claim.requestId,...(ozonUnitMarksEnabled()?{OR:[{kiz:{not:null}},{marketplace:'OZON'}]}:{kiz:{not:null}}),status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}});
+   const tasks=await expandOzonMarkedTasks<any>(tx,rawTasks);
    const units=await tx.fboAssemblyUnit.findMany({where:{requestId:claim.requestId,activeMarkId:{not:null},state:{not:'RETURNED'}}});
    if(oldHistory?.decision==='ALLOW'&&mark?.status==='AVAILABLE'&&!tasks.length&&!units.length){
     await tx.kizReviewCase.update({where:{id:claim.id},data:{status:'RESOLVED'}});continue;
@@ -99,7 +107,9 @@ async function ownExpectedMovement(tx:any,i:ClientKizUse,mark:any,proof:any,read
  if(proof.markVersion===markVersion(mark))return true;
  if(i.scope==='FBS'){
   const task=await tx.fbsTsdAssembly.findUnique({where:{id:i.taskId}});
-  if(clientKizIdentity(task?.kiz??'')!==clientKizIdentity(i.kiz))return false;
+  const state=ozonUnitMarksEnabled()&&task?.marketplace==='OZON'&&!task.kiz?await readOzonPickState(tx,task.id):null;
+  const unit=state?.unitMarksVersion===1?ozonMarkedUnits(task,state).find(u=>clientKizIdentity(u.kiz)===clientKizIdentity(i.kiz)):task;
+  if(!unit||clientKizIdentity(unit.kiz??'')!==clientKizIdentity(i.kiz))return false;
   if(!proof.markId&&mark.status==='AVAILABLE'&&mark.boxId===(i.boxId??null)&&
     mark.sourceDocument?.startsWith(`FBS TSD, заказ ${task.orderId}:`))return true;
   // FIX: permanent boxes keep the source on the task, while the picked mark has no box.
@@ -123,7 +133,9 @@ async function ownExpectedMovement(tx:any,i:ClientKizUse,mark:any,proof:any,read
  return false;
 }
 async function assertNoActiveBinding(tx:any,i:ClientKizUse,key:string,read?:ShipmentKizRead){
- const tasks=(read?.tasks??await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,id:{not:i.taskId||''},...filter(key),status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}})).filter((t:any)=>clientKizIdentity(t.kiz??'')===key);
+ // FIX: search per-unit bindings as well as legacy scalar codes.
+ const rawTasks=read?.tasks??await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,id:{not:i.taskId||''},...(ozonUnitMarksEnabled()?{OR:[filter(key),{marketplace:'OZON'}]}:filter(key)),status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}});
+ const tasks=(await expandOzonMarkedTasks<any>(tx,rawTasks)).filter((t:any)=>clientKizIdentity(t.kiz??'')===key);
  for(const task of tasks){const request=await tx.clientRequest.findUnique({where:{id:task.requestId}});if(!request||!terminal.includes(request.status))throw new ConflictException('КИЗ занят другой сборкой FBS. ОТЛОЖИТЕ ТОВАР.');}
  const units=(read?.bindings??await tx.fboAssemblyUnit.findMany({where:{requestId:{not:i.requestId},activeMarkId:{not:null},...filter(key),assembly:{request:{clientId:i.clientId}}},include:{assembly:{include:{request:true}}}})).filter((u:any)=>clientKizIdentity(u.kiz??'')===key);
  if(units.some((u:any)=>!terminal.includes(u.assembly?.request?.status)))throw new ConflictException('КИЗ занят другой сборкой FBO. ОТЛОЖИТЕ ТОВАР.');
@@ -279,14 +291,15 @@ export async function decideClientKizReview(db:any,clients:any,row:any,resolutio
     throw new ConflictException('Физическая единица не определена однозначно. Сначала завершите сверку.');
    if(resolution==='REUSE'&&i.scope==='RECEIPT')throw new ConflictException('Обычная повторная приёмка запрещена. Оформите возврат отдельно; здесь можно отказать или назначить переклейку.');
    if(resolution==='REUSE'&&['RETIRED','WRITTEN_OFF'].includes(e.circulation))throw new ConflictException('КИЗ погашен. Требуется переклейка.');
-   const tasks=(await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,...filter(key),id:{not:i.taskId||''}}})).filter((t:any)=>clientKizIdentity(t.kiz??'')===key);
+   const tasks=(await expandOzonMarkedTasks<any>(tx,await tx.fbsTsdAssembly.findMany({where:{clientId:i.clientId,...(ozonUnitMarksEnabled()?{OR:[filter(key),{marketplace:'OZON',kiz:null}]}:filter(key)),id:{not:i.taskId||''}}}))).filter((t:any)=>clientKizIdentity(t.kiz??'')===key);
    for(const task of tasks){const req=await tx.clientRequest.findUnique({where:{id:task.requestId}});
     if(!req||!terminal.includes(req.status)||!['COMPLETED','RELEASED','WB_ACCOUNTED','CANCELLED'].includes(task.status))throw new ConflictException('КИЗ занят другой сборкой FBS.');}
    const units=(await tx.fboAssemblyUnit.findMany({where:{...filter(key),requestId:{not:i.requestId},activeMarkId:{not:null},assembly:{request:{clientId:i.clientId}}},include:{assembly:{include:{request:true}}}})).filter((u:any)=>clientKizIdentity(u.kiz??'')===key);
    if(units.some((u:any)=>!terminal.includes(u.assembly?.request?.status)))throw new ConflictException('КИЗ занят другой сборкой FBO.');
    if((await tx.kizReviewCase.findMany({where:{clientId:i.clientId,kizIdentity:key,id:{not:row.id},status:{in:['APPROVED','CLAIMED']},taskId:{startsWith:'GUARD:'}}})).length)
     throw new ConflictException('Для КИЗ уже есть действующее разрешение в другой заявке.');
-   if(resolution==='REUSE')for(const old of tasks){
+   // FIX: per-unit history is immutable; only legacy scalar bindings are cleared.
+   if(resolution==='REUSE')for(const old of tasks.filter((t:any)=>!t.taskId)){
     await tx.auditLog.create({data:{userId:user.id,entity:'FbsTsdAssembly',entityId:old.id,action:'KIZ_CLIENT_BINDING_ARCHIVED',payload:json({reviewId:row.id,reason,before:old})}});
     const changed=await tx.fbsTsdAssembly.updateMany({where:{id:old.id,kiz:old.kiz,updatedAt:old.updatedAt},data:{kiz:null}});
     if(changed.count!==1)throw new ConflictException('Прежняя привязка изменилась.');
@@ -319,11 +332,12 @@ export async function assertClientRequestKizShipment(tx:any,request:any,user:any
  for(const unit of units){const key=clientKizIdentity(unit.kiz);if(identities.has(key))throw new ClientKizReviewRequired({scope:'FBO',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,kiz:unit.kiz,skuId:unit.skuId,boxId:unit.sourceBoxId||null});identities.add(key);}
  const reads=await loadShipmentKizReads(tx,request,units);
  for(const unit of units)await assertClientKizUse(tx,{scope:'FBO',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,kiz:unit.kiz,skuId:unit.skuId,boxId:unit.sourceBoxId||null},user,reads.get(clientKizIdentity(unit.kiz)));
- const tasks=await tx.fbsTsdAssembly.findMany({where:{requestId:request.id,clientId:request.clientId,kiz:{not:null},status:{notIn:['RELEASED','CANCELLED']}}});
+ const rawTasks=await tx.fbsTsdAssembly.findMany({where:{requestId:request.id,clientId:request.clientId,...(ozonUnitMarksEnabled()?{OR:[{kiz:{not:null}},{marketplace:'OZON'}]}:{kiz:{not:null}}),status:{notIn:['RELEASED','CANCELLED']}}});
+ const tasks=await expandOzonMarkedTasks<any>(tx,rawTasks);
  const shipped=tasks.length?await tx.shippedKizHistory.findMany({where:{clientId:request.clientId,assemblyId:{in:tasks.map((t:any)=>t.id)}}}):[];
  for(const task of tasks){
   if(shipped.some((s:any)=>s.assemblyId===task.id&&s.requestId===request.id&&clientKizIdentity(s.kiz)===clientKizIdentity(task.kiz)))continue;
-  await assertClientKizUse(tx,{scope:'FBS',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,taskId:task.id,kiz:task.kiz,skuId:task.skuId,boxId:task.boxId},user);
+  await assertClientKizUse(tx,{scope:'FBS',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,taskId:task.taskId||task.id,kiz:task.kiz,skuId:task.skuId,boxId:task.boxId},user);
  }
 }
 export async function finishClientRequestKizShipment(tx:any,request:any){

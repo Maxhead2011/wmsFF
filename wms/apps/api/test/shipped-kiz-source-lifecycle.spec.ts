@@ -49,6 +49,27 @@ function fixture() {
 }
 
 describe('shipped KIZ leaves active source storage', () => {
+  // TEST: packing alone must not create shipment evidence; handover records both products once.
+  it('archives both per-unit Ozon codes only at handover and preserves their SKU', async () => {
+    const f = fixture();
+    vi.stubEnv('WMS_OZON_UNIT_MARKS_ENABLED', 'true');
+    const codes = ['0104610460840526215OdGM-', '0104610460840540215K.W,b'];
+    Object.assign(f.assembly, { marketplace: 'OZON', itemCount: 2, kiz: null, boxId: null });
+    const state = { version: 1, unitMarksVersion: 1, submission: 'COMPLETED', lines: codes.map((kiz, i) => ({
+      productId: i + 1, skuId: `sku${i}`, requestItemId: `item${i}`, quantity: 1,
+      picks: [{ kiz, boxId: null, boxCode: 'БЕЗ КОРОБА' }],
+    })) };
+    Object.assign(f.tx, { $queryRaw: vi.fn(async () => [{ data: state }]) });
+    f.tx.sku.findMany.mockResolvedValue(codes.map((_, i) => ({ id: `sku${i}`, internalSku: `SKU${i}`, article: 'A', name: 'Food', color: '', size: '', barcodes: [] })));
+    f.tx.productMark.findMany.mockResolvedValue([]);
+    await captureShippedKizHistory(f.tx as never, 'request');
+    expect(f.history).toHaveLength(0);
+    await captureShippedKizHistory(f.tx as never, 'request', shippedAt);
+    expect(f.history).toEqual(codes.map((kiz, i) => expect.objectContaining({ kiz, skuId: `sku${i}` })));
+    expect(new Set(f.history.map(row => row.assemblyId)).size).toBe(2);
+    await captureShippedKizHistory(f.tx as never, 'request', shippedAt);
+    expect(f.history).toHaveLength(2);
+  });
   it.each(['source', null])('archives a picked KIZ from %s with immutable source history', async boxId => {
     const f = fixture(); f.mark.boxId = boxId;
     await captureShippedKizHistory(f.tx as never, 'request', shippedAt);

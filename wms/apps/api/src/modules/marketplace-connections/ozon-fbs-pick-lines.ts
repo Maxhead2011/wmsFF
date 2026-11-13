@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 
-export type OzonPick = { barcode: string; boxId: string | null; boxCode: string; actorId: string; at: string };
+export type OzonPick = { barcode: string; boxId: string | null; boxCode: string; actorId: string; at: string; kiz?: string; markId?: string };
 export type OzonPickLine = {
   productId: number; offerId: string; quantity: number; skuId: string; requestItemId: string;
   name: string; article: string; barcodes: string[]; picks: OzonPick[];
@@ -10,6 +10,9 @@ export type OzonPickState = {
   source: { boxId: string | null; boxCode: string } | null;
   submission: 'PICKING' | 'SUBMITTING' | 'UNKNOWN' | 'SUBMITTED' | 'COMPLETED';
   legacyScansDiscarded: boolean;
+  // FIX: explicit version separates recovered per-unit marks from legacy unmarked scans.
+  unitMarksVersion?: 1;
+  recovery?: { operationKey: string; actorId: string; recordedAt: string; reason: string; mode?: 'PACKED' | 'SHIPPED' };
 };
 export const ozonPickLinesEnabled = () => process.env.WMS_OZON_MULTILINE_PICKING === 'true';
 export const ozonPickCount = (state: OzonPickState) => state.lines.reduce((n, line) => n + line.picks.length, 0);
