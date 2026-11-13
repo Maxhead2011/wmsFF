@@ -79,7 +79,7 @@ export async function captureShippedKizHistory(
     },
   });
   // FIX: archive both products independently when an Ozon task stores per-unit marking evidence.
-  const assemblies = await expandOzonMarkedTasks(tx, rawAssemblies);
+  const assemblies = await expandOzonMarkedTasks(tx, rawAssemblies, { requireComplete: true }); // FIX: archive only complete unit evidence.
   // FIX: archived attempts are history only; they cannot own a currently active KIZ.
   const currentAssemblies = [...assemblies];
   await appendFbsAttemptHistory(tx, assemblies, { requestId });

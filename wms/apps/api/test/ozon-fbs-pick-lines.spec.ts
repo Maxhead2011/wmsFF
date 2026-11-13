@@ -68,8 +68,8 @@ function fixture() {
   let saved: OzonPickState | null = null;
   let remote: any = posting();
   const db: any = {
-    $queryRaw: vi.fn(async (sql: TemplateStringsArray) => sql.join('').includes('OzonFbsPickState') ? saved ? [{ data: structuredClone(saved) }] : [] : [{ id: 'request' }]),
-    $executeRaw: vi.fn(async (_sql: any, _id: any, data: string) => { saved = JSON.parse(data); return 1; }),
+    $queryRaw: vi.fn(async (sql: any) => (Array.isArray(sql) ? sql.join('') : sql.sql ?? '').includes('OzonFbsPickState') ? saved ? [{ data: structuredClone(saved) }] : [] : [{ id: 'request' }]),
+    $executeRaw: vi.fn(async (_sql: any, _id: any, data: string) => { if (Array.isArray(_sql) && _sql.join('').includes('OzonFbsPickState')) saved = JSON.parse(data); return 1; }),
     fbsTsdAssembly: {
       findUnique: vi.fn(async () => ({ ...task })),
       findMany: vi.fn(async () => []),
@@ -120,6 +120,50 @@ function fixture() {
 }
 
 describe('Ozon multi-line workflow', () => {
+  // TEST: real workflow, stock checks and client KIZ guard, including a lost-response retry.
+  it('requires and records each product mark before progressing and survives replay', async () => {
+    for (const key of ['WMS_OZON_TSD_UNIT_MARKS_ENABLED', 'WMS_OZON_UNIT_MARKS_ENABLED', 'WMS_KIZ_CLIENT_GUARD_ENABLED']) vi.stubEnv(key, 'true');
+    const f = fixture();
+    const codes = ['0104610460840526215OdGM-', '0104610460840540215K.W,b'];
+    const marks = codes.map((value, i) => ({ id: `mark${i}`, value, clientId: 'client', skuId: `sku${i}`, stockMovementId: `receipt${i}`, boxId: null, status: 'AVAILABLE' }));
+    const claims = new Map<string, any>();
+    f.db.sku.findMany.mockImplementation(async () => state().lines.map(l => ({ id: l.skuId, name: l.name, article: l.article, needsChestnyZnak: true,
+      marketplaceProductId: l.offerId + ':legacy', barcodes: l.barcodes.map(value => ({ value })) })));
+    f.db.clientRequest.findUnique.mockResolvedValue({ id: 'request', clientId: 'client', warehouseId: 'warehouse', status: 'IN_WORK' });
+    f.db.clientRequest.findMany = vi.fn(async () => []);
+    f.db.clientRequestItem.findMany = vi.fn(async ({ where }: any) => f.items.filter(i => i.skuId === where.skuId));
+    f.db.stockBalance.findMany.mockImplementation(async ({ select }: any) => select?.box ? [] : [{ boxId: null, quantity: 5 }]);
+    f.db.stockMovement = { aggregate: vi.fn(async () => ({ _sum: { quantity: 0 } })),
+      findUnique: vi.fn(async ({ where }: any) => ({ clientId: 'client', skuId: `sku${where.id.slice(-1)}`,
+        warehouseId: 'warehouse', boxId: null, status: 'AVAILABLE', quantity: 1 })) };
+    f.db.productMark = { findMany: vi.fn(async () => marks) };
+    f.db.shippedKizHistory = { findMany: vi.fn(async () => []) };
+    f.db.fboAssemblyUnit = { findMany: vi.fn(async () => []) };
+    f.db.kizReviewCase = {
+      findMany: vi.fn(async () => []),
+      findUnique: vi.fn(async ({ where }: any) => claims.get(where.taskId_kizIdentity.kizIdentity) ?? null),
+      upsert: vi.fn(async ({ create }: any) => { const row = { ...create, id: create.kizIdentity }; claims.set(row.id, row); return row; }),
+      update: vi.fn(async ({ where, data }: any) => Object.assign(claims.get(where.id), data)),
+    };
+    await f.action('view'); await f.source(0);
+    expect((await f.scan(barcodeA, 0)).state).toBe('SCAN_KIZ');
+    expect(f.saved!.lines[0].picks).toHaveLength(0);
+    await expect(f.action('complete')).rejects.toThrow();
+    await expect(f.action('kiz', { kiz: codes[1], scannedItemCount: 0 })).rejects.toThrow('источника');
+    // TEST: same client's loose KIZ from another branch must not be claimed here.
+    f.db.stockMovement.findUnique.mockResolvedValueOnce({ clientId: 'client', skuId: 'sku0', warehouseId: 'other', boxId: null, status: 'AVAILABLE', quantity: 1 });
+    await expect(f.action('kiz', { kiz: codes[0], scannedItemCount: 0 })).rejects.toThrow('филиале');
+    expect(f.saved!.lines[0].picks).toHaveLength(0);
+    await f.action('kiz', { kiz: codes[0], scannedItemCount: 0 });
+    await f.action('kiz', { kiz: codes[0], scannedItemCount: 0 });
+    expect((await f.action('view')).task.scannedItemCount).toBe(1);
+    await f.source(1); await f.scan(barcodeB, 1);
+    await f.action('kiz', { kiz: codes[1], scannedItemCount: 1 });
+    expect(f.saved!.lines.map(l => l.picks[0].kiz)).toEqual(codes);
+    expect(claims.size).toBe(2);
+    await f.action('complete');
+    expect(f.service.submitOzonFbsTask).toHaveBeenCalledTimes(1);
+  });
   // TEST: only the manufactured line skips box selection; ordinary goods retain their source proof.
   it('scans manufactured and ordinary lines separately in one mixed order', async () => {
     vi.stubEnv('WMS_FBS_FABRIC_CUT_ENABLED','true');
@@ -202,6 +246,29 @@ describe('Ozon multi-line workflow', () => {
     expect(JSON.parse(shipping[1].body).packages[0].products).toEqual([
       { product_id: 5756653301, quantity: 1 }, { product_id: 5756654172, quantity: 1 },
     ]);
+  });
+  // TEST: the real transport sends each KIZ to its own product and never ships rejected marks.
+  it.each([false, true])('checks both marked exemplars before shipping (rejected=%s)', async (rejected) => {
+    const f = fixture(); await f.pickAll();
+    const codes = ['0104610460840526215OdGM-', '0104610460840540215K.W,b'];
+    f.saved!.unitMarksVersion = 1;
+    f.db.fbsTsdAssembly.updateMany = vi.fn(async () => ({ count: 1 }));
+    f.saved!.lines.forEach((line, i) => { line.requiresKiz = true; line.picks[0].kiz = codes[i]; });
+    f.db.clientMarketplaceConnection = { findFirst: vi.fn(async () => ({ sellerId: 'test', apiKey: 'test' })) };
+    const fetch = vi.fn(async (url: string) => {
+      const products = f.saved!.lines.map((line, i) => ({ product_id: line.productId,
+        exemplars: [{ exemplar_id: i + 1, marks: url.endsWith('/status') ? [{ mark: codes[i],
+          check_status: rejected && i === 1 ? 'failed' : 'passed' }] : [] }] }));
+      return new Response(JSON.stringify(url.endsWith('/get') ? { result: f.remote } :
+        url.endsWith('/create-or-get') || url.endsWith('/status') ? { products } : { result: [] }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const result = MarketplaceConnectionsService.prototype['submitOzonFbsTask'].call(f.service, f.task);
+    if (rejected) await expect(result).rejects.toThrow('отклонил'); else await result;
+    const set = fetch.mock.calls.find(([url]) => String(url).endsWith('/set')) as any;
+    expect(JSON.parse(set[1].body).products.map((p: any) => [p.product_id, p.exemplars[0].marks[0].mark]))
+      .toEqual(f.saved!.lines.map((line, i) => [line.productId, codes[i]]));
+    expect(fetch.mock.calls.filter(([url]) => String(url).endsWith('/ship'))).toHaveLength(rejected ? 0 : 1);
   });
   it('splits request items, advances product, resumes and completes exactly once', async () => {
     const f = fixture();

@@ -5,7 +5,7 @@ import {clientKizIdentity, clientKizGuardEnabled, clientKizFilter, lookupClientK
 
 import {loadShipmentKizReads, ShipmentKizRead} from './kiz-shipment-reads';
 import {expandOzonMarkedTasks, ozonMarkedUnits, ozonUnitMarksEnabled} from './ozon-unit-marks';
-import {readOzonPickState} from '../modules/marketplace-connections/ozon-fbs-pick-lines';
+import {readOzonPickState, ozonActiveLine} from '../modules/marketplace-connections/ozon-fbs-pick-lines';
 
 // FIX: one client-scoped, contextual permission for a second dispatch; AVAILABLE is not permission.
 export type ClientKizUse = {scope:'FBS'|'FBO'|'RECEIPT';clientId:string;warehouseId:string;requestId:string;
@@ -53,7 +53,7 @@ function required(i:ClientKizUse){
  if(!i.clientId||!i.warehouseId||!clientKizIdentity(i.kiz))throw new BadRequestException('Не определены клиент, филиал или КИЗ.');
  if(i.scope!=='RECEIPT'&&!i.requestId)throw new BadRequestException('Не определена заявка для проверки КИЗ.');
 }
-async function currentContext(db:any,i:ClientKizUse){
+async function currentContext(db:any,i:ClientKizUse,allowPendingReview=false){
  if(i.scope==='RECEIPT')return null;
  const request=await db.clientRequest.findUnique({where:{id:i.requestId}});
  if(!request||request.clientId!==i.clientId||request.warehouseId!==i.warehouseId||['CANCELLED','REJECTED'].includes(request.status))
@@ -62,8 +62,15 @@ async function currentContext(db:any,i:ClientKizUse){
   const task=await db.fbsTsdAssembly.findUnique({where:{id:i.taskId}});
   // FIX: a multi-product posting owns each recorded unit, not only the scalar first SKU.
   const state=ozonUnitMarksEnabled()&&task?.marketplace==='OZON'&&!task.kiz?await readOzonPickState(db,task.id):null;
-  const unit=state?.unitMarksVersion===1
+  let unit=state?.unitMarksVersion===1
    ?ozonMarkedUnits(task,state).find(u=>clientKizIdentity(u.kiz)===clientKizIdentity(i.kiz)):task;
+  // FIX: a refused scan rolls back its candidate pick; review alone can use the pending line.
+  // Claiming and shipment still require a recorded unit, never this fallback.
+  if(!unit&&allowPendingReview&&process.env.WMS_OZON_TSD_UNIT_MARKS_ENABLED==='true'&&
+    state?.unitMarksVersion===1&&state.submission==='PICKING'&&!state.recovery&&state.pendingBarcode&&state.source){
+   const line=ozonActiveLine(state);
+   if(line?.requiresKiz&&line.barcodes.includes(state.pendingBarcode))unit={skuId:line.skuId,boxId:state.source.boxId};
+  }
   if(!task||!unit||task.clientId!==i.clientId||task.requestId!==i.requestId||unit.skuId!==i.skuId||unit.boxId!==(i.boxId??null))
    throw new ConflictException('Задание или исходный короб изменились. Повторите проверку КИЗ.');
  }
@@ -186,7 +193,7 @@ export async function queueClientKizReview(db:any,i:ClientKizUse,user:any){
  if(!clientKizGuardEnabled())throw new ForbiddenException('Проверка КИЗ выключена.');required(i);
  return db.$transaction(async(tx:any)=>{
   const key=clientKizIdentity(i.kiz);await identityLock(tx,i.clientId,key);
-  const request=await currentContext(tx,i),e=await history(tx,i);
+  const request=await currentContext(tx,i,true),e=await history(tx,i);
   let mark:any=null;try{mark=await clientPhysicalMark(tx,i.clientId,i.kiz);}catch(error){if(!(error instanceof ConflictException))throw error;}
   const old=await tx.kizReviewCase.findUnique({where:{taskId_kizIdentity:{taskId:clientUseTaskKey(i),kizIdentity:key}}});
   // FIX: a retry cannot erase already recorded shipment evidence from an open review.
@@ -279,7 +286,7 @@ export async function decideClientKizReview(db:any,clients:any,row:any,resolutio
   ?await require('./kiz-wb-reuse').inspectKizReuse(db,row.clientId,row.kiz,input.taskId||''):input?.externalEvidence;
  return db.$transaction(async(tx:any)=>{
   const i:ClientKizUse={...input,externalEvidence:external};if(!i.clientId||i.clientId!==row.clientId)throw new ConflictException('Обращение требует обновления.');
-  const key=clientKizIdentity(i.kiz);await identityLock(tx,i.clientId,key);const request=await currentContext(tx,i);
+  const key=clientKizIdentity(i.kiz);await identityLock(tx,i.clientId,key);const request=await currentContext(tx,i,true);
   if(request&&terminal.includes(request.status)&&resolution!=='REJECT')throw new ConflictException('Заявка уже закрыта. Разрешение больше не применимо.');
   const fresh=await tx.kizReviewCase.findUnique({where:{id:row.id}});
   if(!fresh||fresh.context!==row.context||!['OPEN','APPROVED'].includes(fresh.status))throw new ConflictException('Обращение изменилось.');
@@ -333,7 +340,7 @@ export async function assertClientRequestKizShipment(tx:any,request:any,user:any
  const reads=await loadShipmentKizReads(tx,request,units);
  for(const unit of units)await assertClientKizUse(tx,{scope:'FBO',clientId:request.clientId,warehouseId:request.warehouseId,requestId:request.id,kiz:unit.kiz,skuId:unit.skuId,boxId:unit.sourceBoxId||null},user,reads.get(clientKizIdentity(unit.kiz)));
  const rawTasks=await tx.fbsTsdAssembly.findMany({where:{requestId:request.id,clientId:request.clientId,...(ozonUnitMarksEnabled()?{OR:[{kiz:{not:null}},{marketplace:'OZON'}]}:{kiz:{not:null}}),status:{notIn:['RELEASED','CANCELLED']}}});
- const tasks=await expandOzonMarkedTasks<any>(tx,rawTasks);
+ const tasks=await expandOzonMarkedTasks<any>(tx,rawTasks,{requireComplete:true}); // FIX: partial picks cannot authorize shipment.
  const shipped=tasks.length?await tx.shippedKizHistory.findMany({where:{clientId:request.clientId,assemblyId:{in:tasks.map((t:any)=>t.id)}}}):[];
  for(const task of tasks){
   if(shipped.some((s:any)=>s.assemblyId===task.id&&s.requestId===request.id&&clientKizIdentity(s.kiz)===clientKizIdentity(task.kiz)))continue;
