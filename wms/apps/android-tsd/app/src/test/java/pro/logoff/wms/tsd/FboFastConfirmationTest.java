@@ -22,6 +22,55 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboFastConfirmationTest {
+    // TEST: a box in the cached route must be rejected if the live route no longer contains it.
+    @Test public void staleSourceBoxIsRejectedOnBoxScan() throws Exception {
+        if (!"logoff".equals(BuildConfig.FLAVOR)) return;
+        try (var controller = Robolectric.buildActivity(Activity.class).setup()) {
+            Activity activity = controller.get();
+            TsdFboPlan cached = plan();
+            cached.alternativePickingSupported = true;
+            TsdFboPlan.Route route = new TsdFboPlan.Route();
+            route.boxCode = "FFL_KEV0311_022";
+            route.pallet = "PALET_01";
+            route.tasks = Collections.emptyList();
+            cached.route.add(route);
+            TsdFboPlan live = plan();
+            live.alternativePickingSupported = true;
+            AtomicInteger reads = new AtomicInteger();
+            WmsApi api = (WmsApi) Proxy.newProxyInstance(WmsApi.class.getClassLoader(),
+                new Class[]{WmsApi.class}, (proxy, method, args) ->
+                    Proxy.newProxyInstance(Call.class.getClassLoader(), new Class[]{Call.class},
+                        (call, operation, values) -> {
+                            if (!operation.getName().equals("execute")) return null;
+                            assertEquals("getFboPlanAtLocation", method.getName());
+                            return Response.success(reads.getAndIncrement() == 0 ? cached : live);
+                        }));
+            FboTwoStageScreen screen = new FboTwoStageScreen(activity,
+                new TsdSession("t", "Bearer", "T", "T", UUID.randomUUID().toString(), "Test", Collections.emptyList()),
+                api, "https://example.invalid", "request", false, () -> {});
+            try {
+                idle(screen);
+                var mode = FboTwoStageScreen.class.getDeclaredField("pickingMode");
+                mode.setAccessible(true);
+                mode.set(screen, FboPickingRoute.Mode.PARTIAL);
+                state(screen).pallet = route.pallet;
+                var input = FboTwoStageScreen.class.getDeclaredField("input");
+                input.setAccessible(true);
+                android.widget.EditText scanner = new android.widget.EditText(activity);
+                input.set(screen, scanner);
+                scanner.setText(route.boxCode);
+                screen.submit();
+                assertEquals("", state(screen).source);
+                idle(screen);
+                assertEquals(2, reads.get());
+                assertEquals("", state(screen).source);
+                assertTrue(text(activity.findViewById(android.R.id.content), "Нет доступного товара"));
+            } finally {
+                screen.close();
+            }
+        }
+    }
+
     private TsdFboPlan plan() {
         TsdFboPlan p=new TsdFboPlan();p.requestId="request";p.title="Test";p.phase="PICKING";p.needed=2;p.fastAcknowledgementSupported=true;
         p.lines=new ArrayList<>();p.route=new ArrayList<>();p.boxes=new ArrayList<>();p.wholeBoxes=new ArrayList<>();return p;

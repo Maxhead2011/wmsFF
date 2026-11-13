@@ -569,6 +569,8 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(254,202,202);
         if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
         if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking()){
+            // FIX: verify a source box against live stock before showing successful scan feedback.
+            if ("box".equals(FboScanState.alternativeLocationKind(plan, value)) && checkAlternativeLocation(value)) return;
             boolean accepted=state.scanLocation(pickingRoute(),value);
             // FIX: like FBS, validate a different physical source instead of treating the route as an allow-list.
             if(!accepted&&checkAlternativeLocation(value))return;
