@@ -7686,6 +7686,18 @@ describe('MarketplaceConnectionsService', () => {
     };
     const service = new MarketplaceConnectionsService(prisma as never, {} as never);
 
+    // TEST: a status error naming a completed order must preserve its scans.
+    const statusFailure = await (service as any).prepareFbsDeliveryRecovery(
+      'client-1',
+      { orders: [problemOrder, healthyOrder] },
+      [problemOrder, healthyOrder],
+      { id: 'admin-1', name: 'Администратор' },
+      `Неподходящий статус: №${problemOrder.id} — Отгружен из ВМС`,
+    );
+    expect(statusFailure.rescanOrders).toEqual([]);
+    expect(tx.fbsTsdAssembly.updateMany).not.toHaveBeenCalled();
+    tasks[0].wbMetaStatus = 'PENDING';
+
     const result = await (service as any).prepareFbsDeliveryRecovery(
       'client-1',
       { orders: [problemOrder, healthyOrder, cancelledOrder] },

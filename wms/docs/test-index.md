@@ -887,3 +887,5 @@ Prepared WB shipping search correction: [scope and timings](wb-fbs-shipping.md#f
 Published PR973 (2026-11-09): WB first-point search accepts the empty optional ID from old tabs; new browser omits it. Selected fresh reads replace full client refresh. Cargo uses official orderIds. Actual published two-order supply: options1204ms/search1646ms, 5432 points, no mutations. API4678/web622 passed (9/2 skipped), runtime12, browser and full local CI workflow/negative guards passed; public startup/reload and controls24 verified. GitHub Actions failed twice before any jobs were created; no CI success claimed. Exact API4/web3, baseline API771/web17, sourceParityVerified=false; sold unchanged.
 
 Ozon FBS multi-product TSD regressions cover scan replay, wrong SKU and branch, reservations, review, and Ozon exemplar validation before shipment. See ozon-fbs-pick-lines.spec.ts and ozon-unit-*.spec.ts.
+
+WB FBS delivery regression in marketplace-connections.service.spec.ts: a status error naming a completed order preserves scans, while a missing marking confirmation still requires rescan.
