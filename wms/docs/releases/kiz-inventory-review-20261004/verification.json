@@ -1,0 +1,12 @@
+{
+  "verified": true,
+  "baseImage": "sha256:7ff2c21d01327774b1ff328cc9c842ec25b02eef031dbda79753050676dbbd3e",
+  "candidateImage": "sha256:eae88e3014252c672e4d0564ae08580dd1e86ebe314dee6a4a004cae64cc7f45",
+  "runtimeFiles": 569,
+  "changedFiles": [
+    "common/kiz-cancelled-reuse.js"
+  ],
+  "tests": 40,
+  "runtimeHash": "20d99a8e5b6af7cbb7e71742668a5d4c9f9d8a77c1c12d7bf85f269add6b5d8f",
+  "webImage": "sha256:1a5e6d8847002aae15640e22052cc6c1682ff9f4c7c6e742d5438f4b7dac53d1"
+}
