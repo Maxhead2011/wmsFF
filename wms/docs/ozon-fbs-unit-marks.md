@@ -21,7 +21,7 @@ Ordinary marked multi-product TSD picking is not enabled by this change.
 
 ## Verification
 
-- API: 4,780 tests passed, 9 skipped; integration files excluded from that run.
+- API: 4,793 tests passed, 9 skipped; integration files excluded from that run.
 - Dedicated PostgreSQL: 4 integration tests passed with real guards and
   reservations, including rollback on second-unit failure, idempotent recovery,
   unchanged stock and no shipment history before handover.
@@ -48,3 +48,13 @@ The owner authorized restoring shipped units and KIZs. SHIPPED mode preserves DO
 No production data, flags or deployed modules have been changed by this work.
 Before publishing, compare against the then-current runtime and preserve its
 unrelated changes; source/runtime parity is not assumed.
+
+## Release checks
+
+The merged PR1010–1011 baseline passed 4,793 API tests (9 skipped).
+The five-module image passed compiled reader checks and a live read-only preview.
+A live recovery rehearsal wrote both units inside one serializable transaction,
+verified two debits and two shipping marks with unchanged DONE time, then
+forcibly rolled back and verified the original request, marks and balances.
+The guarded release script preserves every other runtime module/environment
+value and container; production apply remains a separate authorized operation.
