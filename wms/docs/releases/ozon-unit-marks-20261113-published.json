@@ -1,0 +1,28 @@
+{
+  "image": "sha256:dc88bff4f7d2cf14ed2f9efb299cff2f8199f3181531e7a3f736f357cbf20300",
+  "changes": {
+    "common/kiz-client-review.js": "de1edf33742e81f527365e676165d01d1f49ced9c1ddd49fbd3fad92e0560b30",
+    "common/kiz-shipment-reads.js": "d6447a7ea1a8136a6dbcb8646cef41ae7bbbea14133a3602ead5c680f89e8113",
+    "common/shipment-history/shipped-kiz-history.js": "22d1135a871a9d9d5224aa5a4552cdb2302ba8c83a6eaf4761db9675166e1ee5",
+    "common/ozon-unit-marks.js": "47c72eac8ecfe5688c60b5c4253586e7c6721ed9dfcc27c026236cfbc032d47c",
+    "modules/marketplace-connections/ozon-fbs-marked-recovery.js": "f616a0c1b6b7ffa5a29b71d43824f60a35c42a72a2a903c9eed783f903e5b4d9"
+  },
+  "runtimeTests": "PASS: compiled unit reader, duplicate/incomplete rejection, flag isolation and legacy scalar",
+  "preview": {
+    "readOnly": true,
+    "units": 2,
+    "requestStatus": "DONE",
+    "recovered": false
+  },
+  "pr": 1012,
+  "health": true,
+  "flag": "WMS_OZON_UNIT_MARKS_ENABLED",
+  "otherEnvironmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "publishedPreview": {
+    "readOnly": true,
+    "units": 2,
+    "requestStatus": "DONE",
+    "recovered": false
+  }
+}

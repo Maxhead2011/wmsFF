@@ -1,6 +1,6 @@
 # Ozon FBS: per-unit marking and administrative packing recovery
 
-Prepared, not published. Branch: `fix/ozon-multiline-kiz`.
+Published through PR1012 on 2026-11-13. Branch: `fix/ozon-multiline-kiz`.
 
 The existing assembly has one scalar KIZ although an Ozon posting may contain
 different products. The own-installation flag `WMS_OZON_UNIT_MARKS_ENABLED`
@@ -43,11 +43,9 @@ Read-only recheck of request 2964 on 2026-11-13 found that marketplace status
 reconciliation had already changed it from SUBMITTED to DONE at 16:19 MSK,
 based on Ozon delivering. No request stock movement or per-unit state was
 found. The packing-only recovery correctly rejects this terminal request.
-The owner authorized restoring shipped units and KIZs. SHIPPED mode preserves DONE. Production recovery has not yet been applied.
+The owner authorized restoring shipped units and KIZs. SHIPPED mode preserves DONE. Production recovery applied: two units and two SHIPPING marks; exact retry returned ALREADY_APPLIED.
 
-No production data, flags or deployed modules have been changed by this work.
-Before publishing, compare against the then-current runtime and preserve its
-unrelated changes; source/runtime parity is not assumed.
+The guarded release changed only five runtime modules and enabled the own-installation flag. Other environment values and containers were verified unchanged. Source/runtime parity remains false.
 
 ## Release checks
 
@@ -57,4 +55,6 @@ A live recovery rehearsal wrote both units inside one serializable transaction,
 verified two debits and two shipping marks with unchanged DONE time, then
 forcibly rolled back and verified the original request, marks and balances.
 The guarded release script preserves every other runtime module/environment
-value and container; production apply remains a separate authorized operation.
+value and container; the separately authorized production apply passed, preserving DONE and its original timestamp.
+
+Post-release public startup/reload passed: one root module and one session restore per load. Published API baseline: `2026-11-13-ozon-unit-marks`.
