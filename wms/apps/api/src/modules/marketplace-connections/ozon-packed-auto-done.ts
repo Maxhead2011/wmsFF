@@ -32,6 +32,15 @@ export async function closeOzonPackedRequest(tx: Prisma.TransactionClient, reque
   const changed = await tx.clientRequest.updateMany({ where: { id: request.id, clientId: request.clientId,
     status: previousStatus, updatedAt: request.updatedAt, fbsEmergencyAssemblyAt: null }, data: { status: 'DONE' } });
   if (changed.count !== 1) return false;
+  // FIX: persist the marketplace evidence in the same transaction as closure.
+  for (const order of accepted) {
+    await tx.fbsOrderRequestLink.updateMany({
+      where: { requestId: request.id, clientId: request.clientId, marketplace: 'OZON',
+        connectionId: order.connectionId, orderId: order.id },
+      data: { lastSupplierStatus: order.supplierStatus, lastWbStatus: order.wbStatus,
+        lastCategory: order.wbStatus === 'sold' ? 'archive' : 'shipped' },
+    });
+  }
   await tx.clientRequestEvent.create({ data: { requestId: request.id, clientId: request.clientId,
     eventType: 'STATUS_CHANGED', statusFrom: previousStatus, statusTo: 'DONE',
     title: 'Сдано: Ozon принял заказы в доставку',

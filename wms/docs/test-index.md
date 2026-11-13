@@ -889,3 +889,5 @@ Published PR973 (2026-11-09): WB first-point search accepts the empty optional I
 Ozon FBS multi-product TSD regressions cover scan replay, wrong SKU and branch, reservations, review, and Ozon exemplar validation before shipment. See ozon-fbs-pick-lines.spec.ts and ozon-unit-*.spec.ts.
 
 WB FBS delivery regression in marketplace-connections.service.spec.ts: a status error naming a completed order preserves scans, while a missing marking confirmation still requires rescan.
+
+Confirmed FBS handover regression: WB and Ozon closure persist order evidence. Manual request-status tests exercise the cache invalidation path.

@@ -148,7 +148,7 @@ export class RequestMarketStatusService {
         await tx.fbsReshipmentRun.findUnique({where:{requestId:id}}));
       const close = market==='OZON'?closeOzonPackedRequest:closeWbPackedRequest;
       const closed = await close(tx,fresh,observations,special);
-      if (closed || fresh.status === 'DONE') return {needsAttention:false,reason:''};
+      if (closed || fresh.status === 'DONE') return {needsAttention:false,reason:'',closed};
       if (special || fresh.fbsEmergencyAssemblyAt)
         return {needsAttention:true,reason:'Для повторной или аварийной сборки требуется отдельная проверка сдачи.'};
       const acceptedAll = observations.every(o=>market==='OZON'
@@ -159,6 +159,7 @@ export class RequestMarketStatusService {
         return {needsAttention:true,reason:'Передача подтверждена, но действующая настройка разрешает закрытие только из «Упакована».'};
       return {needsAttention:true,reason:'Передача подтверждена, но статус не обновлён: проверьте настройки автозакрытия и текущее состояние заявки.'};
     });
+    if (outcome.closed) this.connections.invalidateFbsHandoverCache(clientId);
     const counts=new Map<string,number>();
     for(const o of observations){const status=market==='OZON'?o.supplierStatus:o.supplierStatus+'/'+o.wbStatus;counts.set(status,(counts.get(status)??0)+1);}
     return {needsAttention:outcome.needsAttention,message:(market==='OZON'?'Ozon':'WB')+' · '+
