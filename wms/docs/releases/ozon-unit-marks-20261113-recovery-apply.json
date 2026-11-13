@@ -1,0 +1,14 @@
+{
+  "mode": "apply",
+  "result": {
+    "status": "APPLIED",
+    "requestId": "d4524117-5915-48c1-9477-1b2a507b3b06",
+    "units": 2
+  },
+  "status": "DONE",
+  "units": 2,
+  "movements": 2,
+  "marks": 2,
+  "updatedAt": "2026-11-13T13:19:14.501Z",
+  "rollbackVerified": false
+}
