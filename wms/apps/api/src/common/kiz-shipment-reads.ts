@@ -2,6 +2,7 @@ import {ConflictException} from '@nestjs/common';
 import {Prisma} from '@prisma/client';
 import {clientKizFilter,clientKizIdentity,clientKizPrefixes} from './kiz-client-registry';
 import {shipmentPrefixIds} from './kiz-shipment-prefix';
+import {expandOzonMarkedTasks,ozonUnitMarksEnabled} from './ozon-unit-marks';
 
 // FIX: request-local reads, built under the same identity locks and transaction as shipment.
 // Never reused across operations, clients or transaction retries. Policy decisions stay in kiz-client-review.
@@ -33,10 +34,11 @@ export async function loadShipmentKizReads(tx:any,request:any,units:any[]):Promi
    tx.shippedKizHistory.findMany({where:shipmentsWhere,orderBy:{shippedAt:'desc'},take}),
    tx.fboAssemblyUnit.findMany({where:historyWhere,include:{assembly:{include:{request:true}}},take}),
    tx.kizReviewCase.findMany({where:{clientId:request.clientId,kizIdentity:{in:part}},take}),
-   tx.fbsTsdAssembly.findMany({where:tasksWhere,take}),
+   tx.fbsTsdAssembly.findMany({where:ozonUnitMarksEnabled()?{OR:[tasksWhere,{clientId:request.clientId,marketplace:'OZON',kiz:null,status:{in:['IN_PROGRESS','COMPLETED','RETURN_REQUIRED']}}]}:tasksWhere,take}),
    tx.fboAssemblyUnit.findMany({where:bindingsWhere,include:{assembly:{include:{request:true}}},take}),
   ]);
   if([marks,shipments,historyUnits,rows,tasks,bindings].some(a=>a.length>=take))throw new ConflictException('Слишком много записей истории КИЗ. Требуется разбор администратором.');
+  const markedTasks=await expandOzonMarkedTasks(tx,tasks);
   for(const key of part){
    const prefixes=clientKizPrefixes(key),matches=(row:any,field='kiz')=>prefixes.some(prefix=>String(row[field]??'').startsWith(prefix));
    const ownRows=rows.filter((r:any)=>r.kizIdentity===key);
@@ -44,7 +46,7 @@ export async function loadShipmentKizReads(tx:any,request:any,units:any[]):Promi
     shipments:shipments.filter((s:any)=>matches(s)).slice(0,501),historyUnits:historyUnits.filter((u:any)=>matches(u)).slice(0,501),
     consumed:ownRows.filter((r:any)=>r.status==='USED'&&r.taskId.startsWith('GUARD:')).slice(0,501),
     claims:ownRows.filter((r:any)=>r.status==='CLAIMED'&&r.taskId.startsWith('GUARD:')),
-    tasks:tasks.filter((t:any)=>matches(t)),bindings:bindings.filter((u:any)=>matches(u))});
+    tasks:markedTasks.filter((t:any)=>matches(t)),bindings:bindings.filter((u:any)=>matches(u))});
   }
  }
  return result;

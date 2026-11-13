@@ -1,5 +1,6 @@
 import {afterEach,expect,it,vi} from 'vitest';
 import {assertClientRequestKizShipment,ClientKizReviewRequired} from '../src/common/kiz-client-review';
+import {loadShipmentKizReads} from '../src/common/kiz-shipment-reads';
 const request={id:'r',clientId:'c',warehouseId:'w',status:'IN_WORK'};
 const code=(n:number)=>'010460000000000121'+String(n).padStart(13,'A');
 function fixture(count=578){
@@ -13,6 +14,15 @@ function fixture(count=578){
  return {db,units,marks};
 }
 afterEach(()=>vi.unstubAllEnvs());
+// TEST: the second Ozon mark remains visible to batched FBO conflict checks.
+it('includes per-unit Ozon bindings in shipment reads',async()=>{
+ vi.stubEnv('WMS_OZON_UNIT_MARKS_ENABLED','true');
+ const {db,units}=fixture(2);
+ db.fbsTsdAssembly.findMany.mockResolvedValue([{id:'ozon',marketplace:'OZON',itemCount:2,requestId:'other',kiz:null}]);
+ db.$queryRaw.mockImplementation(async(strings:any)=>String(strings).includes('OzonFbsPickState')?[{data:{unitMarksVersion:1,lines:units.map((u,n)=>({productId:n+1,skuId:'s',requestItemId:'i'+n,quantity:1,picks:[{kiz:u.kiz}]}))}}]:[]);
+ const reads=await loadShipmentKizReads(db,request,units);
+ expect(reads.get(code(1))?.tasks).toEqual([expect.objectContaining({taskId:'ozon',kiz:code(1)})]);
+});
 // TEST: 578-unit finish must not repeat the physical-mark scan for each unit.
 it('bounds database mark reads for a 578-unit FBO shipment without dropping claims',async()=>{
  vi.stubEnv('WMS_KIZ_CLIENT_GUARD_ENABLED','true');const {db}=fixture();await assertClientRequestKizShipment(db,request,{id:'worker'});

@@ -23,6 +23,19 @@ function fixture(){
 }
 beforeEach(()=>vi.stubEnv('WMS_KIZ_CLIENT_GUARD_ENABLED','true'));
 afterEach(()=>vi.unstubAllEnvs());
+// TEST: an administrator cannot approve a KIZ already packed as the second Ozon product.
+it('blocks administrative reuse of a per-unit Ozon binding',async()=>{
+ const f=fixture();
+ await expect(withClientKizReview(f.db,user,()=>assertClientKizUse(f.db,input,user))).rejects.toThrow();
+ vi.stubEnv('WMS_OZON_UNIT_MARKS_ENABLED','true');
+ f.db.fbsTsdAssembly.findMany.mockResolvedValue([{id:'other',requestId:'other',marketplace:'OZON',itemCount:2,kiz:null,status:'COMPLETED'}]);
+ f.db.$queryRaw.mockResolvedValue([{data:{unitMarksVersion:1,lines:[
+  {productId:1,skuId:'other-sku',requestItemId:'first',quantity:1,picks:[{kiz:'0104610460840526215OdGM-'}]},
+  {productId:2,skuId:'sku',requestItemId:'second',quantity:1,picks:[{kiz}]},
+ ]}}]);
+ await expect(decideClientKizReview(f.db,{requireClientAccess:vi.fn()},f.getRow(),'REUSE','physical confirmed',true,user)).rejects.toThrow('занят другой сборкой FBS');
+ expect(f.db.kizReviewCase.update).not.toHaveBeenCalled();
+});
 it('blocks an available previously shipped unit and persists its case after rejected transaction',async()=>{
  const f=fixture();await expect(withClientKizReview(f.db,user,()=>assertClientKizUse(f.db,input,user))).rejects.toThrow('ОТЛОЖИТЕ');
  expect(f.getRow()).toMatchObject({status:'OPEN',clientId:'client',taskId:clientUseTaskKey(input)});
@@ -125,4 +138,32 @@ it('closes a receipt scan mistake once and never grants reuse',async()=>{
  expect(f.db.kizReviewCase.update).toHaveBeenCalledTimes(1);
  expect(f.db.auditLog.create).toHaveBeenCalledTimes(1);
  expect(f.db.productMark.findMany).not.toHaveBeenCalled();
+});
+
+// TEST: an ordinary Ozon task has no scalar KIZ until its first scan.
+it('allows the first legacy Ozon scan without a per-unit recovery state',async()=>{
+ const f=fixture();f.db.shippedKizHistory.findMany.mockResolvedValue([]);
+ f.db.fbsTsdAssembly.findUnique.mockResolvedValue({id:'task',marketplace:'OZON',kiz:null,clientId:'client',requestId:'request',skuId:'sku',boxId:'box'});
+ await assertClientKizUse(f.db,{...input,scope:'FBS',taskId:'task'},user);
+ expect(f.getRow()).toMatchObject({status:'CLAIMED',resolution:'FIRST_USE'});
+});
+// TEST: cancellation cannot release a claim while a per-unit Ozon packing binding remains.
+it('keeps a cancelled Ozon unit claim while its physical task remains completed',async()=>{
+ vi.stubEnv('WMS_OZON_UNIT_MARKS_ENABLED','true');
+ const f=fixture(); f.db.shippedKizHistory.findMany.mockResolvedValue([]);
+ f.db.clientRequest.findUnique.mockImplementation(async({where}:any)=>({id:where.id,clientId:'client',warehouseId:'wh',status:where.id==='old'?'CANCELLED':'IN_PROGRESS'}));
+ f.db.kizReviewCase.findMany.mockImplementation(async({where}:any)=>where.status==='CLAIMED'?[{id:'other',requestId:'old',resolution:'FIRST_USE',snapshot:{clientGuard:{input}}}]:[]);
+ f.db.fbsTsdAssembly.findMany.mockImplementation(async({where}:any)=>where.OR?[{id:'old-task',marketplace:'OZON',itemCount:1,kiz:null}]:[]);
+ f.db.$queryRaw.mockResolvedValue([{data:{unitMarksVersion:1,lines:[{productId:1,skuId:'sku',requestItemId:'item',quantity:1,picks:[{kiz}]}]}}]);
+ await expect(assertClientKizUse(f.db,input,user)).rejects.toThrow('другой сборкой');
+ expect(f.db.kizReviewCase.update).not.toHaveBeenCalled();
+});
+// TEST: another task's second KIZ blocks reuse even if no guard claim survived migration.
+it('finds an active per-unit Ozon binding with an empty scalar KIZ',async()=>{
+ vi.stubEnv('WMS_OZON_UNIT_MARKS_ENABLED','true');
+ const f=fixture();f.db.shippedKizHistory.findMany.mockResolvedValue([]);
+ f.db.fbsTsdAssembly.findMany.mockImplementation(async({where}:any)=>where.OR?.some((x:any)=>x.marketplace==='OZON')?[{id:'other',requestId:'other',marketplace:'OZON',itemCount:1,kiz:null}]:[]);
+ f.db.$queryRaw.mockResolvedValue([{data:{unitMarksVersion:1,lines:[{productId:1,skuId:'sku',requestItemId:'item',quantity:1,picks:[{kiz}]}]}}]);
+ await expect(assertClientKizUse(f.db,input,user)).rejects.toThrow('другой сборкой FBS');
+ expect(f.db.kizReviewCase.upsert).not.toHaveBeenCalled();
 });

@@ -1,6 +1,7 @@
 import { ClientRequestStatus, MovementType, Prisma, StockStatus } from '@prisma/client';
 import { appendFbsAttemptHistory } from './fbs-attempt-history';
 import { permanentStorageBoxesEnabled } from '../boxes/box-code-policy.service';
+import { expandOzonMarkedTasks, ozonUnitMarksEnabled } from '../ozon-unit-marks';
 
 export async function captureShippedKizHistory(
   tx: Prisma.TransactionClient,
@@ -58,14 +59,16 @@ export async function captureShippedKizHistory(
     }
   }
 
-  const assemblies = await tx.fbsTsdAssembly.findMany({
+  const rawAssemblies = await tx.fbsTsdAssembly.findMany({
     where: {
       requestId,
       status: 'COMPLETED',
-      kiz: { not: null },
+      ...(ozonUnitMarksEnabled() ? { OR: [{ kiz: { not: null } }, { marketplace: 'OZON' }] } : { kiz: { not: null } }),
     },
     select: {
       id: true,
+      marketplace: true,
+      itemCount: true,
       orderId: true,
       supplyId: true,
       skuId: true,
@@ -75,6 +78,8 @@ export async function captureShippedKizHistory(
       completedAt: true,
     },
   });
+  // FIX: archive both products independently when an Ozon task stores per-unit marking evidence.
+  const assemblies = await expandOzonMarkedTasks(tx, rawAssemblies);
   // FIX: archived attempts are history only; they cannot own a currently active KIZ.
   const currentAssemblies = [...assemblies];
   await appendFbsAttemptHistory(tx, assemblies, { requestId });

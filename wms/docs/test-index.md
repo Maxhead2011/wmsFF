@@ -1,3 +1,5 @@
+Prepared, not published: [Ozon FBS per-unit KIZ accounting](ozon-fbs-unit-marks.md). Default-off own-installation flag; guarded transactional PACKED/SHIPPED recovery, per-unit shipment validation/history. API4780 passed/9 skipped; dedicated PostgreSQL4 passed. Request2964 became DONE through marketplace reconciliation before recovery; owner authorized shipped recovery; production changes not yet applied.
+
 Ozon FBO import: client-scoped EAN-13 and zero-padded GTIN-14 lookup. Ozon import tests: 28 passed. Guarded preview on live data for Ozon 139939408: three items, three units, one direction. Release scripts: ozon-fbo-padded-barcode-20261111.
 
 WB FBS request supply navigation: handover and labels remain inside Requests. TypeScript, 640 web tests and browser replay of real request 2918 passed. See scripts/releases/request-supply-stay-20261111.
