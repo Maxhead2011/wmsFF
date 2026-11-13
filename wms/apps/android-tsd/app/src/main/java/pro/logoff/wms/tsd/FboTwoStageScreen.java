@@ -61,7 +61,10 @@ final class FboTwoStageScreen {
     private FboPickingRoute.Mode pickingMode=FboPickingRoute.Mode.MENU;
     private boolean unboxedPicking(){return plan!=null&&plan.unboxedPickingSupported&&"logoff".equals(BuildConfig.FLAVOR);}
     private boolean pickingChoices(){return !packing&&!unboxedPicking()&&"logoff".equals(BuildConfig.FLAVOR);}
-    private List<TsdFboPlan.Route> pickingRoute(){return pickingChoices()?FboPickingRoute.select(plan,pickingMode,state.source,state.pallet):plan.route;}
+    private List<TsdFboPlan.Route> pickingRoute(){return pickingRoute(plan);}
+    private List<TsdFboPlan.Route> pickingRoute(TsdFboPlan candidate){
+        return pickingChoices()?FboPickingRoute.select(candidate,pickingMode,state.source,state.pallet):candidate.route;
+    }
     // FIX: a server-approved remainder can be taken whole without leaving partial picking.
     private boolean showWholePicking(TsdFboPlan.Route row){return !pickingChoices()||pickingMode==FboPickingRoute.Mode.WHOLE_BOXES||pickingMode==FboPickingRoute.Mode.PARTIAL||FboScanState.reusableBin(plan,row.boxCode);}
     private boolean partialWholePicking(){return pickingChoices()&&pickingMode==FboPickingRoute.Mode.PARTIAL;}
@@ -476,7 +479,9 @@ final class FboTwoStageScreen {
                 else if(!state.barcode.isEmpty())hint="КИЗ товара";
                 if(pickingChoices()&&"PICKING".equals(screenPhase())&&pickingMode==FboPickingRoute.Mode.WHOLE_BOXES&&!state.source.isEmpty())hint="Подтвердите отбор целого короба кнопкой ниже";
                 if(productActive())hint=state.barcode.isEmpty()?"ШК товара":!state.productReady?"КИЗ товара":"ШК короба указанного направления";
-                text(root,hint);input=new EditText(activity);input.setSingleLine(true);TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
+                text(root,hint);input=new EditText(activity);input.setSingleLine(true);
+                if(pickingChoices()&&"PICKING".equals(screenPhase())&&state.source.isEmpty())input.setShowSoftInputOnFocus(false);
+                TsdUi.hint(input,hint);input.setEnabled(ready());root.addView(input);
                 input.setOnEditorActionListener((v,a,e)->{submit();return true;});
                 input.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int a,int c,int f){}public void onTextChanged(CharSequence s,int a,int b,int c){}public void afterTextChanged(Editable s){handler.removeCallbacks(automatic);if(ready()&&s.length()>0)handler.postDelayed(automatic,350);}});
                 button(root,"Подтвердить скан",ready(),this::submit);
@@ -649,7 +654,7 @@ final class FboTwoStageScreen {
         final String code=value.toUpperCase(java.util.Locale.ROOT);
         final String pallet=kind.equals("pallet")?code:state.pallet;
         final String box=kind.equals("box")?code:"";
-        busy=true;message="Проверяю доступность…";render();
+        busy=true;message="Проверяю доступность…";
         executor.execute(()->{try{
             Response<TsdFboPlan> response=api.getFboPlanAtLocation(session.authorizationHeader(),id,pallet,box).execute();
             if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
@@ -659,17 +664,16 @@ final class FboTwoStageScreen {
                 if(!next.alternativePickingSupported||!"PICKING".equals(next.phase)||next.compositionChanged){
                     message="Заявка изменилась. Обновите задание.";routeStale=true;render();return;
                 }
-                plan=next;
                 // A new pallet is a navigation choice. A box still requires its physical pallet scan.
                 FboScanState checked=new FboScanState();checked.pallet=kind.equals("pallet")?"":state.pallet;
-                boolean accepted=checked.scanLocation(pickingRoute(),code);
-                state.reconcile(plan,packing);
-                if(accepted){state.pallet=checked.pallet;state.source=checked.source;message=kind.equals("pallet")?"Паллет найден":"Нужный короб";}
+                boolean accepted=checked.scanLocation(pickingRoute(next),code);
+                // FIX: preserve the current pallet and route when a box is rejected.
+                if(accepted){plan=next;state.pallet=checked.pallet;state.source=checked.source;message=kind.equals("pallet")?"Паллет найден":"Нужный короб";}
                 else {
                     message="Нет доступного товара для оставшегося отбора. Проверьте паллет, остаток и ограничения.";
-                    if(kind.equals("box"))for(TsdFboPlan.Route row:plan.route)if(code.equalsIgnoreCase(row.boxCode)){
+                    if(kind.equals("box"))for(TsdFboPlan.Route row:next.route)if(code.equalsIgnoreCase(row.boxCode)){
                         if(!row.pallet.equals(checked.pallet))message="Сначала отсканируйте паллет "+row.pallet+", затем этот короб.";
-                        else message="Короб доступен в другом режиме отбора. Выберите "+(FboPickingRoute.whole(plan,row)?"«Сборка целых коробов».":"«Частичный отбор».");
+                        else message="Короб доступен в другом режиме отбора. Выберите "+(FboPickingRoute.whole(next,row)?"«Сборка целых коробов».":"«Частичный отбор».");
                     }
                 }
                 feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);speakScan(accepted);render();

@@ -43,7 +43,7 @@ public class FboFastConfirmationTest {
                         (call, operation, values) -> {
                             if (!operation.getName().equals("execute")) return null;
                             assertEquals("getFboPlanAtLocation", method.getName());
-                            return Response.success(reads.getAndIncrement() == 0 ? cached : live);
+                            return Response.success(reads.getAndIncrement() == 1 ? live : cached);
                         }));
             FboTwoStageScreen screen = new FboTwoStageScreen(activity,
                 new TsdSession("t", "Bearer", "T", "T", UUID.randomUUID().toString(), "Test", Collections.emptyList()),
@@ -65,6 +65,16 @@ public class FboFastConfirmationTest {
                 assertEquals(2, reads.get());
                 assertEquals("", state(screen).source);
                 assertTrue(text(activity.findViewById(android.R.id.content), "Нет доступного товара"));
+                assertEquals(route.pallet, state(screen).pallet);
+                android.widget.EditText nextScanner = (android.widget.EditText) input.get(screen);
+                assertNotNull(nextScanner);
+                assertTrue(nextScanner.isEnabled());
+                assertFalse(nextScanner.getShowSoftInputOnFocus());
+                nextScanner.setText(route.boxCode);
+                screen.submit();
+                idle(screen);
+                assertEquals(3, reads.get());
+                assertEquals(route.boxCode, state(screen).source);
             } finally {
                 screen.close();
             }
