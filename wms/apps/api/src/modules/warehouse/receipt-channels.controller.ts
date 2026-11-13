@@ -1,3 +1,4 @@
+import { appendReceiptKizSheet, receiptKizExportEnabled, receiptKizRows } from './receipt-kiz-export';
 import { receiptProcessingEnabled, receiptProcessingPrefix, receiptProcessingKey, saveReceiptProcessing } from '../billing/receipt-processing';
 import { canManageReceiptDirections } from './receipt-direction-access';
 import { ModuleRef } from '@nestjs/core';
@@ -75,7 +76,7 @@ export class ReceiptChannelsController {
     const doc=await this.readReceipt(user,clientId,warehouseId,id);
     const boxes=new Map(doc.boxes.map(b=>[b.id,b.code]));
     // FIX: signed, explicitly linked corrections are exported once alongside original receipt rows.
-    const rows=await this.prisma.stockMovement.findMany({where:{clientId,warehouseId,OR:[{type:'RECEIPT',quantity:{gt:0},OR:doc.boxes.map(b=>({boxId:b.id,sourceDocument:b.receiptDocument?.startsWith('BOX:')?null:b.receiptDocument}))},{type:'INVENTORY_ADJUSTMENT',id:{in:doc.boxes.flatMap(b=>b.linkedAdjustmentIds??[])}}],createdAt:{gte:new Date(doc.date.slice(0,4)+'-01-01T00:00:00Z'),lt:new Date((Number(doc.date.slice(0,4))+1)+'-01-01T00:00:00Z')}},include:{sku:{include:{barcodes:true}}},orderBy:{createdAt:'asc'}});
+    const rows=await this.prisma.stockMovement.findMany({where:{clientId,warehouseId,OR:[{type:'RECEIPT',quantity:{gt:0},OR:doc.boxes.map(b=>({boxId:b.id,sourceDocument:b.receiptDocument?.startsWith('BOX:')?null:b.receiptDocument}))},{type:'INVENTORY_ADJUSTMENT',id:{in:doc.boxes.flatMap(b=>b.linkedAdjustmentIds??[])}}],createdAt:{gte:new Date(doc.date.slice(0,4)+'-01-01T00:00:00Z'),lt:new Date((Number(doc.date.slice(0,4))+1)+'-01-01T00:00:00Z')}},include:{sku:{include:{barcodes:true}},...(receiptKizExportEnabled()?{productMarks:true}:{})},orderBy:{createdAt:'asc'}});
     // FIX: select the barcode recorded by the receipt operation, not the first catalog alias.
     const barcodes=await receiptExportBarcodes(this.prisma,rows,boxes);
     const workbook=new ExcelJS.Workbook(),sheet=workbook.addWorksheet('Приёмка');
@@ -84,7 +85,8 @@ export class ReceiptChannelsController {
     const finalRows=process.env.WMS_RECEIPT_LINKED_ADJUSTMENTS_ENABLED==='true'&&doc.boxes.some(b=>b.linkedAdjustmentIds?.length)?receiptFinalQuantities(rows):rows;
     for(const r of finalRows)sheet.addRow({date:r.createdAt.toLocaleString('ru-RU',{timeZone:'Europe/Moscow'}),box:boxes.get(r.boxId!),name:r.sku.name,article:r.sku.article,size:r.sku.size,barcode:barcodes.get(r.id)??'',quantity:r.quantity});
     sheet.getRow(1).font={bold:true};sheet.views=[{state:'frozen',ySplit:1}];
-    response.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');response.setHeader('Content-Disposition',`attachment; filename="receipt-${id}.xlsx"`);response.send(Buffer.from(await workbook.xlsx.writeBuffer()));
+    // FIX: historical KIZ-to-product mapping, independent of later moves and final quantity corrections.
+    response.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');response.setHeader('Content-Disposition',`attachment; filename="receipt-${id}.xlsx"`);const content=Buffer.from(await workbook.xlsx.writeBuffer());response.send(receiptKizExportEnabled()?appendReceiptKizSheet(content,await receiptKizRows(this.prisma,rows,boxes)):content);
   }
   private async readWarehouses(user:AuthUser,clientId:string){
     if(user.activeWarehouseId)return [user.activeWarehouseId];

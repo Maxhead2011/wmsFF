@@ -1,3 +1,4 @@
+import { receiptKizExportEnabled, receiptKizRows, appendReceiptKizSheet } from '../warehouse/receipt-kiz-export';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientRequestStatus, ClientRequestType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
@@ -165,6 +166,7 @@ type TurnoverWarehouseScope = {
 };
 
 export type TurnoverReceiptDocument = {
+  receiptKizRows?: string[][];
   movementId: string;
   sourceDocument: string | null;
   type: MovementType;
@@ -1306,12 +1308,16 @@ export class TurnoverService {
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
-    return buildReceiptDocument(seed.id, movements.length ? movements : [seed], sourceDocument);
+    const selected = movements.length ? movements : [seed];
+    const document = buildReceiptDocument(seed.id, selected, sourceDocument);
+    if (receiptKizExportEnabled() && document.type === MovementType.RECEIPT) document.receiptKizRows = await receiptKizRows(this.prisma, selected);
+    return document;
   }
 
   async getReceiptDocumentXlsx(movementId: string, user: AuthUser) {
     const document = await this.getReceiptDocument(movementId, user);
-    const content = buildTurnoverReceiptWorkbook(document);
+    const original = buildTurnoverReceiptWorkbook(document);
+    const content = receiptKizExportEnabled() && document.receiptKizRows ? appendReceiptKizSheet(original, document.receiptKizRows) : original;
 
     return {
       fileName: document.fileName,
@@ -1381,7 +1387,8 @@ export class TurnoverService {
       : candidateMovements;
 
     const document = buildReceiptPeriodDocument(client, movements, query);
-    const content = buildTurnoverReceiptPeriodWorkbook(document);
+    const original = buildTurnoverReceiptPeriodWorkbook(document);
+    const content = receiptKizExportEnabled() ? appendReceiptKizSheet(original, await receiptKizRows(this.prisma, movements)) : original;
 
     return {
       fileName: document.fileName,
