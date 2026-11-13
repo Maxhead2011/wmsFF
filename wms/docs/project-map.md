@@ -1,3 +1,5 @@
+Prepared 2026-11-13 (not published): [KIZ in client receipt exports](receipt-kiz-client-exports.md). Separate per-KIZ sheet for series, period and individual receipts; exact accepted scan evidence survives mark movement, existing totals and access scopes preserved. Own flag off by default. Actual runtime recovery/client-summary paths retained by API3 overlay; no stock or billing writes.
+
 Ozon FBO import: client-scoped EAN-13 and zero-padded GTIN-14 lookup. Ozon import tests: 28 passed. Guarded preview on live data for Ozon 139939408: three items, three units, one direction. Release scripts: ozon-fbo-padded-barcode-20261111.
 
 WB FBS request supply navigation: handover and labels remain inside Requests. TypeScript, 640 web tests and browser replay of real request 2918 passed. See scripts/releases/request-supply-stay-20261111.
