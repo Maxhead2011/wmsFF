@@ -24,19 +24,33 @@ const emptyData: BulkSkuVolumeData = {
 };
 
 export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session }: BulkVolumeEditorProps) {
+  // FIX: enable product selection only in the own-WMS build.
+  const searchEnabled = import.meta.env.VITE_BULK_VOLUME_SEARCH_ENABLED === 'true';
   const [clientId, setClientId] = useRememberedClientId(session.user.id, {
     initialClientId: defaultClientId,
   });
   const [sourceVolumeFrom, setSourceVolumeFrom] = useState('');
   const [sourceVolumeTo, setSourceVolumeTo] = useState('');
   const [targetVolume, setTargetVolume] = useState('');
+  const [productSearch, setProductSearch] = useState('');
   const [data, setData] = useState<BulkSkuVolumeData>(emptyData);
+  const [dataKey, setDataKey] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const search = searchEnabled ? productSearch.trim() : '';
+  const rangeFrom = parseVolume(sourceVolumeFrom);
+  const rangeTo = parseVolume(sourceVolumeTo);
+  const hasRange = Boolean(sourceVolumeFrom.trim() || sourceVolumeTo.trim());
+  const rangeReady = rangeFrom !== null && rangeTo !== null && rangeFrom <= rangeTo;
+  const selectionReady = Boolean(clientId) && (hasRange ? rangeReady : Boolean(search));
+  // FIX: never submit IDs fetched for another client, range, search or refresh.
+  const requestKey = JSON.stringify([clientId, sourceVolumeFrom, sourceVolumeTo, search, reloadKey, session.accessToken]);
+  const currentData = dataKey === requestKey && selectionReady;
+  const selectedCount = currentData ? selectedIds.size : 0;
 
   useEffect(() => {
     if (defaultClientId) {
@@ -47,16 +61,13 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
   }, [clientId, clients, defaultClientId]);
 
   useEffect(() => {
-    if (!clientId) {
+    setSelectedIds(new Set());
+    setDataKey('');
+    if (!clientId || (hasRange && !rangeReady)) {
       setData(emptyData);
-      setSourceVolumeFrom('');
-      setSourceVolumeTo('');
-      setSelectedIds(new Set());
+      setLoading(false);
       return;
     }
-    const rangeFrom = parseVolume(sourceVolumeFrom);
-    const rangeTo = parseVolume(sourceVolumeTo);
-    const rangeReady = rangeFrom !== null && rangeTo !== null && rangeFrom <= rangeTo;
     let active = true;
     setLoading(true);
     setError('');
@@ -64,10 +75,12 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
       clientId,
       sourceVolumeFrom: rangeReady ? rangeFrom : undefined,
       sourceVolumeTo: rangeReady ? rangeTo : undefined,
+      search: search || undefined,
     })
       .then((result) => {
         if (!active) return;
         setData(result);
+        setDataKey(requestKey);
         setSelectedIds(new Set(result.items.map((item) => item.id)));
       })
       .catch((caught) => {
@@ -82,28 +95,23 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
     return () => {
       active = false;
     };
-  }, [clientId, reloadKey, session.accessToken, sourceVolumeFrom, sourceVolumeTo]);
+  }, [requestKey]);
 
   const sourceLabel = useMemo(() => {
     const from = parseVolume(sourceVolumeFrom);
     const to = parseVolume(sourceVolumeTo);
-    if (from === null || to === null) return '';
+    if (from === null || to === null) return `по запросу «${search}»`;
     return from === to
       ? `${formatVolume(from)} л`
       : `от ${formatVolume(from)} до ${formatVolume(to)} л`;
-  }, [sourceVolumeFrom, sourceVolumeTo]);
-
-  const rangeReady = useMemo(() => {
-    const from = parseVolume(sourceVolumeFrom);
-    const to = parseVolume(sourceVolumeTo);
-    return from !== null && to !== null && from <= to;
-  }, [sourceVolumeFrom, sourceVolumeTo]);
+  }, [sourceVolumeFrom, sourceVolumeTo, search]);
 
   function changeClient(nextClientId: string) {
     setClientId(nextClientId);
     setSourceVolumeFrom('');
     setSourceVolumeTo('');
     setTargetVolume('');
+    setProductSearch('');
     setMessage('');
     setError('');
   }
@@ -123,12 +131,13 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
 
   async function apply(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving || loading) return;
     const normalizedTarget = Number(targetVolume.replace(',', '.'));
     const normalizedFrom = parseVolume(sourceVolumeFrom);
     const normalizedTo = parseVolume(sourceVolumeTo);
-    if (!clientId || normalizedFrom === null || normalizedTo === null || normalizedFrom > normalizedTo
-      || selectedIds.size === 0 || !Number.isFinite(normalizedTarget) || normalizedTarget <= 0) {
-      setError('Выберите клиента, корректный диапазон, товары и укажите новый литраж больше нуля.');
+    if (!currentData || selectedCount === 0 || !Number.isFinite(normalizedTarget)
+      || normalizedTarget < 0.001 || normalizedTarget > 1_000_000) {
+      setError('Выберите клиента, диапазон или артикул / баркод, товары и укажите новый литраж от 0,001 до 1 000 000 л.');
       return;
     }
     const confirmed = window.confirm(
@@ -142,14 +151,17 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
     try {
       const result = await updateBulkSkuVolume(session.accessToken, {
         clientId,
-        sourceVolumeFrom: normalizedFrom,
-        sourceVolumeTo: normalizedTo,
+        sourceVolumeFrom: normalizedFrom ?? undefined,
+        sourceVolumeTo: normalizedTo ?? undefined,
+        search: search || undefined,
         skuIds: [...selectedIds],
         newVolumeLiters: normalizedTarget,
       });
       setMessage(`Готово: литраж изменён у ${result.updated} товаров. Габариты карточек не изменялись.`);
-      setSourceVolumeFrom(String(result.newVolumeLiters));
-      setSourceVolumeTo(String(result.newVolumeLiters));
+      if (hasRange) {
+        setSourceVolumeFrom(String(result.newVolumeLiters));
+        setSourceVolumeTo(String(result.newVolumeLiters));
+      }
       setTargetVolume('');
       setReloadKey((current) => current + 1);
       onApplied();
@@ -170,21 +182,39 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
             <span>Ручной литраж имеет приоритет над габаритами карточки и используется в расчёте хранения</span>
           </div>
         </div>
-        <button className="icon-button" type="button" onClick={() => setReloadKey((current) => current + 1)} title="Обновить данные">
+        <button className="icon-button" type="button" disabled={saving} onClick={() => setReloadKey((current) => current + 1)} title="Обновить данные">
           <RefreshCw size={17} aria-hidden="true" />
         </button>
       </div>
 
-      <form className="catalog-volume-editor__form" onSubmit={(event) => void apply(event)}>
+      <form className={`catalog-volume-editor__form${searchEnabled ? ' catalog-volume-editor__form--search' : ''}`} onSubmit={(event) => void apply(event)}>
         <label>
           <span>Клиент</span>
-          <select value={clientId} onChange={(event) => changeClient(event.target.value)} required>
+          <select value={clientId} onChange={(event) => changeClient(event.target.value)} disabled={saving} required>
             <option value="">Выберите клиента</option>
             {clients.map((client) => (
               <option key={client.id} value={client.id}>{client.code} · {client.name}</option>
             ))}
           </select>
         </label>
+        {searchEnabled ? (
+          <label>
+            <span>Артикул / баркод</span>
+            <input
+              type="text"
+              value={productSearch}
+              maxLength={200}
+              onChange={(event) => {
+                setProductSearch(event.target.value);
+                setMessage('');
+                setError('');
+              }}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.preventDefault(); }}
+              disabled={!clientId || saving}
+              placeholder="Введите или сканируйте"
+            />
+          </label>
+        ) : null}
         <label>
           <span>Литраж от, л</span>
           <input
@@ -199,9 +229,9 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
               setMessage('');
               setError('');
             }}
-            disabled={!clientId}
+            disabled={!clientId || saving}
             placeholder="От"
-            required
+            required={!search}
           />
         </label>
         <label>
@@ -218,9 +248,9 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
               setMessage('');
               setError('');
             }}
-            disabled={!clientId}
+            disabled={!clientId || saving}
             placeholder="До"
-            required
+            required={!search}
           />
         </label>
         <label>
@@ -232,25 +262,30 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
             max="1000000"
             step="0.001"
             value={targetVolume}
+            disabled={saving}
             onChange={(event) => setTargetVolume(event.target.value)}
             placeholder="Например, 3.5"
             required
           />
         </label>
-        <button className="primary-button" type="submit" disabled={saving || loading || selectedIds.size === 0}>
+        <button className="primary-button" type="submit" disabled={saving || loading || selectedCount === 0}>
           <Save size={16} aria-hidden="true" />
-          <span>{saving ? 'Изменяю…' : `Изменить у ${selectedIds.size}`}</span>
+          <span>{saving ? 'Изменяю…' : `Изменить у ${selectedCount}`}</span>
         </button>
       </form>
+
+      {searchEnabled ? <p>Найдите товар по артикулу или баркоду и отметьте нужные позиции. Диапазон литража необязателен.</p> : null}
+      {hasRange && !rangeReady ? <p className="form-error">Укажите обе границы корректного диапазона литража или очистите их для поиска по товару.</p> : null}
+      {loading ? <p role="status">Загрузка товаров…</p> : null}
 
       {error ? <p className="form-error">{error}</p> : null}
       {message ? <p className="form-success">{message}</p> : null}
 
-      {rangeReady ? (
+      {currentData ? (
         <div className="catalog-volume-editor__results">
           <div className="catalog-volume-editor__summary">
             <span><CheckCheck size={16} aria-hidden="true" /> Найдено: {data.total} · выбрано: {selectedIds.size}</span>
-            <button className="text-button" type="button" onClick={() => toggleAll(selectedIds.size !== data.items.length)}>
+            <button className="text-button" type="button" disabled={saving || loading} onClick={() => toggleAll(selectedIds.size !== data.items.length)}>
               {selectedIds.size === data.items.length && data.items.length > 0 ? 'Снять выбор' : 'Выбрать все'}
             </button>
           </div>
@@ -262,6 +297,7 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
                     <input
                       aria-label="Выбрать все товары"
                       type="checkbox"
+                      disabled={saving || loading}
                       checked={data.items.length > 0 && selectedIds.size === data.items.length}
                       onChange={(event) => toggleAll(event.target.checked)}
                     />
@@ -279,6 +315,7 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
                       <input
                         aria-label={`Выбрать ${item.name}`}
                         type="checkbox"
+                        disabled={saving || loading}
                         checked={selectedIds.has(item.id)}
                         onChange={(event) => toggleOne(item.id, event.target.checked)}
                       />
@@ -290,7 +327,7 @@ export function BulkVolumeEditor({ clients, defaultClientId, onApplied, session 
                   </tr>
                 ))}
                 {data.items.length === 0 ? (
-                  <tr><td colSpan={5}>{loading ? 'Загрузка товаров…' : 'Товаров в выбранном диапазоне нет'}</td></tr>
+                  <tr><td colSpan={5}>Товаров по выбранным условиям нет</td></tr>
                 ) : null}
               </tbody>
             </table>
@@ -311,7 +348,7 @@ function formatVolume(value: string | number) {
 function parseVolume(value: string) {
   if (!value.trim()) return null;
   const parsed = Number(value.replace(',', '.'));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0.001 && parsed <= 1_000_000 ? parsed : null;
 }
 
 function formatDimensions(item: { lengthCm: string | number | null; widthCm: string | number | null; heightCm: string | number | null }) {

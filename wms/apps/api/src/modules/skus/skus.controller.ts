@@ -99,8 +99,10 @@ export class SkusController {
     @Query('clientId') clientId?: string,
     @Query('sourceVolumeFrom') sourceVolumeFrom?: string,
     @Query('sourceVolumeTo') sourceVolumeTo?: string,
+    @Query('search') search?: string,
   ) {
-    return this.skus.listBulkVolume({ clientId, sourceVolumeFrom, sourceVolumeTo }, user);
+    // FIX: forward the same product filter used for preview and submission.
+    return this.skus.listBulkVolume({ clientId, sourceVolumeFrom, sourceVolumeTo, search }, user);
   }
 
   @Patch('bulk-volume')

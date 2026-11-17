@@ -136,13 +136,14 @@ export class SkusService {
   }
 
   async listBulkVolume(
-    filter: { clientId?: string; sourceVolumeFrom?: string; sourceVolumeTo?: string },
+    filter: { clientId?: string; sourceVolumeFrom?: string; sourceVolumeTo?: string; search?: string },
     user: AuthUser,
   ) {
     if (!filter.clientId) {
       throw new BadRequestException('Выберите клиента для массового изменения литража.');
     }
     this.clientScopes.requireClientAccess(user, filter.clientId, 'read');
+    const searchWhere = skuVolumeSearch(filter.search);
     const client = await this.prisma.client.findUnique({
       where: { id: filter.clientId },
       select: { id: true, code: true, name: true },
@@ -173,9 +174,9 @@ export class SkusService {
     const sourceWhere = hasRange
       ? skuVolumeRange(filter.sourceVolumeFrom!, filter.sourceVolumeTo!)
       : null;
-    const items = sourceWhere
+    const items = sourceWhere || searchWhere
       ? await this.prisma.sku.findMany({
-          where: { clientId: filter.clientId, ...sourceWhere },
+          where: { clientId: filter.clientId, ...sourceWhere, ...searchWhere },
           orderBy: [{ name: 'asc' }, { internalSku: 'asc' }],
           select: {
             id: true,
@@ -213,7 +214,19 @@ export class SkusService {
     if (skuIds.length !== dto.skuIds.length) {
       throw new BadRequestException('В списке товаров есть повторяющиеся позиции.');
     }
-    const sourceWhere = skuVolumeRange(dto.sourceVolumeFrom, dto.sourceVolumeTo);
+    // FIX: a product search may replace both bounds, but never just one bound.
+    const searchWhere = skuVolumeSearch(dto.search);
+    const hasRange = dto.sourceVolumeFrom !== undefined || dto.sourceVolumeTo !== undefined;
+    if (hasRange && (dto.sourceVolumeFrom === undefined || dto.sourceVolumeTo === undefined)) {
+      throw new BadRequestException('Укажите обе границы диапазона литража.');
+    }
+    if (!hasRange && !searchWhere) {
+      throw new BadRequestException('Укажите диапазон литража или артикул / баркод.');
+    }
+    const sourceWhere = {
+      ...(hasRange ? skuVolumeRange(dto.sourceVolumeFrom!, dto.sourceVolumeTo!) : {}),
+      ...searchWhere,
+    };
     const matching = await this.prisma.sku.count({
       where: { id: { in: skuIds }, clientId: dto.clientId, ...sourceWhere },
     });
@@ -227,6 +240,10 @@ export class SkusService {
         where: { id: { in: skuIds }, clientId: dto.clientId, ...sourceWhere },
         data: { volumeLiters: volume, volumeSource: 'MANUAL' },
       });
+      // FIX: search submissions are atomic if a selected card stops matching.
+      if (searchWhere && result.count !== skuIds.length) {
+        throw new BadRequestException('Часть товаров уже изменилась. Обновите список.');
+      }
       await tx.auditLog.create({
         data: {
           userId: user.id,
@@ -237,6 +254,7 @@ export class SkusService {
             clientId: dto.clientId,
             sourceVolumeFrom: dto.sourceVolumeFrom,
             sourceVolumeTo: dto.sourceVolumeTo,
+            ...(searchWhere ? { search: dto.search!.trim() } : {}),
             newVolumeLiters: dto.newVolumeLiters,
             updated: result.count,
             skuIds,
@@ -929,6 +947,23 @@ export class SkusService {
 function cleanOptional(value?: string) {
   const trimmed = value?.trim();
   return trimmed || undefined;
+}
+
+// FIX: opt-in product selection is shared by preview and update, within client scope.
+function skuVolumeSearch(value?: string): Prisma.SkuWhereInput | null {
+  if (value !== undefined && (typeof value !== 'string' || value.length > 200)) {
+    throw new BadRequestException('Артикул / баркод должен содержать не более 200 символов.');
+  }
+  const search = value?.trim();
+  if (!search) return null;
+  if (process.env.WMS_BULK_VOLUME_SEARCH_ENABLED !== 'true') {
+    throw new BadRequestException('Поиск по артикулу / баркоду для изменения литража не включён.');
+  }
+  return { OR: [
+    { article: { contains: search, mode: 'insensitive' } },
+    { clientSku: { contains: search, mode: 'insensitive' } },
+    { barcodes: { some: { value: { contains: search } } } },
+  ] };
 }
 
 function skuVolumeRange(sourceVolumeFrom: string | number, sourceVolumeTo: string | number): Prisma.SkuWhereInput {
