@@ -1,0 +1,34 @@
+// TEST: run against the real captured/candidate modules and controller metadata, without business writes.
+const assert = require('node:assert/strict'), path = require('node:path');
+require('reflect-metadata');
+const root = process.env.RUNTIME_DIR;
+const {SkusService} = require(path.join(root, 'modules/skus/skus.service.js'));
+const {SkusController} = require(path.join(root, 'modules/skus/skus.controller.js'));
+const {BulkUpdateSkuVolumeDto} = require(path.join(root, 'modules/skus/dto/bulk-update-sku-volume.dto.js'));
+const {validate} = require('class-validator');
+const {ROUTE_ARGS_METADATA} = require('@nestjs/common/constants');
+const client = 'client-1', id = 'd1000000-0000-4000-8000-000000000001';
+const rows = [{id, clientId:client, article:'Арт-01', clientSku:'X1', barcodes:[{value:'111'},{value:'00123'}], volumeLiters:null}, {id:'other',clientId:'other-client',article:'Арт-01',barcodes:[{value:'00123'}],volumeLiters:1}];
+const matches = (r,w) => (!w.clientId || r.clientId===w.clientId) && (!w.id || w.id.in.includes(r.id)) && (!w.OR || w.OR.some(q => q.article ? r.article.toLowerCase().includes(q.article.contains.toLowerCase()) : q.clientSku ? r.clientSku?.toLowerCase().includes(q.clientSku.contains.toLowerCase()) : r.barcodes.some(b=>b.value.includes(q.barcodes.some.value.contains)))) && (!w.volumeLiters || r.volumeLiters!==null && r.volumeLiters>=Number(w.volumeLiters.gte) && r.volumeLiters<=Number(w.volumeLiters.lte));
+const written=[],audits=[];
+const prisma={client:{findUnique:async()=>({id:client})},sku:{groupBy:async()=>[],findMany:async({where})=>rows.filter(r=>matches(r,where)),count:async({where})=>rows.filter(r=>matches(r,where)).length},$transaction:async fn=>fn({sku:{updateMany:async q=>{written.push(q);return {count:rows.filter(r=>matches(r,q.where)).length};}},auditLog:{create:async q=>audits.push(q)}})};
+const service=new SkusService(prisma,{requireClientAccess(){}},{});
+(async()=>{
+ process.env.WMS_BULK_VOLUME_SEARCH_ENABLED='true';
+ const dto=Object.assign(new BulkUpdateSkuVolumeDto(),{clientId:client,search:'00123',skuIds:[id],newVolumeLiters:2.5});
+ assert.deepEqual(await validate(dto),[]);
+ for(const search of ['арт-01','00123','X1'])assert.deepEqual((await service.listBulkVolume({clientId:client,search},{})).items.map(x=>x.id),[id]);
+ assert.equal((await service.listBulkVolume({clientId:client,search:'00123',sourceVolumeFrom:'1',sourceVolumeTo:'3'},{})).items.length,0);
+ assert.equal((await service.updateBulkVolume(dto,{id:'test'})).updated,1);
+ assert.deepEqual(Object.keys(written[0].data).sort(),['volumeLiters','volumeSource']);assert.equal(audits[0].data.payload.search,'00123');
+ await assert.rejects(()=>service.updateBulkVolume({...dto,skuIds:['other']},{}));
+ await assert.rejects(()=>service.updateBulkVolume({...dto,search:''},{}));
+ await assert.rejects(()=>service.updateBulkVolume({...dto,sourceVolumeFrom:1},{}));
+ const controller=new SkusController(service);assert.equal((await controller.listBulkVolume({},client,undefined,undefined,'00123')).items.length,1);
+ assert.ok(Object.values(Reflect.getMetadata(ROUTE_ARGS_METADATA,SkusController,'listBulkVolume')).some(x=>x.index===4&&x.data==='search'));
+ process.env.WMS_BULK_VOLUME_SEARCH_ENABLED='false';
+ await assert.rejects(()=>service.listBulkVolume({clientId:client,search:'00123'},{}));
+ await assert.rejects(()=>service.updateBulkVolume(dto,{}));
+ assert.equal((await service.listBulkVolume({clientId:client,sourceVolumeFrom:'1',sourceVolumeTo:'3'},{})).items.length,0);
+ console.log(JSON.stringify({runtimeChecks:14,passed:true,realDatabaseWrites:0}));
+})().catch(e=>{console.error(e);process.exitCode=1});
