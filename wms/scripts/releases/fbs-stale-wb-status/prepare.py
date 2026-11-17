@@ -36,7 +36,7 @@ args.output.mkdir(parents=True, exist_ok=True)
 (args.output / 'fbs-display-wb-reconcile.js').write_bytes(args.helper.read_bytes())
 manifest = {
     'baseServiceSha256': hashlib.sha256(args.base.read_bytes()).hexdigest(),
-    'candidateServiceSha256': hashlib.sha256(candidate.encode()).hexdigest(),
+    'candidateServiceSha256': hashlib.sha256((args.output / 'marketplace-connections.service.js').read_bytes()).hexdigest(),
     'files': ['marketplace-connections.service.js', 'fbs-display-wb-reconcile.js'],
     'published': False,
 }
