@@ -5160,8 +5160,8 @@ export type BulkSkuVolumeData = {
 
 export type BulkSkuVolumeResult = {
   clientId: string;
-  sourceVolumeFrom: number;
-  sourceVolumeTo: number;
+  sourceVolumeFrom?: number;
+  sourceVolumeTo?: number;
   newVolumeLiters: number;
   updated: number;
 };
@@ -9046,7 +9046,8 @@ export async function reconcileFactoryShipment(accessToken: string, id: string, 
 
 export async function fetchBulkSkuVolume(
   accessToken: string,
-  filter: { clientId: string; sourceVolumeFrom?: number; sourceVolumeTo?: number },
+  // FIX: the search is optional and can be used without volume bounds.
+  filter: { clientId: string; sourceVolumeFrom?: number; sourceVolumeTo?: number; search?: string },
 ) {
   return request<BulkSkuVolumeData>(withQuery('/skus/bulk-volume', filter), {
     accessToken,
@@ -9057,8 +9058,9 @@ export async function updateBulkSkuVolume(
   accessToken: string,
   payload: {
     clientId: string;
-    sourceVolumeFrom: number;
-    sourceVolumeTo: number;
+    sourceVolumeFrom?: number;
+    sourceVolumeTo?: number;
+    search?: string;
     skuIds: string[];
     newVolumeLiters: number;
   },

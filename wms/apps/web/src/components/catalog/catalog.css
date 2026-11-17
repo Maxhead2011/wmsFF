@@ -200,6 +200,11 @@
   gap: 6px;
 }
 
+/* FIX: the optional product search wraps with the existing form on narrow screens. */
+.catalog-volume-editor__form--search {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .catalog-volume-editor__form select,
 .catalog-volume-editor__form input {
   width: 100%;
