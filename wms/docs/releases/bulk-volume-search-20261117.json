@@ -1,0 +1,64 @@
+{
+  "pr": 1022,
+  "apiImage": "sha256:26440c0226e5a2e439bf470010db06ce9b928e0ad5b570757667c0044fc81be8",
+  "webImage": "sha256:453885f8688e1210e46eceeaaa1a2fa4218fd2b17f321146ebf60f0ad42fe037",
+  "apiBefore": "sha256:17fd43eaaa6c5990f52395c051b74de96f76e01fbbf7d37ee964081cc925b284",
+  "webBefore": "sha256:eb6f7abc650dc928b221a5c45ea9403ecaddbb5d1f2c68eaae3fc1e5f0af9f41",
+  "sourceParityVerified": false,
+  "changedApi": [
+    "modules/skus/skus.service.js",
+    "modules/skus/skus.controller.js",
+    "modules/skus/dto/bulk-update-sku-volume.dto.js"
+  ],
+  "changedWeb": [
+    "index.html",
+    "assets/bulk-volume-search-20261117.js",
+    "assets/bulk-volume-search-20261117.css"
+  ],
+  "assetHashes": {
+    "index.html": "5d903c8a0a7ac328319caf902b543d660bee2f3bbfc49f3ba599c2d226f5961f",
+    "assets/bulk-volume-search-20261117.js": "e2442bfdbebca0419afa3b0f0a093d7c863d5fa052cb1a8667b3be8a9adab375",
+    "assets/bulk-volume-search-20261117.css": "40dfc4f01ef4a9474c4c63acde73df7f04dd88af370d4ea78d791445ee37cd96"
+  },
+  "health": "ok",
+  "liveRead": {
+    "passed": true,
+    "barcodeMatches": 1,
+    "emptySearchVerified": true,
+    "transactionReadOnly": true
+  },
+  "otherContainersPreserved": true,
+  "mountsAndNetworksPreserved": true,
+  "onlyEnvironmentChange": "WMS_BULK_VOLUME_SEARCH_ENABLED=true",
+  "rollbackTags": [
+    "wms-bulk-volume-api:before-1022",
+    "wms-bulk-volume-web:before-1022"
+  ],
+  "publishedAt": "2026-11-17T20:33:50Z",
+  "mergeCommit": "d1511a1aea5392a52805b52e37ae9828d3304440",
+  "runtimeManifest": "/opt/wms-restore/releases/bulk-volume-search-20261117/image-proof.json",
+  "captureManifestSha256": "354cd2c20881d04777e4a851cd1f826feb9424782189a04c6dacd7ceb4ddf561",
+  "verification": {
+    "apiPassed": 4362,
+    "apiSkipped": 156,
+    "webPassed": 600,
+    "webSkipped": 2,
+    "excludedSuite": "kiz-duplicate.integration.spec.ts requires dedicated test PostgreSQL",
+    "typechecks": [
+      "api",
+      "web"
+    ],
+    "webBuild": true,
+    "runtimeChecks": 14,
+    "browserCandidate": [
+      "Edge 1200px",
+      "Edge 390px"
+    ],
+    "browserPublished": [
+      "Edge 1200px",
+      "Edge 390px"
+    ],
+    "browserApiWritesIntercepted": true,
+    "liveSearchReadOnly": true
+  }
+}
