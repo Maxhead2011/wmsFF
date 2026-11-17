@@ -891,3 +891,5 @@ Ozon FBS multi-product TSD regressions cover scan replay, wrong SKU and branch, 
 WB FBS delivery regression in marketplace-connections.service.spec.ts: a status error naming a completed order preserves scans, while a missing marking confirmation still requires rescan.
 
 Confirmed FBS handover regression: WB and Ozon closure persist order evidence. Manual request-status tests exercise the cache invalidation path.
+
+Prepared 17.11.2026 — [WB FBS stale-status regression](fbs-stale-wb-status.md). Runtime entry-point tests 7/7, including eight current WB responses and repeat refresh. API 4820 passed/181 skipped, dedicated KIZ suite unavailable; web 644 passed/2 skipped. Candidate only.

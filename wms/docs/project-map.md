@@ -918,3 +918,5 @@ Ozon FBS multi-product TSD picking records a KIZ for each marked unit before adv
 WB FBS delivery refreshes the marketplace status for orders masked by local shipment history. Status errors preserve valid assembly scans.
 
 Confirmed WB and Ozon FBS handover persists order status alongside request closure and invalidates the queue cache after the explicit status check commits.
+
+Экран FBS, сверка вышедших из новых заказов WB — `apps/api/src/modules/marketplace-connections/fbs-display-wb-reconcile.ts`; подключение к опубликованному `listFbsOrdersForDisplay` через `scripts/releases/fbs-stale-wb-status/prepare.py`. [Проверки и состав кандидата](fbs-stale-wb-status.md). Подготовлено локально, публикация ожидает разрешения.
