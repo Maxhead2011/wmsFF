@@ -1,0 +1,143 @@
+{
+  "pr": 1020,
+  "image": "sha256:17fd43eaaa6c5990f52395c051b74de96f76e01fbbf7d37ee964081cc925b284",
+  "health": true,
+  "otherEnvironmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "changedFiles": {
+    "modules/marketplace-connections/marketplace-connections.service.js": "55d29b7472994238a6c0672de4eaac71a90363211ab747f7d66fac47a3b85522",
+    "modules/marketplace-connections/fbs-display-wb-reconcile.js": "629af110700381177b4855b6bf8ef8a6b8c68efbd9ae76c7967242e9124297c6"
+  },
+  "verifiedAt": "2026-11-17T12:20:14.370Z",
+  "orders": [
+    {
+      "id": 6283746839,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288438753,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288435315,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288399127,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288316060,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288210468,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288207188,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    },
+    {
+      "id": 6288167909,
+      "activeRows": 0,
+      "wms": {
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "sorted",
+        "statusLabel": "\u0420\u045f\u0420\u00b5\u0421\u0402\u0420\u00b5\u0420\u0491\u0420\u00b0\u0420\u0405 \u0420\u0406 \u0420\u0491\u0420\u0455\u0421\u0403\u0421\u201a\u0420\u00b0\u0420\u0406\u0420\u0454\u0421\u0453"
+      },
+      "wb": {
+        "supplierStatus": "complete",
+        "wbStatus": "sorted"
+      },
+      "syncError": null,
+      "partial": false
+    }
+  ],
+  "passed": true
+}
