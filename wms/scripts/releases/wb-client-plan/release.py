@@ -1,6 +1,7 @@
 """Exact own-WMS API4/web2 release. Capture, stage, merged-PR gate and rollback."""
 from pathlib import Path
 import sys,json,subprocess,hashlib,fcntl,time,tarfile
+from release_env import environment_equal
 R=Path(sys.argv[1]);mode=sys.argv[2];C=Path('/opt/wms-restore/compose.json')
 API={'modules/client-requests/client-requests.service.js','modules/client-requests/client-request-xlsx.service.js','modules/client-requests/dto/create-client-request.dto.js','modules/client-requests/wb-client-plan.js'}
 WEB={'index.html','assets/wb-client-plan-20261118.js'}
@@ -60,7 +61,7 @@ elif mode=='publish':
         C.write_text(json.dumps(config,indent=2));start();health()
         for kind in prefixes:
             assert inspect('wms-local-'+kind,'.Image')==stage[kind]['image']
-            assert inspect('wms-local-'+kind,'json .Config.Env')==envs[kind]
+            assert environment_equal(envs[kind], inspect('wms-local-'+kind,'json .Config.Env')), kind+' environment values changed'
             assert hashes(stage[kind]['image'],prefixes[kind])=={**base[kind]['files'],**stage[kind]['changes']}
         assert all(inspect(n,'.Id')==v for n,v in others.items())
     except Exception:
