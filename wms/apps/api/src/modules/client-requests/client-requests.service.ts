@@ -3,7 +3,7 @@ import { releaseCancelledFabricRequest } from '../warehouse/fabric-fbs-task-rele
 import { requestStoreContexts } from '../clients/request-store-context';
 import {assertRequestNotRemoved,lockRequestNotRemoved} from './request-removal-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { wbOrderStockLifecycleEnabled, wbReservationQuantities } from '../../common/stock/wb-order-stock-lifecycle';
 import { ClientNotificationEvent, ClientRequestEventType, ClientRequestStatus, ClientRequestType, MarketplaceType, MovementType, Prisma, StockStatus } from '@prisma/client';
 import * as XLSX from 'xlsx';
@@ -23,6 +23,7 @@ import {
   effectiveWarehouseId,
   warehouseScopeWhere,
 } from './client-request-warehouse-scope';
+import { isWbClientPlan } from './wb-client-plan';
 import { CreateClientRequestDto } from './dto/create-client-request.dto';
 import { ListClientRequestsDto } from './dto/list-client-requests.dto';
 import { PreviewClientRequestAvailabilityDto } from './dto/preview-client-request-availability.dto';
@@ -474,7 +475,18 @@ export class ClientRequestsService {
     const destinationCity = normalizeRequiredText(dto.destinationCity, 'Город поставки обязателен.');
 
     // Русский комментарий: клиентская заявка всегда стартует как SUBMITTED; статусы меняет отдельный workflow.
+    const clientPlan = isWbClientPlan(dto);
+    const guard = (dto.fboExcel || dto.comment?.startsWith('Создано из Excel:')) && dto.type === 'OUTBOUND' && process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED === 'true';
     const created = await this.prisma.$transaction(async (tx) => {
+      // FIX: read availability and write the reserving request in one serializable transaction.
+      const checker = guard ? new ClientRequestsService(tx as PrismaService, this.clientScopes, this.stockOperations) : null;
+      const availability = await checker?.previewAvailability({ ...dto, warehouseId }, user);
+      if (availability && (!availability.lines.length || availability.lines.some(l => !l.skuId) || (!clientPlan && !availability.canCommit)))
+        throw new BadRequestException({
+          message: 'Доступный остаток изменился. Проверьте состав повторно.',
+          shortages: availability.lines.filter(l => !l.canFulfill).map(l => ({ barcode: l.barcode, requested: l.requestedQuantity, available: l.availableQuantity }))
+        });
+
       const request = await tx.clientRequest.create({
         data: {
           clientId: dto.clientId,
@@ -517,7 +529,14 @@ export class ClientRequestsService {
         },
       });
 
+      if (availability)
+        await tx.auditLog.create({ data: { entity: 'ClientRequest', entityId: request.id, userId: user.id, action: 'FBO_EXCEL_STOCK_CHECK', payload: { formationMode: clientPlan ? 'WB_CLIENT_PLAN' : 'AVAILABLE', clientDecisions: (dto.fboDecisions ?? []).map(d => ({ barcode: d.barcode, originalQuantity: d.originalQuantity, finalQuantity: d.finalQuantity })), lines: availability.lines.map(l => ({ skuId: l.skuId, barcode: l.barcode, requested: l.requestedQuantity, available: l.availableQuantity, reserved: l.reservedQuantity, stock: l.stockQuantity })) } } });
       return request;
+    }, guard ? { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 30000 } : undefined).catch((error) => {
+      if (guard && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034') {
+        throw new ConflictException('Остаток изменился во время создания заявки. Повторите проверку файла.');
+      }
+      throw error;
     });
 
     void this.telegram?.notifyFulfillment(

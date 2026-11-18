@@ -3,6 +3,8 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
+  IsIn,
   IsDateString,
   IsEnum,
   IsInt,
@@ -34,7 +36,32 @@ export class CreateClientRequestItemDto {
   comment?: string;
 }
 
+export class FboExcelDecisionDto {
+  @IsString()
+  barcode!: string;
+  @IsInt()
+  @Min(1)
+  originalQuantity!: number;
+  @IsInt()
+  @Min(0)
+  finalQuantity!: number;
+}
+
 export class CreateClientRequestDto {
+  @IsOptional()
+  @IsBoolean()
+  fboExcel?: boolean;
+
+  @IsOptional()
+  @IsIn(['WB_CLIENT_PLAN'])
+  fboFormationMode?: 'WB_CLIENT_PLAN';
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => FboExcelDecisionDto)
+  fboDecisions?: FboExcelDecisionDto[];
+
   @IsString()
   clientId!: string;
 
