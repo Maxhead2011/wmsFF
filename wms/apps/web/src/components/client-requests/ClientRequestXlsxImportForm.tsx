@@ -1,3 +1,4 @@
+import { canUseWbClientPlan } from './wbClientPlan';
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Send, Trash2, Upload, Wand2 } from 'lucide-react';
 import { useMemo, useState, type FormEvent } from 'react';
 import {
@@ -34,6 +35,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   const [clientId, setClientId] = useRememberedClientId(session.user.id, {
     initialClientId: writableClients[0]?.id ?? '',
   });
+  const [clientPlan, setClientPlan] = useState(false);
   const [title, setTitle] = useState('');
   const [priority, setPriority] = useState<ClientRequestPriority>('NORMAL');
   const [desiredDate, setDesiredDate] = useState('');
@@ -96,13 +98,13 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   }
 
   async function createRequest() {
-    const validLines = editableLines.filter((line) => line.skuId && adjustedCanFulfill(line));
+    const validLines = editableLines.filter((line) => line.skuId && (clientPlan ? canUseWbClientPlan(line) : adjustedCanFulfill(line)));
     if (!destinationCity.trim()) {
       setError('Укажите город поставки.');
       return;
     }
 
-    if (!file || !preview || validLines.length === 0) {
+    if (!file || !preview || validLines.length === 0 || validLines.length !== editableLines.length || (clientPlan && (!preview.wbClientPlanEnabled || preview.clientPlanHasParseErrors))) {
       setError('Исправьте позиции перед созданием заявки.');
       return;
     }
@@ -120,6 +122,8 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
       createdRequest = await createClientRequest(session.accessToken, {
         clientId,
         type: 'OUTBOUND',
+        fboExcel: true,
+        fboFormationMode: clientPlan ? 'WB_CLIENT_PLAN' : undefined,
         priority,
         title: title || preview.title,
         comment: `Создано из Excel: ${file.name}. Позиций: ${validLines.length}, количество: ${validLines.reduce((sum, line) => sum + line.requestedQuantity, 0)}.`,
@@ -146,6 +150,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   }
 
   function resetImportForm() {
+    setClientPlan(false);
     setTitle('');
     setDesiredDate('');
     setDestinationCity('');
@@ -157,7 +162,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
   }
 
   const issues = preview?.issues ?? [];
-  const hasBlockingLines = editableLines.some((line) => !adjustedCanFulfill(line));
+  const hasBlockingLines = editableLines.some((line) => clientPlan ? !canUseWbClientPlan(line) : !adjustedCanFulfill(line)) || (clientPlan && (!preview?.wbClientPlanEnabled || preview.clientPlanHasParseErrors));
   const relabelLines = editableLines.filter((line) => hasRelabel(line));
   const relabelConfirmed = relabelLines.every((line) => confirmedRelabels[line.key]);
   const totalShipmentQuantity = editableLines.reduce((sum, line) => sum + line.requestedQuantity, 0);
@@ -177,7 +182,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
       <div className="client-request-fields client-request-fields--xlsx">
         <label>
           <span>Клиент</span>
-          <select value={clientId} onChange={(event) => setClientId(event.target.value)}>
+          <select value={clientId} onChange={(event) => { setClientId(event.target.value); setPreview(null); setEditableLines([]); setClientPlan(false); }}>
             {writableClients.map((client) => (
               <option key={client.id} value={client.id}>
                 {client.code} · {client.name}
@@ -215,6 +220,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
             type="file"
             onChange={(event) => {
               setFile(event.target.files?.[0] ?? null);
+              setClientPlan(false);
               setPreview(null);
               setEditableLines([]);
               setMessage('');
@@ -355,6 +361,12 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
         </p>
       ) : null}
 
+      {preview?.wbClientPlanEnabled && <label>
+        <input type="checkbox" checked={clientPlan} disabled={isCommitting}
+          onChange={event => setClientPlan(event.target.checked)} />
+        WB: сформировать по заявке клиента, включая дефицит
+        <small>Все указанные количества сохранятся. Недостающий товар потребуется принять до завершения сборки.</small>
+      </label>}
       <div className="client-request-xlsx-actions">
         <button className="primary-button client-request-secondary-button" disabled={isPreviewing || !file} type="submit">
           <Upload size={16} aria-hidden="true" />
@@ -367,7 +379,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
           onClick={() => void createRequest()}
         >
           <Send size={16} aria-hidden="true" />
-          <span>{isCommitting ? 'Создаю' : 'Создать заявку'}</span>
+          <span>{isCommitting ? 'Создаю' : clientPlan ? 'Сформировать по заявке клиента' : 'Создать заявку'}</span>
         </button>
       </div>
     </form>

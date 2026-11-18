@@ -56,6 +56,8 @@ type OutboundRequestXlsxPreview = {
   clientId: string;
   title: string;
   canCommit: boolean;
+  wbClientPlanEnabled?: boolean;
+  clientPlanHasParseErrors?: boolean;
   summary: {
     sourceRows: number;
     lines: number;
@@ -334,6 +336,8 @@ export class ClientRequestXlsxService {
       clientId,
       title: normalizeText(dto.title) ?? defaultTitle(),
       canCommit: errorsCount === 0 && lines.length > 0,
+      wbClientPlanEnabled: process.env.WMS_FBO_EXCEL_PICK_CHECK_ENABLED === 'true',
+      clientPlanHasParseErrors: parsed.issues.some(issue => issue.severity === 'error'),
       summary: {
         ...parsed.summary,
         availableQuantity: totalAvailableQuantity,

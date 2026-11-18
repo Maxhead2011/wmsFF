@@ -1853,6 +1853,8 @@ export type OutboundRequestRelabelSourceOption = {
 };
 
 export type OutboundRequestXlsxPreview = {
+  wbClientPlanEnabled?: boolean;
+  clientPlanHasParseErrors?: boolean;
   clientId: string;
   title: string;
   canCommit: boolean;
@@ -2605,6 +2607,9 @@ export type TsdAssemblyPlan = {
 };
 
 export type CreateClientRequestPayload = {
+  fboExcel?: boolean;
+  fboFormationMode?: 'WB_CLIENT_PLAN';
+  fboDecisions?: { barcode: string; originalQuantity: number; finalQuantity: number }[];
   clientId: string;
   warehouseId?: string;
   type: ClientRequestType;
