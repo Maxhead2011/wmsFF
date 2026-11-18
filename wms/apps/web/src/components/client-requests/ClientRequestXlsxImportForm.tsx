@@ -365,7 +365,7 @@ export function ClientRequestXlsxImportForm({ clients, session, onCreated }: Cli
         <input type="checkbox" checked={clientPlan} disabled={isCommitting}
           onChange={event => setClientPlan(event.target.checked)} />
         WB: сформировать по заявке клиента, включая дефицит
-        <small>Все указанные количества сохранятся. Недостающий товар потребуется принять до завершения сборки.</small>
+        <small style={{ display: 'block', marginTop: 4, marginLeft: 22 }}>Все указанные количества сохранятся. Недостающий товар потребуется принять до завершения сборки.</small>
       </label>}
       <div className="client-request-xlsx-actions">
         <button className="primary-button client-request-secondary-button" disabled={isPreviewing || !file} type="submit">
