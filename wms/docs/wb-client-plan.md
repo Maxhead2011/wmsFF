@@ -25,3 +25,7 @@ The request form, create DTO, API types, Excel preview capability and small elig
 Run `node scripts/releases/wb-client-plan/runtime.test.cjs <candidate>`; optional `WB_PLAN_PROOF` points to local read-only snapshots for exact composition replay. `--baseline` against the capture reproduces the original rejection. No secrets, user workbooks or live-data snapshots belong in Git.
 
 Captured API image: `sha256:26440c0226e5a2e439bf470010db06ce9b928e0ad5b570757667c0044fc81be8`; web: `sha256:453885f8688e1210e46eceeaaa1a2fa4218fd2b17f321146ebf60f0ad42fe037`. Both are newer than the checked-in default baseline. Publication requires a fresh full baseline, candidate hash verification, release controls/browser checks and separate user authorization. Nothing was published in this task.
+
+## Publication checks prepared
+
+Fresh API/web image IDs still match the capture above. A full 785-file API baseline was verified, materialized, and checked against the exact API4 delta; all 3333 existing web files remain, with only the mapped request module and index changed. The staged images load the changed API modules. Full-app browser startup/reload and actual Excel form interaction preserve all 705 units, with POST creation intercepted. Compact controls pass all 24 cases. The real candidate DTO and service pass against current PostgreSQL availability with request/event/audit creation intercepted and the transaction always rolled back (receipt index reads require share locks). Request 3160 and the client request count remain unchanged. No production test request was created.
