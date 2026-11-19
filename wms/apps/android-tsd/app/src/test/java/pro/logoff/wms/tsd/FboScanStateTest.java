@@ -7,6 +7,19 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: our opted-in picker accepts a needed box first and uses its server-owned location.
+    @Test public void boxFirstUsesVerifiedRouteWithoutCreatingPick() {
+        TsdFboPlan p=new TsdFboPlan();p.phase="PICKING";p.alternativePickingSupported=true;
+        TsdFboPlan.Route r=new TsdFboPlan.Route();r.boxCode="FFL_TEST";r.pallet="PALET_SORT_043";p.route=Collections.singletonList(r);
+        FboScanState s=new FboScanState();boolean ours="logoff".equals(BuildConfig.FLAVOR);
+        assertEquals(ours,s.scanLocation(p,"ffl_test"));
+        assertEquals(ours?r.pallet:"",s.pallet);assertEquals(ours?r.boxCode:"",s.source);assertNull(s.pending());
+        FboScanState other=new FboScanState();other.pallet="OLD_PALLET";
+        assertEquals(ours,other.scanLocation(p,r.boxCode));
+        assertEquals(ours?r.pallet:"OLD_PALLET",other.pallet);
+        assertFalse(other.scanLocation(p,"FFL_UNKNOWN"));
+        p.alternativePickingSupported=false;assertFalse(new FboScanState().scanLocation(p,r.boxCode));
+    }
     // TEST: pair survives retries, but successful confirmation clears the selected carton.
     @Test public void ozonPairRetryKeepsBothScans(){
         FboScanState s=new FboScanState();s.target="FFL_TEST";s.barcode="1000000000064215123";
