@@ -1,4 +1,4 @@
-Prepared 20.11.2026: [TSD server-choice265 Ozon box-first](tsd-server-choice-265.md). Exact APK overlay; own Android708 and release13 pass; sold baseline has two existing receipt test failures. Not yet published.
+Published 20.11.2026 through PR1034: [TSD server-choice265 Ozon box-first](tsd-server-choice-265.md). Public hashes/health verified; containers and ordinary channel unchanged. Owner terminal reports265;1439 existing assembly units and55727 operations across five terminals, account IDs and request compositions retained. Physical first-box check pending.
 
 ФБО LOGOFF: первый скан короба из маршрута выбирает его паллету в FboScanState.scanLocation. Тест acceptsRouteBoxFirstAndChecksExplicitPallet проверяет первый скан, неизвестный короб и ограничение явно выбранной паллеты.
 Published 19.11.2026: [TSD server-choice264](tsd-server-choice-263.md), PR1028/1030/1032. Public package/hash verified; owner terminal upgraded261→264, same account and request3162 composition retained, all934 picked units and375 prior operations preserved. User confirmed progress/cartons intact. Android706/release12/CI passed; ordinary channel and all containers unchanged.
