@@ -97,9 +97,9 @@ final class FboTwoStageScreen {
     private boolean directed(){return ozon()||lamoda();}
     private boolean productAvailable(){return packing&&directed()&&"logoff".equals(BuildConfig.FLAVOR)&&plan.packingByProductSupported;}
     // FIX: only our Ozon packing uses the product-first flow; other marketplaces retain their modes.
-    private boolean productOnly(){return packing&&ozon()&&"logoff".equals(BuildConfig.FLAVOR);}
+    private boolean productOnly(){return false;} // FIX: Ozon offers both packing modes.
     private void resumeProductOnly(){
-        if(!productOnly()||!"PACKING".equals(screenPhase())||state.productMode||state.pending()!=null)return;
+        if(!packing||!ozon()||!"logoff".equals(BuildConfig.FLAVOR)||prefs.getBoolean(pendingKey+":directionPacking",false)||!"PACKING".equals(screenPhase())||state.productMode||state.pending()!=null)return;
         // Keep the saved box, undo identity and pending commands. A saved barcode still needs a box scan.
         state.productMode=true;
         state.productReady=!state.productKiz.isEmpty();
@@ -115,6 +115,7 @@ final class FboTwoStageScreen {
     }
     private void chooseProductMode(boolean enabled){
         if(!ready()||!state.barcode.isEmpty())return;
+        prefs.edit().putBoolean(pendingKey+":directionPacking",!enabled).commit();
         handler.removeCallbacks(automatic);state.productMode=enabled;state.productReady=false;state.productKiz="";
         state.target="";state.direction="";message="";render();
     }
