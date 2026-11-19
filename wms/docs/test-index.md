@@ -1,4 +1,4 @@
-Prepared: [TSD server-choice264](tsd-server-choice-263.md), compatible update from261; exact storage/update bytecode preservation, Android706 and release12 tests.
+Published 19.11.2026: [TSD server-choice264](tsd-server-choice-263.md), PR1028/1030/1032. Public package/hash verified; owner terminal upgraded261→264, same account and request3162 composition retained, all934 picked units and375 prior operations preserved. User confirmed progress/cartons intact. Android706/release12/CI passed; ordinary channel and all containers unchanged.
 
 ТСД LOGOFF 263 · ФБО Ozon. В строке выбора режима упаковки доступны «По направлению» и «По товару». Регрессия в FboTwoStageScreenTest проверяет переключение и повторную отрисовку. Сборщик release263 сравнивает методы и ресурсы с опубликованным APK 262 перед подписью и проверяет сертификат.
 
