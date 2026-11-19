@@ -1,3 +1,5 @@
+ТСД LOGOFF 263 · ФБО Ozon. В строке выбора режима упаковки доступны «По направлению» и «По товару». Регрессия в FboTwoStageScreenTest проверяет переключение и повторную отрисовку. Сборщик release263 сравнивает методы и ресурсы с опубликованным APK 262 перед подписью и проверяет сертификат.
+
 Published PR1024 (18.11.2026): [WB client-plan creation with shortage](wb-client-plan.md). Explicit full-demand mode; live Excel preview and deployed service verified705 units, public form/startup/reload passed. Request3160 unchanged; no test requests. Exact API4/web2, all786 API/3334 web hashes, health, environment values and other containers verified. Baseline `2026-11-18-wb-client-plan`, sourceParityVerified=false. Release guard corrected through PR1025.
 
 Prepared, not published (18.11.2026): [WB client-plan creation with shortage](wb-client-plan.md). Explicit full-demand mode, own-installation gate, transaction audit; default stock checks retained. API9/web6 regressions and exact runtime handler/component replay; 170/85/705-unit compositions preserved.
