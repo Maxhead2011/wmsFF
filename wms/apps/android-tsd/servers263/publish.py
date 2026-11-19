@@ -1,12 +1,20 @@
 """Own-WMS server-choice APK only. Requires merged PR; rollback feed/config on failure."""
 from pathlib import Path
-import json,hashlib,re,subprocess,sys
+import json,hashlib,re,subprocess,sys,time
 from datetime import datetime,timezone
 FILE='logoff-tsd-servers-packing-modes-263.apk'
 PACKAGE='pro.logoff.wms.tsd.servers'
 BASE='a09aa749d6c9540b4df866feb33210ae8e1510a513e5467432cac870964e6858'
 MAIN='c2025ece773dffec3b38472b5e8d159c6a0912a8cc533e27f3ce6361cd0e3ffa'
 def sha(b):return hashlib.sha256(b).hexdigest()
+def wait_hash(fetch,path,expected,sleep=time.sleep):
+    # FIX: graceful nginx reload can briefly serve a prior worker's route.
+    for attempt in range(10):
+        try:
+            if sha(fetch(path))==expected:return
+        except subprocess.CalledProcessError:pass
+        if attempt<9:sleep(1)
+    raise AssertionError('Public APK hash did not converge: '+path)
 def validate(old,proof):
     assert old['packageId']==proof['packageId']==PACKAGE
     assert old['versionCode']==261 and proof['versionCode']==263
@@ -47,8 +55,8 @@ def main():
         dest=downloads/FILE;assert not dest.exists() or sha(dest.read_bytes())==proof['apkSha256']
         tmp=downloads/(FILE+'.tmp');tmp.write_bytes(payload);tmp.chmod(0o644);tmp.replace(dest)
         cfg.write_text(candidate);run('nginx','-t');run('systemctl','reload','nginx')
-        assert sha(fetch('/downloads/'+FILE))==proof['apkSha256']
-        assert sha(fetch('/downloads/logoff-tsd-server-choice.apk'))==proof['apkSha256']
+        wait_hash(fetch,'/downloads/'+FILE,proof['apkSha256'])
+        wait_hash(fetch,'/downloads/logoff-tsd-server-choice.apk',proof['apkSha256'])
         value=dict(packageId=PACKAGE,versionCode=263,versionName='0.1.263-packing-modes',apkUrl='https://wms.logoff.pro/downloads/'+FILE,sha256=proof['apkSha256'],size=proof['apkSize'],releasedAt=datetime.now(timezone.utc).isoformat(),releaseNotes='ТСД с выбором сервера: актуальные режимы упаковки Ozon и проверка короба. Сохранены сессии и очередь сканов.')
         tmp=downloads/'logoff-tsd-server-choice.json.tmp';tmp.write_text(json.dumps(value,ensure_ascii=False));tmp.chmod(0o644);tmp.replace(meta)
         assert json.loads(fetch('/downloads/logoff-tsd-server-choice.json'))==value
