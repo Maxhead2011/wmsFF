@@ -1,4 +1,5 @@
 ФБО LOGOFF: первый скан короба из маршрута выбирает его паллету в FboScanState.scanLocation. Тест acceptsRouteBoxFirstAndChecksExplicitPallet проверяет первый скан, неизвестный короб и ограничение явно выбранной паллеты.
+Prepared: [TSD server-choice263](tsd-server-choice-263.md), compatible update from261; exact storage/update bytecode preservation, Android706 and release8 tests.
 
 ТСД LOGOFF 263 · ФБО Ozon. В строке выбора режима упаковки доступны «По направлению» и «По товару». Регрессия в FboTwoStageScreenTest проверяет переключение и повторную отрисовку. Сборщик release263 сравнивает методы и ресурсы с опубликованным APK 262 перед подписью и проверяет сертификат.
 
