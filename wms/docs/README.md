@@ -1,4 +1,4 @@
-Prepared: [TSD server-choice263](tsd-server-choice-263.md), compatible update from261; exact storage/update bytecode preservation, Android706 and release8 tests.
+Published 19.11.2026: [TSD server-choice264](tsd-server-choice-263.md), PR1028/1030/1032. Public package/hash verified; owner terminal upgraded261→264, same account and request3162 composition retained, all934 picked units and375 prior operations preserved. User confirmed progress/cartons intact. Android706/release12/CI passed; ordinary channel and all containers unchanged.
 
 Published PR1024 (18.11.2026): [WB client-plan creation with shortage](wb-client-plan.md). Explicit full-demand mode; live Excel preview and deployed service verified705 units, public form/startup/reload passed. Request3160 unchanged; no test requests. Exact API4/web2, all786 API/3334 web hashes, health, environment values and other containers verified. Baseline `2026-11-18-wb-client-plan`, sourceParityVerified=false. Release guard corrected through PR1025.
 
