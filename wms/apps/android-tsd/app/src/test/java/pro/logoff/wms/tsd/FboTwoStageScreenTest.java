@@ -26,6 +26,31 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: Ozon accepts a first box scan after a fresh route read, without picking stock.
+    @Test public void ozonFirstBoxScanUsesVerifiedParentPallet() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        for(boolean available:new boolean[]{true,false})try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();AtomicInteger reads=new AtomicInteger(),writes=new AtomicInteger();
+            WmsApi api=(WmsApi)Proxy.newProxyInstance(WmsApi.class.getClassLoader(),new Class[]{WmsApi.class},(o,m,args)->
+                Proxy.newProxyInstance(Call.class.getClassLoader(),new Class[]{Call.class},(c,method,values)->{
+                    if(!method.getName().equals("execute"))return null;
+                    if(m.getName().equals("actFbo")||m.getName().equals("acknowledgeFbo"))writes.incrementAndGet();
+                    TsdFboPlan next=plan("PICKING");next.marketplace="OZON";next.alternativePickingSupported=true;
+                    next.route.get(0).boxCode="FFL_OZON_BOX";next.route.get(0).pallet="PALET_SORT_012";
+                    if(args.length>3&&"FFL_OZON_BOX".equals(args[3])){reads.incrementAndGet();assertEquals("",args[2]);if(!available)next.route.clear();}
+                    return Response.success(next);
+                }));
+            FboTwoStageScreen screen=new FboTwoStageScreen(a,new TsdSession("test","Bearer","T","T",UUID.randomUUID().toString(),"Test",Collections.emptyList()),api,"https://example.invalid","request",false,()->{},()->{});
+            try{
+                waitIdle(screen);FboPickingModeTest.choose(a,false);
+                screen.scannerField().setText("FFL_OZON_BOX");screen.submit();waitIdle(screen);
+                java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);FboScanState state=(FboScanState)field.get(screen);
+                assertEquals(1,reads.get());assertEquals(0,writes.get());assertNull(state.pending());
+                assertEquals(available?"FFL_OZON_BOX":"",state.source);assertEquals(available?"PALET_SORT_012":"",state.pallet);
+                if(available)assertEquals("PALET_SORT_012",state.prepare("PICK_UNIT","test-kiz").get("palletCode"));
+            }finally{screen.close();}
+        }
+    }
     // TEST: the real screen never confirms Ozon on the first box scan.
     @Test public void ozonLabelControlRequiresTwoPhysicalScans() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
