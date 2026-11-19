@@ -1,6 +1,6 @@
 import struct
 OLD=b'0.1.261-receipt-draft'
-NEW=b'0.1.263-packing-modes'
+NEW=b'0.1.264-packing-modes'
 def manifest(data):
     # FIX: identify android:versionCode by resource ID, never by numeric byte search.
     out = bytearray(data)
@@ -25,7 +25,7 @@ def manifest(data):
                 if name < len(resources) and resources[name] == 0x0101021b:
                     if out[pos+15] != 0x10 or struct.unpack_from('<I', out, pos+16)[0] != 261:
                         raise ValueError('Unexpected versionCode')
-                    struct.pack_into('<I', out, pos+16, 263)
+                    struct.pack_into('<I', out, pos+16, 264)
                     changes += 1
         offset += size
     if changes != 1:
