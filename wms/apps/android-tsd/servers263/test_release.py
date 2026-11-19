@@ -1,7 +1,12 @@
 import unittest
-from publish import validate,patch,BASE,MAIN,PACKAGE,FILE
+from publish import validate,patch,wait_hash,sha,BASE,MAIN,PACKAGE,FILE
 from build import verify_classes
 class ReleaseTests(unittest.TestCase):
+    # TEST: old nginx worker during graceful reload must not falsely fail release.
+    def test_reload_converges(self):
+        responses=iter([b'old',b'new']);wait_hash(lambda p:next(responses),'apk',sha(b'new'),lambda n:None)
+    def test_wrong_hash_still_fails(self):
+        with self.assertRaises(AssertionError):wait_hash(lambda p:b'wrong','apk',sha(b'new'),lambda n:None)
     # TEST: installed261 must receive a newer APK from its own package channel.
     def fixture(self):
         return dict(packageId=PACKAGE,versionCode=261,sha256=BASE),dict(packageId=PACKAGE,versionCode=263,baselineSha256=BASE,mainSha256=MAIN,storageAndUpdateCodePreserved=True,resourcesPreserved=True,certificateSha256='70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da')
