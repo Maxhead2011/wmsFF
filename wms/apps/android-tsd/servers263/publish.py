@@ -6,6 +6,10 @@ FILE='logoff-tsd-servers-packing-modes-263.apk'
 PACKAGE='pro.logoff.wms.tsd.servers'
 BASE='a09aa749d6c9540b4df866feb33210ae8e1510a513e5467432cac870964e6858'
 MAIN='c2025ece773dffec3b38472b5e8d159c6a0912a8cc533e27f3ce6361cd0e3ffa'
+def verify_health(fetch):
+    # FIX: public API is mounted under /api/v1, not /api.
+    health=json.loads(fetch('/api/v1/health'))
+    assert health.get('status')=='ok' and health.get('service')=='logoff-wms-api'
 def sha(b):return hashlib.sha256(b).hexdigest()
 def wait_hash(fetch,path,expected,sleep=time.sleep):
     # FIX: graceful nginx reload can briefly serve a prior worker's route.
@@ -48,6 +52,7 @@ def main():
     mainmeta=(downloads/'logoff-tsd.json').read_bytes();assert json.loads(mainmeta)['sha256']==MAIN
     assert json.loads(fetch('/downloads/logoff-tsd-server-choice.json'))==json.loads(old)
     config=cfg.read_bytes();candidate=patch(config.decode());containers=run('docker','ps','--no-trunc','--format','{{.ID}} {{.Image}}')
+    verify_health(fetch)
     if not apply:print('Preflight OK');return
     assert not (root/'published.json').exists()
     (root/'metadata.before').write_bytes(old);(root/'nginx.before').write_bytes(config)
@@ -63,7 +68,7 @@ def main():
         assert (downloads/'logoff-tsd.json').read_bytes()==mainmeta
         assert sha(fetch('/downloads/logoff-tsd.apk'))==MAIN
         assert run('docker','ps','--no-trunc','--format','{{.ID}} {{.Image}}')==containers
-        fetch('/api/health')
+        verify_health(fetch)
     except Exception:
         meta.write_bytes(old);cfg.write_bytes(config);run('nginx','-t');run('systemctl','reload','nginx');raise
     result=dict(versionCode=263,packageId=PACKAGE,apkSha256=proof['apkSha256'],containersUnchanged=True,mainChannelUnchanged=True,publicHashesVerified=True)

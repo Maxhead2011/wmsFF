@@ -1,7 +1,14 @@
 import unittest
-from publish import validate,patch,wait_hash,sha,BASE,MAIN,PACKAGE,FILE
+from publish import validate,patch,wait_hash,sha,verify_health,BASE,MAIN,PACKAGE,FILE
 from build import verify_classes
 class ReleaseTests(unittest.TestCase):
+    # TEST: reject an HTML fallback or wrong health route before any publication.
+    def test_health_route(self):
+        def fetch(path):
+            self.assertEqual(path,'/api/v1/health');return b'{"status":"ok","service":"logoff-wms-api"}'
+        verify_health(fetch)
+    def test_health_failure(self):
+        with self.assertRaises(AssertionError):verify_health(lambda p:b'{"status":"error"}')
     # TEST: old nginx worker during graceful reload must not falsely fail release.
     def test_reload_converges(self):
         responses=iter([b'old',b'new']);wait_hash(lambda p:next(responses),'apk',sha(b'new'),lambda n:None)
