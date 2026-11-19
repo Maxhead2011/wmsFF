@@ -473,7 +473,7 @@ final class FboTwoStageScreen {
                 unboxedPickingContents(root);
                 String hint="ШК товара";
                 if("CONTROL".equals(screenPhase()))hint=ozonLabelControl()&&!state.target.isEmpty()?"ШК наклеенного стикера Ozon":"ШК короба поставки";
-                else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
+                else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint=state.pallet.isEmpty()?("logoff".equals(BuildConfig.FLAVOR)?"ШК паллеты или короба":"ШК паллета / короба без паллета"):"ШК короба на выбранном паллете";
                 else if("PACKING".equals(screenPhase())&&state.target.isEmpty())hint=packingChoices()
                     ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":packingMode==PackingMode.MANUAL&&plan.reusablePackingEnabled?"ШК нового или закрытого короба для дополнения":"ШК короба для упаковки")
                     :plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
@@ -673,7 +673,7 @@ final class FboTwoStageScreen {
                 else {
                     message="Нет доступного товара для оставшегося отбора. Проверьте паллет, остаток и ограничения.";
                     if(kind.equals("box"))for(TsdFboPlan.Route row:next.route)if(code.equalsIgnoreCase(row.boxCode)){
-                        if(!row.pallet.equals(checked.pallet))message="Сначала отсканируйте паллет "+row.pallet+", затем этот короб.";
+                        if(!checked.pallet.isEmpty()&&!row.pallet.equals(checked.pallet))message="Сначала отсканируйте паллет "+row.pallet+", затем этот короб.";
                         else message="Короб доступен в другом режиме отбора. Выберите "+(FboPickingRoute.whole(next,row)?"«Сборка целых коробов».":"«Частичный отбор».");
                     }
                 }

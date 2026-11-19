@@ -149,11 +149,11 @@ public class FboScanStateTest {
         FboScanState restored=new FboScanState();restored.restore(command);assertEquals(command,restored.prepare("FINISH",null));
         old.rejected();assertEquals("barcode",old.barcode);assertNull(old.pending());
     }
-    @Test public void requiresPalletBeforeBoxAndRejectsAnotherPalletBox() {
+    @Test public void acceptsRouteBoxFirstAndChecksExplicitPallet() {
         // TEST: same picking navigation as FBS: pallet -> its required boxes -> unit scans.
         TsdFboPlan plan=new TsdFboPlan();TsdFboPlan.Route a=new TsdFboPlan.Route(),b=new TsdFboPlan.Route();
         a.pallet="PALET_SORT_27";a.boxCode="FFL_1";b.pallet="PALET_SORT_28";b.boxCode="FFL_2";plan.route=Arrays.asList(a,b);
-        FboScanState s=new FboScanState();assertFalse(s.scanLocation(plan,"FFL_1"));assertTrue(s.scanLocation(plan,"PALET_SORT_27"));
+        FboScanState direct=new FboScanState();assertFalse(direct.scanLocation(plan,"FFL_UNKNOWN"));assertEquals("logoff".equals(BuildConfig.FLAVOR),direct.scanLocation(plan,"FFL_1"));if("logoff".equals(BuildConfig.FLAVOR)){assertEquals("PALET_SORT_27",direct.pallet);assertEquals("FFL_1",direct.source);} FboScanState s=new FboScanState();assertTrue(s.scanLocation(plan,"PALET_SORT_27"));
         assertFalse(s.scanLocation(plan,"FFL_2"));assertTrue(s.scanLocation(plan,"ffl_1"));
         assertEquals("PALET_SORT_27",s.prepare("PICK_BOX",null).get("palletCode"));
     }
