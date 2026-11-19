@@ -107,7 +107,15 @@ final class FboScanState {
         if(value!=null){if("PACK_PRODUCT".equals(value.get("action"))){productMode=true;productReady=true;productKiz=value.getOrDefault("kiz","");}direction=value.getOrDefault("direction","");pallet=value.getOrDefault("palletCode","");source=value.getOrDefault("sourceBoxCode","");target=value.getOrDefault("targetBoxCode","");barcode=value.getOrDefault("barcode","");}
     }
     boolean scanLocation(TsdFboPlan plan,String code) {
-        return scanLocation(plan.route,code);
+        return scanLocation(plan,plan.route,code);
+    }
+    // FIX: a verified required box selects its current location; sold flavors keep pallet-first navigation.
+    boolean scanLocation(TsdFboPlan plan,java.util.List<TsdFboPlan.Route> route,String code) {
+        if("logoff".equals(BuildConfig.FLAVOR)&&plan.alternativePickingSupported&&"PICKING".equals(plan.phase)&&code!=null)
+            for(TsdFboPlan.Route r:route)if(r.boxCode.equalsIgnoreCase(code.trim())){
+                pallet=r.pallet;source=r.boxCode;return true;
+            }
+        return scanLocation(route,code);
     }
     // FIX: a syntactically valid location is only a read request, never permission to pick.
     static String alternativeLocationKind(TsdFboPlan plan,String code) {

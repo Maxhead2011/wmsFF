@@ -450,7 +450,7 @@ final class FboTwoStageScreen {
                 unboxedPickingContents(root);
                 String hint="ШК товара";
                 if("CONTROL".equals(screenPhase()))hint=ozonLabelControl()&&!state.target.isEmpty()?"ШК наклеенного стикера Ozon":"ШК короба поставки";
-                else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint=state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
+                else if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking())hint="logoff".equals(BuildConfig.FLAVOR)&&plan.alternativePickingSupported?"ШК короба или паллет-сорта":state.pallet.isEmpty()?"ШК паллета / короба без паллета":"ШК короба на выбранном паллете";
                 else if("PACKING".equals(screenPhase())&&state.target.isEmpty())hint=packingChoices()
                     ?(packingMode==PackingMode.WHOLE_BOXES?"ШК целого короба":packingMode==PackingMode.MANUAL&&plan.reusablePackingEnabled?"ШК нового или закрытого короба для дополнения":"ШК короба для упаковки")
                     :plan.wholeBoxes.isEmpty()?"ШК короба для упаковки / целого короба":"Сначала отсканируйте целые короба.";
@@ -550,6 +550,8 @@ final class FboTwoStageScreen {
         feedbackColor=Color.rgb(254,202,202);
         if(!FboScanState.phaseAllowed(packing,screenPhase()))return;
         if("PICKING".equals(screenPhase())&&state.source.isEmpty()&&!unboxedPicking()){
+            // FIX: even a listed box is checked against fresh scoped stock before selecting its location.
+            if("box".equals(FboScanState.alternativeLocationKind(plan,value))&&checkAlternativeLocation(value))return;
             boolean accepted=state.scanLocation(pickingRoute(),value);
             // FIX: like FBS, validate a different physical source instead of treating the route as an allow-list.
             if(!accepted&&checkAlternativeLocation(value))return;
@@ -639,16 +641,15 @@ final class FboTwoStageScreen {
                     message="Заявка изменилась. Обновите задание.";routeStale=true;render();return;
                 }
                 plan=next;
-                // A new pallet is a navigation choice. A box still requires its physical pallet scan.
+                // FIX: the server's verified box route supplies its location without an extra pallet scan.
                 FboScanState checked=new FboScanState();checked.pallet=kind.equals("pallet")?"":state.pallet;
-                boolean accepted=checked.scanLocation(pickingRoute(),code);
+                boolean accepted=checked.scanLocation(next,pickingRoute(),code);
                 state.reconcile(plan,packing);
                 if(accepted){state.pallet=checked.pallet;state.source=checked.source;message=kind.equals("pallet")?"Паллет найден":"Нужный короб";}
                 else {
                     message="Нет доступного товара для оставшегося отбора. Проверьте паллет, остаток и ограничения.";
                     if(kind.equals("box"))for(TsdFboPlan.Route row:plan.route)if(code.equalsIgnoreCase(row.boxCode)){
-                        if(!row.pallet.equals(checked.pallet))message="Сначала отсканируйте паллет "+row.pallet+", затем этот короб.";
-                        else message="Короб доступен в другом режиме отбора. Выберите "+(FboPickingRoute.whole(plan,row)?"«Сборка целых коробов».":"«Частичный отбор».");
+                        message="Короб доступен в другом режиме отбора. Выберите "+(FboPickingRoute.whole(plan,row)?"«Сборка целых коробов».":"«Частичный отбор».");
                     }
                 }
                 feedbackColor=accepted?Color.rgb(187,247,208):Color.rgb(254,202,202);speakScan(accepted);render();

@@ -26,6 +26,22 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class FboTwoStageScreenTest {
+    // TEST: scanning a required box first shows its contents without recording a stock operation.
+    @Test public void directBoxScanShowsWhatToPickWithoutPalletScan() throws Exception {
+        if(!"logoff".equals(BuildConfig.FLAVOR))return;
+        try(var controller=Robolectric.buildActivity(Activity.class).setup()){
+            Activity a=controller.get();TsdFboPlan p=plan("PICKING");p.alternativePickingSupported=true;
+            TsdFboPlan.Route r=p.route.get(0);r.boxCode="FFL_TEST";r.pallet="PALET_SORT_043";
+            TsdFboPlan.Task task=new TsdFboPlan.Task();task.name="Платье 56";task.barcode="4630321800292";task.quantity=6;r.tasks.add(task);
+            AtomicInteger writes=new AtomicInteger();FboTwoStageScreen screen=open(a,p,false,writes);
+            try{
+                screen.scannerField().setText(r.boxCode);screen.submit();waitIdle(screen);
+                assertNotNull(find(a.findViewById(android.R.id.content),"Отберите 6 ед."));
+                assertNotNull(find(a.findViewById(android.R.id.content),"Платье 56"));
+                assertEquals(0,writes.get());
+            }finally{screen.close();}
+        }
+    }
     // TEST: the real screen never confirms Ozon on the first box scan.
     @Test public void ozonLabelControlRequiresTwoPhysicalScans() throws Exception {
         if(!"logoff".equals(BuildConfig.FLAVOR))return;
@@ -89,7 +105,7 @@ public class FboTwoStageScreenTest {
                 screen.scannerField().setText("FFL_OTHER");screen.submit();waitIdle(screen);
                 java.lang.reflect.Field field=FboTwoStageScreen.class.getDeclaredField("state");field.setAccessible(true);FboScanState state=(FboScanState)field.get(screen);
                 assertEquals(outcome,outcome.equals("disabled")?0:1,alternatives.get());assertEquals(outcome,0,writes.get());assertNull(state.pending());
-                assertEquals(outcome,outcome.equals("accepted")?"FFL_OTHER":"",state.source);
+                assertEquals(outcome,outcome.equals("accepted")||outcome.equals("wrong-pallet")?"FFL_OTHER":"",state.source);
                 if(outcome.equals("wrong-pallet"))assertNotNull(find(a.findViewById(android.R.id.content),"PALET_SORT_012"));
                 if(outcome.equals("network"))assertNotNull(find(a.findViewById(android.R.id.content),"offline"));
                 if(outcome.equals("other-mode"))assertNotNull(find(a.findViewById(android.R.id.content),"Выберите «Сборка целых коробов»"));
