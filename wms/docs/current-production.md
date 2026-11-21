@@ -1,3 +1,5 @@
+Published 21.11.2026 through PR1036: [Ozon FBO packing and LOGOFF 266](ozon-packing-266.md). API5/web3 exact candidate, both placement/label flags enabled on our WMS, server-choice APK 266 available through both endpoints. Physical device installation pending. Baseline `2026-11-21-ozon-packing-266`, sourceParityVerified=false.
+
 Published 20.11.2026 through PR1034: [TSD server-choice265 Ozon box-first](tsd-server-choice-265.md). Public hashes/health verified; containers and ordinary channel unchanged. Owner terminal reports265;1439 existing assembly units and55727 operations across five terminals, account IDs and request compositions retained. Physical first-box check pending.
 
 Published 19.11.2026: [TSD server-choice264](tsd-server-choice-263.md), PR1028/1030/1032. Public package/hash verified; owner terminal upgraded261→264, same account and request3162 composition retained, all934 picked units and375 prior operations preserved. User confirmed progress/cartons intact. Android706/release12/CI passed; ordinary channel and all containers unchanged.
