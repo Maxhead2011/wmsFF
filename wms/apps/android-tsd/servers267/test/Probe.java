@@ -31,10 +31,34 @@ public class Probe extends Instrumentation {
         f.get();
     }
     void check(boolean ok, String what) { if (!ok) throw new AssertionError(what); }
-    @Override public void onCreate(Bundle args) { super.onCreate(args); start(); }
+    boolean live;
+    @Override public void onCreate(Bundle args) { super.onCreate(args); live="yes".equals(args.getString("live")); start(); }
+    void verifyPublished() throws Exception {
+        Context target = getTargetContext();
+        activity = startActivitySync(new Intent().setClassName(target, prefix+"MainActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        Method bytes=activity.getClass().getDeclaredMethod("downloadBytes",String.class);
+        bytes.setAccessible(true);
+        Method channel=cls("IdleUpdateGuard").getDeclaredMethod("channelUrl",String.class);
+        channel.setAccessible(true);
+        for (String profile : new String[]{"main","backup"}) {
+            field("serverProfile").set(activity,profile);
+            check(call("downloadAndVerifyUpdateApk")==null,"published version differs from installed version: "+profile);
+            String apk=(String)channel.invoke(null,profile);
+            String feed=apk.substring(0,apk.length()-4)+".json";
+            org.json.JSONObject record=new org.json.JSONObject(new String((byte[])bytes.invoke(activity,feed),"UTF-8"));
+            byte[] downloaded=(byte[])bytes.invoke(activity,apk);
+            byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(downloaded);
+            StringBuilder hex=new StringBuilder();
+            for(byte b:digest)hex.append(String.format(java.util.Locale.ROOT,"%02x",b & 255));
+            check(record.getInt("versionCode")==267 && record.getLong("size")==downloaded.length
+                && record.getString("sha256").equals(hex.toString())
+                && hex.toString().equals("6f67f9574b4d4e5a5bfadf2140fc8a375de5b6cb6ec3e6157d82809df68bbb5f"),"published APK "+profile);
+        }
+    }
     @Override public void onStart() {
         Bundle result = new Bundle();
         try {
+            if(live){verifyPublished();result.putString("verified","published 267 APK and feed on main and backup via Android");finish(Activity.RESULT_OK,result);return;}
             // TEST: exercise both HTTP requests from the signed APK with deterministic responses.
             URL.setURLStreamHandlerFactory(proto -> !proto.equals("https") ? null : new URLStreamHandler() {
                 protected URLConnection openConnection(URL u) {

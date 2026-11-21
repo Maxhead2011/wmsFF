@@ -615,3 +615,5 @@ Prepared, not published 17.11.2026 — [сверка статусов WB в FBS]
 - [База следующей сборки ТСД LOGOFF](project-map.md#база-следующей-сборки-тсд-logoff) — подписанные APK обоих каналов, проверка двух серверов и выбор базы.
 
 - [Проверка установки ТСД 267 на Android](../apps/android-tsd/servers267/test/Probe.java) — выбор сервера и отсрочка установки при активной операции или скане.
+
+- [Опубликованная основная сборка ТСД 267](../apps/android-tsd/published/logoff-tsd-server-choice.json) и [проверка двух серверов](../apps/android-tsd/servers267/test/Probe.java).
