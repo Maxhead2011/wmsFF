@@ -1,3 +1,4 @@
+import { fboBoxStatistics } from './fbo-box-statistics';
 import {assertOzonBoxZones} from './ozon-box-zones';
 import {fboCompletionBatchEnabled,validateFboPackedBoxes,fboCompletionPackages,saveFboCompletionSelections,fboCompletionStage,fboCompletionError} from './fbo-completion-batch';
 import { requestStoreContexts } from '../clients/request-store-context';
@@ -268,6 +269,7 @@ export class FboTwoStageService {
         const pendingPlacementQuantity = [...waitingBySku.values()].reduce((s, n) => s + n, 0);
         const storeContexts = await requestStoreContexts(tx, [r]);
         return { ...storeContexts.get(r.id), alternativePickingSupported: alternativeFboPickingEnabled(), requestId: r.id, number: r.number, title: r.title, phase: assembly?.phase ?? 'NOT_STARTED',
+            boxStatistics: process.env.WMS_MENU_READS_ENABLED === 'true' ? fboBoxStatistics(units,route,assembly?.boxes??[],unboxed?lines.reduce((n,l)=>n+l.remaining,0):0) : undefined,
             marketplace: yandex ? 'YANDEX_MARKET' : lamoda ? 'LAMODA' : shipment ? 'OZON' : 'WILDBERRIES',
             relabelRequired,
             relabelUnits:relabelUnits.map(u=>({id:u.id,skuId:u.skuId,sourceBarcode:u.barcode,kiz:u.kiz,pickedByUserId:u.pickedByUserId,
