@@ -49,6 +49,14 @@ type HistoryEntry = {
   createdAt: string;
 };
 
+// FIX: monitoring follows the same published channel as the LOGOFF download.
+export async function loadTsdMonitorRelease() {
+  const response = await fetch(`/downloads/logoff-tsd-server-choice.json?v=${Date.now()}`, { cache: 'no-store' });
+  if (!response.ok) return '';
+  const release = await response.json() as TsdReleaseMetadata;
+  return release.versionName?.trim() ?? '';
+}
+
 export function TsdMonitoringPanel({ session }: Props) {
   const [data, setData] = useState<TsdMonitoring | null>(null);
   const [query, setQuery] = useState('');
@@ -67,13 +75,10 @@ export function TsdMonitoringPanel({ session }: Props) {
     let timer = 0;
     const loadRelease = async () => {
       try {
-        const response = await fetch(`/downloads/logoff-tsd.json?v=${Date.now()}`, { cache: 'no-store' });
-        if (!response.ok) return;
-        const release = await response.json() as TsdReleaseMetadata;
-        if (active && typeof release.versionName === 'string') {
-          setLatestTsdVersion(release.versionName.trim());
-        }
+        const version = await loadTsdMonitorRelease();
+        if (active) setLatestTsdVersion(version);
       } catch {
+        if (active) setLatestTsdVersion('');
         // Если метаданные временно недоступны, обновление остаётся доступным — это безопаснее ложного статуса «Обновлён».
       }
     };
@@ -700,7 +705,7 @@ function DeviceFeed({
   );
 }
 
-function compareVersions(leftValue: string, rightValue: string) {
+export function compareVersions(leftValue: string, rightValue: string) {
   const left = (leftValue.match(/\d+/g) ?? []).map(Number);
   const right = (rightValue.match(/\d+/g) ?? []).map(Number);
   const length = Math.max(left.length, right.length);

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TsdMonitoringPanel } from './TsdMonitoringPanel';
+import { TsdMonitoringPanel, loadTsdMonitorRelease, compareVersions } from './TsdMonitoringPanel';
 import type { AuthSession } from '../../lib/api';
 
 vi.mock('react', async (importOriginal) => {
@@ -47,4 +47,19 @@ describe('ADMIN monitoring buttons', () => {
     const html = render({ ...admin, ...override });
     for (const label of ['Снять все задания', 'Завершить инвентаризацию', '>Сообщение<', 'Перезагрузить заявку', 'Выйти из аккаунта']) expect(html).not.toContain(label);
   });
+});
+
+// TEST: code 265 is stale even when the ordinary channel still serves 264.
+it('compares the terminal with the server-choice release', async () => {
+  const request = vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
+    const primary = String(url).split('?')[0] === '/downloads/logoff-tsd-server-choice.json';
+    return new Response(JSON.stringify({ versionName: primary ? '0.1.267-idle-update' : '0.1.264-box-direct-v1' }));
+  });
+  try {
+    const latest = await loadTsdMonitorRelease();
+    expect(compareVersions('0.1.265-box-direct-v1', latest)).toBeLessThan(0);
+    expect(compareVersions('0.1.267-idle-update', latest)).toBe(0);
+  } finally {
+    request.mockRestore();
+  }
 });
