@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 260 // FIX: standard Sofia audio and confirmed receipt feedback.
-            versionName = "0.1.260-receipt-voice"
+            versionCode = 266 // FIX: Ozon packing voice, including placement-zone errors.
+            versionName = "0.1.266-ozon-pack-voice"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

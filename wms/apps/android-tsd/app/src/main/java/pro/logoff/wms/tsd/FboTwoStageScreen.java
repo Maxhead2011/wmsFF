@@ -123,21 +123,21 @@ final class FboTwoStageScreen {
     private void scanProduct(String value){
         if(state.barcode.isEmpty()){
             TsdFboPlan.Line found=null;for(TsdFboPlan.Line l:plan.lines)if(FboScanState.matches(plan,l,value)&&l.picked>l.packed){found=l;break;}
-            if(found==null){message="Этот ШК не ожидает упаковки.";render();return;}
+            if(found==null){message="Этот ШК не ожидает упаковки.";packingErrorSpeech=true;render();return;}
             state.barcode=value;state.productKiz="";state.productReady=!found.requiresKiz;state.target="";
         }else if(!state.productReady){
-            if(!AssemblyScanVoice.isKiz(value)){message="Отсканируйте КИЗ товара.";render();return;}
+            if(!AssemblyScanVoice.isKiz(value)){message="Отсканируйте КИЗ товара.";packingErrorSpeech=true;render();return;}
             state.productKiz=value;state.productReady=true;
         }else{
             TsdFboPlan.PackingSuggestion suggestion=productSuggestion();
-            if(suggestion==null){message="Нет направления для этого товара. Обновите заявку.";render();return;}
+            if(suggestion==null){message="Нет направления для этого товара. Обновите заявку.";packingErrorSpeech=true;render();return;}
             if(suggestion.targetBoxCode!=null&&!suggestion.targetBoxCode.equals(value)){
-                message="Сканируйте короб "+suggestion.targetBoxCode+" · "+suggestion.direction;render();return;
+                message="Сканируйте короб "+suggestion.targetBoxCode+" · "+suggestion.direction;packingErrorSpeech=true;render();return;
             }
             for(TsdFboPlan.Box box:plan.boxes)if(value.equals(box.code)&&(box.closed||box.wholeBox||!suggestion.direction.equals(box.direction))){
-                message="Короб закрыт или относится к другому направлению.";render();return;
+                message="Короб закрыт или относится к другому направлению.";packingErrorSpeech=true;render();return;
             }
-            if(!value.matches("(?i)^FFL[\\w-]{1,96}$")){message="Отсканируйте ШК короба FFL.";render();return;}
+            if(!value.matches("(?i)^FFL[\\w-]{1,96}$")){message="Отсканируйте ШК короба FFL.";packingErrorSpeech=true;render();return;}
             state.direction=suggestion.direction;state.target=value;send("PACK_PRODUCT",state.productKiz);return;
         }
         TsdFboPlan.PackingSuggestion suggestion=productSuggestion();
@@ -247,12 +247,15 @@ final class FboTwoStageScreen {
     private String screenPhase(){return FboScanState.screenPhase(plan,packing && "logoff".equals(BuildConfig.FLAVOR));}
     private void speakScan(boolean accepted){if(!closed&&!packing&&plan!=null&&"PICKING".equals(screenPhase())&&"logoff".equals(BuildConfig.FLAVOR)&&scanFeedback!=null)scanFeedback.scan(accepted,"picking:"+(state.source.isEmpty()?"location":"barcode"));}
     // FIX: preserve parallel packing and acknowledge speech only after a durable receipt.
-    private boolean packingVoiceActive(){return !closed&&packingChoices()&&(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)&&plan!=null&&"PACKING".equals(screenPhase());}
+    private boolean ozonPackingVoice(){return !closed && packing && ozon() && "logoff".equals(BuildConfig.FLAVOR) && "PACKING".equals(screenPhase());}
+    private boolean packingVoiceActive(){return ozonPackingVoice() || wbPackingVoiceActive();}
+    private boolean wbPackingVoiceActive(){return !closed&&packingChoices()&&(packingMode==PackingMode.NEW_BOXES||packingMode==PackingMode.MANUAL)&&plan!=null&&"PACKING".equals(screenPhase());}
     private void packingPrompt(FboPackingVoice.Cue cue){if(!closed&&scanFeedback!=null&&cue!=null)scanFeedback.prompt(cue);}
     private void packingAccepted(Map<String,String> payload){
-        if(closed||!packingChoices())return;
+        if(closed||(!packingChoices()&&!ozonPackingVoice()))return;
         if("PACK_BOX".equals(payload.get("action")))packingPrompt(packingVoice.boxAccepted(payload.get("operationId")));
-        else if("PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action")))packingPrompt(packingVoice.accepted(payload.get("operationId")));
+        else if("CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId"),ozonPackingVoice() && state.productMode));
+        else if("PACK_PRODUCT".equals(payload.get("action"))||"PACK_UNIT".equals(payload.get("action"))||"MANUAL_PACK_UNIT".equals(payload.get("action")))packingPrompt(packingVoice.accepted(payload.get("operationId")));
     }
     // FIX: cancel only the unsubmitted barcode/KIZ pair, never a committed packing operation.
     private boolean packingScanRecovery(){return !closed&&packingChoices()&&plan!=null&&"PACKING".equals(screenPhase())&&!state.target.isEmpty()&&!state.barcode.isEmpty();}
@@ -552,8 +555,8 @@ final class FboTwoStageScreen {
         ScrollView scroll=new ScrollView(activity);scroll.setFillViewport("logoff".equals(BuildConfig.FLAVOR));scroll.setBackgroundColor(screenColor);scroll.addView(root);activity.setContentView(scroll);if(input!=null&&ready())input.requestFocus();
         final EditText scanTarget=input;
         AssemblyAutoFocus.request(scanTarget,()->!closed&&input==scanTarget&&ready()&&quantityDialog==null);
-        if(plan!=null)packingPrompt(packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
-        if(packingErrorSpeech){packingErrorSpeech=false;if(packingChoices()&&scanFeedback!=null)scanFeedback.error("packing:"+message);}
+        if(plan!=null&&!packingErrorSpeech)packingPrompt(ozonPackingVoice()&&productActive() ? packingVoice.productStep(ready(),state.barcode,state.productReady) : packingVoice.step(packingVoiceActive(),ready(),state.target,state.barcode));
+        if(packingErrorSpeech){packingErrorSpeech=false;if((packingChoices()||ozonPackingVoice())&&scanFeedback!=null)scanFeedback.error("packing:"+message);}
         // FIX: scanner Enter may move focus after this render; focus the new KIZ field on the next UI turn.
         if("logoff".equals(BuildConfig.FLAVOR)&&input!=null&&ready()&&!state.barcode.isEmpty()){
             EditText kizInput=input;
@@ -863,8 +866,6 @@ final class FboTwoStageScreen {
                 if(scanFeedback!=null)scanFeedback.success();manualPackingScan=false;feedbackColor=Color.rgb(187,247,208);message="UNDO_PACK_UNIT".equals(payload.get("action"))?"Последняя единица отменена. Возвращена в отобранные.":FboFeedback.accepted(payload,plan);
                 if("PACK_PRODUCT".equals(payload.get("action")))message="Упаковано: 1 шт. · "+payload.get("direction")+" · "+payload.get("targetBoxCode");
                 if("REOPEN_BOX".equals(payload.get("action"))||"OPEN_BOX".equals(payload.get("action"))||"MANUAL_OPEN_BOX".equals(payload.get("action")))state.target=payload.get("targetBoxCode");state.reconcile(plan,packing);reconcilePickingMode();packingAccepted(payload);
-                // FIX: preserve confirmed state persistence before announcing closure.
-                if(packingVoiceActive()&&"CLOSE_BOX".equals(payload.get("action")))packingPrompt(packingVoice.closed(payload.get("operationId")));
                 if("FINISH".equals(payload.get("action"))&&!packingChoices())download();render();});
         }catch(Exception e){handler.post(()->{if(closed)return;busy=false;feedbackColor=Color.rgb(254,202,202);message="Подтверждение не получено. Нажмите «Повторить отправку».";packingErrorSpeech=true;render();});}});
     }

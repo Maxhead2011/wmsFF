@@ -15,15 +15,24 @@ final class FboPackingVoice {
         if (!active) { last = null; return null; }
         if (!ready) return null;
         Cue next = target.isEmpty() ? Cue.BOX : barcode.isEmpty() ? Cue.BARCODE : Cue.KIZ;
+        return transition(next);
+    }
+    // FIX: Ozon product mode scans the destination after barcode and optional KIZ.
+    Cue productStep(boolean ready, String barcode, boolean productReady) {
+        if (!ready) return null;
+        return transition(barcode.isEmpty() ? Cue.BARCODE : productReady ? Cue.BOX : Cue.KIZ);
+    }
+    private Cue transition(Cue next) {
         if (next == last) return null;
         last = next;
         return next;
     }
     // FIX: acknowledge a confirmed close once and avoid interrupting it on redraw.
-    Cue closed(String operationId) {
+    Cue closed(String operationId) { return closed(operationId,false); }
+    Cue closed(String operationId, boolean productMode) {
         if (operationId == null || operationId.equals(acceptedId)) return null;
         acceptedId = operationId;
-        last = Cue.BOX;
+        last = productMode ? Cue.BARCODE : Cue.BOX;
         return Cue.CLOSED;
     }
     Cue accepted(String operationId) {

@@ -1,4 +1,5 @@
 import {BadRequestException} from '@nestjs/common';
+import {PDFDocument, StandardFonts} from 'pdf-lib';
 import {createHash} from 'node:crypto';
 import {PDFParse} from 'pdf-parse';
 import type {SupplyIntegration} from './ozon-supply-policy';
@@ -41,4 +42,28 @@ export async function renderOzonPrintPages(buffer:Buffer,cargoIds:string[]) {
   if(pages.length!==cargoIds.length)throw new BadRequestException('Подготовлены не все страницы этикеток.');
   return {widthMm:120,heightMm:Math.round(120/ratio),pages};
  }finally{await parser.destroy();}
+}
+
+ // FIX: match each official page by cargo ID before adding a separate bottom line.
+export async function annotateOzonLabels(buffer:Buffer,cargoes:Array<{key:string;cargoId:string}>,boxes:Array<{id:string;boxCode:string}>) {
+ if(process.env.WMS_OZON_BOX_LABEL_ENABLED !== 'true') return buffer;
+ if(buffer.length>20_000_000) throw new BadRequestException('Файл этикеток слишком велик.');
+ const parser=new PDFParse({data:new Uint8Array(buffer)});
+ try {
+  const {pages}=await parser.getText(), pdf=await PDFDocument.load(buffer);
+  const seen=new Set<string>(),font=await pdf.embedFont(StandardFonts.HelveticaBold);
+  if(!cargoes.length || pages.length!==cargoes.length || pdf.getPageCount()!==pages.length) throw new BadRequestException('Количество стикеров не совпадает с коробами.');
+  for(const [index,page] of pages.entries()){
+   const matches=cargoes.filter(c=>page.text.replace(/\s/g,'').includes(c.cargoId));
+   const code=matches.length===1 && boxes.find(b=>b.id===matches[0].key)?.boxCode;
+   if(!code || seen.has(code)) throw new BadRequestException('Не удалось сопоставить стикер с коробом WMS.');
+   seen.add(code);
+   const sheet=pdf.getPage(index),{width,height}=sheet.getSize(),line='WMS: '+code;
+   const size=Math.min(11,(width-14)/font.widthOfTextAtSize(line,1));
+   sheet.setSize(width,height+16);
+   sheet.translateContent(0,16);
+   sheet.drawText(line,{x:7,y:4,size,font});
+  }
+  return Buffer.from(await pdf.save());
+ } finally {await parser.destroy();}
 }

@@ -1,3 +1,4 @@
+import {assertOzonBoxZones} from './ozon-box-zones';
 import type { Prisma } from '@prisma/client';
 import { ConflictException } from '@nestjs/common';
 import { directionProgress, OzonDirection } from './ozon-fbo-directions';
@@ -6,12 +7,18 @@ type PackingUnit = { skuId: string; state: string; wholeBox?: boolean; targetBox
 type PackingBox = { boxId: string; boxCode?: string; direction?: string | null; closedAt?: Date | string | null; wholeBox?: boolean };
 
 // FIX: advisory only; packing rechecks quota under the existing request transaction lock.
-export function ozonPackingSuggestions(directions: OzonDirection[], boxes: PackingBox[], units: PackingUnit[]) {
+export function ozonPackingSuggestions(directions: OzonDirection[], boxes: PackingBox[], units: PackingUnit[], zones?: {integration: unknown}) {
     const progress = directionProgress(directions, boxes, units.map(u => ({ ...u, targetBoxId: u.targetBoxId ?? null })));
     const skus = [...new Set(units.filter(u => u.state === 'PICKED' && !u.wholeBox).map(u => u.skuId))];
     return skus.flatMap(skuId => {
         const needed = progress.filter(d => d.items.some(i => i.skuId === skuId && i.packed < i.quantity));
-        const open = (name: string) => boxes.filter(b => b.direction === name && !b.closedAt && !b.wholeBox)
+        const open = (name: string) => boxes.filter(b => b.direction === name && !b.closedAt && !b.wholeBox).filter(b => {
+            if (!zones) return true;
+            try {
+                assertOzonBoxZones(zones.integration, name, directions, units.filter(u => u.state === 'PACKED' && u.targetBoxId === b.boxId).map(u => u.skuId), skuId);
+                return true;
+            } catch (error) { if (error instanceof ConflictException) return false; throw error; }
+        })
             .sort((a, b) => String(a.boxCode).localeCompare(String(b.boxCode)))[0];
         const direction = needed.find(d => open(d.name)) ?? needed[0];
         if (!direction) return [];

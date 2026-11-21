@@ -6,7 +6,7 @@ import {assertWarehouseAccess} from './client-request-warehouse-scope';
 import {ozonEditDeadline,assertNoOzonAdjustment,bindingIdentity,mergeSupplyOrders,supplyOrders,cargoHash,packedCargoes,supplyDifferences,type SupplyIntegration,type SupplyOrderSnapshot} from './ozon-supply-policy';
 import type {OzonDirection} from '../tsd/ozon-fbo-directions';
 import {cargoMappingWorkbook} from './ozon-cargo-export';
-import {ozonPrintManifest,renderOzonPrintPages} from './ozon-print-labels';
+import {ozonPrintManifest,renderOzonPrintPages,annotateOzonLabels} from './ozon-print-labels';
 
 @Injectable()
 export class OzonAssemblySupplyService {
@@ -45,7 +45,7 @@ export class OzonAssemblySupplyService {
   if(!response.ok)throw new BadGatewayException(`Ozon: HTTP ${response.status}. Этикетки не отправлены в печать.`);
   const buffer=Buffer.from(await response.arrayBuffer());
   if(buffer.length>20_000_000)throw new BadRequestException('Файл этикеток слишком велик.');
-  const rendered=await renderOzonPrintPages(buffer,direction.cargoIds);
+  const rendered=await renderOzonPrintPages(await annotateOzonLabels(buffer,op.cargoes ?? [],s.request.fboAssembly?.boxes ?? []),direction.cargoIds);
   const current=await this.load(id,user);
   if(ozonPrintManifest(current.directions as unknown as Array<{name:string}>,current.integration as SupplyIntegration).fingerprint!==manifest.fingerprint)throw new ConflictException('Состав грузомест изменился. Подготовьте этикетки заново.');
   return {...manifest,clientId:s.request.clientId,...rendered};
@@ -66,7 +66,12 @@ export class OzonAssemblySupplyService {
    await tx.clientRequestEvent.create({data:{requestId:id,clientId:s.request.clientId,eventType:'COMMENT',title:'Нажата кнопка «Скачать стикеры Ozon»',body:`Поставка Ozon ${supplyId} · ${supply.name}. Записано нажатие кнопки; сохранение файла и печать не подтверждаются.`,createdByUserId:user.id}});
    await tx.auditLog.create({data:{userId:user.id,action:'OZON_LABEL_DOWNLOAD_CLICK',entity:'ClientRequest',entityId:id,payload:{supplyId,direction:supply.name}}});
   });
-  return {url:url.href};
+  if (process.env.WMS_OZON_BOX_LABEL_ENABLED !== 'true') return {url:url.href};
+  if (!url.hostname.endsWith('.ozone.ru') && url.hostname !== 'ozone.ru') throw new BadRequestException('Некорректная ссылка Ozon.');
+  const response = await fetch(url,{redirect:'error',signal:AbortSignal.timeout(20000)});
+  if (!response.ok) throw new BadGatewayException('Скачивание стикеров не удалось. Обновите этикетки Ozon.');
+  const pdf = await annotateOzonLabels(Buffer.from(await response.arrayBuffer()),op.cargoes ?? [],s.request.fboAssembly?.boxes ?? []);
+  return {url:url.href,pdfBase64:pdf.toString('base64')};
  }
  private async load(id:string,user:AuthUser,mode:'read'|'write'='read',db:any=this.db){
   if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true')throw new NotFoundException('Связь Ozon выключена.');
@@ -124,7 +129,7 @@ export class OzonAssemblySupplyService {
     if(!b.has_next)break;if(!b.last_id||seen.has(b.last_id))throw new BadGatewayException('Ошибка пагинации состава Ozon.');last=b.last_id;seen.add(last);
    }
    const cluster=clusters.clusters?.find((v:any)=>String(v.macrolocal_cluster_id??v.id)===String(s.macrolocal_cluster_id));
-   supplies.push({id:String(s.supply_id),name:cluster?.name??s.storage_warehouse?.name??String(s.macrolocal_cluster_id),items:items.map(i=>({barcode:String(i.barcode??''),offerId:String(i.offer_id??''),quantity:Number(i.quantity),quant:Number(i.quant)||1,...(i.sku?{sku:String(i.sku)}:{})}))});
+   supplies.push({id:String(s.supply_id),name:cluster?.name??s.storage_warehouse?.name??String(s.macrolocal_cluster_id),items:items.map(i=>({barcode:String(i.barcode??''),offerId:String(i.offer_id??''),quantity:Number(i.quantity),quant:Number(i.quant)||1,...(typeof i.placement_zone==="string"?{placementZone:i.placement_zone}:{}),...(i.sku?{sku:String(i.sku)}:{})}))});
   }
   return {connectionId:c.id,orderId,orderNumber:String(o.order_number??orderId),place:o.drop_off_warehouse?.name??'',date:o.timeslot?.timeslot?.from??'',state:o.state,editDeadlineAt:ozonEditDeadline(o),supplies,mapping:{},operations:{},checkedAt:new Date().toISOString()};
  }

@@ -44,4 +44,15 @@ public class FboPackingVoiceTest {
         assertNull(v.step(false,true,"",""));
         assertEquals(BOX,v.step(true,true,"",""));
     }
+    // TEST: marked and unmarked Ozon units follow different scan sequences.
+    @org.junit.Test public void ozonProductVoice() {
+        FboPackingVoice v = new FboPackingVoice();
+        org.junit.Assert.assertEquals(FboPackingVoice.Cue.BARCODE,v.productStep(true,"",false));
+        org.junit.Assert.assertEquals(FboPackingVoice.Cue.KIZ,v.productStep(true,"sku",false));
+        org.junit.Assert.assertEquals(FboPackingVoice.Cue.BOX,v.productStep(true,"sku",true));
+        org.junit.Assert.assertNull(v.productStep(true,"sku",true));
+        org.junit.Assert.assertEquals(FboPackingVoice.Cue.PUT,v.accepted("unit"));
+        org.junit.Assert.assertNull(v.productStep(true,"",false));
+        org.junit.Assert.assertEquals(FboPackingVoice.Cue.BOX,v.productStep(true,"unmarked",true));
+    }
 }
