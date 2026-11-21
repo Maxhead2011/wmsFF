@@ -619,3 +619,5 @@ Prepared, not published 17.11.2026 — [сверка статусов WB в FBS]
 - [Опубликованная основная сборка ТСД 267](../apps/android-tsd/published/logoff-tsd-server-choice.json) и [проверка двух серверов](../apps/android-tsd/servers267/test/Probe.java).
 
 - [Проверка нижней строки этикетки Ozon](../apps/api/src/modules/client-requests/ozon-box-label.spec.ts) и [проверка версии в мониторе ТСД](../apps/web/src/components/monitoring/TsdMonitoringPanel.admin.spec.tsx).
+
+- [Исключения для неизвестных зон размещения Ozon](../apps/api/src/modules/tsd/ozon-box-zones.spec.ts) — проверка при упаковке и выбор открытого короба.

@@ -279,7 +279,7 @@ export class FboTwoStageService {
             packingByProductSupported: !!ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
             packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
             packingSuggestions: ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
-                ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units, process.env.WMS_OZON_BOX_ZONES_ENABLED === 'true' ? {integration:ozonShipment.integration} : undefined) : [],
+                ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units, process.env.WMS_OZON_BOX_ZONES_ENABLED === 'true' ? {integration:ozonShipment.integration, clientId:r.clientId} : undefined) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
             ozonLabelControlRequired: !!ozonShipment&&ozonLabelControlEnabled()&&assembly?.phase!=='COMPLETED',
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
@@ -495,7 +495,7 @@ export class FboTwoStageService {
                 assertLamodaRelabelPacked(relabelRequired,unit.lamodaRelabelConfirmedAt);
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);
                 if (ozonShipment && process.env.WMS_OZON_BOX_ZONES_ENABLED === 'true') {
-                    assertOzonBoxZones(ozonShipment.integration, parcel.direction, directions ?? [], units.filter(u => u.state === 'PACKED' && u.targetBoxId === target.id).map(u => u.skuId), unit.skuId);
+                    assertOzonBoxZones(ozonShipment.integration, parcel.direction, directions ?? [], units.filter(u => u.state === 'PACKED' && u.targetBoxId === target.id).map(u => u.skuId), unit.skuId, r.clientId);
                 }
                 const holding = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${id}` } });
                 const movement = await this.move(tx, r, unit.skuId, holding.id, target.id, 'PACKING', 'PACKING', 1, key, user);
