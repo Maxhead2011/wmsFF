@@ -12,8 +12,10 @@ Release tooling in scripts/releases/fbo-box-progress. Source/runtime parity rema
 
 Post-release: live full/summary3162 both return121/43/934/0; health, complete API/web hashes, unchanged environments and other containers verified. Public JS/CSS match tested candidate; public controls24 pass. No request writes. Baseline2026-11-21-fbo-box-progress.
 
-## Remaining whole boxes — prepared
+## Remaining whole boxes — published PR1047
 
 Add «Осталось упаковать целых коробов» beneath packing. Count unique nonempty sourceBoxCode values of wholeBox=true,state=PICKED units only. Packed/returned/partial units and not-yet-picked route boxes are excluded. Optional API field preserves compatibility with older responses. Existing own-WMS capability remains the boundary; sold unchanged.
 
 Regression fails before change and passes after; duplicate units, packing transition, returned/partial units, future route, zero and missing response field tested. Read-only live3159 has2 whole boxes/16 units awaiting packing;3162 has0. Exact runtime overlay API1/web2 preserves all other assets/modules. Browser desktop/mobile render and existing controls checked. No inventory writes.
+
+Post-release full and summary confirm3159=2 and3162=0; existing totals unchanged. API4838 and web654 pass; same dedicated KIZ integration limitation. Public JS exact hash and controls24 pass. Baseline2026-11-21-fbo-whole-remaining verified; sourceParityVerified=false.
