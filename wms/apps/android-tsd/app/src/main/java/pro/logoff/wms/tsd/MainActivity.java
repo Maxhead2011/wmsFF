@@ -283,7 +283,66 @@ public class MainActivity extends Activity {
     private boolean receiptKizReviewBusy;
     private boolean receiptCheckingKiz;
     private boolean niimbotPrintBusy;
-    private boolean appUpdateBusy;
+    private volatile boolean appUpdateBusy;
+    private android.app.AlertDialog updateBarrier;
+    private long nextIdleUpdateCheck;
+    private long nextQueueCheck;
+    private File waitingUpdate;
+    private boolean idleUpdateEnabled() { return "pro.logoff.wms.tsd.servers".equals(getPackageName()); }
+    private boolean idleUpdateScreen() { return hasWindowFocus() && idleUpdateState(); }
+    private boolean idleUpdateState() {
+        return (screen == Screen.MAIN || screen == Screen.SETTINGS || screen == Screen.INFO)
+            && !assemblyVoicePaused && !isFinishing() && !isDestroyed()
+            && safeSession()!=null && !idleDialogShown && !fbsBusy && !fbsCargoBusy && !transferBusy
+            && !inventoryRequestBusy && !ozonFboBusy && !receiptBarcodeLookupBusy && !receiptKizReviewBusy;
+    }
+    private boolean pendingUpdateScans() {
+        android.content.Context app = ((ServerScopedContext) getBaseContext()).getBaseContext();
+        for (String profile : new String[]{ServerSettings.MAIN, ServerSettings.BACKUP}) {
+            ServerScopedContext scoped = new ServerScopedContext(app, profile);
+            if (IdleUpdateGuard.hasReceiptDraft(scoped.getSharedPreferences("tsd_ui_preferences", MODE_PRIVATE).getAll())) return true;
+            for (String name : new String[]{"fbs-pending", "storage_transfer_pending", "storage_recount_pending"}) {
+                if (!scoped.getSharedPreferences(name, MODE_PRIVATE).getAll().isEmpty()) return true;
+            }
+            if (IdleUpdateGuard.hasFboScan(scoped.getSharedPreferences("fbo-pending", MODE_PRIVATE).getAll())) return true;
+            if (scoped.getDatabasePath("logoff_wms_tsd.db").exists()
+                    && new OperationOutbox(TsdDatabase.get(scoped).operationDao()).counts().pending != 0) return true;
+        }
+        return false;
+    }
+    private void releaseUpdateBarrier() {
+        if(updateBarrier!=null){updateBarrier.dismiss();updateBarrier=null;}
+    }
+    // FIX: the main-thread dialog takes scanner focus before the serial worker checks the durable queue again.
+    private void tryIdleUpdate() {
+        if(!idleUpdateEnabled() || appUpdateBusy || updateBarrier!=null || !idleUpdateScreen())return;
+        if(waitingUpdate==null){
+            long now=android.os.SystemClock.elapsedRealtime();
+            if(now<nextIdleUpdateCheck)return;
+            nextIdleUpdateCheck=now+3600000L;
+            startManagedApkUpdate(true);return;
+        }
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now < nextQueueCheck) return;
+        nextQueueCheck = now + 60_000L;
+        File apk=waitingUpdate;
+        updateBarrier=new android.app.AlertDialog.Builder(this).setMessage("Устанавливается обновление ТСД…").setCancelable(false).show();
+        appUpdateBusy=true;
+        executor.execute(()->{
+            try {
+                if(outbox.counts().pending!=0 || pendingUpdateScans()){
+                    mainHandler.post(()->{appUpdateBusy=false;releaseUpdateBarrier();});return;
+                }
+                mainHandler.post(()->{
+                    if(!idleUpdateState() || updateBarrier==null || !updateBarrier.isShowing() || !updateBarrier.getWindow().getDecorView().hasWindowFocus()){
+                        releaseUpdateBarrier();appUpdateBusy=false;return;
+                    }
+                    try { installUpdateApk(apk);waitingUpdate=null; }
+                    catch(Exception error){releaseUpdateBarrier();appUpdateBusy=false;waitingUpdate=null;showUpdateStatus("Не удалось установить обновление: "+error.getMessage(),true);}
+                });
+            } catch(Exception error){mainHandler.post(()->{releaseUpdateBarrier();appUpdateBusy=false;});}
+        });
+    }
     private boolean niimbotForceSelection;
     private String pendingNiimbotLabelBase64 = "";
     private String pendingNiimbotLabelContentType = "";
@@ -346,6 +405,7 @@ public class MainActivity extends Activity {
     private final Runnable monitorHeartbeatTask = new Runnable() {
         @Override
         public void run() {
+            tryIdleUpdate();
             sendMonitorHeartbeat();
             mainHandler.postDelayed(this, 5_000L);
         }
@@ -370,6 +430,7 @@ public class MainActivity extends Activity {
                     return;
                 }
             }
+            releaseUpdateBarrier();
             appUpdateBusy = false;
             if (status == PackageInstaller.STATUS_SUCCESS) {
                 showUpdateStatus("Обновление установлено.", false);
@@ -488,6 +549,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        releaseUpdateBarrier();
         mainHandler.removeCallbacks(idleCheck);
         closeAssemblyScanVoice();
         if (fboTwoStageScreen != null) fboTwoStageScreen.close();
@@ -11562,6 +11624,7 @@ public class MainActivity extends Activity {
     }
 
     private void openApkDownload() {
+
         if (appUpdateBusy) {
             showUpdateStatus("Обновление уже загружается.", false);
             return;
@@ -11607,19 +11670,22 @@ public class MainActivity extends Activity {
         });
     }
 
-    private void startManagedApkUpdate() {
+    private void startManagedApkUpdate() { startManagedApkUpdate(false); }
+
+    private void startManagedApkUpdate(boolean automatic) {
         if (appUpdateBusy) return;
         appUpdateBusy = true;
-        showUpdateStatus("Скачиваю и проверяю обновление ТСД...", false);
+        if (!automatic) showUpdateStatus("Скачиваю и проверяю обновление ТСД...", false);
         executor.execute(() -> {
             try {
                 File apk = downloadAndVerifyUpdateApk();
                 if (apk == null) {
                     appUpdateBusy = false;
-                    showUpdateStatus("На ТСД уже установлена актуальная версия.", false);
+                    if (!automatic) showUpdateStatus("На ТСД уже установлена актуальная версия.", false);
                     return;
                 }
-                installUpdateApk(apk);
+                if(idleUpdateEnabled()) mainHandler.post(()->{waitingUpdate=apk;appUpdateBusy=false;tryIdleUpdate();});
+                else installUpdateApk(apk);
             } catch (Throwable error) {
                 appUpdateBusy = false;
                 showUpdateStatus(
@@ -11631,9 +11697,11 @@ public class MainActivity extends Activity {
     }
 
     private File downloadAndVerifyUpdateApk() throws Exception {
-        String metadataUrl = activeApkUrl.endsWith(".apk")
-            ? activeApkUrl.substring(0, activeApkUrl.length() - 4) + ".json"
-            : activeApkUrl + ".json";
+        // FIX: capture both request URLs from the selected profile before reading the feed.
+        String channelUrl = idleUpdateEnabled() ? IdleUpdateGuard.channelUrl(serverProfile) : activeApkUrl;
+        String metadataUrl = channelUrl.endsWith(".apk")
+            ? channelUrl.substring(0, channelUrl.length() - 4) + ".json"
+            : channelUrl + ".json";
         JSONObject metadata = new JSONObject(new String(downloadBytes(metadataUrl), java.nio.charset.StandardCharsets.UTF_8));
         if ("logoff".equals(BuildConfig.FLAVOR) && !BuildConfig.APPLICATION_ID.equals(
                 metadata.optString("packageId", BuildConfig.APPLICATION_ID))) {
@@ -11644,7 +11712,7 @@ public class MainActivity extends Activity {
         if (remoteVersion <= installedVersion) {
             return null;
         }
-        byte[] apkBytes = downloadBytes(metadata.optString("apkUrl", activeApkUrl) + "?v=" + remoteVersion);
+        byte[] apkBytes = downloadBytes((idleUpdateEnabled() ? channelUrl : metadata.optString("apkUrl", activeApkUrl)) + "?v=" + remoteVersion);
         String expectedSha = metadata.optString("sha256", "").trim().toLowerCase(Locale.ROOT);
         String actualSha = sha256(apkBytes);
         if (expectedSha.isEmpty() || !expectedSha.equals(actualSha)) {
@@ -11691,6 +11759,7 @@ public class MainActivity extends Activity {
     private void installUpdateApk(File apk) throws Exception {
         PackageInstaller installer = getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+        if(idleUpdateEnabled() && Build.VERSION.SDK_INT>=31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
         params.setAppPackageName(getPackageName());
         int sessionId = installer.createSession(params);
         try (PackageInstaller.Session installSession = installer.openSession(sessionId)) {

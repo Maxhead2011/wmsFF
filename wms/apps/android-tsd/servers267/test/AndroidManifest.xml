@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="pro.logoff.test.idle267">
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28"/>
+    <application android:label="LOGOFF update test"/>
+    <instrumentation android:name=".Probe" android:targetPackage="pro.logoff.wms.tsd.servers"/>
+</manifest>

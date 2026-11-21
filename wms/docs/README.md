@@ -613,3 +613,5 @@ Prepared, not published (2026-11-10): fabric workspace visual update, branch `fe
 Prepared, not published 17.11.2026 — [сверка статусов WB в FBS](fbs-stale-wb-status.md). Точечный кандидат рабочего display-метода, восемь реальных ответов WB, тест регрессии до/после.
 
 - [База следующей сборки ТСД LOGOFF](project-map.md#база-следующей-сборки-тсд-logoff) — подписанные APK обоих каналов, проверка двух серверов и выбор базы.
+
+- [Проверка установки ТСД 267 на Android](../apps/android-tsd/servers267/test/Probe.java) — выбор сервера и отсрочка установки при активной операции или скане.

@@ -107,3 +107,11 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }
+
+// FIX: the ordinary APK and other brands have independent release channels.
+androidComponents.onVariants(androidComponents.selector().withName("logoffServers")) { variant ->
+    variant.outputs.forEach { output ->
+        output.versionCode.set(267)
+        output.versionName.set("0.1.267-idle-update")
+    }
+}
