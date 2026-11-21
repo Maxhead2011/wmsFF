@@ -44,7 +44,7 @@ export async function renderOzonPrintPages(buffer:Buffer,cargoIds:string[]) {
  }finally{await parser.destroy();}
 }
 
- // FIX: match each official page by cargo ID before adding a separate bottom line.
+ // FIX: match each official page by cargo ID before annotating the drop-off row.
 export async function annotateOzonLabels(buffer:Buffer,cargoes:Array<{key:string;cargoId:string}>,boxes:Array<{id:string;boxCode:string}>) {
  if(process.env.WMS_OZON_BOX_LABEL_ENABLED !== 'true') return buffer;
  if(buffer.length>20_000_000) throw new BadRequestException('Файл этикеток слишком велик.');
@@ -60,10 +60,16 @@ export async function annotateOzonLabels(buffer:Buffer,cargoes:Array<{key:string
    if(!code || seen.has(code)) throw new BadRequestException('Не удалось сопоставить стикер с коробом WMS.');
    seen.add(code);
    const sheet=pdf.getPage(index),{width,height}=sheet.getSize(),line='WMS: '+code;
-   const size=Math.min(11,(width-14)/font.widthOfTextAtSize(line,1));
-   const target=output.addPage([width,height+16]);
-   target.drawPage(await output.embedPage(sheet),{x:0,y:16,width,height});
-   target.drawText(line,{x:7,y:4,size,font});
+   // FIX: align the WMS code with the drop-off value inside the 120 × 75 mm stock.
+   const pageHeight=width*75/120;
+   const target=output.addPage([width,pageHeight]);
+   const scale=Math.min(width/sheet.getWidth(),pageHeight/height);
+   const artWidth=width*scale, artHeight=height*scale;
+   const left=(width-artWidth)/2, bottom=(pageHeight-artHeight)/2;
+   target.drawPage(await output.embedPage(sheet),{x:left,y:bottom,width:artWidth,height:artHeight});
+   const x=left+artWidth*125/340.25,available=artWidth*(284-125)/340.25;
+   const size=Math.min(artWidth*10/340.25,available/font.widthOfTextAtSize(line,1));
+   target.drawText(line,{x,y:bottom+artHeight*5.5/212.5,size,font});
   }
   return Buffer.from(await output.save());
  } finally {await parser.destroy();}
