@@ -66,3 +66,11 @@
 [aria-label="FBO"] .fbo-marketplaces>.fbs-marketplace-card{width:100%!important;min-width:0!important;min-height:200px!important;height:100%!important;box-sizing:border-box}
 @media(min-width:1800px){[aria-label="FBO"] .fbo-marketplaces{grid-template-columns:repeat(4,minmax(0,1fr))!important}}
 @media(max-width:700px){[aria-label="FBO"] .fbo-marketplaces{grid-template-columns:1fr!important}}
+
+/* FIX: box totals sit below the existing progress scale. */
+.fbo-progress-bars .online-execution-progress { display:grid; grid-template-columns:minmax(0,1fr) minmax(80px,38%); }
+.fbo-progress-bars .online-execution-progress meter { width:100%; }
+.fbo-box-count { grid-column:1 / -1; margin:4px 0 0; font-weight:600; }
+.fbo-picking-breakdown { display:grid; gap:4px; font-size:14px; }
+
+@media(max-width:720px){.fbo-progress-bars .online-execution-progress{grid-template-columns:1fr}}

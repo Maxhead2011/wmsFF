@@ -1,3 +1,5 @@
+Prepared: [FBO box counters and picking breakdown](fbo-box-progress.md). Own flag; request3162 read-only replay verified. Not yet published.
+
 Published 20.11.2026 through PR1034: [TSD server-choice265 Ozon box-first](tsd-server-choice-265.md). Public hashes/health verified; containers and ordinary channel unchanged. Owner terminal reports265;1439 existing assembly units and55727 operations across five terminals, account IDs and request compositions retained. Physical first-box check pending.
 
 ФБО LOGOFF: первый скан короба из маршрута выбирает его паллету в FboScanState.scanLocation. Тест acceptsRouteBoxFirstAndChecksExplicitPallet проверяет первый скан, неизвестный короб и ограничение явно выбранной паллеты.
