@@ -1,5 +1,6 @@
 import {BadRequestException} from '@nestjs/common';
 import {PDFDocument, StandardFonts} from 'pdf-lib';
+import {dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 import {PDFParse} from 'pdf-parse';
 import type {SupplyIntegration} from './ozon-supply-policy';
@@ -20,7 +21,11 @@ export function ozonPrintManifest(directions:Array<{name:string}>, link:SupplyIn
 
 // FIX: check identity, not only page count; preserve official artwork and aspect ratio.
 export async function renderOzonPrintPages(buffer:Buffer,cargoIds:string[]) {
- const parser=new PDFParse({data:new Uint8Array(buffer)});
+ const parser=new PDFParse({data:new Uint8Array(buffer),...process.env.WMS_OZON_BOX_LABEL_ENABLED === 'true' && {
+   // FIX: the server image has no system fonts for the WMS Helvetica annotation.
+   useSystemFonts:false, disableFontFace:true,
+   standardFontDataUrl:dirname(require.resolve('pdfjs-dist/package.json',{paths:[require.resolve('pdf-parse')]}))+'/standard_fonts/',
+ }});
  try {
   const text=await parser.getText();
   if(text.pages.length!==cargoIds.length)throw new BadRequestException('Количество этикеток Ozon не совпадает с грузоместами. Печать не начата.');
