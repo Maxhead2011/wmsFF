@@ -936,3 +936,13 @@ WB FBS delivery refreshes the marketplace status for orders masked by local ship
 Confirmed WB and Ozon FBS handover persists order status alongside request closure and invalidates the queue cache after the explicit status check commits.
 
 Экран FBS, сверка вышедших из новых заказов WB — `apps/api/src/modules/marketplace-connections/fbs-display-wb-reconcile.ts`; подключение к опубликованному `listFbsOrdersForDisplay` через `scripts/releases/fbs-stale-wb-status/prepare.py`. [Проверки и состав кандидата](fbs-stale-wb-status.md). Подготовлено локально, публикация ожидает разрешения.
+
+## База следующей сборки ТСД LOGOFF
+
+Подписанные опубликованные APK и их метаданные хранятся в [android-tsd/published](../apps/android-tsd/published/). Основная сборка — с выбором сервера. Получите её входной APK командой `python apps/android-tsd/published/verify.py` из каталога `wms`. Для обычного терминала используйте `--base ordinary`. Команда возвращает путь только после сверки Git с обоими серверами. После выпуска обновите снимок через `--capture`, проверьте изменения и включите APK и JSON в PR. Старые каталоги serversNNN воспроизводят конкретные исторические выпуски.
+
+Сверка APK 264 и 266 от 21.11.2026 охватила все 1056 классов пространства имён приложения. Все классы обычной сборки присутствуют в основной. 1051 совпал после дизассемблирования без отладочных данных. Различаются BuildConfig, MainActivity, ReceiptDraftHooks, FboPackingVoice и FboTwoStageScreen. Для последующих выпусков повторяйте сверку при изменении любого канала. Отдельно проверяйте упаковку, приёмку и установку на устройстве.
+
+В опубликованном APK 266 метод ReceiptDraftHooks.beforeUpdate перед загрузкой APK подставляет адрес основного сервера. Для выпуска с автообновлением требуется проверить фактический маршрут загрузки на резервном профиле. Одного сравнения файлов на двух серверах для этого недостаточно.
+
+Сборка 267 для основного канала включает отложенную установку. Исходный APK, подпись и хеш кандидата указаны в [build-proof.json](../apps/android-tsd/servers267/build-proof.json). Проверка подписанного APK запускается через Android Instrumentation на отдельном эмуляторе и использует синтетические ответы для двух сетевых маршрутов.

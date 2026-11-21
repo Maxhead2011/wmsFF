@@ -165,7 +165,7 @@ export function AuthPanel({ onSession, onBack }: AuthPanelProps) {
         ) : null}
 
         <div className="auth-downloads">
-          <a className="mobile-app-download" href="/downloads/logoff-tsd.apk" download>
+          <a className="mobile-app-download" href="/downloads/logoff-tsd-server-choice.apk" download>
             <ScanBarcode size={20} aria-hidden="true" />
             <span>
               <strong>Скачать LOGOff ТСД</strong>
