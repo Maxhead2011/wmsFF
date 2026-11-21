@@ -1,3 +1,5 @@
+Prepared: remaining whole-box packing counter; distinct picked whole boxes only. [Details](fbo-box-progress.md).
+
 Published21.11.2026 through PR1045: [FBO box counters and picking breakdown](fbo-box-progress.md). Live3162 verified121 picked source boxes,43 packed boxes,934 partial units,0 whole boxes. Full/summary agree; public JS/CSS hashes and controls24 pass. Exact API2/web3; environments/other containers unchanged. Baseline2026-11-21-fbo-box-progress; sourceParityVerified=false.
 
 Published 20.11.2026 through PR1034: [TSD server-choice265 Ozon box-first](tsd-server-choice-265.md). Public hashes/health verified; containers and ordinary channel unchanged. Owner terminal reports265;1439 existing assembly units and55727 operations across five terminals, account IDs and request compositions retained. Physical first-box check pending.

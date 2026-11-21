@@ -11300,7 +11300,7 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 }
 
 export type FboPlan = {
-  boxStatistics?:{pickedBoxes:number;packedBoxes:number;partialUnits:number;wholeBoxes:number};
+  boxStatistics?:{remainingWholeBoxes?:number;pickedBoxes:number;packedBoxes:number;partialUnits:number;wholeBoxes:number};
   relabelRequired?:boolean;
   relabelUnits?:Array<{id:string;skuId:string;sourceBarcode:string;kiz:string|null;pickedByUserId:string;printId:string|null;printStatus:string|null;label:{barcode:string;name:string;size:string|null;article:string}}>;
   pickedUnitsCount?:number;
