@@ -2,12 +2,11 @@ import {ConflictException} from '@nestjs/common';
 import type {SupplyIntegration} from '../client-requests/ozon-supply-policy';
 import type {OzonDirection} from './ozon-fbo-directions';
 
-// FIX: only these WMS clients permit mixed cartons with missing Ozon metadata.
-const allowUnknownZone = new Set([
-  '634434d6-0d5a-4f6b-8876-6c8d3252cdff', // ИП Елецкая
-  'c401202c-be57-4310-9939-2ea36767da37', // ИП Кубрин
-]);
+// FIX: placement-zone checks apply only to ООО «ПАЛИТРА» (CL-000002).
+const palitraClientId = 'e8597352-0b93-442c-9582-c694620a9695';
+
 export function assertOzonBoxZones(raw: unknown, name: string | null | undefined, directions: OzonDirection[], packed: string[], added: string, clientId = '') {
+  if (clientId !== palitraClientId) return;
   const skus = new Set([...packed, added]);
   if (skus.size < 2) return;
   const link = raw as SupplyIntegration | null;
@@ -19,7 +18,6 @@ export function assertOzonBoxZones(raw: unknown, name: string | null | undefined
     const items = supply ? supply.items.filter(i => i.barcode === barcode) : [];
     const zone = items.length === 1 && items[0].placementZone?.trim();
     if (!zone || /UNKNOWN|UNSPECIFIED|^NONE$/i.test(zone)) {
-      if (allowUnknownZone.has(clientId)) continue;
       throw new ConflictException('Зона размещения Ozon неизвестна. Обновите состав поставки или выберите короб с одним SKU.');
     }
     zones.add(zone);
