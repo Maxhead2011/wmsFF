@@ -43,7 +43,7 @@ describe('LOGOFF public website', () => {
   });
   it('keeps real application downloads and explicit login actions', () => {
     const html = render();
-    for (const url of ['/downloads/logoff-tsd.apk', '/downloads/logoff-wms-mobile.apk', '/downloads/LOGOFF-FBS-Print-Agent.zip']) expect(html).toContain(`href="${url}"`);
+    for (const url of ['/downloads/logoff-tsd-server-choice.apk', '/downloads/logoff-wms-mobile.apk', '/downloads/LOGOFF-FBS-Print-Agent.zip']) expect(html).toContain(`href="${url}"`);
     expect(html).toContain('Войти в WMS');
     expect(html).not.toContain('href="#"');
   });
