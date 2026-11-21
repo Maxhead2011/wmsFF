@@ -620,4 +620,4 @@ Prepared, not published 17.11.2026 — [сверка статусов WB в FBS]
 
 - [Проверка нижней строки этикетки Ozon](../apps/api/src/modules/client-requests/ozon-box-label.spec.ts) и [проверка версии в мониторе ТСД](../apps/web/src/components/monitoring/TsdMonitoringPanel.admin.spec.tsx).
 
-- [Исключения для неизвестных зон размещения Ozon](../apps/api/src/modules/tsd/ozon-box-zones.spec.ts) — проверка при упаковке и выбор открытого короба.
+- [Проверка зон размещения Ozon только для «Палитры»](../apps/api/src/modules/tsd/ozon-box-zones.spec.ts) — проверка при упаковке и выбор открытого короба.
