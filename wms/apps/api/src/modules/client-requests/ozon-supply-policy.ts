@@ -3,7 +3,7 @@ import { ConflictException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 
-export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number; sku?: string }> };
+export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number; placementZone?: string; sku?: string }> };
 export type SupplyIntegration = {
   orders?: SupplyOrderSnapshot[];
   editDeadlineAt?: string | null;

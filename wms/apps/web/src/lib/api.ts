@@ -12761,8 +12761,13 @@ export function saveClientStores(accessToken:string,clientId:string,stores:Clien
 export function fetchSkuStores(accessToken:string,clientId:string,skuId:string){return request<{storeIds:string[]}>(`/clients/${encodeURIComponent(clientId)}/stores/skus/${encodeURIComponent(skuId)}`,{accessToken});}
 export function saveSkuStores(accessToken:string,clientId:string,skuId:string,storeIds:string[],expectedStoreIds:string[]){return request<{storeIds:string[]}>(`/clients/${encodeURIComponent(clientId)}/stores/skus/${encodeURIComponent(skuId)}`,{accessToken,method:'PUT',body:{storeIds,expectedStoreIds}});}
 // FIX: save a click event before opening the server-stored Ozon label URL.
-export function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
- return request<{url:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
+export async function recordOzonLabelDownload(accessToken:string,id:string,supplyId:string){
+ const data=await request<{url:string}|{pdfBase64:string}>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply/label-download`,{accessToken,method:'POST',body:{supplyId}});
+ if (!('pdfBase64' in data)) return data;
+ const bytes=Uint8Array.from(atob(data.pdfBase64),c=>c.charCodeAt(0));
+ const url=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+ window.setTimeout(()=>URL.revokeObjectURL(url),300000);
+ return {url};
 }
 // FIX: individual safety reserves use the existing versioned server rule, independently of sale caps.
 export type FbsSafetyReserveRule = { mode: 'NONE' | 'UNITS' | 'PERCENT'; value: number; lowStock?: { threshold: number; reserveUnits: number } };

@@ -1,0 +1,76 @@
+"""Own-WMS server-choice APK only. Requires merged PR; rollback feed/config on failure."""
+from pathlib import Path
+import json,hashlib,re,subprocess,sys,time
+from datetime import datetime,timezone
+FILE='logoff-tsd-servers-ozon-266.apk'
+PACKAGE='pro.logoff.wms.tsd.servers'
+BASE='659f56d0fb38b21ef09380a0d15ed47743e5d2bdd33e4d7a69806b696b741d4b'
+MAIN='3cd34888897b040631a06c2778c8d90c33be2a16115629a2cfe535d852e20531'
+def verify_health(fetch):
+    # FIX: public API is mounted under /api/v1, not /api.
+    health=json.loads(fetch('/api/v1/health'))
+    assert health.get('status')=='ok' and health.get('service')=='logoff-wms-api'
+def sha(b):return hashlib.sha256(b).hexdigest()
+def wait_hash(fetch,path,expected,sleep=time.sleep):
+    # FIX: graceful nginx reload can briefly serve a prior worker's route.
+    for attempt in range(10):
+        try:
+            if sha(fetch(path))==expected:return
+        except subprocess.CalledProcessError:pass
+        if attempt<9:sleep(1)
+    raise AssertionError('Public APK hash did not converge: '+path)
+def validate(old,proof):
+    assert old['packageId']==proof['packageId']==PACKAGE
+    assert old['versionCode']==265 and proof['versionCode']==266
+    assert old['sha256']==proof['baselineSha256']==BASE
+    assert proof['storageAndUpdateCodePreserved'] and proof['resourcesPreserved']
+    assert proof['certificateSha256']=='70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da'
+def patch(config):
+    # FIX: both HTTP/HTTPS aliases must resolve the same compatible package.
+    old='logoff-tsd-servers-box-direct-265.apk'
+    assert FILE not in config
+    anchor='location = /downloads/'+old+' {'
+    assert config.count(anchor)==2
+    route='location = /downloads/'+FILE+' { alias /var/www/wms-updates/'+FILE+'; default_type application/vnd.android.package-archive; }\n '
+    result=config.replace(anchor,route+anchor)
+    result,count=re.subn(r'(location = /downloads/logoff-tsd-server-choice\.apk\s*\{\s*alias )/var/www/wms-updates/'+re.escape(old)+r';',lambda m:m.group(1)+'/var/www/wms-updates/'+FILE+';',result)
+    assert count==2
+    return result
+def main():
+    import fcntl
+    root=Path(sys.argv[1]);apply='--publish' in sys.argv[2:]
+    run=lambda *a:subprocess.check_output(a).decode().strip()
+    fetch=lambda p:subprocess.check_output(['curl','-fsS','--max-time','45','https://wms.logoff.pro'+p])
+    locks=[]
+    for name in ['/opt/logoff-wms/.release.lock','/opt/wms-restore/.release-pr863.lock','/run/logoff-wms-web-release.lock']:
+        lock=open(name,'a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);locks.append(lock)
+    pr=json.loads((root/'pr.json').read_text());assert pr['state']=='MERGED' and pr['headRefName']=='fix/ozon-zone-box-label' and pr['baseRefName']=='feature/la_panthera'
+    downloads=Path('/var/www/wms-updates');meta=downloads/'logoff-tsd-server-choice.json';cfg=Path('/etc/nginx/sites-available/default')
+    old=meta.read_bytes();proof=json.loads((root/'proof.json').read_text());payload=(root/FILE).read_bytes();validate(json.loads(old),proof)
+    assert sha(payload)==proof['apkSha256'] and len(payload)==proof['apkSize']
+    assert sha((downloads/'logoff-tsd-servers-box-direct-265.apk').read_bytes())==BASE
+    mainmeta=(downloads/'logoff-tsd.json').read_bytes();assert json.loads(mainmeta)['sha256']==MAIN
+    assert json.loads(fetch('/downloads/logoff-tsd-server-choice.json'))==json.loads(old)
+    config=cfg.read_bytes();candidate=patch(config.decode());containers=run('docker','ps','--no-trunc','--format','{{.ID}} {{.Image}}')
+    verify_health(fetch)
+    if not apply:print('Preflight OK');return
+    assert not (root/'published.json').exists()
+    (root/'metadata.before').write_bytes(old);(root/'nginx.before').write_bytes(config)
+    try:
+        dest=downloads/FILE;assert not dest.exists() or sha(dest.read_bytes())==proof['apkSha256']
+        tmp=downloads/(FILE+'.tmp');tmp.write_bytes(payload);tmp.chmod(0o644);tmp.replace(dest)
+        cfg.write_text(candidate);run('nginx','-t');run('systemctl','reload','nginx')
+        wait_hash(fetch,'/downloads/'+FILE,proof['apkSha256'])
+        wait_hash(fetch,'/downloads/logoff-tsd-server-choice.apk',proof['apkSha256'])
+        value=dict(packageId=PACKAGE,versionCode=266,versionName='0.1.266-ozon-voice-v1',apkUrl='https://wms.logoff.pro/downloads/'+FILE,sha256=proof['apkSha256'],size=proof['apkSize'],releasedAt=datetime.now(timezone.utc).isoformat(),releaseNotes='ТСД с выбором сервера: актуальные режимы упаковки Ozon и проверка короба. Сохранены сессии и очередь сканов.')
+        tmp=downloads/'logoff-tsd-server-choice.json.tmp';tmp.write_text(json.dumps(value,ensure_ascii=False));tmp.chmod(0o644);tmp.replace(meta)
+        assert json.loads(fetch('/downloads/logoff-tsd-server-choice.json'))==value
+        assert (downloads/'logoff-tsd.json').read_bytes()==mainmeta
+        assert sha(fetch('/downloads/logoff-tsd.apk'))==MAIN
+        assert run('docker','ps','--no-trunc','--format','{{.ID}} {{.Image}}')==containers
+        verify_health(fetch)
+    except Exception:
+        meta.write_bytes(old);cfg.write_bytes(config);run('nginx','-t');run('systemctl','reload','nginx');raise
+    result=dict(versionCode=266,packageId=PACKAGE,apkSha256=proof['apkSha256'],containersUnchanged=True,mainChannelUnchanged=True,publicHashesVerified=True)
+    (root/'published.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
+if __name__=='__main__':main()

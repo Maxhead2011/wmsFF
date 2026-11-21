@@ -1,0 +1,11 @@
+{
+  "packageId": "pro.logoff.wms.tsd.servers",
+  "versionCode": 266,
+  "baselineSha256": "659f56d0fb38b21ef09380a0d15ed47743e5d2bdd33e4d7a69806b696b741d4b",
+  "donorSha256": "4278cb27c733414ec9e9c1112204a6a577e8a33b3f67799e39ccb854ebdf4e3a",
+  "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+  "apkSha256": "66c6be59323a9a98a2d7d40870ac431915b5780bcc060f9a6e241f25a0aed7be",
+  "apkSize": 6001689,
+  "storageAndUpdateCodePreserved": true,
+  "resourcesPreserved": true
+}
