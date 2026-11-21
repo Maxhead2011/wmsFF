@@ -1,4 +1,4 @@
-Prepared: [FBO box counters and picking breakdown](fbo-box-progress.md). Own flag; request3162 read-only replay verified. Not yet published.
+Published21.11.2026 through PR1045: [FBO box counters and picking breakdown](fbo-box-progress.md). Live3162 verified121 picked source boxes,43 packed boxes,934 partial units,0 whole boxes. Full/summary agree; public JS/CSS hashes and controls24 pass. Exact API2/web3; environments/other containers unchanged. Baseline2026-11-21-fbo-box-progress; sourceParityVerified=false.
 
 Published 21.11.2026 through PR1036: [Ozon FBO packing and LOGOFF 266](ozon-packing-266.md). API5/web3 exact candidate, both placement/label flags enabled on our WMS, server-choice APK 266 available through both endpoints. Physical device installation pending. Baseline `2026-11-21-ozon-packing-266`, sourceParityVerified=false.
 
