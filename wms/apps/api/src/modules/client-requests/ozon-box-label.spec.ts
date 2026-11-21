@@ -18,6 +18,18 @@ it('prints the actual box code on each PDF page',async()=>{
  // TEST: the physical print job uses 120 × 75 mm even after annotation.
  const job=await renderOzonPrintPages(buffer,['2222222222222222','1111111111111111']);
  expect([job.widthMm,job.heightMm]).toEqual([120,75]);
+ // TEST: inspect the printer bitmap, not the PDF text layer.
+ const {PNG}=require(require.resolve('pngjs',{paths:[require.resolve('pdf-parse')]}));
+ for(const printed of job.pages){
+  const img=PNG.sync.read(Buffer.from(printed.imageBase64,'base64'));
+  let dark=0;
+  for(let y=Math.floor(img.height*.94);y<img.height;y++){
+   for(let x=Math.ceil(img.width*.36);x<img.width*.81;x++){
+    if(img.data[(y*img.width+x)*4]<100) dark++;
+   }
+  }
+  expect(dark).toBeGreaterThan(40);
+ }
  const parser=new PDFParse({data:new Uint8Array(buffer)});
  try {const {pages}=await parser.getText();expect(pages[0].text).toContain('BOX_007');expect(pages[1].text).toContain('BOX_001');} finally {await parser.destroy();}
  }finally{vi.unstubAllEnvs();}

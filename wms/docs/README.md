@@ -621,3 +621,5 @@ Prepared, not published 17.11.2026 — [сверка статусов WB в FBS]
 - [Проверка печати этикетки Ozon 120 × 75 мм](../apps/api/src/modules/client-requests/ozon-box-label.spec.ts) и [проверка версии в мониторе ТСД](../apps/web/src/components/monitoring/TsdMonitoringPanel.admin.spec.tsx).
 
 - [Проверка зон размещения Ozon только для «Палитры»](../apps/api/src/modules/tsd/ozon-box-zones.spec.ts) — проверка при упаковке и выбор открытого короба.
+
+Печать Ozon 120 × 75 использует стандартные шрифты PDF.js при формировании PNG на сервере. Тест проверяет пиксели номера короба.
