@@ -51,7 +51,8 @@ export async function annotateOzonLabels(buffer:Buffer,cargoes:Array<{key:string
  const parser=new PDFParse({data:new Uint8Array(buffer)});
  try {
   const {pages}=await parser.getText(), pdf=await PDFDocument.load(buffer);
-  const seen=new Set<string>(),font=await pdf.embedFont(StandardFonts.HelveticaBold);
+  const output=await PDFDocument.create();
+  const seen=new Set<string>(),font=await output.embedFont(StandardFonts.HelveticaBold);
   if(!cargoes.length || pages.length!==cargoes.length || pdf.getPageCount()!==pages.length) throw new BadRequestException('Количество стикеров не совпадает с коробами.');
   for(const [index,page] of pages.entries()){
    const matches=cargoes.filter(c=>page.text.replace(/\s/g,'').includes(c.cargoId));
@@ -60,10 +61,10 @@ export async function annotateOzonLabels(buffer:Buffer,cargoes:Array<{key:string
    seen.add(code);
    const sheet=pdf.getPage(index),{width,height}=sheet.getSize(),line='WMS: '+code;
    const size=Math.min(11,(width-14)/font.widthOfTextAtSize(line,1));
-   sheet.setSize(width,height+16);
-   sheet.translateContent(0,16);
-   sheet.drawText(line,{x:7,y:4,size,font});
+   const target=output.addPage([width,height+16]);
+   target.drawPage(await output.embedPage(sheet),{x:0,y:16,width,height});
+   target.drawText(line,{x:7,y:4,size,font});
   }
-  return Buffer.from(await pdf.save());
+  return Buffer.from(await output.save());
  } finally {await parser.destroy();}
 }
