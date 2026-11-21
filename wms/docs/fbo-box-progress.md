@@ -11,3 +11,9 @@ Validation: API4837 tests pass,181 skipped; unrelated dedicated KIZ PostgreSQL i
 Release tooling in scripts/releases/fbo-box-progress. Source/runtime parity remains false. Publish requires merged PR, source head, browser/control/read-only proofs and unchanged live image/compose baseline; automatic rollback retains previous images/config on failure.
 
 Post-release: live full/summary3162 both return121/43/934/0; health, complete API/web hashes, unchanged environments and other containers verified. Public JS/CSS match tested candidate; public controls24 pass. No request writes. Baseline2026-11-21-fbo-box-progress.
+
+## Remaining whole boxes — prepared
+
+Add «Осталось упаковать целых коробов» beneath packing. Count unique nonempty sourceBoxCode values of wholeBox=true,state=PICKED units only. Packed/returned/partial units and not-yet-picked route boxes are excluded. Optional API field preserves compatibility with older responses. Existing own-WMS capability remains the boundary; sold unchanged.
+
+Regression fails before change and passes after; duplicate units, packing transition, returned/partial units, future route, zero and missing response field tested. Read-only live3159 has2 whole boxes/16 units awaiting packing;3162 has0. Exact runtime overlay API1/web2 preserves all other assets/modules. Browser desktop/mobile render and existing controls checked. No inventory writes.
