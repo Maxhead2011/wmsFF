@@ -45,3 +45,25 @@ it('does not grant a manual bypass when the installation has not opted in',async
  vi.stubEnv('WMS_FBO_DELIVERY_SYNC_ENABLED','false');vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','false');const f=fixture();
  expect(await f.svc.reconcile('r',undefined,undefined,true)).toBe('DISABLED');expect(f.ozon.call).not.toHaveBeenCalled();
 });
+// TEST: acceptance must reach shipping even when local control was not finished.
+it('checks CONTROL when automatic stage completion is enabled',async()=>{
+ vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+ const f=fixture();f.r.fboAssembly.phase='CONTROL';
+ expect(await f.svc.reconcile('r')).toBe('DONE');
+ expect(f.stock.shipClientRequest).toHaveBeenCalledTimes(1);
+});
+it('keeps CONTROL when marketplace acceptance is missing',async()=>{
+ vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+ const f=fixture();f.r.fboAssembly.phase='CONTROL';
+ f.ozon.call.mockResolvedValue({orders:[{order_id:123,state:'READY_TO_SUPPLY',supplies:[{supply_id:456,state:'READY_TO_SUPPLY'}]}]});
+ expect(await f.svc.reconcile('r')).toBe('WAITING_MARKETPLACE');
+ expect(f.stock.shipClientRequest).not.toHaveBeenCalled();
+});
+
+// TEST: remote receipt replaces the missing local dispatch only on the opt-in path.
+it('closes accepted WB without a local dispatch when stage completion is enabled',async()=>{
+ vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+ const f=fixture();f.r.ozonShipment=null;f.r.fboAssembly.phase='CONTROL';
+ f.settings.set('wb-fbo-tracking:v1:r',{connectionId:'c',supplyId:'789'});
+ expect(await f.svc.reconcile('r')).toBe('DONE');
+});

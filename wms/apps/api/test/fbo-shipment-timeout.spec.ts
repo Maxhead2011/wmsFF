@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+vi.mock('../src/modules/stock/market-accepted-fbo', async (original) => ({...await original<any>(), completeMarketAcceptedFbo: vi.fn()}));
+import { completeMarketAcceptedFbo } from '../src/modules/stock/market-accepted-fbo';
 import { StockOperationsService } from '../src/modules/stock/stock-operations.service';
 afterEach(() => vi.unstubAllEnvs());
 // TEST: emulate elapsed DB work beyond Prisma's default 5 seconds without a slow sleep.
@@ -40,4 +42,20 @@ describe('FBO shipment transaction',()=>{
   await expect(f.service.shipClientRequest({requestId:'request'}, {id:'owner'})).rejects.toThrow();
   expect(f.prisma.$transaction).not.toHaveBeenCalled();
  });
+});
+
+// TEST: confirmed marketplace completion stays under the shipment lock and invokes all billing hooks.
+it('runs marketplace stage completion and billing through the locked shipment workflow',async()=>{
+ const f=fixture();vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+ f.prisma.fboAssembly.findUnique.mockResolvedValue({phase:'CONTROL'});
+ f.service.billingAutomation={generateForDoneRequest:vi.fn()};
+ const verify=vi.fn(async()=>{f.order.push('verify');});
+ vi.mocked(completeMarketAcceptedFbo).mockImplementationOnce(async()=>{f.order.push('complete');});
+ await f.service.shipClientRequest({requestId:'request'}, {id:'owner'},verify);
+ expect(f.order).toEqual(['lock','load','verify','complete','load']);
+ expect(f.service.ensureRequestFulfillmentBillingCharges).toHaveBeenCalledTimes(1);
+ expect(f.service.ensureRequestLogisticsBilling).toHaveBeenCalledWith('request',{id:'owner'});
+ expect(f.service.ensureRequestExpenseConsumption).toHaveBeenCalledWith('request',{id:'owner'});
+ expect(f.service.billingAutomation.generateForDoneRequest).toHaveBeenCalledWith('request',{id:'owner'});
+ expect(f.tx.stockMovement.create).not.toHaveBeenCalled();
 });

@@ -394,6 +394,37 @@ describe.skipIf(!url).sequential('FBO physical pick, pack and final box control'
         await act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole });
         await expect(act('CONFIRM_BOX', { targetBoxCode: 'FFL_' + whole })).rejects.toThrow('уже подтверждён');
     });
+    // TEST: marketplace proof completes stale CONTROL and creates real charges exactly once.
+    it('marketplace completion ships recorded units and bills once', async () => {
+        vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+        await packed();
+        user.activeWarehouseId=wh;
+        await p.clientRequest.update({where:{id:request},data:{status:'PACKED'}});
+        const verify=async()=>{};
+        await stock.shipClientRequest({requestId:request},user,verify);
+        expect((await p.clientRequest.findUniqueOrThrow({where:{id:request}})).status).toBe('DONE');
+        expect((await p.fboAssembly.findUniqueOrThrow({where:{requestId:request}})).phase).toBe('COMPLETED');
+        const charges=await p.billingCharge.findMany({where:{requestId:request},orderBy:{id:'asc'}});
+        expect(charges.length).toBeGreaterThan(0);
+        const movements=await p.stockMovement.count({where:{sourceDocument:request}});
+        await stock.shipClientRequest({requestId:request},user,verify);
+        expect(await p.stockMovement.count({where:{sourceDocument:request}})).toBe(movements);
+        expect(await p.billingCharge.findMany({where:{requestId:request},orderBy:{id:'asc'}})).toEqual(charges);
+        expect(await p.stockBalance.aggregate({where:{clientId:client,status:'PACKING'},_sum:{quantity:true}})).toMatchObject({_sum:{quantity:0}});
+    });
+    // TEST: a charge failure rolls back stage, packing, packages and stock atomically.
+    it('marketplace completion rolls back when billing fails', async () => {
+        vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+        await packed();user.activeWarehouseId=wh;
+        await p.clientRequest.update({where:{id:request},data:{status:'PACKED'}});
+        vi.spyOn(stock as any,'createFulfillmentBillingCharges').mockRejectedValueOnce(Error('billing failure'));
+        await expect(stock.shipClientRequest({requestId:request},user,async()=>{})).rejects.toThrow('billing failure');
+        expect((await p.clientRequest.findUniqueOrThrow({where:{id:request}})).status).toBe('PACKED');
+        expect((await p.fboAssembly.findUniqueOrThrow({where:{requestId:request}})).phase).toBe('CONTROL');
+        expect(await p.clientRequestPackage.count({where:{requestId:request}})).toBe(0);
+        expect(await p.stockMovement.count({where:{sourceDocument:request,type:{in:['PACK','SHIP']}}})).toBe(0);
+        expect(await p.billingCharge.count({where:{requestId:request}})).toBe(0);
+    });
     it('rolls back final confirmation and package/balance writes if billing fails', async () => {
         await packed();
         for (const b of [whole, target])

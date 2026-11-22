@@ -1,3 +1,4 @@
+import {marketFboCompletionEnabled} from '../stock/market-accepted-fbo';
 import {Injectable,Logger,OnModuleInit,OnModuleDestroy} from '@nestjs/common';
 import {PrismaService} from '../../common/prisma/prisma.service';
 import type {AuthUser} from '../auth/auth.types';
@@ -22,7 +23,7 @@ export class RequestMarketStatusScheduler implements OnModuleInit,OnModuleDestro
     // FIX: missed local FBS stages must not exclude confirmed marketplace handovers.
     OR:[{status:process.env.WMS_FBS_ACTION_STATUS_ENABLED==='true'?{in:['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK','PACKED']}:'PACKED',
       fbsOrderLinks:{some:{marketplace:{in:['WILDBERRIES','OZON']}}}},
-      {status:'PACKED',ozonShipment:{isNot:null}},{status:'PACKED',fboAssembly:{isNot:null}}]},select:{id:true,clientId:true,warehouseId:true},orderBy:{id:'asc'},take:100});
+      {status:marketFboCompletionEnabled()?{in:['SUBMITTED','IN_WORK','PACKED']}:'PACKED',ozonShipment:{isNot:null}},{status:marketFboCompletionEnabled()?{in:['SUBMITTED','IN_WORK','PACKED']}:'PACKED',fboAssembly:{isNot:null}}]},select:{id:true,clientId:true,warehouseId:true},orderBy:{id:'asc'},take:100});
    if(!rows.length)this.cursor='';
    let checked=0;
    for(const r of rows){
