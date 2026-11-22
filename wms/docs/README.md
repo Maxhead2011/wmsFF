@@ -1,3 +1,5 @@
+Published PR1049 on 22 November. WB ordinary screen reads refreshed at 12:00 and 12:01 Moscow, with all ten current new orders and zero of five completed orders shown as new. Ozon selected print confirmation and existing printer dialog verified in handler tests. Live worker label API returned 15 and 6 PDF pages. Physical print and fresh assembly submission pending operator verification. [Release](fbs-display-print.md).
+
 WB FBS display freshness and Ozon print confirmation: see [release checks](fbs-display-print.md).
 
 Published21.11.2026 PR1047: remaining whole boxes to pack. Live3159=2 boxes/16 units;3162=0. Full/summary match. API1/web2 hashes, public JS, health, controls24, environments and other containers verified; sourceParityVerified=false. [Details](fbo-box-progress.md).
