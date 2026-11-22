@@ -24,3 +24,15 @@ describe('marketplace schedule',()=>{
  it('claims once, skips a running worker and persists completion across restart',async()=>{const d=db();const c=await claimMarketSlot(d,'r','slot',100);expect(c).toBeTruthy();expect(await claimMarketSlot(d,'r','slot',200)).toBeNull();await finishMarketSlot(d,'r',c,true,'PACKED',300);expect(await claimMarketSlot(d,'r','slot',999999)).toBeNull();expect(await claimMarketSlot(d,'r','next',999999)).toBeTruthy();});
  it('retries failures with backoff and rejects a stale completion',async()=>{const d=db();const c=await claimMarketSlot(d,'r','slot',100);await finishMarketSlot(d,'r',c,false,'429',200);expect(await claimMarketSlot(d,'r','slot',201)).toBeNull();const newer=await claimMarketSlot(d,'r','slot',400000);expect(newer).toBeTruthy();await finishMarketSlot(d,'r',c,true,'DONE',400100);expect(d.value().token).toBe(newer.token);});
 });
+
+// TEST: marketplace-confirmed FBO completion must be reachable from the primary scheduler.
+it('selects unfinished FBO stages with the dedicated opt-in',async()=>{
+ vi.useFakeTimers();vi.setSystemTime(new Date('2026-11-10T09:00:00Z'));
+ vi.stubEnv('WMS_MARKET_STATUS_SCHEDULE_ENABLED','true');vi.stubEnv('WMS_FBO_MARKET_COMPLETION_ENABLED','true');
+ const db:any={clientRequest:{findMany:vi.fn(async()=>[])}};
+ const scheduler=new RequestMarketStatusScheduler(db,{} as any);
+ await scheduler.tick();scheduler.onModuleDestroy();
+ const where=db.clientRequest.findMany.mock.calls[0][0].where;
+ expect(where.OR[1].status).toEqual({in:['SUBMITTED','IN_WORK','PACKED']});
+ expect(where.OR[2].status).toEqual({in:['SUBMITTED','IN_WORK','PACKED']});
+});

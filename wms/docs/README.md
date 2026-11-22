@@ -631,3 +631,9 @@ Prepared, not published 17.11.2026 — [сверка статусов WB в FBS]
 - [Проверка зон размещения Ozon только для «Палитры»](../apps/api/src/modules/tsd/ozon-box-zones.spec.ts) — проверка при упаковке и выбор открытого короба.
 
 Печать Ozon 120 × 75 использует стандартные шрифты PDF.js при формировании PNG на сервере. Тест проверяет пиксели номера короба.
+
+Подготовлено локально: подтверждённая сдача FBO WB/Ozon завершает этапы и вызывает штатную отгрузку с биллингом при WMS_FBO_MARKET_COMPLETION_ENABLED=true. Проверяются полный состав единиц, направления Ozon, остатки коробов и КИЗ. Реализация: stock/market-accepted-fbo.ts, stock-operations.service.ts и fbo-delivery-sync.service.ts. На сервере ещё не включено.
+
+Планировщик: request-market-status-scheduler.service.ts выбирает ранние этапы ФБО только с новым флагом. Тесты: market-accepted-fbo.spec.ts, fbo-delivery-sync.spec.ts, market-status-schedule.spec.ts, fbo-shipment-timeout.spec.ts.
+
+PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
