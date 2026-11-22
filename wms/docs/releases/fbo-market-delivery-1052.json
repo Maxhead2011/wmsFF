@@ -1,0 +1,36 @@
+{
+  "pr": 1052,
+  "api": {
+    "image": "sha256:2b4c2fa52aebbd54c3f73309d5439ad767434a7504197e713fd9fc5174357757",
+    "changes": {
+      "modules/stock/stock-operations.service.js": "32feeee9a7922795d9314ba600e20e0f55e57ce77c361ccfdf936d52e9949318",
+      "modules/stock/market-accepted-fbo.js": "afeab322de919abe794241f0824d0229b2cf198b78daebb6b63ee0902cf23070",
+      "modules/client-requests/fbo-delivery-sync.service.js": "81994f0f0426e17c8a5b7e366f08b9abe70c0e0e790e276d4020819999081023",
+      "modules/client-requests/fbo-delivery-policy.js": "a73f0886682fcd57384aab48017c8048729f38608d08e9518ba847e4762773ab",
+      "modules/client-requests/request-market-status-scheduler.service.js": "9a98a73338b806aa603380a19d827843f62b059d194f03861a59f6f15b4cc067"
+    }
+  },
+  "health": true,
+  "approvedFlags": {
+    "WMS_FBO_MARKET_COMPLETION_ENABLED": "true"
+  },
+  "otherContainersUnchanged": true,
+  "previousApiImage": "sha256:8968233f31b695a3b7db9f5141a9467e40d6f12da68354e780b807b54b304685",
+  "apiFilesVerified": 790,
+  "request": {
+    "number": 3211,
+    "status": "DONE",
+    "phase": "COMPLETED",
+    "units": 126,
+    "boxes": 3,
+    "charges": 5,
+    "positiveCharges": 4,
+    "totalRub": "4054.04",
+    "invoice": "USL-202611-0070",
+    "invoiceStatus": "DRAFT",
+    "zeroLogisticsCharges": 1,
+    "repeatUnchanged": true
+  },
+  "rollbackPreviewVerified": true,
+  "sourceParityVerified": false
+}

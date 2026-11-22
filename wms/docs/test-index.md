@@ -1,3 +1,5 @@
+PR1052: 57 профильных тестов и 42 интеграционных теста ФБО на PostgreSQL; повтор не дублирует начисления/движения, ошибка начисления откатывает упаковку. Точный production-кандидат: успешная проверка №003211 с принудительным откатом до публикации, затем настоящая сверка и неизменность при повторе. 12 ошибок TypeScript совпали с исходной версией.
+
 Published PR1049 on 22 November. WB ordinary screen reads refreshed at 12:00 and 12:01 Moscow, with all ten current new orders and zero of five completed orders shown as new. Ozon selected print confirmation and existing printer dialog verified in handler tests. Live worker label API returned 15 and 6 PDF pages. Physical print and fresh assembly submission pending operator verification. [Release](fbs-display-print.md).
 
 WB FBS display freshness and Ozon print confirmation: see [release checks](fbs-display-print.md).

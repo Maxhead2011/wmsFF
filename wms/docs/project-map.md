@@ -1,3 +1,5 @@
+Опубликован PR1052, 22.11.2026: подтверждённая сдача WB/Ozon завершает проверенные этапы ФБО и штатную отгрузку с биллингом. Флаг WMS_FBO_MARKET_COMPLETION_ENABLED=true только нашей ВМС. Точный API5, все 790 хешей, health, изменение только согласованного флага и сохранность остальных контейнеров проверены. №003211: DONE/COMPLETED, 126 единиц, 3 короба, 4 ненулевых начисления на 4054,04 ₽ и одна нулевая строка логистики; черновик USL-202611-0070. Повторная сверка не изменила начисления, строки счёта и движения. Baseline `2026-11-22-fbo-market-delivery`, sourceParityVerified=false. [Доказательства выпуска](releases/fbo-market-delivery-1052.json).
+
 Published PR1049 on 22 November. WB ordinary screen reads refreshed at 12:00 and 12:01 Moscow, with all ten current new orders and zero of five completed orders shown as new. Ozon selected print confirmation and existing printer dialog verified in handler tests. Live worker label API returned 15 and 6 PDF pages. Physical print and fresh assembly submission pending operator verification. [Release](fbs-display-print.md).
 
 WB FBS display freshness and Ozon print confirmation: see [release checks](fbs-display-print.md).
@@ -965,7 +967,7 @@ Confirmed WB and Ozon FBS handover persists order status alongside request closu
 
 Палитра (CL-000002) — первая привязка КИЗ при отборе ФБО и ФБС, в том числе из общего остатка филиала. Флаг WMS_PALITRA_PICK_KIZ. Проверки: palitra-pick-kiz.spec.ts и scripts/releases/palitra-pick-kiz/rollback-check.js.
 
-Подготовлено локально: подтверждённая сдача FBO WB/Ozon завершает этапы и вызывает штатную отгрузку с биллингом при WMS_FBO_MARKET_COMPLETION_ENABLED=true. Проверяются полный состав единиц, направления Ozon, остатки коробов и КИЗ. Реализация: stock/market-accepted-fbo.ts, stock-operations.service.ts и fbo-delivery-sync.service.ts. На сервере ещё не включено.
+Опубликовано в PR1052: подтверждённая сдача FBO WB/Ozon завершает этапы и вызывает штатную отгрузку с биллингом при WMS_FBO_MARKET_COMPLETION_ENABLED=true. Проверяются полный состав единиц, направления Ozon, остатки коробов и КИЗ. Реализация: stock/market-accepted-fbo.ts, stock-operations.service.ts и fbo-delivery-sync.service.ts. Включено только на нашей ВМС.
 
 Планировщик: request-market-status-scheduler.service.ts выбирает ранние этапы ФБО только с новым флагом. Тесты: market-accepted-fbo.spec.ts, fbo-delivery-sync.spec.ts, market-status-schedule.spec.ts, fbo-shipment-timeout.spec.ts.
 
