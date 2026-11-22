@@ -17,7 +17,7 @@ export function ReturnsPanel({ session }: { session: AuthSession }) {
   const token = session.accessToken, batch = batches.find(b => b.id === selected);
   const canWrite = session.user.permissionCodes.some(p => p === 'stock:write' || p === 'system:admin');
   useEffect(() => { fetchClients(token).then(setClients).catch(e => setMessage(e.message)); }, [token]);
-  async function refresh() { if (clientId) setBatches(await request<Batch[]>(`/returns?clientId=${encodeURIComponent(clientId)}`, { accessToken: token })); }
+  async function refresh() { if (mode === 'MARK' && releaseBox && selected) { await loadBox(releaseBox); return; } if (clientId) setBatches(await request<Batch[]>(`/returns?clientId=${encodeURIComponent(clientId)}`, { accessToken: token })); }
   useEffect(() => { let live = true; setBatches([]); setSelected(''); if (clientId) request<Batch[]>(`/returns?clientId=${encodeURIComponent(clientId)}`, { accessToken: token }).then(v => { if (live) setBatches(v); }).catch(e => { if (live) setMessage(e.message); }); return () => { live = false; }; }, [clientId, token]);
   useEffect(() => { setReleaseBox(''); setReleaseBarcode(''); setKiz(''); }, [clientId]);
   async function loadBox(value: string) {

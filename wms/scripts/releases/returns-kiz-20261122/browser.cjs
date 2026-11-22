@@ -33,6 +33,7 @@ await page.getByLabel('Скан короба',{exact:true}).fill('RETURN_BOX_01'
 await page.getByLabel('Скан ШК товара',{exact:true}).fill('0461234567890');
 await page.getByLabel('Полный КИЗ',{exact:true}).fill('010461046084052621AAAAAAAAAAAAA\u001d91ABCD\u001d92testcrypto');
 await page.getByRole('button',{name:'Сохранить пару ШК–КИЗ'}).click();await page.getByText('КИЗ сохранён · Карантин',{exact:false}).waitFor();
+await page.getByRole('button',{name:'Обновить',exact:true}).last().click();await page.getByText('КИЗ сохранён · Карантин',{exact:false}).waitFor();assert.equal(calls.filter(([m,p])=>m==='GET'&&p.endsWith('/returns/box')).length,3);
 assert(!batch.units[0].releasedAt);assert.equal(calls.filter(([m,p])=>m==='POST'&&p.endsWith('/mark')).length,1);
 page.on('dialog',d=>d.accept());await page.getByRole('button',{name:'Закрыть короб',exact:true}).click();
 await page.getByText('Короб закрыт. Товар доступен для отгрузок.',{exact:true}).waitFor();
