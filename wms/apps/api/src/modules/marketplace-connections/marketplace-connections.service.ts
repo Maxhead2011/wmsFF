@@ -1,3 +1,4 @@
+import { bindNewPickMark, palitraPickEnabled } from '../../common/palitra-pick-kiz';
 import { ozonUnitExemplarPayload, ozonUnitExemplarsPassed } from './ozon-fbs-unit-exemplars';
 import { loadOzonUnitReservations, ozonUnitReservationsEnabled } from '../../common/ozon-unit-reservations';
 import { wbShippingEnabled } from './wb-shipping-points';
@@ -10936,6 +10937,11 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
               },
             }),
           ]);
+          if (palitraPickEnabled(task.clientId)) {
+            const bound = await bindNewPickMark(tx,{clientId:task.clientId,skuId:task.skuId!,boxId:task.boxId,warehouseId:await this.resolveFbsTsdExpectedWarehouseId(task),kiz},task.requestId);
+            await tx.fbsTsdAssembly.update({where:{id:task.id},data:{kiz,wbMetaStatus:'PENDING',errorMessage:null}});
+            return {mode:'CREATED' as const,id:bound.id};
+          }
           // FIX: another unit's registered KIZ is not evidence of a stale record.
           this.assertFbsKizRegistrationCapacity(task, available._sum.quantity ?? 0, registeredMarks);
           if ((available._sum.quantity ?? 0) <= registeredMarks) {

@@ -1,3 +1,4 @@
+import { bindNewPickMark, palitraPickEnabled } from '../../common/palitra-pick-kiz';
 import { fboBoxStatistics } from './fbo-box-statistics';
 import {assertOzonBoxZones} from './ozon-box-zones';
 import {fboCompletionBatchEnabled,validateFboPackedBoxes,fboCompletionPackages,saveFboCompletionSelections,fboCompletionStage,fboCompletionError} from './fbo-completion-batch';
@@ -410,7 +411,9 @@ export class FboTwoStageService {
                     const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
                     if (marked && !dto.kiz)
                         throw new BadRequestException('После ШК отсканируйте КИЗ.');
-                    const mark = dto.kiz ? await this.exactMark(tx, dto.kiz, r.clientId) : null;
+                    const mark = dto.kiz && palitraPickEnabled(r.clientId)
+                        ? await clientPhysicalMark(tx,r.clientId,dto.kiz) ?? await bindNewPickMark(tx,{clientId:r.clientId,skuId:line.skuId!,boxId:source.id,warehouseId:r.warehouseId,kiz:dto.kiz},r.id)
+                        : dto.kiz ? await this.exactMark(tx,dto.kiz,r.clientId) : null;
                     if (mark && (mark.clientId !== r.clientId || mark.skuId !== line.skuId || mark.boxId !== source.id || mark.status !== 'AVAILABLE'))
                         throw new ConflictException('Этот КИЗ не доступен в указанном коробе для данного товара.');
                     chosen = [{ skuId: line.skuId!, mark }];
