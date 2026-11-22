@@ -65,3 +65,14 @@ describe('packed WB acceptance', () => {
     expect(tx.clientRequestEvent.create).not.toHaveBeenCalled();
   });
 });
+
+// TEST: waiting requires the new flag AND verified closed-supply evidence.
+it('closes waiting only with verified closed supply on our installation',async()=>{
+ const f=setup();f.request.status='SUBMITTED';f.orders[0].wbStatus='waiting';
+ vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');vi.stubEnv('WMS_WB_CLOSED_SUPPLY_COMPLETION_ENABLED','true');
+ expect(await closeWbPackedRequest(f.tx,f.request,f.orders,false)).toBe(false);
+ (f.orders[0] as any).closedSupplyConfirmed=true;
+ expect(await closeWbPackedRequest(f.tx,f.request,f.orders,false)).toBe(true);
+ vi.stubEnv('WMS_WB_CLOSED_SUPPLY_COMPLETION_ENABLED','false');
+ expect(await closeWbPackedRequest(f.tx,f.request,f.orders,false)).toBe(false);
+});
