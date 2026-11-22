@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 268 // FIX: isolated returns sorting and receipt.
-            versionName = "0.1.268-returns"
+            versionCode = 269 // FIX: isolated returns sorting and receipt.
+            versionName = "0.1.269-returns-kiz"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")

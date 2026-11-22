@@ -17,9 +17,13 @@ import retrofit2.Response;
 /** FIX: durable scan -> condition -> box flow, isolated from ordinary receipts. */
 public final class ReturnsActivity extends Activity {
     public static void addMenu(Activity activity, LinearLayout root) {
-        Button button=new Button(activity);button.setText("Возвраты");
+        // FIX: same dimensions/style as the existing main menu, immediately below inventory.
+        Button button=new Button(activity);button.setText("Возвраты");button.setAllCaps(false);button.setTextSize(20);button.setTextColor(android.graphics.Color.WHITE);button.setBackgroundColor(android.graphics.Color.rgb(215,25,32));
+        float density=activity.getResources().getDisplayMetrics().density;
+        LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,Math.round(86*density));params.setMargins(0,0,0,Math.round(16*density));button.setLayoutParams(params);
         button.setOnClickListener(v->activity.startActivity(new android.content.Intent(activity,ReturnsActivity.class)));
-        root.addView(button);
+        int index=root.getChildCount();for(int i=0;i<root.getChildCount();i++){android.view.View v=root.getChildAt(i);if(v instanceof TextView){String title=((TextView)v).getText().toString();if(title.equals("Инвентаризация")||title.equals("Inventarizatsiya"))index=i+1;}}
+        root.addView(button,index);
     }
     private String baseUrl, profile;
     private TsdSession session;
@@ -29,6 +33,7 @@ public final class ReturnsActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private String clientId="", batchId="", code="", barcode="", condition="NORMAL", marketplace="WILDBERRIES", message="";
     private String pendingAction="";
+    private String mode="", releaseUnit="", releaseBox="", releaseBarcode="";
     private Map<String,String> pending=new LinkedHashMap<>();
     private List<TsdClientSummary> clients=new ArrayList<>();
     private List<Map<String,Object>> batches=new ArrayList<>();
@@ -64,19 +69,38 @@ public final class ReturnsActivity extends Activity {
     @Override protected void onDestroy(){main.removeCallbacksAndMessages(null);executor.shutdown();super.onDestroy();}
     private String key(){return "returns:"+session.userId+":"+session.deviceCode;}
     private void save(){
-        try{JSONObject s=new JSONObject();s.put("client",clientId);s.put("batch",batchId);s.put("code",code);s.put("barcode",barcode);s.put("condition",condition);s.put("marketplace",marketplace);s.put("action",pendingAction);s.put("pending",new JSONObject(pending));getSharedPreferences("returns",MODE_PRIVATE).edit().putString(key(),s.toString()).commit();}catch(Exception e){throw new IllegalStateException(e);}
+        try{JSONObject s=new JSONObject();s.put("mode",mode);s.put("releaseUnit",releaseUnit);s.put("releaseBox",releaseBox);s.put("releaseBarcode",releaseBarcode);s.put("client",clientId);s.put("batch",batchId);s.put("code",code);s.put("barcode",barcode);s.put("condition",condition);s.put("marketplace",marketplace);s.put("action",pendingAction);s.put("pending",new JSONObject(pending));getSharedPreferences("returns",MODE_PRIVATE).edit().putString(key(),s.toString()).commit();}catch(Exception e){throw new IllegalStateException(e);}
     }
-    private void restore(){try{JSONObject s=new JSONObject(getSharedPreferences("returns",MODE_PRIVATE).getString(key(),"{}"));clientId=s.optString("client");batchId=s.optString("batch");code=s.optString("code");barcode=s.optString("barcode");condition=s.optString("condition","NORMAL");marketplace=s.optString("marketplace","WILDBERRIES");pendingAction=s.optString("action");JSONObject p=s.optJSONObject("pending");if(p!=null){Iterator<String> keys=p.keys();while(keys.hasNext()){String k=keys.next();pending.put(k,p.getString(k));}}}catch(Exception e){message="Не удалось восстановить операцию. Проверьте партию в WMS.";}}
+    private void restore(){try{JSONObject s=new JSONObject(getSharedPreferences("returns",MODE_PRIVATE).getString(key(),"{}"));mode=s.optString("mode",s.optString("batch").isEmpty()?"":"PRIMARY");releaseUnit=s.optString("releaseUnit");releaseBox=s.optString("releaseBox");releaseBarcode=s.optString("releaseBarcode");clientId=s.optString("client");batchId=s.optString("batch");code=s.optString("code");barcode=s.optString("barcode");condition=s.optString("condition","NORMAL");marketplace=s.optString("marketplace","WILDBERRIES");pendingAction=s.optString("action");JSONObject p=s.optJSONObject("pending");if(p!=null){Iterator<String> keys=p.keys();while(keys.hasNext()){String k=keys.next();pending.put(k,p.getString(k));}}}catch(Exception e){message="Не удалось восстановить операцию. Проверьте партию в WMS.";}}
     private void loadClients(){busy=true;executor.execute(()->{try{Response<List<TsdClientSummary>> r=api.listClients(session.authorizationHeader()).execute();if(!r.isSuccessful()||r.body()==null)throw new Exception("Не удалось загрузить клиентов");main.post(()->{clients=r.body();busy=false;render();if(!clientId.isEmpty())refresh();});}catch(Exception e){main.post(()->{busy=false;message=e.getMessage();render();});}});}
-    private void refresh(){busy=true;executor.execute(()->{try{Response<List<Map<String,Object>>> r=api.listReturns(session.authorizationHeader(),clientId).execute();if(!r.isSuccessful()||r.body()==null)throw new Exception("Не удалось загрузить возвраты: "+r.code());main.post(()->{batches=r.body();busy=false;render();});}catch(Exception e){main.post(()->{busy=false;message=e.getMessage();render();});}});}
-    private TextView text(String value){TextView v=new TextView(this);v.setText(value);v.setTextSize(18);v.setPadding(0,10,0,10);return v;}
-    private void button(LinearLayout root,String title,Runnable run){Button b=new Button(this);b.setText(title);b.setEnabled(!busy);b.setOnClickListener(v->run.run());root.addView(b);}
+    private void refresh(){if("MARK".equals(mode)&&!releaseBox.isEmpty()){lookupBox(releaseBox);return;}busy=true;executor.execute(()->{try{Response<List<Map<String,Object>>> r=api.listReturns(session.authorizationHeader(),clientId).execute();if(!r.isSuccessful()||r.body()==null)throw new Exception("Не удалось загрузить возвраты: "+r.code());main.post(()->{batches=r.body();busy=false;render();});}catch(Exception e){main.post(()->{busy=false;message=e.getMessage();render();});}});}
+    private int dp(int value){return Math.round(value*getResources().getDisplayMetrics().density);}
+    private android.graphics.drawable.GradientDrawable background(int color){android.graphics.drawable.GradientDrawable d=new android.graphics.drawable.GradientDrawable();d.setColor(color);d.setCornerRadius(dp(14));d.setStroke(dp(1),0xffdce3ea);return d;}
+    private TextView text(String value){TextView v=new TextView(this);v.setText(value);v.setTextColor(0xff1e293b);v.setTextSize(18);v.setPadding(dp(4),dp(10),dp(4),dp(10));return v;}
+    private void button(LinearLayout root,String title,Runnable run){Button b=new Button(this);b.setText(title);b.setAllCaps(false);b.setTextSize(18);b.setMinHeight(dp(56));b.setPadding(dp(14),dp(10),dp(14),dp(10));boolean primary=title.equals("Подтвердить скан")||title.equals("Начать сортировку")||title.equals("Выбрать клиента")||title.equals("Закрыть короб");b.setTextColor(primary?0xffffffff:0xff1e293b);b.setBackground(background(primary?0xffd71920:0xffffffff));LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2);p.setMargins(0,dp(6),0,dp(6));b.setLayoutParams(p);b.setEnabled(!busy);b.setAlpha(busy?.55f:1f);b.setOnClickListener(v->run.run());root.addView(b);}
+    private void scanField(LinearLayout root,String prompt){root.addView(text(prompt));input=new EditText(this);input.setSingleLine(true);input.setTextSize(20);input.setHint(prompt);input.setBackground(background(0xffffffff));input.setPadding(dp(14),dp(14),dp(14),dp(14));input.setEnabled(!busy);root.addView(input,new LinearLayout.LayoutParams(-1,-2));input.requestFocus();button(root,"Подтвердить скан",this::scan);}
+    private void lookupBox(String value){busy=true;render();executor.execute(()->{try{Response<Map<String,Object>> r=api.findReturnBox(session.authorizationHeader(),clientId,value).execute();if(!r.isSuccessful()||r.body()==null)throw new Exception("Короб возвратов не найден у клиента: "+r.code());main.post(()->{busy=false;Map<String,Object>b=r.body();batchId=String.valueOf(b.get("id"));releaseBox=value;List<Map<String,Object>> list=new ArrayList<>(batches);list.removeIf(x->batchId.equals(x.get("id")));list.add(b);batches=list;save();render();});}catch(Exception e){main.post(()->{busy=false;message=e.getMessage();render();});}});}
+    private void menu(){mode="";batchId="";releaseBox="";releaseUnit="";releaseBarcode="";code="";barcode="";save();render();}
+    private void marking(LinearLayout root){
+        if(releaseBox.isEmpty()||batchId.isEmpty()){scanField(root,"Сканируйте короб возврата");button(root,"В меню возвратов",this::menu);return;}
+        Map<String,Object> b=current();if(b==null){button(root,"Обновить короб",()->lookupBox(releaseBox));return;}
+        List<?> units=(List<?>)b.get("units");int marked=0,released=0;for(Object o:units){Map<?,?> u=(Map<?,?>)o;if(u.get("kiz")!=null)marked++;if(u.get("releasedAt")!=null)released++;}
+        root.addView(text("Короб "+releaseBox));root.addView(text("КИЗ: "+marked+" / "+units.size()+" · Выпущено: "+released));
+        if(released==units.size()){root.addView(text("Короб закрыт. Товар доступен для отгрузок."));}
+        else{root.addView(text("До закрытия короба товар остаётся в карантине."));scanField(root,releaseBarcode.isEmpty()?"Сканируйте ШК товара":"Сканируйте полный КИЗ");
+            if(!releaseBarcode.isEmpty()){root.addView(text("ШК: "+releaseBarcode));button(root,"Сбросить пару ШК–КИЗ",()->{releaseBarcode="";releaseUnit="";save();render();});}
+            if(marked==units.size()&&releaseBarcode.isEmpty())button(root,"Закрыть короб",()->new android.app.AlertDialog.Builder(this).setTitle("Закрыть короб?").setMessage("Все единицы маркированы. Сделать товар доступным для отгрузок?").setNegativeButton("Отмена",null).setPositiveButton("Закрыть",(d,w)->{pendingAction="close";pending.put("boxCode",releaseBox);save();send();}).show());
+        }
+        button(root,"Другой короб",()->{batchId="";releaseBox="";releaseBarcode="";releaseUnit="";save();render();});button(root,"В меню возвратов",this::menu);
+    }
     private Map<String,Object> current(){for(Map<String,Object>b:batches)if(batchId.equals(b.get("id")))return b;return null;}
     private void render(){
         if(isFinishing())return;
-        ScrollView scroll=new ScrollView(this);LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(20,20,20,20);scroll.addView(root);setContentView(scroll);input=null;
+        ScrollView scroll=new ScrollView(this);LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(16),dp(16),dp(16),dp(16));root.setBackgroundColor(0xfff3f5f8);scroll.addView(root);setContentView(scroll);input=null;
         root.addView(text("Возвраты"));root.addView(text(busy?"Загружаю…":message));
         if(!pendingAction.isEmpty()){root.addView(text("Ответ не подтверждён. Повторите ту же операцию."));button(root,"Повторить тот же запрос",this::send);return;}
+        if(mode.isEmpty()){button(root,"Первичная обработка",()->{mode="PRIMARY";save();render();});button(root,"Маркировка",()->{mode="MARK";save();render();});button(root,"Главное меню",this::finish);return;}
+        root.addView(text("MARK".equals(mode)?"Маркировка":"Первичная обработка"));
         if(clientId.isEmpty()){
             Spinner select=new Spinner(this);List<String> names=new ArrayList<>();for(TsdClientSummary c:clients)names.add(c.name);
             select.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,names));root.addView(select);
@@ -84,15 +108,16 @@ public final class ReturnsActivity extends Activity {
             button(root,"Обновить",this::loadClients);return;
         }
         for(TsdClientSummary c:clients)if(clientId.equals(c.id))root.addView(text(c.name));
+        if("MARK".equals(mode)){marking(root);return;}
         if(batchId.isEmpty()){
             button(root,"Начать сортировку",()->{pendingAction="create";pending.put("id",UUID.randomUUID().toString());pending.put("clientId",clientId);save();send();});
-            for(Map<String,Object>b:batches)if("SORTING".equals(b.get("status")))button(root,"Продолжить · "+b.get("createdAt"),()->{batchId=String.valueOf(b.get("id"));save();render();});
-            button(root,"Другой клиент",()->{clientId="";save();render();});return;
+            for(Map<String,Object>b:batches)button(root,("SORTING".equals(b.get("status"))?"Сортировка · ":"Маркировка · ")+b.get("createdAt"),()->{batchId=String.valueOf(b.get("id"));save();render();});
+            button(root,"Другой клиент",()->{clientId="";save();render();});button(root,"В меню возвратов",this::menu);return;
         }
         Map<String,Object>b=current();
         if(b==null){button(root,"Обновить партию",this::refresh);return;}
         List<?> units=(List<?>)b.get("units");root.addView(text("Отсортировано: "+(units==null?0:units.size())));
-        if("STORED".equals(b.get("status"))){root.addView(text("Принято на хранение. До маркировки недоступно для сборки."));button(root,"К партиям",()->{batchId="";code="";barcode="";save();render();});return;}
+        if("STORED".equals(b.get("status"))){root.addView(text("Принято на хранение. Для сканирования КИЗ откройте пункт «Маркировка»."));button(root,"В меню возвратов",this::menu);return;}
         if(code.isEmpty()){
             Spinner mp=new Spinner(this);mp.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"Wildberries","Ozon"}));mp.setSelection("OZON".equals(marketplace)?1:0);mp.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?>p){}public void onItemSelected(android.widget.AdapterView<?>p,android.view.View v,int pos,long id){marketplace=pos==1?"OZON":"WILDBERRIES";save();}});root.addView(mp);
         }
@@ -108,16 +133,25 @@ public final class ReturnsActivity extends Activity {
         if(code.isEmpty())button(root,"К партиям",()->{batchId="";save();render();});
     }
     private void scan(){if(busy||input==null)return;String value=input.getText().toString().trim();if(value.isEmpty())return;
+        if("MARK".equals(mode)){
+            if(releaseBox.isEmpty()||batchId.isEmpty()){lookupBox(value);return;}
+            if(releaseBarcode.isEmpty()){
+                Map<String,Object>b=current();List<?> units=b==null?Collections.emptyList():(List<?>)b.get("units");
+                for(Object o:units){Map<?,?> u=(Map<?,?>)o;if(value.equals(u.get("barcode"))&&"NORMAL".equals(u.get("condition"))&&u.get("kiz")==null&&u.get("releasedAt")==null){releaseUnit=String.valueOf(u.get("id"));releaseBarcode=value;save();render();return;}}
+                message="В коробе нет немаркированной нормальной единицы с этим ШК.";render();return;
+            }
+            pendingAction="mark";pending.put("unitId",releaseUnit);pending.put("boxCode",releaseBox);pending.put("barcode",releaseBarcode);pending.put("kiz",value);save();send();return;
+        }
         if(code.isEmpty())code=value;else if(barcode.isEmpty())barcode=value;else{pendingAction="scan";pending.put("id",UUID.randomUUID().toString());pending.put("marketplace",marketplace);pending.put("returnCode",code);pending.put("barcode",barcode);pending.put("condition",condition);pending.put("boxCode",value);save();send();return;}save();render();}
     private void send(){if(busy||pendingAction.isEmpty())return;busy=true;render();final String action=pendingAction;final Map<String,String> body=new LinkedHashMap<>(pending);
         executor.execute(()->{try{
-            Response<Map<String,Object>> r=("create".equals(action)?api.createReturns(session.authorizationHeader(),body):"scan".equals(action)?api.scanReturn(session.authorizationHeader(),batchId,body):api.finishReturns(session.authorizationHeader(),batchId,body)).execute();
+            Response<Map<String,Object>> r=("create".equals(action)?api.createReturns(session.authorizationHeader(),body):"scan".equals(action)?api.scanReturn(session.authorizationHeader(),batchId,body):"mark".equals(action)?api.markReturn(session.authorizationHeader(),batchId,body):"close".equals(action)?api.closeReturnBox(session.authorizationHeader(),batchId,body):api.finishReturns(session.authorizationHeader(),batchId,body)).execute();
             if(!r.isSuccessful()){
                 String error=r.errorBody()==null?"Ошибка "+r.code():r.errorBody().string();
                 try{error=new JSONObject(error).optString("message",error);}catch(Exception ignored){}
                 final String msg=error;main.post(()->{busy=false;message=msg;if(r.code()>=400&&r.code()<500){pendingAction="";pending.clear();save();}render();});return;
             }
-            main.post(()->{busy=false;if("create".equals(action)&&r.body()!=null)batchId=String.valueOf(r.body().get("id"));if("scan".equals(action)){code="";barcode="";}pendingAction="";pending.clear();save();message="Сохранено";refresh();});
+            main.post(()->{busy=false;if("create".equals(action)&&r.body()!=null)batchId=String.valueOf(r.body().get("id"));if("scan".equals(action)){code="";barcode="";}if("mark".equals(action)){releaseUnit="";releaseBarcode="";}pendingAction="";pending.clear();save();message="Сохранено";refresh();});
         }catch(Exception e){main.post(()->{busy=false;message="Нет подтверждения: "+e.getMessage();render();});}});
     }
 }

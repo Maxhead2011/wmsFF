@@ -1,0 +1,36 @@
+// TEST: compiled production candidate against disposable PostgreSQL only.
+const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto');
+const {PrismaClient}=require('@prisma/client');
+const {ReturnsService}=require('/app/apps/api/dist/modules/returns/returns.service');
+const {ClientScopeService}=require('/app/apps/api/dist/modules/auth/client-scope.service');
+const db=new PrismaClient();
+(async()=>{
+ assert(process.env.DATABASE_URL.includes('returns-kiz-test-20261122-pg'));
+ const clientId=randomUUID(),warehouseId=randomUUID(),id=randomUUID(),skuId=randomUUID(),boxId=randomUUID(),batchId=randomUUID(),code='TEST-'+randomUUID();
+ await db.client.create({data:{id:clientId,code,name:'Test'}});
+ await db.warehouse.create({data:{id:warehouseId,code,name:'Test'}});
+ await db.user.create({data:{id,email:id+'@example.invalid',name:'Test',passwordHash:'not-a-login'}});
+ await db.sku.create({data:{id:skuId,clientId,internalSku:code,name:'Suit XL',needsChestnyZnak:true,barcodes:{create:{value:code}}}});
+ await db.box.create({data:{id:boxId,clientId,warehouseId,code}});
+ const user={id,name:'Test',roleCodes:['WORKER'],permissionCodes:['stock:read','stock:write'],activeWarehouseId:warehouseId,warehouseIds:[warehouseId],writableWarehouseIds:[warehouseId],clientScopeMode:'LIMITED',clientIds:[clientId],writableClientIds:[clientId]};
+ const service=new ReturnsService(db,new ClientScopeService());
+ await service.create({id:batchId,clientId},user);
+ const unitId=randomUUID(),scan={id:unitId,marketplace:'WILDBERRIES',returnCode:code,barcode:code,boxCode:code,condition:'NORMAL'};
+ await service.scan(batchId,scan,user);await service.finish(batchId,user);
+ const before=await db.returnUnit.findUniqueOrThrow({where:{id:unitId}});
+ await assert.rejects(()=>service.closeBox(batchId,code,user));
+ const dto={unitId,boxCode:code,barcode:code,kiz:'010461046084052621ABCDEFGHIJKLM\u001d91ABCD\u001d92testcrypto'};
+ await Promise.all([service.mark(batchId,dto,user),service.mark(batchId,dto,user)]);
+ assert.equal(await db.stockBalance.count({where:{clientId,status:'AVAILABLE',quantity:{gt:0}}}),0);
+ assert.equal(await db.productMark.count({where:{clientId,status:'QUARANTINE'}}),1);
+ await Promise.all([service.closeBox(batchId,code,user),service.closeBox(batchId,code,user)]);
+ await service.finish(batchId,user);await service.mark(batchId,dto,user);
+ assert.equal(await db.stockMovement.count({where:{clientId,type:'RETURN'}}),1);
+ assert.equal(await db.stockMovement.count({where:{clientId,type:'MOVE'}}),1);
+ assert.equal(await db.billingCharge.count({where:{clientId}}),1);
+ assert.equal(await db.productMark.count({where:{clientId,status:'AVAILABLE'}}),1);
+ assert.equal((await db.stockBalance.aggregate({where:{clientId},_sum:{quantity:true}}))._sum.quantity,1);
+ assert.equal((await db.returnUnit.findUniqueOrThrow({where:{id:unitId}})).receivedAt.toISOString(),before.receivedAt.toISOString());
+ assert((await service.findBox(clientId,code,user)).units[0].releasedAt);
+ console.log('Compiled runtime: mark quarantines; close releases once; receipt, quantity, billing and storage date preserved');
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>db.$disconnect());

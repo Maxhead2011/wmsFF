@@ -11,6 +11,7 @@ const url = process.env.RETURNS_TEST_DATABASE_URL;
 describe.skipIf(!url)('returns PostgreSQL concurrency', () => {
   const db = new PrismaClient({ datasources: { db: { url: url ?? 'postgresql://unused@127.0.0.1:1/unused' } } });
   const clientId = randomUUID(), warehouseId = randomUUID(), userId = randomUUID(), skuId = randomUUID(), boxId = randomUUID();
+  const kizCode = '010461046084052621' + randomUUID().replace(/-/g, '').slice(0, 13) + '\u001d91ABCD\u001d92testcrypto';
   const batchId = randomUUID(), code = `RETURN-${randomUUID()}`;
   const actor = { id: userId, name: 'Return test', roleCodes: ['WORKER'], permissionCodes: ['stock:read', 'stock:write'], activeWarehouseId: warehouseId,
     warehouseIds: [warehouseId], writableWarehouseIds: [warehouseId], clientScopeMode: 'LIMITED', clientIds: [clientId], writableClientIds: [clientId] } as AuthUser;
@@ -54,4 +55,89 @@ describe.skipIf(!url)('returns PostgreSQL concurrency', () => {
     expect(workbook.worksheets[0].getRow(2).getCell(1).value).toBe(code);
     expect(workbook.worksheets[0].getRow(2).getCell(2).value).toBe(code);
   });
+  // TEST: invalid/foreign scans leave the physically received return quarantined.
+  it('rejects missing crypto, wrong box/product, damaged condition and foreign warehouse', async () => {
+    const unit = await db.returnUnit.findFirstOrThrow({ where: { batchId } });
+    const dto = { unitId: unit.id, boxCode: code, barcode: code, kiz: kizCode };
+    await expect(service.mark(batchId, { ...dto, kiz: dto.kiz.split('\u001d')[0] }, actor)).rejects.toThrow('полный');
+    await expect(service.mark(batchId, { ...dto, boxCode: 'other' }, actor)).rejects.toThrow('не совпадает');
+    await expect(service.mark(batchId, { ...dto, barcode: 'other' }, actor)).rejects.toThrow('не совпадает');
+    await expect(service.mark(batchId, dto, { ...actor, activeWarehouseId: 'other' })).rejects.toThrow();
+    await db.returnUnit.update({ where: { id: unit.id }, data: { condition: 'DAMAGED' } });
+    await expect(service.mark(batchId, dto, actor)).rejects.toThrow('нормальном состоянии');
+    await db.returnUnit.update({ where: { id: unit.id }, data: { condition: 'NORMAL' } });
+    expect(await db.stockBalance.count({ where: { clientId, status: 'AVAILABLE', quantity: { gt: 0 } } })).toBe(0);
+  });
+  // TEST: failure after the balance/mark writes rolls the complete release back.
+  it('rolls back stock, mark and registry if the audit write fails', async () => {
+    const unit = await db.returnUnit.findFirstOrThrow({ where: { batchId } });
+    const faulty = new ReturnsService({ $transaction: (fn: any) => db.$transaction(tx => fn(new Proxy(tx, { get(target, key) { return key === 'auditLog' ? { create() { throw new Error('test audit failure'); } } : Reflect.get(target, key); } }))) } as never, new ClientScopeService());
+    await expect(faulty.mark(batchId, { unitId: unit.id, boxCode: code, barcode: code, kiz: kizCode }, actor)).rejects.toThrow('test audit failure');
+    expect(await db.productMark.count({ where: { clientId } })).toBe(0);
+    expect(await db.stockMovement.count({ where: { clientId, type: 'MOVE' } })).toBe(0);
+    expect(await db.kizClientRegistry.count({ where: { clientId } })).toBe(0);
+    expect((await db.stockBalance.findFirstOrThrow({ where: { clientId } })).quantity).toBe(1);
+  });
+  it('releases one unit once under concurrency without another receipt, charge or storage start', async () => {
+    const unit = await db.returnUnit.findFirstOrThrow({ where: { batchId } });
+    const dto = { unitId: unit.id, boxCode: code, barcode: code, kiz: kizCode };
+    await Promise.all([service.mark(batchId, dto, actor), service.mark(batchId, dto, actor)]);
+    await service.mark(batchId, dto, actor);
+    expect(await db.stockBalance.count({ where: { clientId, status: 'AVAILABLE', quantity: { gt: 0 } } })).toBe(0);
+    expect(await db.productMark.count({ where: { clientId, status: 'QUARANTINE' } })).toBe(1);
+    await Promise.all([service.closeBox(batchId, code, actor), service.closeBox(batchId, code, actor)]);
+    await service.closeBox(batchId, code, actor);
+    await service.finish(batchId, actor);
+    expect(await db.stockMovement.count({ where: { clientId, type: 'RETURN' } })).toBe(1);
+    expect(await db.stockMovement.count({ where: { clientId, type: 'MOVE' } })).toBe(1);
+    expect(await db.billingCharge.count({ where: { clientId } })).toBe(1);
+    expect(await db.productMark.count({ where: { clientId, status: 'AVAILABLE' } })).toBe(1);
+    const balances = await db.stockBalance.findMany({ where: { clientId } });
+    expect(balances.reduce((n, b) => n + b.quantity, 0)).toBe(1);
+    expect(balances.find(b => b.status === 'QUARANTINE')?.quantity).toBe(0);
+    expect(balances.find(b => b.status === 'AVAILABLE')?.quantity).toBe(1);
+    const after = await db.returnUnit.findUniqueOrThrow({ where: { id: unit.id } });
+    expect(after.receivedAt).toEqual(unit.receivedAt); expect(after.releasedAt).not.toBeNull();
+    expect((await db.kizClientRegistry.findFirstOrThrow({ where: { clientId } })).firstReceivedAt).toEqual(unit.receivedAt);
+    await expect(service.mark(batchId, { ...dto, kiz: dto.kiz.replace(dto.kiz.slice(18, 31), 'BBBBBBBBBBBBB') }, actor)).rejects.toThrow('другим КИЗ');
+    expect((await new StorageOverviewService(db as never, new ClientScopeService()).getOverview({ clientId }, actor)).totals.quantity).toBe(1);
+  });
+  it('does not reuse a KIZ on another return or accept a known other-size GTIN', async () => {
+    const secondBatch = randomUUID(), secondBox = 'SECOND-' + randomUUID(), secondUnit = randomUUID();
+    await db.box.create({ data: { code: secondBox, clientId, warehouseId } });
+    await service.create({ id: secondBatch, clientId }, actor);
+    await service.scan(secondBatch, { id: secondUnit, marketplace: 'OZON', returnCode: randomUUID(), barcode: code, boxCode: secondBox, condition: 'NORMAL' }, actor);
+    await service.finish(secondBatch, actor);
+    const dto = { unitId: secondUnit, boxCode: secondBox, barcode: code, kiz: kizCode };
+    await expect(service.mark(secondBatch, dto, actor)).rejects.toThrow('уже использовался');
+    const wrongSku = await db.sku.create({ data: { clientId, internalSku: 'WRONG-' + code, name: 'Other size' } });
+    await db.productMark.create({ data: { clientId, skuId: wrongSku.id, value: '010461046084053321CCCCCCCCCCCCC\u001d91ABCD\u001d92testcrypto' } });
+    await expect(service.mark(secondBatch, { ...dto, kiz: '010461046084053321DDDDDDDDDDDDD\u001d91ABCD\u001d92testcrypto' }, actor)).rejects.toThrow('другим товаром');
+    expect((await db.returnUnit.findUniqueOrThrow({ where: { id: secondUnit } })).releasedAt).toBeNull();
+  });
+  // TEST: incomplete boxes cannot release; failure on closing rolls back the entire box.
+  it('keeps partial marking quarantined and closes all units atomically', async () => {
+    const id = randomUUID(), boxCode = 'PAIR-' + randomUUID(), ids = [randomUUID(), randomUUID()];
+    const box = await db.box.create({ data: { code: boxCode, clientId, warehouseId } });
+    await service.create({ id, clientId }, actor);
+    for (const unitId of ids) await service.scan(id, { id: unitId, marketplace: 'OZON', returnCode: randomUUID(), barcode: code, boxCode, condition: 'NORMAL' }, actor);
+    await service.finish(id, actor);
+    const mark = (unitId: string) => service.mark(id, { unitId, boxCode, barcode: code, kiz: '010461046084052621' + randomUUID().replace(/-/g, '').slice(0, 13) + '\u001d91ABCD\u001d92testcrypto' }, actor);
+    await mark(ids[0]);
+    await expect(service.closeBox(id, boxCode, actor)).rejects.toThrow('всех единиц');
+    expect(await db.stockBalance.count({ where: { boxId: box.id, status: 'AVAILABLE', quantity: { gt: 0 } } })).toBe(0);
+    await mark(ids[1]);
+    const faulty = new ReturnsService({ $transaction: (fn: any) => db.$transaction(tx => fn(new Proxy(tx, { get(target, key) { return key === 'auditLog' ? { create() { throw new Error('close failure'); } } : Reflect.get(target, key); } }))) } as never, new ClientScopeService());
+    await expect(faulty.closeBox(id, boxCode, actor)).rejects.toThrow('close failure');
+    expect(await db.returnUnit.count({ where: { batchId: id, releasedAt: { not: null } } })).toBe(0);
+    expect(await db.productMark.count({ where: { boxId: box.id, status: 'QUARANTINE' } })).toBe(2);
+    const chargesBefore = await db.billingCharge.count({ where: { clientId } });
+    await Promise.all([service.closeBox(id, boxCode, actor), service.closeBox(id, boxCode, actor)]);
+    expect((await db.stockBalance.findFirstOrThrow({ where: { boxId: box.id, status: 'AVAILABLE' } })).quantity).toBe(2);
+    expect(await db.stockMovement.count({ where: { boxId: box.id, type: 'RETURN' } })).toBe(2);
+    expect(await db.stockMovement.count({ where: { boxId: box.id, type: 'MOVE' } })).toBe(2);
+    expect(await db.billingCharge.count({ where: { clientId } })).toBe(chargesBefore);
+    expect((await service.findBox(clientId, boxCode, actor)).units.every(u => u.releasedAt)).toBe(true);
+  });
+
 });
