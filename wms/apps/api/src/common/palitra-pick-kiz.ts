@@ -2,9 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { clientKizFilter, clientKizIdentity } from './kiz-client-registry';
 
-const palitra = 'e8597352-0b93-442c-9582-c694620a9695';
-export const palitraPickEnabled = (clientId: string) =>
-  clientId === palitra && process.env.WMS_PALITRA_PICK_KIZ === 'true';
+import { activeRule } from './client-fulfillment-policy';
 
 interface PickInput {
   clientId: string; skuId: string; boxId?: string | null; warehouseId?: string | null; kiz: string;
@@ -14,7 +12,7 @@ interface PickInput {
 export async function checkNewPickMark(tx: any, input: PickInput) {
   const {clientId, skuId, boxId, warehouseId, kiz} = input;
   const identity = clientKizIdentity(kiz);
-  if (clientId !== palitra || !identity || !warehouseId) throw new ConflictException('Для привязки КИЗ подтвердите товар и исходный короб.');
+  if (!identity || !warehouseId) throw new ConflictException('Для привязки КИЗ подтвердите товар и исходный короб.');
   await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${'sorting-kiz:'+identity}))::text`);
   if (boxId) {
   const boxes = await tx.$queryRaw(Prisma.sql`SELECT id FROM "Box" WHERE id=${boxId} AND "clientId"=${clientId} AND "warehouseId"=${warehouseId} AND status='active' FOR UPDATE`);
@@ -44,7 +42,7 @@ export async function checkNewPickMark(tx: any, input: PickInput) {
 }
 
 export async function bindNewPickMark(tx:any,input:PickInput,requestId:string) {
-  if (!palitraPickEnabled(input.clientId)) return null;
+  if (!(await activeRule(tx,input.clientId,'pickKiz'))) return null;
   const stockMovementId=await checkNewPickMark(tx,input);
   return tx.productMark.create({data:{clientId:input.clientId,skuId:input.skuId,boxId:input.boxId,value:input.kiz.trim(),
     stockMovementId,status:'AVAILABLE',sourceDocument:`PICK:${requestId}`},include:{box:true,sku:true}});

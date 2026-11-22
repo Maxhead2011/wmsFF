@@ -1,4 +1,5 @@
-import { bindNewPickMark, palitraPickEnabled } from '../../common/palitra-pick-kiz';
+import { activeRule } from '../../common/client-fulfillment-policy';
+import { bindNewPickMark } from '../../common/palitra-pick-kiz';
 import { fboBoxStatistics } from './fbo-box-statistics';
 import {assertOzonBoxZones} from './ozon-box-zones';
 import {fboCompletionBatchEnabled,validateFboPackedBoxes,fboCompletionPackages,saveFboCompletionSelections,fboCompletionStage,fboCompletionError} from './fbo-completion-batch';
@@ -282,7 +283,7 @@ export class FboTwoStageService {
             packingByProductSupported: !!ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
             packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
             packingSuggestions: ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
-                ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units, process.env.WMS_OZON_BOX_ZONES_ENABLED === 'true' ? {integration:ozonShipment.integration, clientId:r.clientId} : undefined) : [],
+                ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units, await activeRule(tx,r.clientId,'zones') ? {integration:ozonShipment.integration, enabled:true} : undefined) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
             ozonLabelControlRequired: !!ozonShipment&&ozonLabelControlEnabled()&&assembly?.phase!=='COMPLETED',
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
@@ -411,7 +412,7 @@ export class FboTwoStageService {
                     const marked = (line.sku!.needsChestnyZnak && !line.sku!.isUnmarked) || marks.some(m => m.skuId === line.skuId && m.status === 'AVAILABLE');
                     if (marked && !dto.kiz)
                         throw new BadRequestException('После ШК отсканируйте КИЗ.');
-                    const mark = dto.kiz && palitraPickEnabled(r.clientId)
+                    const mark = dto.kiz && await activeRule(tx,r.clientId,'pickKiz')
                         ? await clientPhysicalMark(tx,r.clientId,dto.kiz) ?? await bindNewPickMark(tx,{clientId:r.clientId,skuId:line.skuId!,boxId:source.id,warehouseId:r.warehouseId,kiz:dto.kiz},r.id)
                         : dto.kiz ? await this.exactMark(tx,dto.kiz,r.clientId) : null;
                     if (mark && (mark.clientId !== r.clientId || mark.skuId !== line.skuId || mark.boxId !== source.id || mark.status !== 'AVAILABLE'))
@@ -499,8 +500,8 @@ export class FboTwoStageService {
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
                 assertLamodaRelabelPacked(relabelRequired,unit.lamodaRelabelConfirmedAt);
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);
-                if (ozonShipment && process.env.WMS_OZON_BOX_ZONES_ENABLED === 'true') {
-                    assertOzonBoxZones(ozonShipment.integration, parcel.direction, directions ?? [], units.filter(u => u.state === 'PACKED' && u.targetBoxId === target.id).map(u => u.skuId), unit.skuId, r.clientId);
+                if (ozonShipment && await activeRule(tx,r.clientId,'zones')) {
+                    assertOzonBoxZones(ozonShipment.integration, parcel.direction, directions ?? [], units.filter(u => u.state === 'PACKED' && u.targetBoxId === target.id).map(u => u.skuId), unit.skuId, r.clientId, true);
                 }
                 const holding = await tx.box.findUniqueOrThrow({ where: { code: `FBO-PICK-${id}` } });
                 const movement = await this.move(tx, r, unit.skuId, holding.id, target.id, 'PACKING', 'PACKING', 1, key, user);

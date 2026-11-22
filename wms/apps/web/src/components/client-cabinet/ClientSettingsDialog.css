@@ -1,0 +1,15 @@
+.client-settings-launch,.client-settings-dialog button {border:1px solid var(--line,#ccd5db);border-radius:.65rem;padding:.55rem .9rem;color:inherit;background:var(--panel,#fff);font:inherit;font-weight:600;cursor:pointer}
+.client-settings-launch:hover,.client-settings-dialog button:enabled:hover {border-color:currentColor}
+.client-settings-dialog button:disabled {opacity:.55;cursor:default}
+.client-settings-dialog {width:min(52rem,94vw);max-height:85vh;padding:0;color:inherit;background:var(--panel,#fff);border:1px solid var(--line,#ccd5db);border-radius:1rem;box-shadow:0 1rem 4rem #10233833}
+.client-settings-dialog::backdrop {background:#14263880}
+.client-settings-dialog header {display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:inherit;padding:1rem 1.4rem;border-bottom:1px solid var(--line,#ccd5db);z-index:1}
+.client-settings-dialog h2 {margin:0;font-size:1.25rem}
+.client-settings-fields {border:0;padding:.5rem 1.4rem 1.4rem;min-width:0}
+.client-settings-fields section {padding:1rem;margin:.75rem 0;border:1px solid var(--line,#ccd5db);border-radius:.8rem}
+.client-settings-fields section fieldset {border:0;margin:.75rem 0;padding:0;min-width:0}
+.client-rule {display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.65rem 0}
+.client-rule input {width:2.5rem;height:1.4rem;appearance:none;border-radius:1rem;background:#78838e;cursor:pointer}
+.client-rule input:before {content:'';display:block;width:1rem;height:1rem;margin:.2rem;background:white;border-radius:50%}
+.client-rule input:checked {background:#485dbe}
+.client-rule input:checked:before {transform:translateX(1.1rem)}

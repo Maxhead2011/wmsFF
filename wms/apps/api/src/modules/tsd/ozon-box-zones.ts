@@ -2,11 +2,10 @@ import {ConflictException} from '@nestjs/common';
 import type {SupplyIntegration} from '../client-requests/ozon-supply-policy';
 import type {OzonDirection} from './ozon-fbo-directions';
 
-// FIX: placement-zone checks apply only to ООО «ПАЛИТРА» (CL-000002).
-const palitraClientId = 'e8597352-0b93-442c-9582-c694620a9695';
+import { palitraClientId } from '../../common/client-fulfillment-policy';
 
-export function assertOzonBoxZones(raw: unknown, name: string | null | undefined, directions: OzonDirection[], packed: string[], added: string, clientId = '') {
-  if (clientId !== palitraClientId) return;
+export function assertOzonBoxZones(raw: unknown, name: string | null | undefined, directions: OzonDirection[], packed: string[], added: string, clientId = '', enabled = clientId === palitraClientId) {
+  if (!enabled) return;
   const skus = new Set([...packed, added]);
   if (skus.size < 2) return;
   const link = raw as SupplyIntegration | null;

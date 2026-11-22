@@ -1,3 +1,4 @@
+import { requireSettingsEditor } from '../../common/client-fulfillment-policy';
 import { Body, Controller, Get, Param, Put } from '@nestjs/common';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
@@ -15,6 +16,7 @@ export class ProductDisplayController {
   @Put()
   @RequirePermissions('clients:write')
   save(@Param('clientId') id: string, @Body('fields') fields: unknown, @CurrentUser() user: AuthUser) {
+    requireSettingsEditor(user.roleCodes);
     return this.display.save(id, fields, user);
   }
 }
