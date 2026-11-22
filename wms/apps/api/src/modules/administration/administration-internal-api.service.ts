@@ -317,7 +317,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'stock',
     name: 'Остатки',
     prefixes: ['/stock', '/returns'],
-    routeCount: 29, // FIX: five isolated return sorting, storage and export routes.
+    routeCount: 32, // FIX: eight isolated return processing routes.
     description: 'Доступные, резервные и физические остатки WMS и их движения.',
     logic: ['Считает остаток по коробу, SKU, клиенту и филиалу.', 'Создаёт движения при приёмке, резерве и отгрузке.', 'Формирует отчёты и сверки остатков.'],
     dependencies: ['Основная БД', 'Складские движения'],

@@ -779,7 +779,6 @@ public class MainActivity extends Activity {
             ));
         } else {
             root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
-            if ("logoff".equals(BuildConfig.FLAVOR)) ReturnsActivity.addMenu(this, root);
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
             root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
                 if ("logoff".equals(BuildConfig.FLAVOR)) renderFboMenu(); else openAssemblyRequests();
@@ -809,6 +808,7 @@ public class MainActivity extends Activity {
                 view -> togglePhoneMode()
             ));
         }
+        if ("logoff".equals(BuildConfig.FLAVOR)) ReturnsActivity.addMenu(this, root);
         root.addView(secondaryButton(tr("Синхронизировать очередь", "Navbatni sinxronlash") + " (" + pendingCount + ")", view -> syncPending()));
         if (!isWarehouseKeeperOnly(session)) {
             root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));

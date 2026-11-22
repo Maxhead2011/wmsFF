@@ -4,7 +4,8 @@ import ExcelJS from 'exceljs';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
-import { CreateReturnBatchDto, ScanReturnDto } from './returns.dto';
+import { CreateReturnBatchDto, ScanReturnDto, MarkReturnDto } from './returns.dto';
+import { clientKizIdentity, clientKizFilter, lockClientKiz, lookupClientKiz } from '../../common/kiz-client-registry';
 import { RETURN_PROCESSING_SERVICE, RETURN_STORAGE_STATUS, returnChargeKey, returnConditions, returnReceiptKey } from './returns-policy';
 
 @Injectable()
@@ -116,6 +117,86 @@ export class ReturnsService {
     }, { timeout: 30000 });
   }
 
+  async mark(id: string, dto: MarkReturnDto, user: AuthUser) {
+    const kiz = dto.kiz.trim().replace(/^\]d2/i, '').replace(/<GS>/gi, '\u001d')
+      .replace(/^\(01\)(\d{14})\(21\)/, '01$121').replace(/^(01\d{14})\u001d21/, '$121');
+    const identity = clientKizIdentity(kiz);
+    if (!identity || !/^(?:\u001d91[^\s\u001d]{4}\u001d92[^\s\u001d]{4,}|\u001d93[^\s\u001d]{4,})$/.test(kiz.slice(identity.length))) {
+      throw new BadRequestException('Сканируйте полный Data Matrix КИЗ с проверочной частью.');
+    }
+    // FIX: scanning reserves the KIZ in quarantine; only closing the whole box releases stock.
+    return this.db.$transaction(async tx => {
+      const batch = await this.lockedBatch(tx, id, user);
+      const unit = await tx.returnUnit.findUnique({ where: { id: dto.unitId } });
+      if (!unit || unit.batchId !== id) throw new NotFoundException('Единица возврата не найдена в партии.');
+      if (unit.boxCode !== dto.boxCode.trim() || unit.barcode !== dto.barcode.trim()) throw new ConflictException('Короб или ШК не совпадает с выбранной единицей возврата.');
+      if (unit.kiz) {
+        if (unit.kiz !== kiz) throw new ConflictException('Эта единица уже маркирована другим КИЗ.');
+        return unit;
+      }
+      if (batch.status !== 'STORED' || !unit.receivedAt || unit.condition !== 'NORMAL') throw new ConflictException('Выпуск доступен только принятым возвратам в нормальном состоянии.');
+      await tx.$queryRaw`SELECT "id" FROM "Box" WHERE "id" = ${unit.boxId} FOR UPDATE`;
+      const box = await tx.box.findUniqueOrThrow({ where: { id: unit.boxId } });
+      if (box.status !== 'active' || box.clientId !== batch.clientId || box.warehouseId !== batch.warehouseId || box.code !== unit.boxCode) throw new ConflictException('Размещение короба изменилось. Проверьте возврат.');
+      await lockClientKiz(tx, batch.clientId, identity);
+      if (await lookupClientKiz(tx, batch.clientId, kiz, batch.warehouseId)) throw new ConflictException('КИЗ уже использовался. Нужен новый КИЗ клиента; прежние привязки не изменены.');
+      if (await tx.productMark.findFirst({ where: clientKizFilter(identity) })) throw new ConflictException('КИЗ уже зарегистрирован. Выпуск не выполнен.');
+      const gtin = identity.slice(2, 16);
+      const known = await tx.productMark.findMany({ where: { clientId: batch.clientId, OR: [
+        { value: { startsWith: '01' + gtin } }, { value: { startsWith: ']d201' + gtin } }, { value: { startsWith: '(01)' + gtin } },
+      ] }, select: { skuId: true, value: true } });
+      if (known.some(m => clientKizIdentity(m.value).slice(2, 16) === gtin && m.skuId !== unit.skuId)) throw new ConflictException('GTIN КИЗ связан с другим товаром или размером. Проверьте маркировку.');
+      const balances = await tx.stockBalance.findMany({ where: { clientId: batch.clientId, warehouseId: batch.warehouseId, skuId: unit.skuId, boxId: unit.boxId, status: 'QUARANTINE', quantity: { gt: 0 } } });
+      if (balances.length !== 1 || balances[0].palletId !== box.palletId) throw new ConflictException('Карантинный остаток или размещение изменилось. Выпуск не выполнен.');
+      const receipt = await tx.stockMovement.findUniqueOrThrow({ where: { idempotencyKey: returnReceiptKey(unit.id) } });
+      const mark = await tx.productMark.create({ data: { clientId: batch.clientId, skuId: unit.skuId, boxId: unit.boxId, value: kiz, status: 'QUARANTINE', stockMovementId: receipt.id, sourceDocument: `returns:${id}` } });
+      await tx.kizClientRegistry.create({ data: { clientId: batch.clientId, identity, firstReceivedAt: unit.receivedAt, firstBoxCode: unit.boxCode, firstWarehouseId: batch.warehouseId,
+        skuId: unit.skuId, productName: unit.productName, barcode: unit.barcode, operationKey: `returns:release:${unit.id}`, sourceDocument: `returns:${id}`, userId: user.id, source: 'RETURN_MARKING' } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'RETURN_KIZ_SCANNED', entity: 'ReturnUnit', entityId: unit.id, payload: { batchId: id, markId: mark.id, movementId: receipt.id, identity, boxCode: unit.boxCode, fromStatus: 'QUARANTINE', toStatus: 'QUARANTINE', originalReceivedAt: unit.receivedAt.toISOString() } } });
+      return tx.returnUnit.update({ where: { id: unit.id }, data: { kiz } });
+    }, { timeout: 30000 });
+  }
+
+  async findBox(clientId: string, boxCode: string, user: AuthUser) {
+    const warehouseId = this.scope(user, clientId);
+    const batch = await this.db.returnBatch.findFirst({ where: { clientId, warehouseId, status: 'STORED', units: { some: { boxCode: boxCode.trim() } } }, include: { units: { where: { boxCode: boxCode.trim() }, orderBy: { createdAt: 'asc' } } } });
+    if (!batch) throw new NotFoundException('Принятый короб возвратов не найден у клиента в этом филиале.');
+    return batch;
+  }
+
+  async closeBox(id: string, boxCode: string, user: AuthUser) {
+    // FIX: all units leave quarantine in one transaction, with a repeat-safe final state.
+    return this.db.$transaction(async tx => {
+      const batch = await this.lockedBatch(tx, id, user);
+      const units = await tx.returnUnit.findMany({ where: { batchId: id, boxCode: boxCode.trim() }, orderBy: { id: 'asc' } });
+      if (!units.length || batch.status !== 'STORED') throw new ConflictException('Короб не принят в этой партии возвратов.');
+      if (units.every(u => u.releasedAt)) return { boxCode: boxCode.trim(), units, released: true };
+      if (units.some(u => u.releasedAt || !u.receivedAt || u.condition !== 'NORMAL' || !u.kiz)) throw new ConflictException('Для закрытия короба отсканируйте пары ШК–КИЗ всех единиц. Допускается только нормальное состояние.');
+      const boxId = units[0].boxId;
+      await tx.$queryRaw`SELECT "id" FROM "Box" WHERE "id" = ${boxId} FOR UPDATE`;
+      const box = await tx.box.findUniqueOrThrow({ where: { id: boxId } });
+      if (box.status !== 'active' || box.clientId !== batch.clientId || box.warehouseId !== batch.warehouseId || units.some(u => u.boxId !== boxId)) throw new ConflictException('Размещение короба изменилось.');
+      const now = new Date();
+      for (const unit of units) {
+        const sources = await tx.stockBalance.findMany({ where: { clientId: batch.clientId, warehouseId: batch.warehouseId, skuId: unit.skuId, boxId, status: 'QUARANTINE', quantity: { gt: 0 } } });
+        if (sources.length !== 1 || sources[0].palletId !== box.palletId) throw new ConflictException('Карантинный остаток изменился. Короб не закрыт.');
+        const mark = await tx.productMark.findUnique({ where: { clientId_value: { clientId: batch.clientId, value: unit.kiz! } } });
+        if (!mark || mark.status !== 'QUARANTINE' || mark.skuId !== unit.skuId || mark.boxId !== boxId) throw new ConflictException('Привязка КИЗ изменилась. Короб не закрыт.');
+        const taken = await tx.stockBalance.updateMany({ where: { id: sources[0].id, status: 'QUARANTINE', quantity: { gt: 0 } }, data: { quantity: { decrement: 1 } } });
+        if (taken.count !== 1) throw new ConflictException('Карантинный остаток уже изменился.');
+        const balanceKey = [batch.clientId, unit.skuId, boxId, box.palletId ?? 'no-pallet', 'AVAILABLE'].join(':');
+        await tx.stockBalance.upsert({ where: { balanceKey }, update: { quantity: { increment: 1 } }, create: { balanceKey, clientId: batch.clientId, warehouseId: batch.warehouseId, skuId: unit.skuId, boxId, palletId: box.palletId, status: 'AVAILABLE', quantity: 1 } });
+        const movement = await tx.stockMovement.create({ data: { clientId: batch.clientId, warehouseId: batch.warehouseId, skuId: unit.skuId, boxId, palletId: box.palletId, type: 'MOVE', status: 'AVAILABLE', quantity: 1,
+          idempotencyKey: `returns:release:${unit.id}`, sourceDocument: `returns:${id}`, comment: `Закрытие маркированного короба возвратов; ${user.name}` } });
+        const updated = await tx.productMark.updateMany({ where: { id: mark.id, status: 'QUARANTINE', boxId, skuId: unit.skuId }, data: { status: 'AVAILABLE', stockMovementId: movement.id } });
+        if (updated.count !== 1) throw new ConflictException('КИЗ изменился во время закрытия.');
+        await tx.returnUnit.update({ where: { id: unit.id }, data: { releasedAt: now } });
+      }
+      await tx.auditLog.create({ data: { userId: user.id, action: 'RETURN_BOX_RELEASE', entity: 'Box', entityId: boxId, payload: { batchId: id, boxCode: box.code, unitIds: units.map(u => u.id), quantity: units.length } } });
+      return { boxCode: box.code, released: true, units: await tx.returnUnit.findMany({ where: { batchId: id, boxId } }) };
+    }, { timeout: 30000 });
+  }
+
   async export(id: string, user: AuthUser) {
     const batch = await this.db.returnBatch.findUnique({ where: { id }, include: { units: true } });
     if (!batch) throw new NotFoundException();
@@ -123,9 +204,9 @@ export class ReturnsService {
     const skus = await this.db.sku.findMany({ where: { clientId: batch.clientId, id: { in: [...new Set(batch.units.map(u => u.skuId))] } }, select: { id: true, article: true, size: true } });
     const products = new Map(skus.map(s => [s.id, s]));
     const book = new ExcelJS.Workbook();
-    for (const [name, units] of [['Все возвраты', batch.units], ['Ожидают КИЗ', batch.units.filter(u => u.condition === 'NORMAL' && !u.releasedAt)]] as const) {
+    for (const [name, units] of [['Все возвраты', batch.units], ['Ожидают КИЗ', batch.units.filter(u => u.condition === 'NORMAL' && !u.kiz)]] as const) {
       const sheet = book.addWorksheet(name);
-      sheet.columns = [{ header: 'Короб', key: 'boxCode', width: 28 }, { header: 'ШК товара', key: 'barcode', width: 22 }, { header: 'Товар', key: 'productName', width: 45 }, { header: 'Артикул', key: 'article', width: 25 }, { header: 'Размер', key: 'size', width: 15 }, { header: 'Состояние', key: 'condition', width: 30 }, { header: 'Количество', key: 'quantity', width: 14 }, { header: 'Код возврата', key: 'returnCode', width: 32 }, { header: 'Маркетплейс', key: 'marketplace', width: 20 }];
+      sheet.columns = [{ header: 'Короб', key: 'boxCode', width: 28 }, { header: 'ШК товара', key: 'barcode', width: 22 }, { header: 'Товар', key: 'productName', width: 45 }, { header: 'Артикул', key: 'article', width: 25 }, { header: 'Размер', key: 'size', width: 15 }, { header: 'Состояние', key: 'condition', width: 30 }, { header: 'Количество', key: 'quantity', width: 14 }, { header: 'Код возврата', key: 'returnCode', width: 32 }, { header: 'Маркетплейс', key: 'marketplace', width: 20 }, { header: 'КИЗ', key: 'kiz', width: 50 }, { header: 'Выпущено из карантина', key: 'releasedAt', width: 24 }];
       units.forEach(u => sheet.addRow({ ...u, article: products.get(u.skuId)?.article ?? '', size: products.get(u.skuId)?.size ?? '', condition: returnConditions[u.condition], quantity: 1 }));
       sheet.getColumn('barcode').numFmt = '@';
       sheet.getColumn('returnCode').numFmt = '@';
