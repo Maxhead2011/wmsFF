@@ -1,0 +1,142 @@
+{
+  "publication": {
+    "pr": 1059,
+    "images": {
+      "api": "sha256:a4129e1ff2ec82c5e9c55c00ae488cea568ac94ea586a5953a612a558ba0a91a",
+      "web": "sha256:e2e8c707349ef64ea64a777e9ad605684fee597054d782051fc68dbcedfb0c65"
+    },
+    "health": true,
+    "otherContainersUnchanged": true,
+    "environmentUnchanged": true,
+    "noProductionReturnsCreated": true,
+    "noMigration": true
+  },
+  "apk": {
+    "logoff-tsd": {
+      "packageId": "pro.logoff.wms.tsd",
+      "versionCode": 269,
+      "versionName": "0.1.269-returns-kiz",
+      "sha256": "aa4b19d6123729b04d4247deaadf0eaf355a0b17940856fbfd137ad56d0e546b",
+      "size": 6050841,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-returns-kiz-269.apk",
+      "releasedAt": "2026-11-22T11:45:47.929173+00:00",
+      "releaseNotes": "Возвраты: сортировка по клиенту и коробам, карантин до КИЗ, хранение и отдельная обработка."
+    },
+    "logoff-tsd-server-choice": {
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 269,
+      "versionName": "0.1.269-returns-kiz",
+      "sha256": "72c32793e4a9e66e2687ab9683dfd06cf3057f2d592acd8114194d74a6bbc90d",
+      "size": 6054937,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-servers-returns-kiz-269.apk",
+      "releasedAt": "2026-11-22T11:45:47.964703+00:00",
+      "releaseNotes": "Возвраты: сортировка по клиенту и коробам, карантин до КИЗ, хранение и отдельная обработка."
+    }
+  },
+  "isolated": {
+    "image": "sha256:a4129e1ff2ec82c5e9c55c00ae488cea568ac94ea586a5953a612a558ba0a91a",
+    "fullApiHealth": true,
+    "syntheticOnly": true,
+    "markAndCloseVerified": true
+  },
+  "browser": {
+    "synthetic": true,
+    "errors": [],
+    "calls": [
+      [
+        "GET",
+        "/api/v1/auth/me"
+      ],
+      [
+        "GET",
+        "/api/v1/branches"
+      ],
+      [
+        "GET",
+        "/api/v1/kiz/issues"
+      ],
+      [
+        "GET",
+        "/api/v1/warehouse/storage-locations/placement-report"
+      ],
+      [
+        "GET",
+        "/api/v1/inventory/warehouse-problems"
+      ],
+      [
+        "GET",
+        "/api/v1/admin-notifications"
+      ],
+      [
+        "GET",
+        "/api/v1/client-requests/navigation-counts"
+      ],
+      [
+        "GET",
+        "/api/v1/kiz/issues"
+      ],
+      [
+        "GET",
+        "/api/v1/clients"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/cc0c5746-eab8-47f3-b628-b8c418cb3165/scan"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/cc0c5746-eab8-47f3-b628-b8c418cb3165/finish"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "GET",
+        "/api/v1/returns/box"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/cc0c5746-eab8-47f3-b628-b8c418cb3165/mark"
+      ],
+      [
+        "GET",
+        "/api/v1/returns/box"
+      ],
+      [
+        "GET",
+        "/api/v1/returns/box"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/cc0c5746-eab8-47f3-b628-b8c418cb3165/close-box"
+      ],
+      [
+        "GET",
+        "/api/v1/returns/box"
+      ]
+    ],
+    "units": 1,
+    "status": "STORED"
+  },
+  "android": {
+    "main": "INSTRUMENTATION_RESULT: calls=[listClients, createReturns, listReturns, scanReturn, listReturns, finishReturns, listReturns, findReturnBox, markReturn, findReturnBox, closeReturnBox, findReturnBox]\nINSTRUMENTATION_RESULT: verified=published APK: client, return scan, product scan, box, finish, KIZ release; synthetic API only\nINSTRUMENTATION_CODE: -1\n",
+    "servers": "INSTRUMENTATION_RESULT: calls=[listClients, createReturns, listReturns, scanReturn, listReturns, finishReturns, listReturns, findReturnBox, markReturn, findReturnBox, closeReturnBox, findReturnBox]\nINSTRUMENTATION_RESULT: verified=published APK: client, return scan, product scan, box, finish, KIZ release; synthetic API only\nINSTRUMENTATION_CODE: -1\n"
+  }
+}
