@@ -1,3 +1,4 @@
+import { completeMarketAcceptedFbo, marketFboCompletionEnabled } from './market-accepted-fbo';
 import { clientReceiptMarking, assertClientReceiptKiz } from '../../common/client-receipt-kiz-policy';
 import { assertStoreReceipt } from '../clients/client-store-receipt';
 import { assertClientRequestKizShipment, finishClientRequestKizShipment, withClientKizReview } from '../../common/kiz-client-review';
@@ -2039,7 +2040,7 @@ export class StockOperationsService {
     if (process.env.WMS_FBO_TWO_STAGE_ENABLED === 'true') {
       const fbo = await this.prisma.fboAssembly.findUnique({where:{requestId:dto.requestId}});
       fboShipment = Boolean(fbo);
-      if(fbo && fbo.phase !== 'COMPLETED') throw new BadRequestException('Сначала подтвердите все короба поставки ФБО.');
+      if(fbo && fbo.phase !== 'COMPLETED' && !(verifyDelivery && marketFboCompletionEnabled())) throw new BadRequestException('Сначала подтвердите все короба поставки ФБО.');
     }
     await this.inventoryLock?.assertStockMovementsAllowed();
     const warehouseId = this.resolveWritableWarehouseId(user);
@@ -2049,9 +2050,15 @@ export class StockOperationsService {
       // FIX: serialize FBO confirmations before checking stock and billing idempotency.
       if (fboShipment || verifyDelivery) await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id = ${dto.requestId} FOR UPDATE`;
       const doneAt = new Date();
-      const request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
+      let request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
       // FIX: background marketplace evidence is revalidated under the same request lock as the stock mutation.
       if (verifyDelivery) await verifyDelivery(tx);
+      // FIX: marketplace proof and completion share the shipment lock and transaction.
+      if (verifyDelivery && marketFboCompletionEnabled()) {
+        await completeMarketAcceptedFbo(tx, request, user, (dto) => this.packageClientRequest(dto, user, tx));
+        request = await this.loadOutboundRequest(tx, dto.requestId, user, 'Отгрузка');
+      }
+
 
       // Упаковка через ТСД или аварийный workflow могла завершиться без начислений.
       // Перед закрытием восстанавливаем их по фактическим упаковочным местам.

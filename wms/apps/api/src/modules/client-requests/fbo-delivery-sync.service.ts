@@ -1,3 +1,4 @@
+import { marketFboCompletionEnabled } from '../stock/market-accepted-fbo';
 import {ConflictException,Injectable,Logger,OnModuleDestroy,OnModuleInit} from '@nestjs/common';
 import {Prisma} from '@prisma/client';
 import {randomUUID} from 'node:crypto';
@@ -44,7 +45,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
   if(this.running||this.stopped||!fboDeliveryEnabled())return;this.running=true;
   try{
    if(marketStatusScheduleEnabled())return; // FIX: the Moscow schedule owns periodic checks.
-   const rows=await this.db.clientRequest.findMany({where:{type:'OUTBOUND',status:'PACKED',warehouseId:{not:null},client:{isDemo:false},fboAssembly:{phase:'COMPLETED'},fbsOrderLinks:{none:{}},...(this.cursor?{id:{gt:this.cursor}}:{})},orderBy:{id:'asc'},take:100,select:{id:true}});
+   const rows=await this.db.clientRequest.findMany({where:{type:'OUTBOUND',status:marketFboCompletionEnabled()?{in:['SUBMITTED','IN_WORK','PACKED']}:'PACKED',warehouseId:{not:null},client:{isDemo:false},fboAssembly:marketFboCompletionEnabled()?{isNot:null}:{phase:'COMPLETED'},fbsOrderLinks:{none:{}},...(this.cursor?{id:{gt:this.cursor}}:{})},orderBy:{id:'asc'},take:100,select:{id:true}});
    if(!rows.length)this.cursor='';
    let count=0;
    for(const row of rows){
@@ -65,7 +66,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
  }
  private async context(id:string,db:any=this.db){
   const r=await db.clientRequest.findUnique({where:{id},include:{client:{select:{isDemo:true}},fboAssembly:{select:{phase:true}},ozonShipment:{select:{integration:true}},lamodaAssembly:{select:{requestId:true}},yandexFbyShipment:{select:{id:true}},items:{select:{id:true,skuId:true,quantity:true}},_count:{select:{fbsOrderLinks:true}}}});
-  if(!r||r.client.isDemo||r.type!=='OUTBOUND'||!['PACKED','DONE'].includes(r.status)||r.fboAssembly?.phase!=='COMPLETED'||!r.warehouseId||r._count.fbsOrderLinks||r.lamodaAssembly||r.yandexFbyShipment)return null;
+  if(!r||r.client.isDemo||r.type!=='OUTBOUND'||!(marketFboCompletionEnabled()?['SUBMITTED','IN_WORK','PACKED','DONE']:['PACKED','DONE']).includes(r.status)||!r.fboAssembly||(!marketFboCompletionEnabled()&&r.fboAssembly.phase!=='COMPLETED')||!r.warehouseId||r._count.fbsOrderLinks||r.lamodaAssembly||r.yandexFbyShipment)return null;
   if(/^(FBS|DBS)/i.test((r.title??'').trim())||r.comment?.toLocaleLowerCase('ru-RU').includes('создано из fbs-заказов:')||(await readFbsAttemptHistory(db,{requestId:id})).length)return null;
   await assertRequestNotRemoved(db,id);
   const link=r.ozonShipment?.integration??(await db.systemSetting.findUnique({where:{key:'wb-fbo-tracking:v1:'+id}}))?.value;
@@ -75,7 +76,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
   const connection=await db.clientMarketplaceConnection.findFirst({where:{id:link.connectionId,clientId:r.clientId,marketplace:market,isActive:true}});
   if(!connection)return null;
   const dispatch=(await db.systemSetting.findUnique({where:{key:'wb-fbo-dispatch:v1:'+id}}))?.value;
-  if(market==='WILDBERRIES'&&!dispatch?.at)return null;
+  if(market==='WILDBERRIES'&&!dispatch?.at&&!marketFboCompletionEnabled())return null;
   const version=deliveryVersion([r.clientId,r.warehouseId,r.items.sort((a:any,b:any)=>a.id.localeCompare(b.id)),market,
    market==='OZON'?link:[link.connectionId,link.supplyId],dispatch]);
   return {r,link,market,connection,dispatch,version};
@@ -95,7 +96,7 @@ export class FboDeliverySyncService implements OnModuleInit,OnModuleDestroy{
   }else{
    if(!/^[1-9]\d*$/.test(c.link.supplyId)||!Number.isSafeInteger(Number(c.link.supplyId)))throw new ConflictException('Некорректная привязка WB.');
    evidence=await this.wb.remote(c.connection,c.link.supplyId);
-   accepted=wbDeliveryAccepted(evidence,c.r.items.reduce((n:number,i:any)=>n+i.quantity,0),c.dispatch);
+   accepted=wbDeliveryAccepted(evidence,c.r.items.reduce((n:number,i:any)=>n+i.quantity,0),c.dispatch,marketFboCompletionEnabled());
   }
   if(!accepted)return 'WAITING_MARKETPLACE';
   const checkedAt=Date.now();

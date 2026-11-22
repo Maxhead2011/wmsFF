@@ -18,7 +18,7 @@ export function ozonDeliveryProof(link:SupplyIntegration,data:any){
  }
  return orders.map((o:any)=>({orderId:String(o.order_id),state:o.state,supplies:o.supplies.map((s:any)=>({id:String(s.supply_id),state:s.state}))}));
 }
-export function wbDeliveryAccepted(snapshot:any,quantity:number,dispatch:any){
- return Boolean(dispatch?.at&&[4,5,6].includes(snapshot?.statusId)&&Number.isSafeInteger(quantity)&&quantity>0&&snapshot.quantity===quantity);
+export function wbDeliveryAccepted(snapshot:any,quantity:number,dispatch:any,marketplaceConfirmation=false){
+ return Boolean((marketplaceConfirmation||dispatch?.at)&&[4,5,6].includes(snapshot?.statusId)&&Number.isSafeInteger(quantity)&&quantity>0&&snapshot.quantity===quantity);
 }
 export const deliveryRetryMs=(attempt:number)=>Math.min(30*60_000,60_000*2**Math.min(5,Math.max(0,attempt-1)));

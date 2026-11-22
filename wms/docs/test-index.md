@@ -915,3 +915,9 @@ Confirmed FBS handover regression: WB and Ozon closure persist order evidence. M
 Prepared 17.11.2026 — [WB FBS stale-status regression](fbs-stale-wb-status.md). Runtime entry-point tests 7/7, including eight current WB responses and repeat refresh. API 4820 passed/181 skipped, dedicated KIZ suite unavailable; web 644 passed/2 skipped. Candidate only.
 
 Палитра (CL-000002) — первая привязка КИЗ при отборе ФБО и ФБС, в том числе из общего остатка филиала. Флаг WMS_PALITRA_PICK_KIZ. Проверки: palitra-pick-kiz.spec.ts и scripts/releases/palitra-pick-kiz/rollback-check.js.
+
+FBO marketplace completion: test/market-accepted-fbo.spec.ts и test/fbo-delivery-sync.spec.ts — CONTROL, повтор, отсутствие подтверждения, состав, направления и ошибка упаковки.
+
+Планировщик: request-market-status-scheduler.service.ts выбирает ранние этапы ФБО только с новым флагом. Тесты: market-accepted-fbo.spec.ts, fbo-delivery-sync.spec.ts, market-status-schedule.spec.ts, fbo-shipment-timeout.spec.ts.
+
+PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
