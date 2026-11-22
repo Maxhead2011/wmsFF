@@ -8,7 +8,7 @@ export function regroupWorkspaces<T extends Item>(groups: Group<T>[], hostname: 
     ['main', 'Главное', 'overview'],
     ['client', 'Клиентский контур', 'cabinet contracts analytics catalog'],
     ['marketplaces', 'Маркетплейсы', 'requests fbs fbo-ozon dbs operations-statistics'],
-    ['operations', 'Склад и операции', 'warehouse storage-zones inventory kiz kiz-circulation turnover fbs-packed order-assembly relabeling'],
+    ['operations', 'Склад и операции', 'warehouse storage-zones returns inventory kiz kiz-circulation turnover fbs-packed order-assembly relabeling'],
     ['management', 'Управление', 'access monitoring integration-api branches imports services own-companies factory print'],
     ['control', 'Контроль', 'ai administration service debug data'],
     ['logistics', 'Логистика', 'logistics'],

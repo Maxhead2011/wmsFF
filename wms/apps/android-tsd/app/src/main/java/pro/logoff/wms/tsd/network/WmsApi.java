@@ -18,6 +18,15 @@ import retrofit2.http.Url;
 import okhttp3.MultipartBody;
 
 public interface WmsApi {
+    @GET("api/v1/returns")
+    Call<List<Map<String,Object>>> listReturns(@Header("Authorization") String authorization, @Query("clientId") String clientId);
+    @POST("api/v1/returns")
+    Call<Map<String,Object>> createReturns(@Header("Authorization") String authorization, @Body Map<String,String> body);
+    @POST("api/v1/returns/{id}/scan")
+    Call<Map<String,Object>> scanReturn(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String,String> body);
+    @POST("api/v1/returns/{id}/finish")
+    Call<Map<String,Object>> finishReturns(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String,String> body);
+
     @GET("api/v1/tsd/requests/{id}/fbo")
     Call<TsdFboPlan> getFboPlan(@Header("Authorization") String authorization,@Path("id") String id);
     @GET("api/v1/tsd/requests/{id}/fbo")
