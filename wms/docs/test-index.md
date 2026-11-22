@@ -921,3 +921,5 @@ FBO marketplace completion: test/market-accepted-fbo.spec.ts и test/fbo-deliver
 Планировщик: request-market-status-scheduler.service.ts выбирает ранние этапы ФБО только с новым флагом. Тесты: market-accepted-fbo.spec.ts, fbo-delivery-sync.spec.ts, market-status-schedule.spec.ts, fbo-shipment-timeout.spec.ts.
 
 PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
+
+Настройки клиента: client-fulfillment-policy.spec.ts проверяет отдельные ключи и права; ClientSettingsDialog.spec.tsx проверяет окно в режиме просмотра; ozon-box-zones.spec.ts и palitra-pick-kiz.spec.ts покрывают упаковку и маркировку.

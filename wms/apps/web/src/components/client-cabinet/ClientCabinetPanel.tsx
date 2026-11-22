@@ -1,4 +1,4 @@
-import { ClientStoresSettings } from './ClientStoresSettings';
+import { ClientSettingsDialog } from './ClientSettingsDialog';
 import { Ban, CheckCircle2, Pencil, RefreshCw, Save, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -75,8 +75,6 @@ import {
 import { clientStatusLabel, formatCabinetMoney, formatCabinetNumber } from './clientCabinetFormat';
 import { ClientRequestTimelineModal } from './ClientRequestTimelineModal';
 import { ClientBranchStockTiles } from './ClientBranchStockTiles';
-import { ClientProductDisplaySettings } from './ClientProductDisplaySettings';
-import { ClientKizPolicySettings } from './ClientKizPolicySettings';
 
 type CabinetData = {
   clients: ClientSummary[];
@@ -735,12 +733,8 @@ export function ClientCabinetPanel({ session }: ClientCabinetPanelProps) {
             </div>
           ) : null}
 
-        {canManageClients && <div className="client-cabinet-settings-row">
-          <ClientProductDisplaySettings key={view.client.id} accessToken={session.accessToken} clientId={view.client.id} />
-          <ClientKizPolicySettings key={`kiz-${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id} />
-        </div>}
-          {import.meta.env.VITE_CLIENT_STORES_ENABLED === 'true' && session.user.roleCodes.some(role=>role==='ADMIN'||role==='OWNER') &&
-            <ClientStoresSettings key={`stores:${view.client.id}`} accessToken={session.accessToken} clientId={view.client.id}/>}
+          {canUse(session.user,'clients:read') && <ClientSettingsDialog key={view.client.id} accessToken={session.accessToken}
+            clientId={view.client.id} canEdit={canManageClients && session.user.roleCodes.some(role => role === 'ADMIN' || role === 'OWNER')} />}
           <ClientBranchStockTiles accessToken={session.accessToken} clientId={view.client.id} />
 
           {showClientOverview ? (

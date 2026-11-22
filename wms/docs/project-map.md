@@ -970,3 +970,5 @@ Confirmed WB and Ozon FBS handover persists order status alongside request closu
 Планировщик: request-market-status-scheduler.service.ts выбирает ранние этапы ФБО только с новым флагом. Тесты: market-accepted-fbo.spec.ts, fbo-delivery-sync.spec.ts, market-status-schedule.spec.ts, fbo-shipment-timeout.spec.ts.
 
 PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
+
+Кабинет → Настройки клиента объединяет отображение товара, маркировку, магазины и правила отбора/упаковки. Правила зон Ozon и первой привязки КИЗ хранятся по клиенту в SystemSetting. Без записи действуют исходные настройки установки для Палитры. Изменение разрешено ADMIN и OWNER.

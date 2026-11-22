@@ -7322,6 +7322,13 @@ export type AdministrationPhantomStock = {
   }>;
 };
 
+export type FulfillmentRule = 'zones' | 'pickKiz';
+export type FulfillmentSettings = Record<FulfillmentRule, boolean> & {available: Record<FulfillmentRule,boolean>};
+export function clientFulfillmentSettings(accessToken: string, id: string, change?: {rule:FulfillmentRule;enabled:boolean}) {
+  return request<FulfillmentSettings>(`/clients/${encodeURIComponent(id)}/kiz-policy/fulfillment`, {
+    accessToken, ...(change ? {method:'PUT', body:change} : {})
+  });
+}
 export type ClientKizPolicy = { clientId: string; required: boolean };
 export function fetchClientKizPolicy(accessToken: string, clientId: string) {
   return request<ClientKizPolicy>(`/clients/${encodeURIComponent(clientId)}/kiz-policy`, { accessToken });

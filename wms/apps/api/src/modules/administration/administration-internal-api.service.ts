@@ -160,7 +160,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'clients',
     name: 'Клиенты',
     prefixes: ['/clients', '/clients/:clientId/product-display', '/clients/:clientId/stores', '/clients/:clientId/kiz-policy'],
-    routeCount: 16, // FIX: includes client required-KIZ policy read/save routes.
+    routeCount: 18, // FIX: receipt and fulfillment policy read/save routes.
     description: 'Карточки клиентов, реквизиты и правила складского обслуживания.',
     logic: ['Хранит юридические и контактные данные.', 'Настраивает режимы остатков и хранения.', 'Связывает клиента с менеджером и собственной компанией.', 'Разделяет магазины одного плательщика и разрешения общего SKU без дублирования остатков; функция включается отдельно.'],
     dependencies: ['Основная БД'],

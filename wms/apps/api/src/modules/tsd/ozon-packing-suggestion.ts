@@ -7,7 +7,7 @@ type PackingUnit = { skuId: string; state: string; wholeBox?: boolean; targetBox
 type PackingBox = { boxId: string; boxCode?: string; direction?: string | null; closedAt?: Date | string | null; wholeBox?: boolean };
 
 // FIX: advisory only; packing rechecks quota under the existing request transaction lock.
-export function ozonPackingSuggestions(directions: OzonDirection[], boxes: PackingBox[], units: PackingUnit[], zones?: {integration: unknown; clientId?: string}) {
+export function ozonPackingSuggestions(directions: OzonDirection[], boxes: PackingBox[], units: PackingUnit[], zones?: {integration: unknown; clientId?: string; enabled?: boolean}) {
     const progress = directionProgress(directions, boxes, units.map(u => ({ ...u, targetBoxId: u.targetBoxId ?? null })));
     const skus = [...new Set(units.filter(u => u.state === 'PICKED' && !u.wholeBox).map(u => u.skuId))];
     return skus.flatMap(skuId => {
@@ -15,7 +15,7 @@ export function ozonPackingSuggestions(directions: OzonDirection[], boxes: Packi
         const open = (name: string) => boxes.filter(b => b.direction === name && !b.closedAt && !b.wholeBox).filter(b => {
             if (!zones) return true;
             try {
-                assertOzonBoxZones(zones.integration, name, directions, units.filter(u => u.state === 'PACKED' && u.targetBoxId === b.boxId).map(u => u.skuId), skuId, zones.clientId);
+                assertOzonBoxZones(zones.integration, name, directions, units.filter(u => u.state === 'PACKED' && u.targetBoxId === b.boxId).map(u => u.skuId), skuId, zones.clientId, zones.enabled);
                 return true;
             } catch (error) { if (error instanceof ConflictException) return false; throw error; }
         })

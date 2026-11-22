@@ -1,4 +1,5 @@
-import { bindNewPickMark, palitraPickEnabled } from '../../common/palitra-pick-kiz';
+import { activeRule } from '../../common/client-fulfillment-policy';
+import { bindNewPickMark } from '../../common/palitra-pick-kiz';
 import { ozonUnitMarksEnabled } from '../../common/ozon-unit-marks';
 import { assertOzonUnitStock, assertOzonMarkWarehouse } from './ozon-unit-stock';
 import { runFbsBoxClaimTransaction } from './fbs-box-claim-retry';
@@ -308,7 +309,7 @@ export async function handleOzonPickLines(service: any, task: any, user: any, ac
         await assertOzonUnitStock(service, tx, fresh, current);
         await assertReceiptFbsBox(tx, fresh, current.source?.boxId);
         const pick = next.lines.find(l => l.requestItemId === line.requestItemId)!.picks.at(-1)!;
-        const mark = await clientPhysicalMark(tx, fresh.clientId, pick.kiz!) ?? (palitraPickEnabled(fresh.clientId) ? await bindNewPickMark(tx,{clientId:fresh.clientId,skuId:line.skuId,boxId:pick.boxId,warehouseId:await service.resolveFbsTsdExpectedWarehouseId(fresh),kiz:pick.kiz!},fresh.requestId) : null);
+        const mark = await clientPhysicalMark(tx, fresh.clientId, pick.kiz!) ?? (await activeRule(tx,fresh.clientId,'pickKiz') ? await bindNewPickMark(tx,{clientId:fresh.clientId,skuId:line.skuId,boxId:pick.boxId,warehouseId:await service.resolveFbsTsdExpectedWarehouseId(fresh),kiz:pick.kiz!},fresh.requestId) : null);
         if (!mark || mark.skuId !== line.skuId || (mark.boxId ?? null) !== pick.boxId || mark.status !== 'AVAILABLE')
           throw new ConflictException('КИЗ не относится к доступной единице выбранного товара и источника.');
         const warehouseId = await service.resolveFbsTsdExpectedWarehouseId(fresh);
