@@ -1,0 +1,120 @@
+{
+  "published.json": {
+    "pr": 1057,
+    "images": {
+      "api": "sha256:abbc9f701adf4cfe1713003a319e4542e823a88c332fbd5b78c2edb6fe7a2f12",
+      "web": "sha256:d91550737eacca43a723b8f2329fd34a0c3f6f6f0f763269bf8d0d17c23264af"
+    },
+    "health": true,
+    "otherContainersUnchanged": true,
+    "onlyNewFlag": true,
+    "noProductionReturnsCreated": true,
+    "migration": "20261122_returns_processing"
+  },
+  "apk-published.json": {
+    "logoff-tsd": {
+      "packageId": "pro.logoff.wms.tsd",
+      "versionCode": 268,
+      "versionName": "0.1.268-returns",
+      "sha256": "9dc71e68836f3b521f184dc32988b545f90bf818a6802f458be4a828fa1cbee3",
+      "size": 6046745,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-returns-268.apk",
+      "releasedAt": "2026-11-22T10:44:27.236513+00:00",
+      "releaseNotes": "\u0412\u043e\u0437\u0432\u0440\u0430\u0442\u044b: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0443 \u0438 \u043a\u043e\u0440\u043e\u0431\u0430\u043c, \u043a\u0430\u0440\u0430\u043d\u0442\u0438\u043d \u0434\u043e \u041a\u0418\u0417, \u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435 \u0438 \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u0430\u044f \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430."
+    },
+    "logoff-tsd-server-choice": {
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 268,
+      "versionName": "0.1.268-returns",
+      "sha256": "26fac93d5678b59b40e5dea68cd10fedc75c7cf6952b5c570f322e9e0f223b7c",
+      "size": 6050841,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-servers-returns-268.apk",
+      "releasedAt": "2026-11-22T10:44:27.263106+00:00",
+      "releaseNotes": "\u0412\u043e\u0437\u0432\u0440\u0430\u0442\u044b: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0443 \u0438 \u043a\u043e\u0440\u043e\u0431\u0430\u043c, \u043a\u0430\u0440\u0430\u043d\u0442\u0438\u043d \u0434\u043e \u041a\u0418\u0417, \u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435 \u0438 \u043e\u0442\u0434\u0435\u043b\u044c\u043d\u0430\u044f \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u043a\u0430."
+    }
+  },
+  "isolated-proof.json": {
+    "image": "sha256:abbc9f701adf4cfe1713003a319e4542e823a88c332fbd5b78c2edb6fe7a2f12",
+    "fullApiHealth": true,
+    "syntheticOnly": true
+  },
+  "apiFilesVerified": 797,
+  "publicBrowser": {
+    "synthetic": true,
+    "errors": [],
+    "calls": [
+      [
+        "GET",
+        "/api/v1/auth/me"
+      ],
+      [
+        "GET",
+        "/api/v1/branches"
+      ],
+      [
+        "GET",
+        "/api/v1/kiz/issues"
+      ],
+      [
+        "GET",
+        "/api/v1/warehouse/storage-locations/placement-report"
+      ],
+      [
+        "GET",
+        "/api/v1/inventory/warehouse-problems"
+      ],
+      [
+        "GET",
+        "/api/v1/admin-notifications"
+      ],
+      [
+        "GET",
+        "/api/v1/client-requests/navigation-counts"
+      ],
+      [
+        "GET",
+        "/api/v1/kiz/issues"
+      ],
+      [
+        "GET",
+        "/api/v1/clients"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/84e8fdc7-ba5f-4755-9150-d2baf047a4c8/scan"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/84e8fdc7-ba5f-4755-9150-d2baf047a4c8/finish"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ]
+    ],
+    "units": 1,
+    "status": "STORED"
+  },
+  "compactControls": {
+    "passed": 24,
+    "mode": "served-artifact",
+    "checkedAt": "2026-11-22T10:44:43.526Z"
+  },
+  "bothPublicUpdateOriginsVerified": true
+}
