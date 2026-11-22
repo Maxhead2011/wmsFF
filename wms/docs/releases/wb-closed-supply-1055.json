@@ -1,0 +1,65 @@
+{
+  "pr": 1055,
+  "api": {
+    "image": "sha256:e184e9ee1e1b4a46d22668c4f89c23f553b1e96b7b7a5ee14e794e3caaf8b5f7",
+    "changes": {
+      "modules/marketplace-connections/wb-packed-auto-done.js": "86831340fe33b3e0892c31b4394a0e1c6c51428b41f5c97a4ab7d7901f701d64",
+      "modules/marketplace-connections/marketplace-connections.service.js": "7cd2a038898b9ef41dbbab98a6e3f8443358d1d852b74a58910c4d0b7aca9d8d",
+      "modules/marketplace-connections/wb-closed-supply-proof.js": "4cac09dedeb82f7a318e9d3517e6c5c614769958c89e02c117228cdb15c9113a",
+      "modules/client-requests/request-market-status.service.js": "c173ce40591a105afc21e247ded15789390e6e92f4c8031275cee535e4b27e3b"
+    }
+  },
+  "health": true,
+  "approvedFlags": {
+    "WMS_WB_CLOSED_SUPPLY_COMPLETION_ENABLED": "true"
+  },
+  "otherContainersUnchanged": true,
+  "filesVerified": 792,
+  "sourceParityVerified": false,
+  "rollbackPreview": true,
+  "injectedBillingFailureRollback": true,
+  "requests": [
+    {
+      "number": 3229,
+      "status": "DONE",
+      "charges": 4,
+      "totalRub": "2076.06",
+      "invoices": [
+        {
+          "number": "FBS-PRIMARY-202611-0801",
+          "total": "255.32"
+        },
+        {
+          "number": "FBS-202611-1546",
+          "total": "1820.74"
+        }
+      ],
+      "repeatUnchanged": true,
+      "stockMovements": 0
+    },
+    {
+      "number": 3232,
+      "status": "DONE",
+      "charges": 2,
+      "totalRub": "153.83",
+      "invoices": [
+        {
+          "number": "FBS-202611-1547",
+          "total": "90"
+        },
+        {
+          "number": "FBS-PRIMARY-202611-0802",
+          "total": "63.83"
+        }
+      ],
+      "repeatUnchanged": true,
+      "stockMovements": 0
+    }
+  ],
+  "tests": {
+    "focusedPassed": 56,
+    "apiPassed": 4863,
+    "apiSkipped": 183,
+    "knownBaselineTypeErrors": 12
+  }
+}
