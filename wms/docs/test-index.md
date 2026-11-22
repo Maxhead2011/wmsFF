@@ -913,3 +913,5 @@ WB FBS delivery regression in marketplace-connections.service.spec.ts: a status 
 Confirmed FBS handover regression: WB and Ozon closure persist order evidence. Manual request-status tests exercise the cache invalidation path.
 
 Prepared 17.11.2026 — [WB FBS stale-status regression](fbs-stale-wb-status.md). Runtime entry-point tests 7/7, including eight current WB responses and repeat refresh. API 4820 passed/181 skipped, dedicated KIZ suite unavailable; web 644 passed/2 skipped. Candidate only.
+
+Палитра (CL-000002) — первая привязка КИЗ при отборе ФБО и ФБС, в том числе из общего остатка филиала. Флаг WMS_PALITRA_PICK_KIZ. Проверки: palitra-pick-kiz.spec.ts и scripts/releases/palitra-pick-kiz/rollback-check.js.

@@ -1,3 +1,5 @@
+import { bindNewPickMark, palitraPickEnabled } from '../../common/palitra-pick-kiz';
+import {clientPhysicalMark} from '../../common/kiz-client-review';
 import {assertClientKizUse} from '../../common/kiz-client-review';
 import {BadRequestException,ConflictException} from '@nestjs/common';
 import {randomUUID} from 'node:crypto';
@@ -22,7 +24,9 @@ export async function pickUnboxed(tx:Prisma.TransactionClient,r:any,lines:any[],
  if((free.get(line.skuId)??0)<1)throw new ConflictException('Нет свободного остатка: товар отсутствует или зарезервирован другой заявкой.');
  const marked=(line.sku.needsChestnyZnak&&!line.sku.isUnmarked)||!!await tx.productMark.findFirst({where:{clientId:r.clientId,skuId:line.skuId,boxId:null,status:'AVAILABLE',stockMovement:{warehouseId:r.warehouseId}}});
  if(marked&&!dto.kiz)throw new BadRequestException('После ШК отсканируйте КИЗ.');
- const mark=dto.kiz?await exactMark(tx,dto.kiz):null;
+ const mark=dto.kiz && palitraPickEnabled(r.clientId)
+  ? await clientPhysicalMark(tx,r.clientId,dto.kiz) ?? await bindNewPickMark(tx,{clientId:r.clientId,skuId:line.skuId,boxId:null,warehouseId:r.warehouseId,kiz:dto.kiz},r.id)
+  : dto.kiz?await exactMark(tx,dto.kiz):null;
  if(mark)await assertClientKizUse(tx,{scope:'FBO',clientId:r.clientId,warehouseId:r.warehouseId,requestId:r.id,kiz:mark.value,skuId:line.skuId,boxId:null},user); // FIX: check history before treating storage status as permission.
  if(mark){
   const evidence=mark.stockMovementId?await tx.stockMovement.findUnique({where:{id:mark.stockMovementId}}):null;
