@@ -1,0 +1,12 @@
+.returns-panel {padding:24px; border:1px solid #d8e4e7; border-radius:22px; background:var(--surface,white);}
+.returns-toolbar {display:flex;flex-wrap:wrap;gap:12px;align-items:end;margin:16px 0;}
+.returns-toolbar label {display:flex;flex-direction:column;gap:6px;min-width:160px;}
+.returns-panel input,.returns-panel select,.returns-panel button {padding:12px 16px;border:1px solid #d8d9e7;border-radius:12px;font:inherit;}
+.returns-panel button {background:#f0ebfa;color:#433167;cursor:pointer;}
+.returns-panel button:disabled {opacity:.55;cursor:default;}
+.returns-batches {display:flex;flex-direction:column;gap:8px;}
+.returns-batches button {text-align:left;}
+.returns-table {overflow:auto;}
+.returns-table table {border-collapse:collapse;width:100%;}
+.returns-table td,.returns-table th {padding:12px;text-align:left;border-bottom:1px solid #d8e4e7;}
+.returns-panel fieldset {border:0;padding:0;}

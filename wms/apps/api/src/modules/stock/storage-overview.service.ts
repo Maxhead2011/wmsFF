@@ -71,12 +71,20 @@ export class StorageOverviewService {
 
     const periodStart = startOfUtcDay(period.periodFrom);
     const relevantMovementWhere = storageRelevantMovementWhere(query.clientId);
+    // FIX: completed returns occupy paid storage even while waiting for KIZs.
+    // Keep the sold-installation and all unrelated quarantine policies unchanged.
+    const returnBoxes = process.env.WMS_RETURNS_PROCESSING_ENABLED === 'true'
+      ? await this.prisma.returnUnit.findMany({ where: { clientId: query.clientId, receivedAt: { not: null } }, select: { boxId: true }, distinct: ['boxId'] })
+      : [];
     const [balances, openingBalances, movements, firstReceipts] = await Promise.all([
       this.prisma.stockBalance.findMany({
         where: {
           clientId: query.clientId,
           quantity: { gt: 0 },
-          status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] },
+          ...(returnBoxes.length ? { OR: [
+            { status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] } },
+            { status: StockStatus.QUARANTINE, boxId: { in: returnBoxes.map(b => b.boxId) } },
+          ] } : { status: { in: [StockStatus.AVAILABLE, StockStatus.PACKING, StockStatus.SHIPPING] } }),
         },
         select: storageBalanceSelect,
       }),

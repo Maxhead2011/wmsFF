@@ -779,6 +779,7 @@ public class MainActivity extends Activity {
             ));
         } else {
             root.addView(primaryMenuButton(tr("Приемка товара", "Tovarni qabul qilish"), view -> openReceipt()));
+            if ("logoff".equals(BuildConfig.FLAVOR)) ReturnsActivity.addMenu(this, root);
             if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(tr("Перемещения", "Ko‘chirish"), view -> openStockTransfer()));
             root.addView(primaryMenuButton("logoff".equals(BuildConfig.FLAVOR) ? "FBO" : tr("Сборка заявки", "Buyurtmani yig‘ish"), view -> {
                 if ("logoff".equals(BuildConfig.FLAVOR)) renderFboMenu(); else openAssemblyRequests();

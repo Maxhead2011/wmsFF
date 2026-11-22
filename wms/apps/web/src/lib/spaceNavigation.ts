@@ -55,6 +55,7 @@ const sectionMembership: Partial<Record<WorkspaceId, SpaceSectionId>> = {
   ai: 'home',
 
   warehouse: 'warehouse',
+  returns: 'warehouse',
   'operations-statistics': 'warehouse',
   'storage-zones': 'warehouse',
   inventory: 'warehouse',

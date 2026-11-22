@@ -1370,3 +1370,22 @@ function financialFixture(prisma: any) {
     ? transaction((tx: any) => callback(merge(tx)))
     : callback(merge(prisma)) };
 }
+
+// TEST: return quarantine has physical storage volume without any KIZ lookup.
+it('bills quarantine returns before marking and does not add volume for MOVE', async () => {
+  const movement = { skuId: 'sku-1', warehouseId: 'warehouse-msk', type: MovementType.RETURN,
+    status: 'QUARANTINE', quantity: 2, createdAt: new Date('2026-06-01T12:00:00Z'),
+    sku: { id: 'sku-1', internalSku: 'SKU-1', name: 'Returned suit', volumeLiters: '1.5' } };
+  const prisma = {
+    client: { findUnique: vi.fn().mockResolvedValue({ storageAccountingEnabled: true, storagePriceRubPerLiterDay: '0.5' }) },
+    billingService: { upsert: vi.fn().mockResolvedValue({ id: 'storage', code: 'STORAGE_LITER_DAY' }) },
+    billingCharge: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'charge' }) },
+    stockMovement: { findMany: vi.fn().mockResolvedValue([movement,
+      { ...movement, type: MovementType.MOVE, quantity: -2, createdAt: new Date('2026-06-02T12:00:00Z') },
+      { ...movement, type: MovementType.MOVE, status: 'AVAILABLE', createdAt: new Date('2026-06-02T12:00:00Z') },
+    ]) }, stockBalance: { findMany: vi.fn() },
+  };
+  const service = new BillingService(financialFixture(prisma) as never, clientScopes());
+  await service.generateStorageCharge({ clientId: 'client-1', periodFrom: '2026-06-01', periodTo: '2026-06-03', unitPriceRub: 0.5 }, user({ clientIds: ['client-1'], writableClientIds: ['client-1'] }));
+  expect(prisma.billingCharge.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ quantity: 6, totalRub: 3 }) }));
+});

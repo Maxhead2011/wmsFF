@@ -47,6 +47,7 @@ export type WorkspaceId =
   | 'imports'
   | 'logistics'
   | 'warehouse'
+  | 'returns'
   | 'storage-zones'
   | 'inventory'
   | 'pallet-sorting'
@@ -90,6 +91,11 @@ export type WorkspaceNavItem = {
 };
 
 const workspaceDefinitions: WorkspaceNavItem[] = [
+  ...(import.meta.env.VITE_RETURNS_PROCESSING_ENABLED === 'true' ? [{
+    id: 'returns', title: 'Возвраты', eyebrow: 'Обработка возвратов',
+    description: 'Разбор возвратов, хранение до маркировки и отчёт клиенту.',
+    permissions: ['stock:read'], icon: RefreshCw, status: 'ready', audience: 'internal',
+  } as WorkspaceNavItem] : []),
   { id: 'operations-statistics', title: 'Статистика', eyebrow: 'Склад и операции',
     description: 'Время от заказа до передачи в доставку, по клиентам, филиалам и складам WB/Ozon.',
     permissions: ['stock:read'], icon: BarChart3, status: 'ready', audience: 'all' }, // FIX: API restricts CLIENT to own statistics.

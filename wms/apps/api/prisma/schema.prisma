@@ -571,6 +571,10 @@ enum ClientNotificationEvent {
 }
 
 model User {
+  returnBatchesCreated ReturnBatch[] @relation("ReturnBatchCreator")
+  returnBatchesCompleted ReturnBatch[] @relation("ReturnBatchCompleter")
+  returnUnitsScanned ReturnUnit[]
+
   id                             String                         @id @default(uuid())
   email                          String                         @unique
   passwordHash                   String
@@ -900,6 +904,9 @@ model LamodaFboAssembly {
 }
 
 model Client {
+  returnBatches ReturnBatch[]
+  returnUnits ReturnUnit[]
+
   lamodaAccounts               LamodaAccount[]
   id                           String                         @id @default(uuid())
   ownCompanyId                 String?
@@ -1096,6 +1103,8 @@ model ClientDbsIntegration {
 }
 
 model Warehouse {
+  returnBatches ReturnBatch[]
+
   lamodaPlans             LamodaPlan[]
   id                      String                        @id @default(uuid())
   code                    String                        @unique
@@ -1264,6 +1273,8 @@ model Zone {
 }
 
 model Sku {
+  returnUnits ReturnUnit[]
+
   lamodaProducts       LamodaProduct[]
   id                   String                      @id @default(uuid())
   clientId             String
@@ -1365,6 +1376,8 @@ model Barcode {
 }
 
 model Box {
+  returnUnits ReturnUnit[]
+
   id                   String                      @id @default(uuid())
   clientId             String
   warehouseId          String?
@@ -3968,4 +3981,50 @@ model WmsReconciliationCase {
  updatedAt DateTime @default(now()) @db.Timestamptz
  @@index([clientId,nextAttemptAt],map: "WmsReconciliationCase_client_due")
  @@index([requestId],map: "WmsReconciliationCase_request")
+}
+
+// FIX: physically inspected marketplace returns remain separate from sellable stock.
+model ReturnBatch {
+  id String @id @default(uuid())
+  clientId String
+  warehouseId String
+  status String @default("SORTING")
+  createdById String
+  createdByName String
+  completedById String?
+  completedAt DateTime?
+  createdAt DateTime @default(now())
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Restrict)
+  createdBy User @relation("ReturnBatchCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy User? @relation("ReturnBatchCompleter", fields: [completedById], references: [id], onDelete: Restrict)
+  units ReturnUnit[]
+  @@index([warehouseId, clientId, createdAt])
+}
+
+model ReturnUnit {
+  id String @id
+  batchId String
+  clientId String
+  marketplace String
+  returnCode String
+  barcode String
+  skuId String
+  productName String
+  condition String
+  boxId String
+  boxCode String
+  scannedById String
+  scannedByName String
+  receivedAt DateTime?
+  releasedAt DateTime?
+  kiz String?
+  createdAt DateTime @default(now())
+  client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  sku Sku @relation(fields: [skuId], references: [id], onDelete: Restrict)
+  box Box @relation(fields: [boxId], references: [id], onDelete: Restrict)
+  scannedBy User @relation(fields: [scannedById], references: [id], onDelete: Restrict)
+  batch ReturnBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+  @@unique([clientId, marketplace, returnCode, barcode])
+  @@index([batchId, boxId])
 }

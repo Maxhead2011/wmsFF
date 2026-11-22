@@ -1,3 +1,4 @@
+import { ReturnsPanel } from './components/returns/ReturnsPanel';
 import {ReceiptPlacementBadge} from './components/warehouse/ReceiptPlacementPanel';
 import {magicEnabled, welcomeStyle} from './components/layout/magicAppearanceState';
 import {MagicWelcome} from './components/layout/MagicWelcome'; // FIX: personalized loading without delay.
@@ -987,6 +988,8 @@ function renderWorkspace(
       return <WarehouseOpsPanel session={session} />;
     case 'branches':
       return <BranchesPanel session={session} />;
+    case 'returns':
+      return <ReturnsPanel session={session} />;
     case 'storage-zones':
       return <StorageZonesPanel session={session} />;
     case 'inventory':
