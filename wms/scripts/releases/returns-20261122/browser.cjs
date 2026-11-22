@@ -16,7 +16,7 @@ else if(p.endsWith('/scan')){batch.units.push({...req.postDataJSON(),productName
 else if(p.endsWith('/finish')){batch.status='STORED';body=batch;}
 else if(req.method()!=='GET')throw Error('Unexpected write '+p);
 return route.fulfill({json:body});}
-const local=path.join(work,'web',p==='/'?'index.html':p);if(fs.existsSync(local))return route.fulfill({body:fs.readFileSync(local),contentType:local.endsWith('.js')?'text/javascript':local.endsWith('.css')?'text/css':'text/html'});
+const local=path.join(work,'web',p==='/'?'index.html':p);if(!process.env.RETURNS_PUBLIC && fs.existsSync(local))return route.fulfill({body:fs.readFileSync(local),contentType:local.endsWith('.js')?'text/javascript':local.endsWith('.css')?'text/css':'text/html'});
 return route.continue();});
 await page.goto('https://wms.logoff.pro/',{waitUntil:'networkidle'});
 await page.getByRole('button',{name:'Возвраты',exact:true}).first().click();

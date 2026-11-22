@@ -1,0 +1,122 @@
+{
+  "images": {
+    "images": {
+      "api": "sha256:abbc9f701adf4cfe1713003a319e4542e823a88c332fbd5b78c2edb6fe7a2f12",
+      "web": "sha256:d91550737eacca43a723b8f2329fd34a0c3f6f6f0f763269bf8d0d17c23264af"
+    },
+    "allHashesVerified": true,
+    "apiChanged": [
+      "app.module.js",
+      "modules/administration/administration-internal-api.service.js",
+      "modules/returns/returns-policy.js",
+      "modules/returns/returns.controller.js",
+      "modules/returns/returns.dto.js",
+      "modules/returns/returns.module.js",
+      "modules/returns/returns.service.js",
+      "modules/stock/storage-overview.service.js"
+    ],
+    "webChanged": [
+      "index.html",
+      "assets/returns-20261122.js",
+      "assets/returns-20261122.css"
+    ]
+  },
+  "apk": [
+    {
+      "packageId": "pro.logoff.wms.tsd",
+      "versionCode": 268,
+      "versionName": "0.1.268-returns",
+      "sha256": "9dc71e68836f3b521f184dc32988b545f90bf818a6802f458be4a828fa1cbee3",
+      "size": 6046745,
+      "baselineSha256": "3cd34888897b040631a06c2778c8d90c33be2a16115629a2cfe535d852e20531",
+      "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+      "resourcesPreserved": true
+    },
+    {
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 268,
+      "versionName": "0.1.268-returns",
+      "sha256": "26fac93d5678b59b40e5dea68cd10fedc75c7cf6952b5c570f322e9e0f223b7c",
+      "size": 6050841,
+      "baselineSha256": "6f67f9574b4d4e5a5bfadf2140fc8a375de5b6cb6ec3e6157d82809df68bbb5f",
+      "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+      "resourcesPreserved": true
+    }
+  ],
+  "browser": {
+    "synthetic": true,
+    "errors": [],
+    "calls": [
+      [
+        "GET",
+        "/api/v1/auth/me"
+      ],
+      [
+        "GET",
+        "/api/v1/branches"
+      ],
+      [
+        "GET",
+        "/api/v1/kiz/issues"
+      ],
+      [
+        "GET",
+        "/api/v1/warehouse/storage-locations/placement-report"
+      ],
+      [
+        "GET",
+        "/api/v1/inventory/warehouse-problems"
+      ],
+      [
+        "GET",
+        "/api/v1/admin-notifications"
+      ],
+      [
+        "GET",
+        "/api/v1/client-requests/navigation-counts"
+      ],
+      [
+        "GET",
+        "/api/v1/kiz/issues"
+      ],
+      [
+        "GET",
+        "/api/v1/clients"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/dd1f3ce4-74d2-42df-b1e4-ecb6ed59a22c/scan"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ],
+      [
+        "POST",
+        "/api/v1/returns/dd1f3ce4-74d2-42df-b1e4-ecb6ed59a22c/finish"
+      ],
+      [
+        "GET",
+        "/api/v1/returns"
+      ]
+    ],
+    "units": 1,
+    "status": "STORED"
+  },
+  "androidInstrumentation": {
+    "test": "INSTRUMENTATION_RESULT: calls=[listClients, createReturns, listReturns, scanReturn, listReturns, finishReturns, listReturns]\nINSTRUMENTATION_RESULT: verified=published APK: client, return scan, product scan, box, finish; synthetic API only\nINSTRUMENTATION_CODE: -1\n",
+    "test-main": "INSTRUMENTATION_RESULT: calls=[listClients, createReturns, listReturns, scanReturn, listReturns, finishReturns, listReturns]\nINSTRUMENTATION_RESULT: verified=published APK: client, return scan, product scan, box, finish; synthetic API only\nINSTRUMENTATION_CODE: -1\n"
+  }
+}

@@ -1,3 +1,5 @@
+Подготовлено 22.11.2026: [Возвраты — первичная обработка, карантинное хранение и ТСД 268](returns-processing.md). API8/web3, отдельный флаг нашей ВМС, повторные запросы не создают приход/начисления. Публикация ещё не подтверждена.
+
 PR1055: 56 профильных тестов, 4863 API passed /183 skipped; 12 ошибок TypeScript совпадают с исходной версией. Точный runtime: №3229/3232 — откат успешного завершения, откат при ошибке после начислений, повтор без новых начислений/счетов; после публикации повторно проверены реальные результаты.
 
 Опубликовано PR1055: WB complete/waiting + done=true закрытой поставки с точным составом завершает ФБС и штатный биллинг одной транзакцией. Флаг WMS_WB_CLOSED_SUPPLY_COMPLETION_ENABLED только нашей ВМС. Реализация: request-market-status.service, wb-packed-auto-done, wb-closed-supply-proof, marketplace-connections.service. Проверки: wb-closed-supply-proof.spec, request-market-status.spec, wb-confirmed-billing.spec, wb-packed-auto-done.spec; реальный runtime — откат и повтор для 3229/3232.
