@@ -1,3 +1,5 @@
+import {runBillingMutation} from '../billing/billing-mutation';
+import {closedSupplyEnabled,closedSupplyMatches,proofKey} from '../marketplace-connections/wb-closed-supply-proof';
 import { BadGatewayException, ConflictException, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
@@ -15,9 +17,9 @@ import { LamodaClient, openSecret } from '../lamoda/lamoda-client';
 import { LamodaSubmission } from '../lamoda/lamoda-submission';
 
 type Link = { marketplace: string; connectionId: string; orderId: string; syncStatus: string };
-type Observation = { id: string; marketplace: string; connectionId: string; supplierStatus: string; wbStatus: string };
+type Observation = { id: string; marketplace: string; connectionId: string; supplierStatus: string; wbStatus: string; closedSupplyConfirmed?: boolean };
 const linkIdentity = (links: Link[]) => JSON.stringify(links.map(l =>
-  JSON.stringify([l.marketplace,l.connectionId,l.orderId,l.syncStatus])).sort());
+  JSON.stringify([l.marketplace,l.connectionId,l.orderId,l.syncStatus,(l as any).lastSupplyId,(l as any).lastSkuId,(l as any).lastItemCount])).sort());
 
 // FIX: manual and scheduled checks share the same authorization and marketplace evidence rules.
 @Injectable()
@@ -136,8 +138,23 @@ export class RequestMarketStatusService {
         observations.push({id:orderId,connectionId,marketplace:market,supplierStatus:posting.status,wbStatus:posting.status});
       }
     }
+    // FIX: a closed seller supply is sufficient only under the explicit own-WMS policy.
+    if(market==='WILDBERRIES' && closedSupplyEnabled() && observations.some(o=>o.wbStatus==='waiting') && observations.every(o=>o.supplierStatus==='complete' && ['waiting','sorted','ready_for_pickup','sold'].includes(o.wbStatus))) {
+      const covered=new Set<string>();
+      const groups=new Map<string,Link[]>();
+      for(const link of active){const supplyId=(link as any).lastSupplyId;if(!supplyId)continue;const key=JSON.stringify([link.connectionId,supplyId]);groups.set(key,[...(groups.get(key)??[]),link]);}
+      for(const group of groups.values()){
+        const supplyId=(group[0] as any).lastSupplyId;
+        const supply=await this.connections.readReshipmentWbSupply(clientId,group[0].connectionId,supplyId,user);
+        if(supply.id===supplyId && closedSupplyMatches(group.map(l=>l.orderId),supply))for(const l of group)covered.add(l.connectionId+':'+l.orderId);
+      }
+      if(observations.every(o=>covered.has(o.connectionId+':'+o.id)))for(const o of observations)o.closedSupplyConfirmed=true;
+    }
     // FIX: report why verified marketplace evidence did not close the local request.
-    const outcome = await this.db.$transaction(async tx=>{
+    const closedSupplyOrders=observations.every(o=>o.closedSupplyConfirmed)
+      ? await this.connections.prepareClosedSupplyOrders(clientId,observations) : null;
+    const transact=closedSupplyOrders ? (fn:any)=>runBillingMutation(this.db,fn) : (fn:any)=>this.db.$transaction(fn);
+    const outcome:any = await transact(async (tx:any)=>{
       await tx.$queryRaw`SELECT id FROM "ClientRequest" WHERE id=${id} FOR UPDATE`;
       const fresh = await tx.clientRequest.findUniqueOrThrow({where:{id},include:{fbsOrderLinks:true}});
       assertWarehouseAccess(user,fresh,'write');
@@ -148,6 +165,12 @@ export class RequestMarketStatusService {
         await tx.fbsReshipmentRun.findUnique({where:{requestId:id}}));
       const close = market==='OZON'?closeOzonPackedRequest:closeWbPackedRequest;
       const closed = await close(tx,fresh,observations,special);
+      if(closed && observations.every(o=>o.closedSupplyConfirmed)) {
+        if(!closedSupplyOrders)throw new ConflictException('Нет состава для расчёта закрытой поставки.');
+        await this.connections.billClosedSupplyOrders(tx,clientId,closedSupplyOrders);
+        const value={clientId,requestId:id,checkedAt:new Date().toISOString(),orders:observations};
+        await tx.systemSetting.upsert({where:{key:proofKey(id)},create:{key:proofKey(id),value},update:{value}});
+      }
       if (closed || fresh.status === 'DONE') return {needsAttention:false,reason:'',closed};
       if (special || fresh.fbsEmergencyAssemblyAt)
         return {needsAttention:true,reason:'Для повторной или аварийной сборки требуется отдельная проверка сдачи.'};

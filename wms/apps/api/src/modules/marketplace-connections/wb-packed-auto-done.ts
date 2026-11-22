@@ -1,8 +1,9 @@
+import {closedSupplyEnabled} from './wb-closed-supply-proof';
 import { ClientRequestStatus, Prisma } from '@prisma/client';
 
 // FIX: opt-in for our installation; remote acceptance changes no warehouse ledger.
 export const wbPackedAutoDoneEnabled = () => process.env.WMS_WB_PACKED_AUTO_DONE_ENABLED === 'true';
-type Order = { id: string; connectionId: string; marketplace: string; supplierStatus: string; wbStatus: string };
+type Order = { id: string; connectionId: string; marketplace: string; supplierStatus: string; wbStatus: string; closedSupplyConfirmed?: boolean };
 type Request = { id: string; clientId: string; type: string; status: string; updatedAt: Date;
   fbsEmergencyAssemblyAt: Date | null; fbsOrderLinks: Array<{ connectionId: string; orderId: string; marketplace: string; syncStatus: string }> };
 
@@ -21,7 +22,7 @@ export async function closeWbPackedRequest(tx: Prisma.TransactionClient, request
     if (link.marketplace !== 'WILDBERRIES' || matches.length !== 1) return false;
     const order = matches[0];
     if (order.marketplace !== 'WILDBERRIES' || order.supplierStatus !== 'complete' ||
-      !['sorted', 'ready_for_pickup', 'sold'].includes(order.wbStatus)) return false;
+      !(['sorted', 'ready_for_pickup', 'sold'].includes(order.wbStatus) || (closedSupplyEnabled() && order.wbStatus==='waiting' && order.closedSupplyConfirmed===true))) return false;
     accepted.push(order);
   }
   const client = await tx.client.findUnique({ where: { id: request.clientId }, select: { isDemo: true } });
@@ -43,7 +44,7 @@ export async function closeWbPackedRequest(tx: Prisma.TransactionClient, request
   }
   await tx.clientRequestEvent.create({ data: { requestId: request.id, clientId: request.clientId,
     eventType: 'STATUS_CHANGED', statusFrom: previousStatus, statusTo: 'DONE',
-    title: 'Сдано: Wildberries принял заказы в доставку',
+    title: accepted.some(o=>o.closedSupplyConfirmed) ? 'Сдано: подтверждена закрытая поставка WB' : 'Сдано: Wildberries принял заказы в доставку',
     body: `Автоматическая сверка ФБС WB: ${accepted.map(o => `${o.id}: ${o.supplierStatus}/${o.wbStatus}`).join('; ')}. Изменён только статус заявки; списания, возвраты и остатки не изменялись.` } });
   return true;
 }
