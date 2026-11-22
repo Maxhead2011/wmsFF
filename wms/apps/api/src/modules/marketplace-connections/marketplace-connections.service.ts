@@ -1,3 +1,4 @@
+import {closedSupplyBillingKeys} from './wb-closed-supply-proof';
 import { activeRule } from '../../common/client-fulfillment-policy';
 import { bindNewPickMark } from '../../common/palitra-pick-kiz';
 import { ozonUnitExemplarPayload, ozonUnitExemplarsPassed } from './ozon-fbs-unit-exemplars';
@@ -24166,6 +24167,26 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       { invalidateHistory: false, historyMode: 'cache-only', billingMode: 'skip' }) : response;
   }
 
+  // FIX: bounded selection for atomic marketplace completion; never bill the whole client here.
+  async prepareClosedSupplyOrders(clientId:string, selections:Array<{connectionId:string;id:string;supplierStatus:string;wbStatus:string}>) {
+    const orders:FbsOrderSummary[]=[];
+    for(const selected of selections){
+      const links=await this.prisma.fbsOrderRequestLink.findMany({where:{clientId,connectionId:selected.connectionId,orderId:selected.id,syncStatus:'ACTIVE'},include:{request:true}});
+      if(links.length!==1 || !links[0].lastSkuId || !links[0].lastSupplyId || !links[0].lastItemCount)throw new ConflictException('Нет однозначного состава заказа для расчёта биллинга.');
+      const l=links[0],sku=await this.prisma.sku.findUniqueOrThrow({where:{id:l.lastSkuId!}});
+      orders.push({id:l.orderId,connectionId:l.connectionId,marketplace:'WILDBERRIES',category:'shipped',supplierStatus:selected.supplierStatus,wbStatus:selected.wbStatus,
+        itemCount:l.lastItemCount,supplyId:l.lastSupplyId,article:sku.article,barcodes:[],product:sku,request:l.request,createdAt:l.orderPlacedAt?.toISOString(),deliveryDate:new Date().toISOString(),sellerDate:null,shipmentPlan:null,storageBoxes:[],relabeling:null,warehouseId:l.sellerWarehouseId,warehouseName:l.sellerWarehouseName} as unknown as FbsOrderSummary);
+    }
+    return orders;
+  }
+  async billClosedSupplyOrders(tx:any,clientId:string,orders:FbsOrderSummary[]) {
+    const scoped=withBillingDb(this,tx);
+    const bills=await scoped.ensureFbsProcessingChargesLocked(clientId,orders);
+    await scoped.ensureFbsShipmentInvoicesLocked(clientId,orders,bills);
+    if(orders.some(order=>!bills.has(fbsOrderKey(order))))throw new ConflictException('Не для всех заказов закрытой поставки рассчитан биллинг.');
+    return bills;
+  }
+
   private async resolveSelectedFbsOrders(
     clientId: string,
     selections: Array<{ connectionId: string; id: string }>,
@@ -27664,8 +27685,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       // FIX: WB acknowledgement can exist without a local pick (fabric/on-demand).
       const observedWb = new Map(wbObservedOrders.filter(order => order.marketplace === MarketplaceType.WILDBERRIES)
         .map(order => [selectionKey(order.connectionId, order.id), order]));
+      const closedKeys=await closedSupplyBillingKeys(this.prisma,clientId);
       const acceptedWb = (order: FbsOrderSummary) => order.supplierStatus === 'complete' &&
-        ['sorted', 'ready_for_pickup', 'sold'].includes(order.wbStatus);
+        (['sorted', 'ready_for_pickup', 'sold'].includes(order.wbStatus) || (order.wbStatus==='waiting' && closedKeys.has(order.connectionId+':'+order.id)));
       orders = orders.filter(order => order.marketplace !== MarketplaceType.WILDBERRIES
         ? order.category === 'shipped' : acceptedWb(observedWb.get(selectionKey(order.connectionId, order.id)) ?? order));
       const accountedWb = new Set<string>();

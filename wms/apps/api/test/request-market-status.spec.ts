@@ -121,3 +121,16 @@ it('keeps manual checks disabled on other installations and rejects demo access'
  await expect(f.check()).rejects.toThrow();expect(f.ozon.call).not.toHaveBeenCalled();
  vi.stubEnv('WMS_REQUEST_MARKET_STATUS_MANUAL_ENABLED','true');await expect(f.ctl.check('r',{isDemo:true} as any)).rejects.toThrow();
 });
+// TEST: request completion, persisted proof and billing share a transaction; failure propagates.
+it.each([false,true])('closed-supply policy invokes atomic billing; failure=%s',async fail=>{
+ const f=setup();vi.stubEnv('WMS_FBS_ACTION_STATUS_ENABLED','true');vi.stubEnv('WMS_WB_CLOSED_SUPPLY_COMPLETION_ENABLED','true');f.row.status='SUBMITTED';
+ f.row.fbsOrderLinks.forEach((l:any)=>{l.marketplace='WILDBERRIES';l.lastSupplyId='s';});
+ const c:any=f.connections;
+ c.readWbStatusesForConnection.mockResolvedValue(new Map(['1','2'].map(id=>[id,{supplierStatus:'complete',wbStatus:'waiting'}])));
+ c.readReshipmentWbSupply=vi.fn(async()=>({id:'s',done:true,orderIds:['1','2']}));
+ c.prepareClosedSupplyOrders=vi.fn(async()=>[{id:'1'},{id:'2'}]);c.billClosedSupplyOrders=vi.fn(async()=>{if(fail)throw Error('billing failed');});
+ f.db.systemSetting={findMany:vi.fn(async()=>[{value:{supplyId:'s',orderIds:['1','2']}}]),upsert:vi.fn()};
+ if(fail){await expect(f.check()).rejects.toThrow('billing failed');expect(f.db.systemSetting.upsert).not.toHaveBeenCalled();}
+ else {expect((await f.check()).status).toBe('DONE');expect(f.db.systemSetting.upsert).toHaveBeenCalledTimes(1);}
+ expect(c.billClosedSupplyOrders).toHaveBeenCalledTimes(1);
+});

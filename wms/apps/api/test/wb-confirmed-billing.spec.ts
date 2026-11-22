@@ -38,3 +38,15 @@ it('prefers fresh waiting status over a local shipped display overlay',async()=>
  const db:any={$queryRaw:vi.fn(async()=>[]),wbOrderShipment:{findMany:vi.fn(async()=>[])}};db.$transaction=vi.fn(async(fn:any)=>fn(db));const service:any=new MarketplaceConnectionsService(db,{} as never);service.ensureFbsProcessingChargesLocked=vi.fn(async()=>new Map());
  await service.ensureFbsProcessingCharges('client',[displayed],[{...displayed,supplierStatus:'confirm',wbStatus:'waiting'}]);expect(service.ensureFbsProcessingChargesLocked.mock.calls[0][1]).toEqual([]);
 });
+
+// TEST: real upstream waiting is billable only with this client's persisted supply proof.
+it('bills complete waiting from verified closed supply without fabricating WB statuses',async()=>{
+ vi.stubEnv('WMS_WB_ORDER_STOCK_LIFECYCLE_ENABLED','true');vi.stubEnv('WMS_WB_CLOSED_SUPPLY_COMPLETION_ENABLED','true');
+ try {
+ const order:any={id:'1',connectionId:'cab',marketplace:'WILDBERRIES',supplierStatus:'complete',wbStatus:'waiting',category:'assembly',itemCount:1};
+ const db:any={$queryRaw:vi.fn(async()=>[]),wbOrderShipment:{findMany:vi.fn(async()=>[])},systemSetting:{findMany:vi.fn(async()=>[{value:{clientId:'c',orders:[{id:'1',connectionId:'cab'}]}}])}};db.$transaction=vi.fn(async(f:any)=>f(db));
+ const service:any=new MarketplaceConnectionsService(db,{} as never);service.ensureFbsProcessingChargesLocked=vi.fn(async()=>new Map());
+ await service.ensureFbsProcessingCharges('c',[order]);expect(service.ensureFbsProcessingChargesLocked.mock.calls[0][1]).toEqual([order]);
+ expect(order.wbStatus).toBe('waiting');
+ }finally{vi.unstubAllEnvs();}
+});
