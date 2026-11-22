@@ -29,7 +29,9 @@
     "invoice": "USL-202611-0070",
     "invoiceStatus": "DRAFT",
     "zeroLogisticsCharges": 1,
-    "repeatUnchanged": true
+    "repeatUnchanged": true,
+    "logisticsPriceReview": true,
+    "billingRetryCreated": 0
   },
   "rollbackPreviewVerified": true,
   "sourceParityVerified": false
