@@ -1,0 +1,27 @@
+{
+  "publication": {
+    "pr": 1061,
+    "images": {
+      "api": "sha256:b331f4569c27cbdc3e86c1a09b16aa1e56ec95c5eb95f9f82893d5f7d56e1dac"
+    },
+    "health": true,
+    "allHashesVerified": true,
+    "environmentUnchanged": true,
+    "otherContainersUnchanged": true,
+    "noBusinessWrites": true
+  },
+  "isolated": {
+    "image": "sha256:b331f4569c27cbdc3e86c1a09b16aa1e56ec95c5eb95f9f82893d5f7d56e1dac",
+    "fullApiHealth": true,
+    "syntheticOnly": true,
+    "markAndCloseVerified": true
+  },
+  "guardPr": 1062,
+  "initialAttemptRolledBack": true,
+  "apiTests": {
+    "passed": 4881,
+    "skipped": 183
+  },
+  "postgresTests": 11,
+  "runtimeFiles": 797
+}

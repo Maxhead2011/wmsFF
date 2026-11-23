@@ -50,6 +50,8 @@ API выключен без `WMS_RETURNS_PROCESSING_ENABLED=true`; исходн�
 
 ## First-scan box creation
 
+Published via PR1061, deployment comparator fixed through PR1062.
+
 ReturnsService.scan creates an absent code in the batch client and warehouse. INSERT ON CONFLICT DO NOTHING plus a row lock protects unique codes and existing ownership. Ownership/status checks run after the lock. Box creation, RETURN_BOX_CREATED audit and return scan are one transaction: a rejected scan leaves no empty box. Competing batches cannot share a new box.
 
 No receipt or charge is created at scan time. Finish, quarantine storage, marking and closing remain unchanged. Foreign, inactive, occupied and differently classified boxes remain rejected. No APK update required (269 supported); sold WMS stays disabled by the existing flag.
