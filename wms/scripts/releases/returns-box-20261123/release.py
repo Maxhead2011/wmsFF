@@ -4,7 +4,8 @@ import subprocess,json,sys,hashlib,time,fcntl
 r=Path(sys.argv[1]);action=sys.argv[2]
 def run(*a):return subprocess.check_output(a,text=True).strip()
 def image():return run('docker','inspect','wms-local-api','--format','{{.Image}}')
-def env():return json.loads(run('docker','inspect','wms-local-api','--format','{{json .Config.Env}}'))
+# FIX: Docker may reorder entries on recreation; compare every key/value, not list order.
+def env():return dict(item.split('=',1) for item in json.loads(run('docker','inspect','wms-local-api','--format','{{json .Config.Env}}')))
 base=json.loads((r/'base.json').read_text());assert image()==base['baseApi']
 name='modules/returns/returns.service.js'
 def hashes(img):
