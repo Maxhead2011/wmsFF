@@ -13,7 +13,7 @@ function fixture() {
     billingService: { upsert: vi.fn(async () => ({ id: 'svc', defaultPriceRub: null })) },
     clientBillingService: { findUnique: vi.fn(async () => ({ isActive: true, priceRub: 25, taxMode: 'INCLUDED' })) },
     stockMovement: { create: vi.fn() }, stockBalance: { upsert: vi.fn(), count: vi.fn(async () => 0) }, billingCharge: { create: vi.fn() },
-    box: { findUnique: vi.fn(async () => ({ id: 'box', clientId: 'c', warehouseId: 'w', status: 'active' })), findUniqueOrThrow: vi.fn(async () => ({ id: 'box', clientId: 'c', warehouseId: 'w', status: 'active', palletId: null })) },
+    box: { createMany: vi.fn(async () => ({ count: 0 })), findUnique: vi.fn(async () => ({ id: 'box', clientId: 'c', warehouseId: 'w', status: 'active' })), findUniqueOrThrow: vi.fn(async () => ({ id: 'box', clientId: 'c', warehouseId: 'w', status: 'active', palletId: null })) },
     sku: { findMany: vi.fn(async () => [{ id: 's', name: 'Костюм' }]) },
   };
   const db = { ...tx, $transaction: async (fn: (t: any) => unknown) => fn(tx) };

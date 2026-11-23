@@ -61,9 +61,12 @@ export class ReturnsService {
       if (batch.status !== 'SORTING') throw new ConflictException('Сортировка уже завершена.');
       const skus = await tx.sku.findMany({ where: { clientId: batch.clientId, barcodes: { some: { value: barcode } } }, take: 2 });
       if (skus.length !== 1) throw new BadRequestException('ШК не найден однозначно у клиента. Проверьте фактический товар и карточку.');
-      const box = await tx.box.findUnique({ where: { code: boxCode } });
-      if (!box || box.status !== 'active' || box.clientId !== batch.clientId || box.warehouseId !== batch.warehouseId) throw new BadRequestException('Нужен действующий короб выбранного клиента и филиала.');
-      await tx.$queryRaw`SELECT "id" FROM "Box" WHERE "id" = ${box.id} FOR UPDATE`;
+      // FIX: create only an absent code; unique insert + row lock preserve existing ownership.
+      const created = await tx.box.createMany({ data: [{ code: boxCode, clientId: batch.clientId, warehouseId: batch.warehouseId }], skipDuplicates: true });
+      await tx.$queryRaw`SELECT "id" FROM "Box" WHERE "code" = ${boxCode} FOR UPDATE`;
+      const box = await tx.box.findUniqueOrThrow({ where: { code: boxCode } });
+      if (box.status !== 'active' || box.clientId !== batch.clientId || box.warehouseId !== batch.warehouseId) throw new BadRequestException('Нужен действующий короб выбранного клиента и филиала.');
+      if (created.count) await tx.auditLog.create({ data: { userId: user.id, action: 'RETURN_BOX_CREATED', entity: 'Box', entityId: box.id, payload: { batchId: id, clientId: batch.clientId, warehouseId: batch.warehouseId, boxCode } } });
       const [other, balances, duplicate] = await Promise.all([
         tx.returnUnit.findFirst({ where: { boxId: box.id, OR: [{ batchId: { not: id } }, { condition: { not: dto.condition } }] } }),
         tx.stockBalance.count({ where: { boxId: box.id, quantity: { gt: 0 } } }),

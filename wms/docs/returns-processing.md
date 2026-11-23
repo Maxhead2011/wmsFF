@@ -47,3 +47,11 @@ API выключен без `WMS_RETURNS_PROCESSING_ENABLED=true`; исходн�
 Проверки: API4878 passed/183 skipped; отдельный kiz-duplicate.integration исключён из общего запуска из-за отсутствующей специализированной БД. PostgreSQL возвратов8, включая сбой audit с полным откатом закрытия и конкурентные повторы. Web656/2 skipped, tsc и браузерный сценарий; оба подписанных APK проверены на Android9 emulator с синтетическим API. Установка обычного269 поверх опубликованного268 успешна. Серверный кандидат запущен на отдельной PostgreSQL, mark/close/retry проверены на скомпилированных модулях. В полном API tsc остаются 12 прежних ошибок вне модуля возвратов. Физический ТСД не проверен.
 
 Скрипты: scripts/releases/returns-kiz-20261122/. Публикация требует merged PR и совпадения актуальных образов. На рабочей базе тестовые возвраты не создаются.
+
+## First-scan box creation
+
+ReturnsService.scan creates an absent code in the batch client and warehouse. INSERT ON CONFLICT DO NOTHING plus a row lock protects unique codes and existing ownership. Ownership/status checks run after the lock. Box creation, RETURN_BOX_CREATED audit and return scan are one transaction: a rejected scan leaves no empty box. Competing batches cannot share a new box.
+
+No receipt or charge is created at scan time. Finish, quarantine storage, marking and closing remain unchanged. Foreign, inactive, occupied and differently classified boxes remain rejected. No APK update required (269 supported); sold WMS stays disabled by the existing flag.
+
+Files: ReturnsService.scan, returns.postgres.spec.ts, fixture in returns.service.spec.ts. RED reproduced for creation and rollback. PostgreSQL11/unit6 and API4881 passed/183 skipped. Dedicated kiz-duplicate.integration excluded without its DB;12 existing unrelated tsc errors remain. Exact API1 overlay on PR1059; current web untouched.
