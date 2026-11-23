@@ -140,4 +140,49 @@ describe.skipIf(!url)('returns PostgreSQL concurrency', () => {
     expect((await service.findBox(clientId, boxCode, actor)).units.every(u => u.releasedAt)).toBe(true);
   });
 
+  // TEST: a first return scan creates one client/warehouse box, retry creates no receipt/charge.
+  it('creates a new box atomically with its first return scan and reuses it', async () => {
+    const id = randomUUID(), boxCode = 'NEW-' + randomUUID(), unitId = randomUUID();
+    await service.create({ id, clientId }, actor);
+    const dto = { id: unitId, marketplace: 'OZON', returnCode: randomUUID(), barcode: code, boxCode, condition: 'NORMAL' };
+    const charges = await db.billingCharge.count({ where: { clientId } });
+    await Promise.all([service.scan(id, dto, actor), service.scan(id, dto, actor)]);
+    const box = await db.box.findUniqueOrThrow({ where: { code: boxCode } });
+    expect(box).toMatchObject({ clientId, warehouseId, status: 'active', palletId: null });
+    expect(await db.box.count({ where: { code: boxCode } })).toBe(1);
+    expect(await db.returnUnit.count({ where: { batchId: id } })).toBe(1);
+    expect(await db.stockMovement.count({ where: { boxId: box.id } })).toBe(0);
+    expect(await db.billingCharge.count({ where: { clientId } })).toBe(charges);
+    await service.scan(id, { ...dto, id: randomUUID(), returnCode: randomUUID() }, actor);
+    await Promise.all([service.finish(id, actor), service.finish(id, actor)]);
+    expect(await db.stockMovement.count({ where: { boxId: box.id, type: 'RETURN' } })).toBe(2);
+    expect(await db.billingCharge.count({ where: { clientId } })).toBe(charges + 1);
+  });
+  // TEST: creation rolls back if saving the return fails; existing boxes keep their ownership.
+  it('rolls back a new box on scan failure and rejects foreign or inactive boxes', async () => {
+    const id = randomUUID(), boxCode = 'ROLLBACK-' + randomUUID();
+    await service.create({ id, clientId }, actor);
+    const dto = { id: randomUUID(), marketplace: 'OZON', returnCode: randomUUID(), barcode: code, boxCode, condition: 'NORMAL' };
+    const faulty = new ReturnsService({ $transaction: (fn: any) => db.$transaction(tx => fn(new Proxy(tx, { get(target, key) { return key === 'returnUnit' ? new Proxy(target.returnUnit, { get(delegate, method) { return method === 'create' ? () => { throw new Error('scan failure'); } : Reflect.get(delegate, method); } }) : Reflect.get(target, key); } }))) } as never, new ClientScopeService());
+    await expect(faulty.scan(id, dto, actor)).rejects.toThrow('scan failure');
+    expect(await db.box.count({ where: { code: boxCode } })).toBe(0);
+    const foreign = await db.client.create({ data: { code: randomUUID(), name: 'Foreign' } });
+    for (const data of [{clientId: foreign.id, warehouseId}, {clientId, warehouseId: null}, {clientId, warehouseId, status: 'closed'}]) {
+      const box = await db.box.create({ data: { ...data, code: randomUUID() } });
+      await expect(service.scan(id, { ...dto, boxCode: box.code }, actor)).rejects.toThrow('действующий короб');
+      expect(await db.box.findUnique({ where: { id: box.id } })).toEqual(box);
+    }
+  });
+
+  // TEST: two employees cannot claim the same new box for different batches.
+  it('serializes concurrent creation of the same box across batches', async () => {
+    const ids = [randomUUID(), randomUUID()], boxCode = 'RACE-' + randomUUID();
+    for (const id of ids) await service.create({ id, clientId }, actor);
+    const result = await Promise.allSettled(ids.map(id => service.scan(id, { id: randomUUID(), marketplace: 'OZON', returnCode: randomUUID(), barcode: code, boxCode, condition: 'NORMAL' }, actor)));
+    expect(result.filter(r => r.status === 'fulfilled')).toHaveLength(1);
+    expect(result.filter(r => r.status === 'rejected')).toHaveLength(1);
+    expect(await db.box.count({ where: { code: boxCode } })).toBe(1);
+    expect(await db.returnUnit.count({ where: { boxCode } })).toBe(1);
+  });
+
 });
