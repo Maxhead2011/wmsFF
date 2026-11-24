@@ -22,3 +22,7 @@ PDF, PNG, JPG, WebP до 40 МБ. PDF до 100 страниц; выбор диа
 - `test/free-label.browser.cjs`: реальные React/Canvas/PDF.js, серия 3, выбор 2 из 3 PDF-страниц, отсутствие вызова печати, мобильная ширина 390. Синтетические шаблоны; бизнес-записей нет.
 - Веб-набор: 665 passed / 2 skipped. TypeScript прошёл. Перед публикацией требуется сверить свежий runtime и подготовить точный web overlay: sourceParityVerified=false.
 - Физический принтер не запускался, публичный интерфейс проверен после публикации 24.11.2026.
+
+## Silent print agent
+
+Both modes also offer «Печать через агент»: select client and online printer bound to the exact label size, then explicitly send all PNG pages as one existing print-series job. No automatic printing or stock/status/billing operations. Unknown network responses retain the same request UUID; a known failed job requires queue inspection instead of blind retry. Backend limits: integer sizes20–150mm and8MB total; up to100 pages in this editor. Existing browser printer selection is retained. Tests: freeLabelAgent.spec.ts (3), web668 passed/2 skipped, TypeScript and full-app candidate browser with intercepted queue writes. Physical printer not tested.
