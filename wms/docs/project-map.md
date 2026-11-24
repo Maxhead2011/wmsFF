@@ -990,3 +990,8 @@ Confirmed WB and Ozon FBS handover persists order status alongside request closu
 PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
 
 Кабинет → Настройки клиента объединяет отображение товара, маркировку, магазины и правила отбора/упаковки. Правила зон Ozon и первой привязки КИЗ хранятся по клиенту в SystemSetting. Без записи действуют исходные настройки установки для Палитры. Изменение разрешено ADMIN и OWNER.
+
+
+## Авансы ФОТ (подготовлено)
+
+Ledger: payroll-advances.ts и методы PayrollService. UI: PayrollAdvances, PayrollManagement, PayrollHistory. Миграция: 20261124170000_payroll_advances. Четыре маршрута учтены в каталоге API. [Описание](payroll-advances.md).

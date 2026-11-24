@@ -655,3 +655,6 @@ Prepared, not published 17.11.2026 — [сверка статусов WB в FBS]
 Планировщик: request-market-status-scheduler.service.ts выбирает ранние этапы ФБО только с новым флагом. Тесты: market-accepted-fbo.spec.ts, fbo-delivery-sync.spec.ts, market-status-schedule.spec.ts, fbo-shipment-timeout.spec.ts.
 
 PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
+
+
+[Авансы и зачёт переплат ФОТ](payroll-advances.md) — подготовлено к PR, без публикации.

@@ -90,10 +90,20 @@ export class PayrollBatchEntryDto {
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(2000) @ArrayUnique() @IsString({ each: true }) keys!: string[];
 }
 export class PayrollStatusBatchDto {
+  // FIX: bind a payment to the displayed advance balance and make retries idempotent.
+  @IsOptional() @IsString() @MaxLength(64) previewHash?: string;
+  @IsOptional() @IsString() @MaxLength(36) operationId?: string;
   @IsString() dateFrom!: string;
   @IsString() dateTo!: string;
   @IsIn(['UNPAID', 'REVIEW', 'PAID']) status!: string;
   @IsString() @MaxLength(1000) comment!: string;
   @IsInt() @Min(0) expectedAmountKopecks!: number;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100) @ValidateNested({ each: true }) @Type(() => PayrollBatchEntryDto) entries!: PayrollBatchEntryDto[];
+}
+
+export class PayrollAdvanceDto {
+  @IsString() @MaxLength(36) operationId!: string;
+  @IsString() issuedDate!: string;
+  @IsInt() @Min(1) amountKopecks!: number;
+  @IsString() @MaxLength(1000) reason!: string;
 }

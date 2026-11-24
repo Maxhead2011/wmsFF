@@ -7,6 +7,8 @@ import { RequirePermissions } from '../auth/decorators/require-permissions.decor
 import type { AuthUser } from '../auth/auth.types';
 import { PayrollIdentityDto, PayrollStatusBatchDto, PayrollConditionDto, PayrollEmployeeDto, PayrollHandlingDto, PayrollShiftDto, PayrollStatusDto, PayrollHistoryEditDto, PayrollHandlingConfirmDto, PayrollHandlingCancelDto } from './payroll.dto';
 import { PayrollService } from './payroll.service';
+import { PayrollAdvanceDto } from './payroll.dto';
+import { payrollAdvancesEnabled } from './payroll-advances';
 
 @Controller('expenses/workforce')
 @RequirePermissions('expenses:read')
@@ -14,8 +16,16 @@ export class PayrollController {
   constructor(private readonly payroll: PayrollService) {}
   @Get('capabilities') capabilities(@CurrentUser() user: AuthUser) {
     const enabled = process.env.WMS_PAYROLL_ATTENDANCE_ENABLED === 'true' && user.roleCodes.some(r => ['ADMIN', 'OWNER'].includes(r));
-    return { enabled, correctionsEnabled: enabled && process.env.WMS_PAYROLL_CORRECTIONS_ENABLED === 'true' };
+    return { enabled, correctionsEnabled: enabled && process.env.WMS_PAYROLL_CORRECTIONS_ENABLED === 'true', advancesEnabled: enabled && payrollAdvancesEnabled() };
   }
+  // FIX: branch-scoped advance ledger and a server-computed payout preview.
+  @Get('advances') advances(@CurrentUser() user:AuthUser){return this.payroll.advances(user);}
+  @Post('employees/:id/advances') @RequirePermissions('expenses:write')
+  advance(@Param('id') id:string,@Body() dto:PayrollAdvanceDto,@CurrentUser() user:AuthUser){return this.payroll.addAdvance(id,dto,user);}
+  @Post('advances/:id/cancel') @RequirePermissions('expenses:write')
+  cancelAdvance(@Param('id') id:string,@Body() dto:PayrollHandlingCancelDto,@CurrentUser() user:AuthUser){return this.payroll.cancelAdvance(id,dto.reason,user);}
+  @Post('payment-preview') @RequirePermissions('expenses:write')
+  paymentPreview(@Body() dto:PayrollStatusBatchDto,@CurrentUser() user:AuthUser){return this.payroll.previewPayment(dto,user);}
   @Get('employees') employees(@CurrentUser() user: AuthUser) { return this.payroll.employees(user); }
   @Get('history') history(@Query('from') from: string, @Query('to') to: string, @Query('cursor') cursor: string | undefined, @CurrentUser() user: AuthUser) { return this.payroll.correctionHistory(from, to, cursor, user); }
   @Post('history/:id/undo') @RequirePermissions('expenses:write')

@@ -7,10 +7,12 @@ type State = {
   handling?: { startsAt: string; operation: string; palletCount: string; boxCount: number; bagCount: number; rollCount: number; status: string; shares: Array<{ employeeId: string }> };
 };
 export type PayrollHistoryEntry = { id: string; createdAt: string; actorName: string; action: string; canUndo: boolean; undone: boolean;
-  details: { reason?: string; comment?: string; names?: Record<string, string>; before?: State; after?: State; from?: string; to?: string } };
+  details: { reason?: string; comment?: string; names?: Record<string, string>; before?: State; after?: State; from?: string; to?: string; amountKopecks?:number; deductedKopecks?:number; netKopecks?:number; creditKopecks?:number; correctedAmountKopecks?:number; afterEnd?:string } };
 type Page = { entries: PayrollHistoryEntry[]; nextCursor: string | null };
 const actions: Record<string, string> = { SHIFT_CORRECTED: 'Исправление смены', HANDLING_CORRECTED: 'Исправление погрузки / разгрузки', CORRECTION_UNDONE: 'Отмена изменения', SHIFT_CREATED: 'Добавление смены', SHIFT_UPDATED: 'Изменение смены', SHIFT_CANCELLED: 'Отмена смены', HANDLING_UPDATED: 'Изменение работы', HANDLING_CANCELLED: 'Отмена работы', HANDLING_CONFIRMED: 'Подтверждение работы', HISTORY_UPDATED: 'Исправление импортированного табеля', PAYMENT_STATUS: 'Статус оплаты', EMPLOYEE_CREATED: 'Добавление сотрудника', EMPLOYEE_UPDATED: 'Изменение карточки сотрудника', EMPLOYEE_IDENTITY_LINKED: 'Объединение карточек', CONDITION_CREATED: 'Условия оплаты', HISTORY_IMPORTED: 'Импорт табеля' };
 const dateTime = (s?: string | null) => s ? new Date(s).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' }) : 'Не указано';
+// FIX: make advance and paid-shift reconciliation audit records readable.
+Object.assign(actions,{ADVANCE_CREATED:'Выдача аванса / переплата к зачёту',ADVANCE_CANCELLED:'Отмена аванса',PAID_SHIFT_CREDIT:'Исправление оплаченной смены с зачётом переплаты'});
 // FIX: show business fields from the correction snapshot instead of internal database metadata.
 export function payrollHistoryValues(state: State | undefined, names: Record<string, string> = {}): Array<[string, string]> {
   if (state?.shift) {
@@ -47,6 +49,8 @@ export function PayrollHistory({ api }: { api: <T>(path: string, method?: 'GET' 
     {!busy && !page.entries.length && <p>Изменений за период нет.</p>}
     {page.nextCursor && <button disabled={busy} onClick={() => void load(page.nextCursor!)}>Показать ещё</button>}
     {entry && <section aria-label="Выбранное изменение"><h4>{actions[entry.action] || 'Изменение ФОТ'}</h4>
+      <dl>{([['amountKopecks','Сумма'],['deductedKopecks','Зачтено'],['netKopecks','К выдаче'],['creditKopecks','Переплата к зачёту'],['correctedAmountKopecks','Исправленный заработок']] as const).map(([key,label])=>entry.details[key]!==undefined&&<div key={key}><dt>{label}</dt><dd>{(entry.details[key]!/100).toLocaleString('ru-RU',{style:'currency',currency:'RUB'})}</dd></div>)}</dl>
+      {entry.details.afterEnd&&<p>Исправленное окончание: {dateTime(entry.details.afterEnd)}</p>}
       <div className="payroll-fields">{(['before', 'after'] as const).map(key => <div key={key}><strong>{key === 'before' ? 'Было' : 'Стало'}</strong><dl>{payrollHistoryValues(entry.details[key], entry.details.names).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl></div>)}</div>
       {entry.canUndo ? <form onSubmit={e => { e.preventDefault(); setBusy(true); setError(''); void api(`/history/${encodeURIComponent(entry.id)}/undo`, 'POST', { reason }).then(async () => { await load(); setReason(''); setMessage('Изменение отменено. Результат сохранён в истории.'); }).catch(e => setError(e instanceof Error ? e.message : 'Не удалось отменить изменение')).finally(() => setBusy(false)); }}>
         <p>Отмена восстановит данные до выбранного исправления. Если запись уже оплачена или после неё были другие изменения, отмена будет заблокирована.</p>

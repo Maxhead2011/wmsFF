@@ -14,6 +14,7 @@ model PayrollEmployee {
   payrollPrimaryId String?
   payrollPrimary PayrollEmployee? @relation("PayrollIdentity", fields: [payrollPrimaryId], references: [id], onDelete: Restrict)
   payrollAliases PayrollEmployee[] @relation("PayrollIdentity")
+  advances       PayrollAdvance[]
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   rates          PayrollCondition[]
@@ -22,6 +23,42 @@ model PayrollEmployee {
   handlingShares PayrollHandlingShare[]
   @@index([warehouseId, isDemo, isActive])
   @@index([payrollPrimaryId])
+}
+
+// FIX: advances retain their original amount; deductions are separate reversible records.
+model PayrollAdvance {
+  id String @id
+  employeeId String
+  warehouseId String
+  issuedDate String
+  amountKopecks Int
+  kind String
+  reason String
+  createdById String
+  createdAt DateTime @default(now())
+  cancelledAt DateTime?
+  employee PayrollEmployee @relation(fields:[employeeId],references:[id],onDelete:Restrict)
+  uses PayrollAdvanceUse[]
+  @@index([employeeId,issuedDate])
+}
+model PayrollPaymentRun {
+  id String @id
+  requestHash String
+  result Json
+  createdAt DateTime @default(now())
+  uses PayrollAdvanceUse[]
+}
+model PayrollAdvanceUse {
+  id String @id
+  advanceId String
+  settlementKey String
+  amountKopecks Int
+  runId String
+  createdAt DateTime @default(now())
+  reversedAt DateTime?
+  advance PayrollAdvance @relation(fields:[advanceId],references:[id],onDelete:Restrict)
+  run PayrollPaymentRun @relation(fields:[runId],references:[id],onDelete:Restrict)
+  @@index([settlementKey])
 }
 
 model PayrollCondition {
