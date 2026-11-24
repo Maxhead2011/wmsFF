@@ -8,6 +8,8 @@ import { appendFbsAttemptHistory } from '../../common/shipment-history/fbs-attem
 import { Prisma } from '@prisma/client';
 import { previewPayrollWorkbook } from './payroll-import';
 import { PayrollCorrections, correctionHash, requireCorrections } from './payroll-corrections';
+import { payrollAdvancesEnabled, requirePayrollAdvances, payrollAdvanceRows, createPayrollAdvance, planPayrollAdvances, payrollPaymentHash, applyPayrollAdvances, reversePayrollAdvances } from './payroll-advances';
+import type { PayrollAdvanceDto } from './payroll.dto';
 
 type PayrollRow = { key: string; employeeId: string; date: string; kind: string; amountKopecks: number; status: string; comment?: string; workedMs?: number; lunchMs?: number; units?: number; detail: unknown };
 
@@ -21,6 +23,128 @@ export function payrollWarehouses(user: AuthUser, write = false): string[] | und
 @Injectable()
 export class PayrollService {
   constructor(private readonly prisma: PrismaService) {}
+
+  // FIX: employee identities, advances, corrections and payments share row locks.
+  private async advancePeople(tx: Prisma.TransactionClient, user: AuthUser, write: boolean) {
+    const people=await tx.payrollEmployee.findMany({where:this.scope(user,write),orderBy:{id:'asc'}});
+    if(write && people.length) await tx.$queryRaw`SELECT id FROM "PayrollEmployee" WHERE id IN (${Prisma.join(people.map(p=>p.id))}) ORDER BY id FOR UPDATE`;
+    return tx.payrollEmployee.findMany({where:this.scope(user,write),orderBy:{id:'asc'}});
+  }
+
+  async advances(user:AuthUser) {
+    requirePayrollAdvances();
+    const people=await this.prisma.payrollEmployee.findMany({where:this.scope(user),select:{id:true}});
+    return payrollAdvanceRows(this.prisma,people.map(p=>p.id));
+  }
+
+  // FIX: reconcile an already paid shift without pretending that previously issued cash disappeared.
+  async correctPaidShiftWithCredit(employeeId:string,shiftId:string,dto:{operationId:string;endsAt:string;expectedVersion:number;expectedCreditKopecks:number;reason:string},user:AuthUser) {
+    requirePayrollAdvances();requireCorrections();if(!user.roleCodes.includes('OWNER'))throw new ForbiddenException('Корректировку оплаченной смены выполняет собственник.');
+    if(!dto.reason?.trim()||dto.reason.length>1000)throw new BadRequestException('Укажите основание корректировки.');
+    const end=this.timestamp(dto.endsAt);
+    return this.prisma.$transaction(async tx=>{
+      const people=await this.advancePeople(tx,user,true);const person=people.find(p=>p.id===employeeId);if(!person)throw new NotFoundException('Сотрудник не найден.');
+      const shift=await tx.payrollShift.findFirst({where:{id:shiftId,employeeId,cancelledAt:null},include:{breaks:true}});if(!shift)throw new NotFoundException('Смена не найдена.');
+      const key=`WORK:${employeeId}:${shift.workDate}`;const paid=await tx.payrollSettlement.findUnique({where:{key}});if(!paid||paid.status!=='PAID')throw new BadRequestException('Ожидалась оплаченная смена.');
+      const before=paid.snapshot as unknown as PayrollRow&{advancePayment?:unknown;paymentCorrection?:{operationId:string;endsAt:string;creditKopecks:number}};
+      if(before.paymentCorrection?.operationId===dto.operationId){if(before.paymentCorrection.endsAt!==dto.endsAt||before.paymentCorrection.creditKopecks!==dto.expectedCreditKopecks)throw new BadRequestException('Повтор отличается от исходной корректировки.');return before.paymentCorrection;}
+      if(before.advancePayment||before.paymentCorrection||shift.version!==dto.expectedVersion||!shift.endsAt||end<=shift.startsAt||end>=shift.endsAt||shift.breaks.some(b=>!b.endsAt||b.endsAt>end))throw new BadRequestException('Смена или выплата изменена; требуется повторная сверка.');
+      await tx.payrollShift.update({where:{id:shiftId},data:{endsAt:end,reason:dto.reason,version:{increment:1}}});
+      await tx.payrollSettlement.update({where:{key},data:{status:'REVIEW'}});
+      const report=await new PayrollService(tx as unknown as PrismaService).report(employeeId,shift.workDate,shift.workDate,user);const row=report.rows.find(r=>r.key===key);
+      if(!row||report.issues.length)throw new BadRequestException('Не удалось пересчитать исправленную смену.');
+      const credit=before.amountKopecks-row.amountKopecks;
+      if(!Number.isSafeInteger(credit)||credit<=0||credit!==dto.expectedCreditKopecks)throw new BadRequestException('Переплата отличается от согласованной суммы.');
+      const correction={operationId:dto.operationId,endsAt:dto.endsAt,creditKopecks:credit,originalPaidAmountKopecks:before.amountKopecks,originalPaidAt:paid.paidAt?.toISOString(),originalSnapshot:before,reason:dto.reason};
+      await createPayrollAdvance(tx,{id:dto.operationId,employeeId:person.payrollPrimaryId||person.id,warehouseId:person.warehouseId,issuedDate:workDate(new Date().toISOString()),amountKopecks:credit,kind:'OVERPAYMENT',reason:dto.reason,actorId:user.id});
+      const snapshot=JSON.parse(JSON.stringify({...row,status:'PAID',paymentCorrection:correction})) as Prisma.InputJsonValue;
+      await tx.payrollSettlement.update({where:{key},data:{status:'PAID',snapshot,comment:dto.reason,updatedById:user.id}});
+      await tx.payrollAudit.create({data:{warehouseId:person.warehouseId,actorId:user.id,entityId:shiftId,action:'PAID_SHIFT_CREDIT',details:JSON.parse(JSON.stringify({before:shift,afterEnd:dto.endsAt,originalSettlement:paid,correctedAmountKopecks:row.amountKopecks,creditKopecks:credit,advanceId:dto.operationId,reason:dto.reason}))}});
+      return {operationId:dto.operationId,endsAt:dto.endsAt,creditKopecks:credit,correctedAmountKopecks:row.amountKopecks};
+    },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,timeout:60000});
+  }
+
+  async addAdvance(employeeId:string,dto:PayrollAdvanceDto,user:AuthUser) {
+    requirePayrollAdvances();this.period(dto.issuedDate,dto.issuedDate);
+    if(dto.issuedDate>workDate(new Date().toISOString()))throw new BadRequestException('Нельзя записать выданный аванс будущей датой.');
+    return this.prisma.$transaction(async tx=>{
+      const people=await this.advancePeople(tx,user,true);const p=people.find(p=>p.id===employeeId);
+      if(!p)throw new NotFoundException('Сотрудник не найден.');const root=people.find(r=>r.id===(p.payrollPrimaryId||p.id));
+      if(!root||!root.isActive)throw new BadRequestException('Выберите действующего сотрудника.');
+      return createPayrollAdvance(tx,{id:dto.operationId,employeeId:root.id,warehouseId:root.warehouseId,issuedDate:dto.issuedDate,amountKopecks:dto.amountKopecks,kind:'ADVANCE',reason:dto.reason,actorId:user.id});
+    },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,timeout:30000});
+  }
+
+  async cancelAdvance(id:string,reason:string,user:AuthUser) {
+    requirePayrollAdvances();if(!reason?.trim())throw new BadRequestException('Укажите причину отмены.');
+    return this.prisma.$transaction(async tx=>{
+      const people=await this.advancePeople(tx,user,true);const rows=await payrollAdvanceRows(tx,people.map(p=>p.id));const a=rows.find(a=>a.id===id);
+      if(!a)throw new NotFoundException('Аванс не найден.');
+      if(a.cancelledAt)return {cancelled:true};
+      if(a.kind!=='ADVANCE'||a.remainingKopecks!==a.amountKopecks)throw new BadRequestException('Зачтённый аванс или корректировку выплаты нельзя отменить как обычный аванс.');
+      await tx.$executeRaw`UPDATE "PayrollAdvance" SET "cancelledAt"=now() WHERE id=${id}`;
+      await tx.payrollAudit.create({data:{warehouseId:a.warehouseId,actorId:user.id,entityId:a.employeeId,action:'ADVANCE_CANCELLED',details:{advanceId:id,reason}}});return {cancelled:true};
+    },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,timeout:30000});
+  }
+
+  private async advanceSelection(tx:Prisma.TransactionClient,dto:PayrollStatusBatchDto,user:AuthUser,write:boolean) {
+    this.period(dto.dateFrom,dto.dateTo);const ids=dto.entries.map(e=>e.employeeId);
+    if(!ids.length||ids.length>100||new Set(ids).size!==ids.length||dto.entries.some(e=>!e.keys.length||e.keys.length>2000||new Set(e.keys).size!==e.keys.length))throw new BadRequestException('Проверьте выбранные начисления.');
+    const people=await this.advancePeople(tx,user,write);const scoped=new PayrollService(tx as unknown as PrismaService);
+    const selected:Array<{row:PayrollRow;warehouseId:string;rootId:string}>=[];
+    for(const entry of dto.entries){const p=people.find(p=>p.id===entry.employeeId);if(!p)throw new NotFoundException('Сотрудник не найден.');
+      const report=await scoped.report(entry.employeeId,dto.dateFrom,dto.dateTo,user);
+      if(dto.status==='PAID'&&report.issues.length)throw new BadRequestException('Сначала исправьте ошибки расчёта за период.');
+      for(const key of [...entry.keys].sort()){const row=report.rows.find(r=>r.key===key);if(!row)throw new BadRequestException('Начисление не найдено. Обновите отчёт.');
+        if(dto.status==='PAID'&&(row.status!=='UNPAID'||(row.kind==='PALLET'&&(row.detail as {status:string}).status!=='CONFIRMED')))throw new BadRequestException('Выберите неоплаченные подтверждённые начисления.');
+        selected.push({row,warehouseId:p.warehouseId,rootId:p.payrollPrimaryId||p.id});
+      }
+    }
+    selected.sort((a,b)=>a.row.key.localeCompare(b.row.key));
+    const roots=new Set(selected.map(s=>s.rootId));const owned=people.filter(p=>roots.has(p.payrollPrimaryId||p.id));
+    const all=await payrollAdvanceRows(tx,owned.map(p=>p.id));const today=workDate(new Date().toISOString());
+    const usable=all.filter(a=>!a.cancelledAt&&a.issuedDate<=today&&a.remainingKopecks>0).map(a=>({...a,rootId:people.find(p=>p.id===a.employeeId)!.payrollPrimaryId||a.employeeId}));
+    const rows=selected.map(s=>({key:s.row.key,rootId:s.rootId,amountKopecks:s.row.amountKopecks}));const plan=planPayrollAdvances(rows,usable);
+    const persons=[...roots].map(rootId=>{const own=selected.filter(s=>s.rootId===rootId);const keys=new Set(own.map(s=>s.row.key));const gross=own.reduce((sum,s)=>sum+s.row.amountKopecks,0);const deducted=plan.allocations.filter(a=>keys.has(a.settlementKey)).reduce((sum,a)=>sum+a.amountKopecks,0);const credits=usable.filter(a=>a.rootId===rootId);return {employeeId:rootId,grossKopecks:gross,deductedKopecks:deducted,netKopecks:gross-deducted,balanceKopecks:credits.reduce((sum,a)=>sum+a.remainingKopecks,0),issuedInPeriodKopecks:all.filter(a=>!a.cancelledAt&&a.kind==='ADVANCE'&&a.issuedDate>=dto.dateFrom&&a.issuedDate<=dto.dateTo&&owned.find(p=>p.id===a.employeeId)&&(people.find(p=>p.id===a.employeeId)!.payrollPrimaryId||a.employeeId)===rootId).reduce((sum,a)=>sum+a.amountKopecks,0)};});
+    const previewHash=payrollPaymentHash({from:dto.dateFrom,to:dto.dateTo,rows:selected.map(s=>({row:s.row,rootId:s.rootId})),credits:usable.map(a=>({id:a.id,balance:a.remainingKopecks,rootId:a.rootId})),plan});
+    return {selected,preview:{...plan,persons,previewHash}};
+  }
+
+  async previewPayment(dto:PayrollStatusBatchDto,user:AuthUser) {
+    requirePayrollAdvances();return this.prisma.$transaction(async tx=>(await this.advanceSelection(tx,{...dto,status:'PAID'},user,false)).preview,{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead,timeout:60000});
+  }
+
+  private async setStatusWithAdvances(dto:PayrollStatusBatchDto,user:AuthUser) {
+    requirePayrollAdvances();this.scope(user,true);
+    const requestHash=payrollPaymentHash({actor:user.id,dto});
+    return this.prisma.$transaction(async tx=>{
+      // The operation lock covers same-ID concurrent retries before any payroll state is read.
+      if(dto.status==='PAID'){
+        if(!dto.operationId||!/^[0-9a-f-]{36}$/i.test(dto.operationId)||!dto.previewHash)throw new BadRequestException('Сначала проверьте сумму с учётом авансов.');
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`payroll-payment:${dto.operationId}`}))::text`;
+        const old=await tx.$queryRaw<Array<{requestHash:string;result:unknown}>>`SELECT "requestHash",result FROM "PayrollPaymentRun" WHERE id=${dto.operationId}`;
+        if(old.length){if(old[0].requestHash!==requestHash)throw new BadRequestException('Повтор выплаты отличается от исходного запроса.');return old[0].result;}
+      }
+      const {selected,preview}=await this.advanceSelection(tx,dto,user,true);
+      if(preview.grossKopecks!==dto.expectedAmountKopecks||(dto.status==='PAID'&&preview.previewHash!==dto.previewHash))throw new BadRequestException('Начисления или авансы изменились. Обновите расчёт выплаты.');
+      const result={updated:selected.length,amountKopecks:preview.grossKopecks,deductedKopecks:dto.status==='PAID'?preview.deductedKopecks:0,netKopecks:dto.status==='PAID'?preview.netKopecks:preview.grossKopecks};
+      if(dto.status==='PAID')await tx.$executeRaw`INSERT INTO "PayrollPaymentRun" (id,"requestHash",result) VALUES (${dto.operationId!},${requestHash},${JSON.stringify(result)}::jsonb)`;
+      else {
+        // A paid correction carries a real credit; undo requires a separate reconciliation.
+        if(selected.some(s=>(s.row as PayrollRow&{paymentCorrection?:unknown}).paymentCorrection))throw new BadRequestException('Выплата содержит зачёт переплаты. Требуется отдельная сверка корректировки.');
+        await reversePayrollAdvances(tx,selected.map(s=>s.row.key));
+      }
+      for(const {row,warehouseId}of selected){const used=dto.status==='PAID'?preview.allocations.filter(a=>a.settlementKey===row.key).reduce((sum,a)=>sum+a.amountKopecks,0):0;
+        const {advancePayment:ignored,...clean}=row as PayrollRow&{advancePayment?:unknown};
+        const snapshot={...clean,...(dto.status==='PAID'?{advancePayment:{runId:dto.operationId,grossKopecks:row.amountKopecks,deductedKopecks:used,netKopecks:row.amountKopecks-used}}:{})};
+        const data={employeeId:row.employeeId,warehouseId,workDate:row.date,status:dto.status,snapshot:JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue,comment:dto.comment,updatedById:user.id,paidAt:dto.status==='PAID'?new Date():null};
+        await tx.payrollSettlement.upsert({where:{key:row.key},create:{key:row.key,...data},update:data});
+        await tx.payrollAudit.create({data:{warehouseId,actorId:user.id,entityId:row.key,action:'PAYMENT_STATUS',details:{from:row.status,to:dto.status,comment:dto.comment,amountKopecks:row.amountKopecks,deductedKopecks:used,netKopecks:row.amountKopecks-used,operationId:dto.operationId||null}}});
+      }
+      if(dto.status==='PAID')await applyPayrollAdvances(tx,preview.allocations,dto.operationId!);
+      return result;
+    },{isolationLevel:Prisma.TransactionIsolationLevel.Serializable,timeout:60000});
+  }
 
   private scope(user: AuthUser, write = false) {
     if (process.env.WMS_PAYROLL_ATTENDANCE_ENABLED !== 'true') throw new NotFoundException('Новый ФОТ не включён.');
@@ -64,6 +188,7 @@ export class PayrollService {
 
   // FIX: all selected people are validated and paid within one transaction, never partially.
   async setStatusBatch(dto: PayrollStatusBatchDto, user: AuthUser) {
+    if (payrollAdvancesEnabled()) return this.setStatusWithAdvances(dto, user);
     this.scope(user, true); this.period(dto.dateFrom, dto.dateTo);
     const ids = dto.entries.map(e => e.employeeId);
     if (!ids.length || ids.length > 100 || new Set(ids).size !== ids.length || dto.entries.some(e => !e.keys.length || e.keys.length > 2000 || new Set(e.keys).size !== e.keys.length)) throw new BadRequestException('Проверьте выбранные начисления.');
@@ -452,6 +577,12 @@ export class PayrollService {
   }
 
   async setStatus(dto: PayrollStatusDto, user: AuthUser) {
+    // FIX: legacy callers cannot bypass advance consumption or reversal.
+    if (payrollAdvancesEnabled()) {
+      if(dto.status==='PAID')throw new BadRequestException('Обновите ФОТ и подтвердите выплату с учётом авансов.');
+      const report=await this.report(dto.employeeId,dto.dateFrom,dto.dateTo,user);
+      return this.setStatusWithAdvances({...dto,entries:[{employeeId:dto.employeeId,keys:dto.keys}],expectedAmountKopecks:report.rows.filter(r=>dto.keys.includes(r.key)).reduce((s,r)=>s+r.amountKopecks,0)},user);
+    }
     const employee = await this.employee(dto.employeeId, user, true);
     return this.prisma.$transaction(async tx => {
       await tx.$queryRaw`SELECT id FROM "PayrollEmployee" WHERE id = ${dto.employeeId} FOR UPDATE`;

@@ -941,3 +941,8 @@ FBO marketplace completion: test/market-accepted-fbo.spec.ts и test/fbo-deliver
 PostgreSQL: fbo-two-stage.integration.spec.ts проверяет завершение CONTROL по подтверждению МП, реальные начисления без повторов и полный откат при ошибке начислений.
 
 Настройки клиента: client-fulfillment-policy.spec.ts проверяет отдельные ключи и права; ClientSettingsDialog.spec.tsx проверяет окно в режиме просмотра; ozon-box-zones.spec.ts и palitra-pick-kiz.spec.ts покрывают упаковку и маркировку.
+
+
+## Авансы ФОТ
+
+API: payroll-advances.spec.ts и payroll-advances.integration.spec.ts (отдельный PostgreSQL). Web: PayrollAdvances.spec.tsx; scripts/payroll-advances.browser-test.cjs — форма, повтор запроса, сумма к выдаче и точный runtime-кандидат. [Описание](payroll-advances.md).

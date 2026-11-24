@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { AuthSession, BranchSummary, fetchBranches, payrollDownload, payrollImport, payrollRequest, payrollAttendancePhoto } from '../../lib/api';
 import './payroll.css';
 import { PayrollHistory } from './PayrollHistory';
+import { PayrollAdvances } from './PayrollAdvances';
 
 type Employee = { id: string; payrollPrimaryId?: string | null; name: string; warehouseId: string; userId?: string | null; picker: boolean; loader: boolean; isActive: boolean; paymentMethod: string; paymentPhone?: string | null; paymentBank?: string | null; rates: Array<{ id: string; kind: string; rateKopecks: number; startsAt: string; endsAt?: string; temporary: boolean }> };
 type Row = { key: string; employeeId: string; date: string; kind: string; amountKopecks: number; status: string; units?: number; workedMs?: number; lunchMs?: number; detail: { correctionToken?: string; lunchOverride?: number | null; id?: string; status?: string; warehouseId?: string; startsAt?: string; operation?: string; shares?: Array<{ employeeId: string }>; palletCount?: number; boxCount?: number; bagCount?: number; rollCount?: number; unitRateKopecks?: number; start?: number; end?: number; rate?: number; shifts?: Array<{ id: string; start: string; end: string; version?: number }>; segments?: Array<{ start: string; end: string; rateKopecks: number }> } };
@@ -110,6 +111,7 @@ export function payrollCurrentRates(rates: Employee['rates'], now = Date.now()) 
 export function PayrollManagement({ session, legacy, onBack }: { session: AuthSession; legacy: ReactNode; onBack?: () => void }) {
   const [enabled, setEnabled] = useState(false);
   const [correctionsEnabled, setCorrectionsEnabled] = useState(false);
+  const [advancesEnabled, setAdvancesEnabled] = useState(false);
   const [shiftVersion, setShiftVersion] = useState<number | undefined>();
   const [error, setError] = useState('');
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -162,9 +164,10 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
   }
   useEffect(() => {
     let live = true;
-    api<{ enabled: boolean; correctionsEnabled?: boolean }>('/capabilities').then(async result => {
+    api<{ enabled: boolean; correctionsEnabled?: boolean; advancesEnabled?: boolean }>('/capabilities').then(async result => {
       if (!live || !result.enabled) return;
       setEnabled(true); setCorrectionsEnabled(result.correctionsEnabled === true);
+      setAdvancesEnabled(result.advancesEnabled === true);
       const [people, warehouses, pickingUsers] = await Promise.all([api<Employee[]>('/employees'), fetchBranches(session.accessToken), api<Array<{ id: string; name: string }>>('/picking-users')]);
       if (live) { setEmployees(people); setBranches(warehouses); setUsers(pickingUsers); setSelected('__all'); }
     }).catch(e => { if (live) setError(e.message); });
@@ -317,8 +320,10 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
             <div className="payroll-payment-detail">Не оплачено: {money(p.unpaidKopecks)}<br />Оплачено: {money(p.paidKopecks)}<br />На проверке: {money(p.reviewKopecks)}</div></td>
             <td>{p.payment}</td><td>{p.phone}</td><td>{p.bank}</td></tr>)}</tbody></table></div>
         {!paymentSummary.length && <p>За выбранный период записей нет.</p>}
-        <p role="status">Выбрано людей: <strong>{new Set(selectedRows.map(r=>payrollIdentityId(employees.find(p=>p.id===r.employeeId)!))).size}</strong>. К оплате: <strong>{money(payableTotal)}</strong>. На проверке и уже оплаченные строки в эту сумму не входят.</p>
+        <p role="status">Выбрано людей: <strong>{new Set(selectedRows.map(r=>payrollIdentityId(employees.find(p=>p.id===r.employeeId)!))).size}</strong>. {advancesEnabled ? 'Заработок выбранных' : 'К оплате'}: <strong>{money(payableTotal)}</strong>. На проверке и уже оплаченные строки в эту сумму не входят.</p>
         <p>Начислено по разделу: <strong>{money(paymentSummary.reduce((s, p) => s + p.amountKopecks, 0))}</strong>. Реквизиты — из текущей карточки сотрудника. Суммы на проверке показаны отдельно.</p>
+        {/* FIX: show earned wages, outstanding advances and net cash before a payment. */}
+        {advancesEnabled && <PayrollAdvances people={selectedReportPeople} rows={visibleRows} selectedKeys={checked} from={from} to={to} api={api} run={run} reload={reloadReport} busy={busy}/>}
       </section>
         <div>{['xlsx', 'pdf'].map(format => <button key={format} disabled={busy || !employee} onClick={() => void run(async () => {
           const blob = await payrollDownload(session.accessToken, selected, from, to, format); const url = URL.createObjectURL(blob);
@@ -342,7 +347,7 @@ export function PayrollManagement({ session, legacy, onBack }: { session: AuthSe
           if(!rows.length)throw new Error('Выберите начисления.');
           const entries=[...new Set(rows.map(r=>r.employeeId))].map(employeeId=>({employeeId,keys:rows.filter(r=>r.employeeId===employeeId).map(r=>r.key)}));
           await api('/statuses/batch','POST',{entries,dateFrom:from,dateTo:to,status,comment:String(f.get('comment')??''),expectedAmountKopecks:rows.reduce((sum,r)=>sum+r.amountKopecks,0)});await reloadReport();
-        },'Статус выбранных начислений сохранён'); }}><div className="payroll-fields"><label>Статус выбранных<select name="status" defaultValue="PAID">{Object.entries(statuses).map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label><label>Комментарий<input name="comment" /></label></div><button disabled={busy||!selectedRows.length}>Применить к выбранным начислениям ({selectedRows.length})</button></form>
+        },'Статус выбранных начислений сохранён'); }}><div className="payroll-fields"><label>Статус выбранных<select name="status" defaultValue={advancesEnabled?'REVIEW':'PAID'}>{Object.entries(statuses).filter(([k])=>!advancesEnabled||k!=='PAID').map(([k,v])=><option key={k} value={k}>{v}</option>)}</select></label><label>Комментарий<input name="comment" /></label></div><button disabled={busy||!selectedRows.length}>Применить к выбранным начислениям ({selectedRows.length})</button></form>
       </>}
     </>}
   </section>;
