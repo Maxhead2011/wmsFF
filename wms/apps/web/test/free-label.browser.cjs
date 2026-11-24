@@ -25,6 +25,13 @@ const assert=require('node:assert/strict');
   await page.goto('http://127.0.0.1:5194/test/free-label.html');
   await page.getByAltText('Предпросмотр этикетки').waitFor();
   await page.getByLabel('Стандартный размер этикетки',{exact:true}).selectOption('std');
+  // TEST: delete the selected second field before scrolling through its settings.
+  await page.getByRole('button',{name:'Текст',exact:true}).click();
+  assert.equal(await page.locator('.free-label__fields button').count(),2);
+  const remove=page.getByRole('button',{name:'Удалить выбранное поле',exact:true});
+  assert(await remove.evaluate(el=>Boolean(el.compareDocumentPosition(document.querySelector('.free-label textarea'))&Node.DOCUMENT_POSITION_FOLLOWING)));
+  await remove.click();assert.equal(await page.locator('.free-label__fields button').count(),1);
+  assert.equal(await page.locator('.free-label textarea').inputValue(),'ФБО');
   await page.getByRole('button',{name:'Счётчик',exact:true}).click();
   await page.getByLabel('Начальное значение',{exact:true}).fill('8');
   await page.getByLabel('Шаг',{exact:true}).fill('2');
