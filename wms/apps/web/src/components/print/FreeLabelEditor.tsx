@@ -1,4 +1,4 @@
-import { openLabelAgent } from './freeLabelAgent';
+import { openLabelAgent, labelFormatOptions, type LabelStation } from './freeLabelAgent';
 import { useEffect, useRef, useState } from 'react';
 import { Plus, Printer, Save, Trash2, Type } from 'lucide-react';
 import { fetchLabelTemplates, type AuthSession, type LabelTemplateSummary } from '../../lib/api';
@@ -8,10 +8,10 @@ import './free-label.css';
 
 const fonts = ['Arial','Times New Roman','Calibri','Verdana','Tahoma','Georgia','Courier New','Segoe UI'];
 export function FreeLabelEditor({ session }: { session: AuthSession }) {
-  const [label,setLabel]=useState(defaultLabel),[selected,setSelected]=useState(''),[formats,setFormats]=useState<LabelTemplateSummary[]>([]),[error,setError]=useState(''),[image,setImage]=useState(''),[page,setPage]=useState(0),[busy,setBusy]=useState(false),[fontList,setFontList]=useState(fonts),[mode,setMode]=useState<'text'|'file'>('text');
+  const [label,setLabel]=useState(defaultLabel),[selected,setSelected]=useState(''),[formats,setFormats]=useState<Pick<LabelTemplateSummary,'id'|'name'|'widthMm'|'heightMm'>[]>([]),[error,setError]=useState(''),[image,setImage]=useState(''),[page,setPage]=useState(0),[busy,setBusy]=useState(false),[fontList,setFontList]=useState(fonts),[mode,setMode]=useState<'text'|'file'>('text');
   const drag=useRef<{id:string;x:number;y:number;left:number;top:number;scale:number}|null>(null);
   const block=label.blocks.find(b=>b.id===selected)??label.blocks[0];
-  useEffect(()=>{let alive=true;fetchLabelTemplates(session.accessToken).then(v=>{if(alive)setFormats(v.filter(f=>f.isActive));}).catch(e=>{if(alive)setError(String(e.message));});return()=>{alive=false;};},[session.accessToken]);
+  useEffect(()=>{let alive=true;const media=fetch('/api/v1/print/series/formats',{headers:{Authorization:`Bearer ${session.accessToken}`}}).then(async r=>{if(!r.ok)throw Error('Не удалось загрузить размеры принтеров.');return await r.json() as LabelStation[];});Promise.allSettled([fetchLabelTemplates(session.accessToken),media]).then(([templates,stations])=>{if(!alive)return;setFormats(labelFormatOptions(templates.status==='fulfilled'?templates.value:[],stations.status==='fulfilled'?stations.value:[]));if(templates.status==='rejected'&&stations.status==='rejected')setError('Не удалось загрузить размеры этикеток.');});return()=>{alive=false;};},[session.accessToken]);
   useEffect(()=>{let alive=true;const timer=setTimeout(()=>{renderFreeLabel(label,Math.min(page,label.copies-1)).then(v=>{if(alive){setImage(v);setError('');}}).catch(e=>{if(alive){setImage('');setError(e.message);}});},180);return()=>{alive=false;clearTimeout(timer);};},[label,page]);
   const update=(patch:Partial<TextBlock>)=>setLabel(l=>({...l,blocks:l.blocks.map(b=>b.id===block?.id?{...b,...patch}:b)}));
   const numeric=(title:string,key:'x'|'y'|'width'|'height'|'fontSize'|'start'|'step'|'digits',unit='')=><label>{title}{unit&&` (${unit})`}<input type="number" step={key==='x'||key==='y'||key==='width'||key==='height'?0.5:1} value={block[key]} onChange={e=>update({[key]:Number(e.target.value)})}/></label>;

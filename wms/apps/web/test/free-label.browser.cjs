@@ -9,14 +9,14 @@ const assert=require('node:assert/strict');
   await page.route('**/api/v1/print/templates',r=>r.fulfill({json:[{id:'std',name:'Обычная',isActive:true,widthMm:58,heightMm:40}]}));
   const jobs=[];
   await page.route('**/api/v1/clients',r=>r.fulfill({json:[{id:'c',code:'CL-TEST',name:'Test'}]}));
-  await page.route('**/api/v1/print/series/stations',r=>r.fulfill({json:[{id:'s',name:'Agent',printerName:'Printer'}]}));
-  await page.route('**/api/v1/print/series/formats',r=>r.fulfill({json:[{id:'s',name:'Agent',printerName:'Printer',labelWidthMm:58,labelHeightMm:40}]}));
+  await page.route('**/api/v1/print/series/stations',r=>r.fulfill({json:[{id:'s',name:'Agent',printerName:'Printer'},{id:'oz',name:'ОЗОН',printerName:'TSC TE200'}]}));
+  await page.route('**/api/v1/print/series/formats',r=>r.fulfill({json:[{id:'s',name:'Agent',printerName:'Printer',labelWidthMm:58,labelHeightMm:40},{id:'oz',name:'ОЗОН',printerName:'TSC TE200',labelWidthMm:70,labelHeightMm:120}]}));
   await page.route('**/api/v1/print/series/jobs',r=>{jobs.push(r.request().postDataJSON());return r.fulfill({status:jobs.length===1?503:200,json:jobs.length===1?{message:'Temporary network error'}:{id:'synthetic-job',status:'queued',pages:jobs.at(-1).pages.length}});});
   // TEST: the real queue route is intercepted; this never reaches a physical printer.
-  async function testAgent(expected,retry){
+  async function testAgent(expected,retry,stationId='s'){
     const before=jobs.length;await page.getByRole('button',{name:'Печать через агент',exact:true}).click();
     const d=page.getByRole('dialog',{name:'Печать через агент'});
-    await d.getByLabel('Клиент для печати').selectOption('c');await d.getByLabel('Принтер агента').selectOption('s');assert.equal(jobs.length,before);
+    await d.getByLabel('Клиент для печати').selectOption('c');await d.getByLabel('Принтер агента').selectOption(stationId);assert.equal(jobs.length,before);
     await d.getByRole('button',{name:'Отправить на печать'}).click();
     if(retry)await d.getByRole('button',{name:'Повторить то же задание'}).click();
     await d.getByRole('button',{name:'Закрыть',exact:true}).click();assert.equal(jobs.at(-1).pages.length,expected);
@@ -50,6 +50,10 @@ const assert=require('node:assert/strict');
   const next=context.waitForEvent('page');await page.getByRole('button',{name:'Предпросмотр и выбор принтера',exact:true}).click();const output=await next;
   await output.waitForFunction(()=>document.images.length===2&&[...document.images].every(i=>i.complete));assert.equal(await output.evaluate(()=>window.__printed),undefined);
   await output.pdf({path:process.env.PDF_OUTPUT,preferCSSPageSize:true});await output.close();await testAgent(2,false);
+  // TEST: printer-only 70x120 media appears and enables the second Ozon agent.
+  await page.getByLabel('Стандартный размер этикетки',{exact:true}).selectOption('station:oz');
+  await page.waitForTimeout(400);await testAgent(2,false,'oz');
+  assert.equal(jobs.at(-1).widthMm,70);assert.equal(jobs.at(-1).heightMm,120);
   await page.setViewportSize({width:390,height:844});await page.screenshot({path:process.env.SCREENSHOT,fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
   assert.deepEqual(errors,[]);console.log('PASS: 3 counter labels, 2 selected PDF pages, no print invocation, mobile layout');
  }finally{await browser.close();}

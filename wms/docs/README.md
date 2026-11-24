@@ -1,3 +1,5 @@
+Prepared: labelFormatOptions includes configured branch-printer media absent from product templates. Read-only live check: Ozon70x120 and ordinary58x40 agents online; templates only50x30/40x60/60x40 caused hidden Ozon. Pure test plus browser verifies printer-only70x120 option and second agent payload. PR1067 field-delete visibility published and public-browser verified.
+
 Prepared: free-label field deletion moved immediately below the field list, before long settings. Browser regression deletes the selected second field and verifies the first text is retained. Existing print paths unchanged.
 
 Published 24.11.2026 PR1066: silent-agent printing in both free-label modes. Exact web2 overlay, all3355 files and public hashes verified; existing API, environment, other containers and sold WMS unchanged. Web668/2 skipped, TypeScript, candidate/public full-app mocked queue (counter3/PDF2/retry UUID), controls24 and request-fold before/after passed. No physical printing or business writes. Baseline `2026-11-24-free-label-agent`, sourceParityVerified=false. [Proof](releases/free-label-agent-1066.json), [details](free-label-editor.md).

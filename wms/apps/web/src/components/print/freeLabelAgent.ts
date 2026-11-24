@@ -36,3 +36,10 @@ export async function openLabelAgent(session:AuthSession,width:number,height:num
     finally{busy=false;close.disabled=false;}
   };
 }
+
+// FIX: media configured on branch printers is available even without a product template.
+export function labelFormatOptions(templates:{id:string;name:string;widthMm:number;heightMm:number;isActive:boolean}[],stations:LabelStation[]){
+  const result=templates.filter(t=>t.isActive).map(t=>({id:t.id,name:t.name,widthMm:t.widthMm,heightMm:t.heightMm}));
+  for(const s of stations)if(!result.some(f=>f.widthMm===s.labelWidthMm&&f.heightMm===s.labelHeightMm))result.push({id:'station:'+s.id,name:s.name,widthMm:s.labelWidthMm,heightMm:s.labelHeightMm});
+  return result;
+}
