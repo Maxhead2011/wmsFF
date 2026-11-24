@@ -10,12 +10,14 @@ import { PrintJobPanel } from './PrintJobPanel';
 import { PrintPrinterPanel } from './PrintPrinterPanel';
 import { SkuLabelForm } from './SkuLabelForm';
 import { StickerSetPanel } from './StickerSetPanel';
+import { FreeLabelEditor } from './FreeLabelEditor';
+import { freeLabelEnabled } from './freeLabel';
 
 type PrintPanelProps = {
   session: AuthSession;
 };
 
-type PrintTab = 'box' | 'sku' | 'pallet' | 'sets' | 'templates' | 'printers' | 'jobs';
+type PrintTab = 'box' | 'sku' | 'pallet' | 'sets' | 'templates' | 'printers' | 'jobs' | 'free';
 
 const printTabs: Array<{ id: PrintTab; label: string; icon: LucideIcon }> = [
   { id: 'box', label: 'Короб', icon: Boxes },
@@ -29,6 +31,9 @@ const printTabs: Array<{ id: PrintTab; label: string; icon: LucideIcon }> = [
 
 export function PrintPanel({ session }: PrintPanelProps) {
   const [activeTab, setActiveTab] = useState<PrintTab | null>(null);
+  // FIX: additive editor stays outside the sold installation and existing label routes.
+  const tabs = freeLabelEnabled(typeof location === 'undefined' ? '' : location.hostname)
+    ? [...printTabs, { id: 'free' as const, label: 'Свободный ввод', icon: FileText }] : printTabs;
 
   if (!canUse(session.user, 'print:write')) {
     return null;
@@ -45,12 +50,12 @@ export function PrintPanel({ session }: PrintPanelProps) {
       </div>
 
       {!activeTab ? <div className="print-topic-grid" aria-label="Разделы печати">
-        {printTabs.map((tab) => { const Icon = tab.icon; return <button className={`print-topic-tile print-topic-tile--${tab.id}`} key={tab.id} type="button" onClick={() => setActiveTab(tab.id)}><span className="print-topic-tile__icon"><Icon size={22} /></span><span className="print-topic-tile__content"><small>Печать</small><strong>{tab.label}</strong><span>{printTopicDescription(tab.id)}</span></span><ChevronRight size={22} /></button>; })}
+        {tabs.map((tab) => { const Icon = tab.icon; return <button className={`print-topic-tile print-topic-tile--${tab.id}`} key={tab.id} type="button" onClick={() => setActiveTab(tab.id)}><span className="print-topic-tile__icon"><Icon size={22} /></span><span className="print-topic-tile__content"><small>Печать</small><strong>{tab.label}</strong><span>{printTopicDescription(tab.id)}</span></span><ChevronRight size={22} /></button>; })}
       </div> : null}
 
       {activeTab ? <div className="print-tabs" role="tablist" aria-label="Тип этикетки">
         <button className="print-tabs__back" type="button" onClick={() => setActiveTab(null)}><ArrowLeft size={16} /><span>Разделы</span></button>
-        {printTabs.map((tab) => {
+        {tabs.map((tab) => {
           const Icon = tab.icon;
 
           return (
@@ -74,11 +79,13 @@ export function PrintPanel({ session }: PrintPanelProps) {
       {activeTab === 'templates' ? <LabelTemplatePanel session={session} /> : null}
       {activeTab === 'printers' ? <PrintPrinterPanel session={session} /> : null}
       {activeTab === 'jobs' ? <PrintJobPanel session={session} /> : null}
+      {activeTab === 'free' ? <FreeLabelEditor session={session} /> : null}
     </section>
   );
 }
 
 function printTopicDescription(tab: PrintTab) {
+  if (tab === 'free') return 'Текстовые поля, счётчики и печать из PDF или изображения.';
   if (tab === 'box') return 'Создание и печать этикетки для складского короба.';
   if (tab === 'sku') return 'Этикетки товара с названием, артикулом и штрихкодом.';
   if (tab === 'pallet') return 'Маркировка паллет и паллет-сортов.';
