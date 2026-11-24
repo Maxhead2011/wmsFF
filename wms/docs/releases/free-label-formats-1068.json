@@ -1,0 +1,15 @@
+{
+  "pr": 1068,
+  "web": "sha256:956c41a42e9c313dd4dada3b248af3bd402b13515c44dfe19fa335af586154b2",
+  "filesVerified": 3357,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "noBusinessWrites": true,
+  "publicHashesVerified": true,
+  "physicalPrinting": false,
+  "webTests": {
+    "passed": 669,
+    "skipped": 2
+  },
+  "sourceParityVerified": false
+}
