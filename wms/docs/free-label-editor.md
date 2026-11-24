@@ -26,3 +26,5 @@ PDF, PNG, JPG, WebP до 40 МБ. PDF до 100 страниц; выбор диа
 ## Silent print agent
 
 Both modes also offer «Печать через агент»: select client and online printer bound to the exact label size, then explicitly send all PNG pages as one existing print-series job. No automatic printing or stock/status/billing operations. Unknown network responses retain the same request UUID; a known failed job requires queue inspection instead of blind retry. Backend limits: integer sizes20–150mm and8MB total; up to100 pages in this editor. Existing browser printer selection is retained. Tests: freeLabelAgent.spec.ts (3), web668 passed/2 skipped, TypeScript and full-app candidate browser with intercepted queue writes. Physical printer not tested.
+
+PR1067/1068: delete selected field immediately under list; keep at least one field. Sizes combine active templates and branch-printer media without duplicate dimensions. Read-only live station Ozon70x120 is included without creating a template or changing paper configuration. Browser verifies second printer and70x120 job payload, field removal and existing print paths.
