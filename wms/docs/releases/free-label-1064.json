@@ -1,0 +1,17 @@
+{
+  "pr": 1064,
+  "web": "sha256:c3ebb18509b886dc6aa4296a08102dd6bc4a7a470c86fb5cd70134d57d22f260",
+  "filesVerified": 3354,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "noBusinessWrites": true,
+  "publicAssetsHashesVerified": true,
+  "publicBrowserPassed": true,
+  "printerInvoked": false,
+  "webTests": {
+    "passed": 665,
+    "skipped": 2
+  },
+  "controlsBeforeAfter": 24,
+  "sourceParityVerified": false
+}
