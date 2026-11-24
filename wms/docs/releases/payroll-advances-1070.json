@@ -1,0 +1,32 @@
+{
+  "published": true,
+  "pr": 1070,
+  "mergeCommitSha": "9c204438e21ef671584e62f6611110604d1e748e",
+  "images": {
+    "api": "sha256:ac1d14344adb41ac2e8d168f6dbeeb0fd88579ca6950ca009f8cfe1dd3ea1e2d",
+    "web": "sha256:a5c3675baecfa8c35e97f4f6942bbcdb1e385b1febcbd8e3bbc4ffee3d5c5167"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "otherContainersUnchanged": true,
+  "onlyEnvironmentChange": "WMS_PAYROLL_ADVANCES_ENABLED=true",
+  "migration": "20261124170000_payroll_advances",
+  "businessRecordsChangedByRelease": false,
+  "apiFiles": 798,
+  "webFiles": 3358,
+  "publicAssetsVerified": true,
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "advanceFormBrowser": true,
+  "businessCorrection": {
+    "workDate": "2026-11-07",
+    "endMoscow": "21:06:25.966",
+    "earnedKopecks": 353699,
+    "originalPaidKopecks": 792138,
+    "creditKopecks": 438439,
+    "credits": 1,
+    "repeatDidNotDuplicate": true,
+    "nextPaymentNotMarkedPaid": true
+  }
+}

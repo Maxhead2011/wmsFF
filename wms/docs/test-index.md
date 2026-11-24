@@ -946,3 +946,5 @@ PostgreSQL: fbo-two-stage.integration.spec.ts проверяет заверше�
 ## Авансы ФОТ
 
 API: payroll-advances.spec.ts и payroll-advances.integration.spec.ts (отдельный PostgreSQL). Web: PayrollAdvances.spec.tsx; scripts/payroll-advances.browser-test.cjs — форма, повтор запроса, сумма к выдаче и точный runtime-кандидат. [Описание](payroll-advances.md).
+
+PR1070 publication: actual PostgreSQL compiled-service scenarios5, browser source/candidate, controls24 before/after, request-fold before, live file/public hashes. Full API4875 plus flag-off unit; web671. Existing KIZ isolated-DB suite and API type diagnostics match base.

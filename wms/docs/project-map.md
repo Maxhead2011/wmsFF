@@ -992,6 +992,8 @@ PostgreSQL: fbo-two-stage.integration.spec.ts проверяет заверше�
 Кабинет → Настройки клиента объединяет отображение товара, маркировку, магазины и правила отбора/упаковки. Правила зон Ozon и первой привязки КИЗ хранятся по клиенту в SystemSetting. Без записи действуют исходные настройки установки для Палитры. Изменение разрешено ADMIN и OWNER.
 
 
-## Авансы ФОТ (подготовлено)
+## Авансы ФОТ (опубликовано, PR1070)
 
 Ledger: payroll-advances.ts и методы PayrollService. UI: PayrollAdvances, PayrollManagement, PayrollHistory. Миграция: 20261124170000_payroll_advances. Четыре маршрута учтены в каталоге API. [Описание](payroll-advances.md).
+
+Payroll advances published via PR1070; own-only flag enabled and new baseline verified. PayrollService paid-shift recovery preserves issued cash and credits the next payout. See [release proof](releases/payroll-advances-1070.json).
