@@ -11,7 +11,8 @@ it('resolves once and reuses the selected snapshot for every section', async () 
   const order: any = { id: '42', connectionId: 'cab', marketplace: 'WILDBERRIES', supplyId: 's' };
   vi.mocked(wbLabelOrders).mockResolvedValue([order]);
   const service: any = Object.create(MarketplaceConnectionsService.prototype);
-  service.prisma = {};
+  // TEST: marketplace dispatch sees a scoped WB cabinet, then retains the WB selected reader.
+  service.prisma = {clientMarketplaceConnection:{findMany:vi.fn(async()=>[{id:'cab',marketplace:'WILDBERRIES'}])}};
   service.clientScopes = { requireClientAccess: vi.fn() };
   service.resolveSelectedFbsOrders = vi.fn(async () => { throw Error('Full client refresh forbidden while printing'); });
   const pdf = await PDFDocument.create(); pdf.addPage([58, 40]); const buffer = Buffer.from(await pdf.save());
