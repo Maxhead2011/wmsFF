@@ -1,0 +1,92 @@
+{
+  "published": true,
+  "pr": 1084,
+  "mergeCommitSha": "1aedcabb77dc65de49d5523b0315771c4b3effff",
+  "head": "432122d13f1629218c3f067474f23c1349db95a8",
+  "images": {
+    "api": "sha256:05526f20d37402b299c4e3321dd846e659ff3d91a48aa00f7b9ab8fcb1f5ed5e",
+    "web": "sha256:fa76cf77d2ead176f24c0ee8d4588ac627d5d3f8af7386b5feabf2813dfcb2fe"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 804,
+  "webFiles": 3371,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi": {
+    "passed": true,
+    "publicApi": true,
+    "readOnly": true,
+    "reports": [
+      {
+        "channel": "FBS",
+        "units": 1861,
+        "groups": [
+          {
+            "color": "Шампань / айвори",
+            "skus": 14,
+            "lengths": 7
+          }
+        ]
+      },
+      {
+        "channel": "FBO",
+        "units": 70,
+        "groups": [
+          {
+            "color": "Шампань / айвори",
+            "skus": 1,
+            "lengths": 1
+          }
+        ]
+      }
+    ]
+  },
+  "browser": {
+    "passed": true,
+    "publicBrowser": true,
+    "colorGroups": 1,
+    "skus": 14,
+    "lengthRows": 7,
+    "noBusinessWrites": true
+  },
+  "candidateRuntime": {
+    "passed": true,
+    "readOnly": true,
+    "aliases": 14,
+    "colorGroups": 1,
+    "lengthGroups": 7,
+    "reports": [
+      {
+        "channel": "FBS",
+        "skus": 69,
+        "units": 1861,
+        "colorSkus": 14,
+        "color": "Шампань / айвори",
+        "children": 7
+      },
+      {
+        "channel": "FBO",
+        "skus": 12,
+        "units": 70,
+        "colorSkus": 1,
+        "color": "Шампань / айвори",
+        "children": 1
+      }
+    ]
+  },
+  "apiTests": 4934,
+  "apiFullRunPassed": 4933,
+  "apiFullRunTimeouts": 1,
+  "billingPdfRetryPassed": 3,
+  "webTests": 682,
+  "baseRelease": 1082,
+  "physicalPrintSubmitted": false
+}
