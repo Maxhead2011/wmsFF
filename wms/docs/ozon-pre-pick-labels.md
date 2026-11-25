@@ -1,8 +1,8 @@
-## Official PDF content validation (prepared 25.11.2026)
+## Official PDF content validation (published 25.11.2026, PR1088/1089)
 
-Prepared follow-up to PR1088: real Ozon label PDFs contain additional product pages. Cargo-only mode retains pages proven by posting number, scanit or official posting barcode and rejects incomplete coverage. Full PDF mode remains unchanged. WB supply QR/text fits medium-length destinations on one label. Exact API4/web0 over captured PR1088; tests and real-PDF check cover3319 (5→2 pages). The intermediate PR1088 runtime is captured as `2026-11-25-fbs-cargo-labels` with its observed follow-up requirements. The source/API filtering path is opt-in for cargo only; unmatched/unknown pages are not guessed.
+Published follow-up to PR1088 (PR1089): real Ozon label PDFs contain additional product pages. Cargo-only mode retains pages proven by posting number, scanit or official posting barcode and rejects incomplete coverage. Full PDF mode remains unchanged. WB supply QR/text fits medium-length destinations on one label. Exact API4/web0 over captured PR1088; tests and real-PDF check cover3319 (5→2 pages). The intermediate PR1088 runtime is captured as `2026-11-25-fbs-cargo-labels` with its observed follow-up requirements. The source/API filtering path is opt-in for cargo only; unmatched/unknown pages are not guessed.
 
-## Cargo-only printing and WB missing cargo (prepared 25.11.2026)
+## Cargo-only printing and WB missing cargo (published 25.11.2026, PR1088/1089)
 
 `FbsLabelActions` provides three modern controls. Full download and full print retain the existing product/order set. Cargo printing requests only WB supply and cargo labels, or official Ozon posting labels. It never calls Ozon preparation, physical assembly, delivery or stock/billing completion. The printer dialog names the selected set correctly; errors retain the top-layer explanation.
 
@@ -39,3 +39,4 @@ Tests: ozon-gtd-absence.spec.ts, ozon-print-preparation.spec.ts, FbsRequestActio
 Свежая база кандидата: API `sha256:ac1d14344adb41ac2e8d168f6dbeeb0fd88579ca6950ca009f8cfe1dd3ea1e2d`, web `sha256:a5c3675baecfa8c35e97f4f6942bbcdb1e385b1febcbd8e3bbc4ffee3d5c5167`. `sourceParityVerified=false`: перед публикацией повторно сверить сервер. `scripts/releases/ozon-pre-pick-labels/build-candidate.cjs` накладывает только шесть изменений на свежий API runtime; `runtime-test.cjs` проверяет фактический контроллер, сервис и модуль. Полная локальная сборка не заменяет серверный образ.
 
 Опубликованные образы: API `sha256:2fa87e8a4bf380674eb3025de2d3ea09c333bd6843735a07c4b4493b89c1a569`, web `sha256:d1f8ff2e38865326c34b958ded7c009c3dd2761cdcdfb3900ff918195abf0429`. Проверены все 799 API- и 3359 web-файлов, оба публичных изменённых файла, 6 браузерных сценариев опубликованного обработчика и controls24 до/после. Окружение и другие контейнеры сохранены. Baseline `2026-11-25-ozon-pre-pick-labels`; физическая печать и первая подготовка реального заказа при выпуске не выполнялись.
+
