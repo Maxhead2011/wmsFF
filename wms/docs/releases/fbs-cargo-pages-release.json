@@ -1,0 +1,72 @@
+{
+  "published": true,
+  "pr": 1089,
+  "mergeCommitSha": "2e106e6a8006b8adbb27fba450d5ada12fb0080e",
+  "head": "919d973fc17da802ed662d498344774c1dae9540",
+  "images": {
+    "api": "sha256:873d083019dd672a3977c863ed0831674d8350c2a17631cecad065daa5250ace",
+    "web": "sha256:21ec6928b83ccd62a9e4cb2f7dc4e98473261dc360e5afb1519def401b0b5b74"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 807,
+  "webFiles": 3377,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "publicBrowser": {
+    "passed": true,
+    "fullApp": true,
+    "modernButtons": true,
+    "cargoOzon": true,
+    "cargoWb": true,
+    "fullPrintPreserved": true,
+    "fullDownloadPreserved": true,
+    "noOzonAssemblyInCargo": true,
+    "errorModal": true,
+    "mobile": true,
+    "noActualBusinessWrites": true
+  },
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi": {
+    "passed": true,
+    "physicalPrintSubmitted": false,
+    "proofs": [
+      {
+        "request": 3319,
+        "cargoPages": 2,
+        "cargoMs": 1376,
+        "fullPages": 7,
+        "warnings": [],
+        "existingCargoUnchanged": false
+      },
+      {
+        "request": 3391,
+        "cargoPages": 2,
+        "cargoMs": 2289,
+        "warnings": [],
+        "repeatPages": 2,
+        "existingCargoUnchanged": true
+      }
+    ]
+  },
+  "candidateRuntime": {
+    "passed": true,
+    "synthetic": true,
+    "wbPages": 2,
+    "ozonPages": 1,
+    "fullSetPreserved": true,
+    "createOnce": true,
+    "noAssembly": true,
+    "dtoValidated": true
+  },
+  "apiTests": 4956,
+  "webTests": 688,
+  "apiTypecheck": "14 existing baseline errors outside changed logic",
+  "baseRelease": 1088,
+  "physicalPrintSubmitted": false
+}
