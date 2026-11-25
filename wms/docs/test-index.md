@@ -1,3 +1,5 @@
+Published 25.11.2026 PR1075: [WB pending handovers and request3361 label client context](wb-awaiting-handover.md). API3/web4; all799/3362 hashes verified, public browser PDF6/printer/client/current-vs-archive passed, no print submission. Web679/API4897, TypeScript and compiled runtime passed. Own WMS only; environment/other containers unchanged. Baseline `2026-11-25-wb-awaiting-handover`, sourceParityVerified=false. [Proof](releases/wb-awaiting-1075.json).
+
 Prepared: [WB awaiting handover and request3361 labels](wb-awaiting-handover.md). API3/web4, no business writes; web679/API4897, compiled runtime, TypeScript, PDF6/printer/client/archive browser checks.
 
 PR1072: API4893 passed/199 skipped (отдельный набор KIZ DB исключён с тем же сбоем сбора на базе), web677 passed/2 skipped, web TypeScript, 6 сценариев фактического опубликованного обработчика, точный runtime-контроллер/сервис и controls24 до/после. Первая живая подготовка и физическая печать не проверялись. [Подробности](ozon-pre-pick-labels.md).
