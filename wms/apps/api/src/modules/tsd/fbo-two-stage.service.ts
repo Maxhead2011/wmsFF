@@ -1,3 +1,6 @@
+import { readLamodaLabel } from '../print/lamoda-label.service';
+import {lamodaRelabelData} from '../print/lamoda-relabel-data';
+import { buildLamodaLabelPdf, lamodaLabelImage } from '../print/lamoda-label';
 import { activeRule } from '../../common/client-fulfillment-policy';
 import { bindNewPickMark } from '../../common/palitra-pick-kiz';
 import { fboBoxStatistics } from './fbo-box-statistics';
@@ -70,6 +73,11 @@ export class FboTwoStageService {
         if(!plan.relabelRequired)throw new ConflictException('Переклейка Lamoda не требуется.');
         return resolveLamodaRelabelUnit(plan.relabelUnits,r.items.flatMap(i=>i.skuId?[{skuId:i.skuId,barcode:i.barcode??'',barcodes:i.sku?.barcodes.map(b=>b.value)}]:[]),body.barcode??'',body.kiz);
     }
+    async lamodaLabelData(id:string,user:AuthUser,body?:{labelData:import('../print/lamoda-batch-label').LamodaBatchInput[];confirmed:boolean}) {
+        const r=await this.load(this.prisma,id,user,body?'write':'read');
+        this.requireFbo(r);
+        return lamodaRelabelData(this.prisma,r,user,body);
+    }
     async relabelStations(id:string,user:AuthUser) {
         const r=await this.load(this.prisma,id,user,'write');
         if(process.env.WMS_LAMODA_FBO_RELABEL_ENABLED!=='true'||!lamodaAssemblyEnabled()||!await this.prisma.lamodaFboAssembly.findUnique({where:{requestId:id}})) throw new NotFoundException();
@@ -88,7 +96,10 @@ export class FboTwoStageService {
         if(!unit||!label||unit.lamodaRelabelConfirmedAt) throw new ConflictException('Единица не ожидает переклейки.');
         const sku=r.items.find(i=>i.skuId===unit.skuId)?.sku;
         if(!sku) throw new ConflictException('Карточка товара недоступна.');
-        const image=await buildTsdRelabelLabel(label.barcode,{...sku,name:label.name,article:label.article,size:label.size},r.client.name);
+        // FIX: client-opted Lamoda content; preserve the existing two-copy queue and scan confirmation.
+        const legacyPrint=!label.fullLabel&&await this.prisma.fboAssemblyUnit.count({where:{requestId:id,lamodaRelabelPrintId:{not:null}}});
+        const fullLabel=legacyPrint?null:await readLamodaLabel(this.prisma,r.clientId,sku.id,label.barcode,label.article,label.fullLabel,true);
+        const image=fullLabel?await lamodaLabelImage(await buildLamodaLabelPdf(fullLabel)):await buildTsdRelabelLabel(label.barcode,{...sku,name:label.name,article:label.article,size:label.size},r.client.name);
         return this.prisma.$transaction(async tx=>{
             await tx.$queryRaw`SELECT "id" FROM "ClientRequest" WHERE "id"=${id} FOR UPDATE`;
             const current=await this.load(tx,id,user,'write');

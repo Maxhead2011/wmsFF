@@ -57,10 +57,11 @@ it('does not enqueue duplicates after a lost response',async()=>{
  const binding={planId:'plan',relabelLabels:[label]};
  tx.lamodaFboAssembly.findUniqueOrThrow=async()=>binding;
  tx.fboAssemblyUnit.findFirst=async()=>unit;
+ tx.fboAssemblyUnit.count=async()=>0;
  tx.fboAssemblyUnit.update=async({data}:any)=>Object.assign(unit,data);
  tx.fbsPrintStation={findMany:async()=>[{id:'station'}],findFirst:async()=>({id:'station'})};
  tx.fbsPrintJob={findUnique:async({where}:any)=>jobs.find(j=>j.historyId===where.historyId)??null,create:vi.fn(async({data}:any)=>{const j={...data,status:'QUEUED',errorMessage:null};jobs.push(j);return j;})};
- svc.prisma={...tx,$transaction:async(fn:any)=>fn(tx)};svc.relabelStations=async()=>[{id:'station'}];
+ svc.prisma={...tx,systemSetting:{findUnique:async()=>null},$transaction:async(fn:any)=>fn(tx)};svc.relabelStations=async()=>[{id:'station'}];
  const first=await svc.printLamodaRelabel('r',{unitId:'unit',stationId:'station',printId:'12345678-1234-4123-8123-123456789012'},{id:'worker'});
  const repeat=await svc.printLamodaRelabel('r',{unitId:'unit',stationId:'station',printId:'22345678-1234-4123-8123-123456789012'},{id:'worker'});
  expect(repeat).toEqual(first);expect(tx.fbsPrintJob.create).toHaveBeenCalledTimes(1);

@@ -1,4 +1,5 @@
 import {OzonStockAdjustmentController} from './ozon-stock-adjustment.controller';
+import {LamodaRelabelDataController} from './lamoda-relabel-data.controller';
 import {OzonStockAdjustmentService} from './ozon-stock-adjustment.service';
 import {OzonAssemblySupplyService} from '../client-requests/ozon-assembly-supply.service';
 import { Module } from '@nestjs/common';
@@ -26,7 +27,7 @@ import { ClientRequestMarketplaceFilesService } from '../client-requests/client-
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule, InventoryModule],
-  controllers: [OzonStockAdjustmentController,TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
+  controllers: [LamodaRelabelDataController,OzonStockAdjustmentController,TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
   providers: [OzonStockAdjustmentService, OzonAssemblySupplyService,
     ReceiptBarcodeReviewService,
     FboTwoStageService,
