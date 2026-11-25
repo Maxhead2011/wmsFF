@@ -25,3 +25,13 @@ it('restricts the database before loading and drops old warm rows',async()=>{con
 it('uses a saved order date only when shipment time is absent',async()=>{const x=setup();Object.assign(x.link,{handedOverAt:null,orderPlacedAt:new Date('2026-11-09T10:00:00Z')});const r=await restoreSavedFbsArchive(x.db,'c',x.response);expect(r.orders[0].archiveDateBasis).toBe('order');expect(r.orders[0].sourceTiming.handedOverAt).toBeNull()});
 it('does not substitute import time for missing historical dates',async()=>{const x=setup();Object.assign(x.link,{handedOverAt:null,orderPlacedAt:null,createdAt:new Date()});expect((await restoreSavedFbsArchive(x.db,'c',x.response)).orders).toHaveLength(0)});
 it('honours custom dates and exclusive end boundary',async()=>{const x=setup();x.link.handedOverAt=new Date('2026-11-08T21:00:00Z');expect((await restoreSavedFbsArchive(x.db,'c',x.response,'2026-11-08','2026-11-08')).orders).toHaveLength(0)});
+
+// TEST: waiting for WB acceptance survives cold caches outside archive date range, without writes.
+it('restores only open waiting handovers without limiting their age',async()=>{
+ const x=setup();Object.assign(x.link,{lastWbStatus:'waiting',handedOverAt:null,orderPlacedAt:new Date('2026-07-01'),request:{id:'r',status:'PACKED',warehouseId:'wh'}});
+ const r=await restoreSavedFbsArchive(x.db,'c',x.response,undefined,undefined,true);
+ expect(r.orders).toHaveLength(1);expect(r.orders[0].category).toBe('shipped');expect(r).not.toHaveProperty('archivePeriod');
+ const where=x.db.fbsOrderRequestLink.findMany.mock.calls[0][0].where;expect(where.lastWbStatus).toBe('waiting');expect(where).not.toHaveProperty('OR');expect(where.request.status.in).not.toContain('DONE');
+});
+it.each(['DONE','CANCELLED'])('does not restore %s into pending handovers',async status=>{const x=setup();x.link.lastWbStatus='waiting';x.link.request.status=status;expect((await restoreSavedFbsArchive(x.db,'c',x.response,undefined,undefined,true)).orders).toHaveLength(0)});
+it('keeps confirmed WB handovers out of pending restoration',async()=>{const x=setup();x.link.request.status='PACKED';expect((await restoreSavedFbsArchive(x.db,'c',x.response,undefined,undefined,true)).orders).toHaveLength(0)});

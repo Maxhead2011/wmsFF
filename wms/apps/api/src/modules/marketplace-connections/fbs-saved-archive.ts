@@ -14,7 +14,7 @@ export function archiveRange(from?: string, to?: string, now = new Date()) {
   if (start > end) throw new BadRequestException('Начало периода позже окончания.');
   return { from: start, to: end, gte: new Date(start + 'T00:00:00+03:00'), lt: new Date(Date.parse(end + 'T00:00:00+03:00') + 86400000) };
 }
-export async function restoreSavedFbsArchive(db: any, clientId: string, response: any, from?: string, to?: string) {
+export async function restoreSavedFbsArchive(db: any, clientId: string, response: any, from?: string, to?: string, pendingOnly = false) {
   if (process.env.WMS_FBS_SAVED_ARCHIVE_ENABLED !== 'true') return response;
   if (!clientId || response.client?.id !== clientId) throw new Error('Несовпадение клиента архива FBS.');
   const range = archiveRange(from, to);
@@ -24,7 +24,7 @@ export async function restoreSavedFbsArchive(db: any, clientId: string, response
   const connections = await db.clientMarketplaceConnection.findMany({ where: { clientId, id: { in: connectionIds }, isActive: true }, select: { id: true, marketplace: true, accountName: true } });
   if (!connections.length) return response;
   const links = await db.fbsOrderRequestLink.findMany({
-    where: { clientId, connectionId: { in: connections.map((c: any) => c.id) }, syncStatus: 'ACTIVE', lastCategory: { in: ['shipped', 'archive'] }, OR: [{ handedOverAt: { gte: range.gte, lt: range.lt } }, { handedOverAt: null, orderPlacedAt: { gte: range.gte, lt: range.lt } }] },
+    where: { clientId, connectionId: { in: connections.map((c: any) => c.id) }, syncStatus: 'ACTIVE', lastCategory: { in: ['shipped', 'archive'] }, ...(pendingOnly ? {marketplace:'WILDBERRIES',lastSupplierStatus:'complete',lastWbStatus:'waiting',request:{status:{in:['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK','PACKED']}}} : {OR: [{ handedOverAt: { gte: range.gte, lt: range.lt } }, { handedOverAt: null, orderPlacedAt: { gte: range.gte, lt: range.lt } }]}) },
     include: { request: { select: { id: true, number: true, title: true, status: true, warehouseId: true } } },
     orderBy: [{ handedOverAt: 'desc' }, { createdAt: 'desc' }],
   });
@@ -36,7 +36,8 @@ export async function restoreSavedFbsArchive(db: any, clientId: string, response
   for (const link of links) {
     const connection = connections.find((c: any) => c.id === link.connectionId && c.marketplace === link.marketplace);
     if (!connection || link.clientId !== clientId || link.syncStatus !== 'ACTIVE' || !['shipped', 'archive'].includes(link.lastCategory)) continue;
-    if (!inRange(link.handedOverAt ?? link.orderPlacedAt)) continue;
+    if (!pendingOnly && !inRange(link.handedOverAt ?? link.orderPlacedAt)) continue;
+    if (pendingOnly && (link.marketplace !== 'WILDBERRIES' || link.lastSupplierStatus !== 'complete' || link.lastWbStatus !== 'waiting' || !['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK','PACKED'].includes(link.request?.status))) continue;
     const old: any = orders.get(key(link));
     // A current marketplace response wins; saved rows only fill missing archive history.
     if (old) continue;
@@ -58,6 +59,6 @@ export async function restoreSavedFbsArchive(db: any, clientId: string, response
       savedStatusAt: iso(link.lastSeenAt),
     });
   }
-  const rows: any[] = [...orders.values()].filter((o: any) => !['shipped', 'archive'].includes(o.category) || inRange(o.archiveDate ?? o.sourceTiming?.handedOverAt ?? o.sourceTiming?.placedAt ?? o.createdAt));
-  return { ...response, archivePeriod: { from: range.from, to: range.to }, orders: rows, counts: { active: rows.filter(o => o.category === 'active').length, shipped: rows.filter(o => o.category === 'shipped').length, archive: rows.filter(o => o.category === 'archive').length, cancelled: rows.filter(o => o.category === 'cancelled').length, all: rows.length } };
+  const rows: any[] = [...orders.values()].filter((o: any) => pendingOnly || !['shipped', 'archive'].includes(o.category) || inRange(o.archiveDate ?? o.sourceTiming?.handedOverAt ?? o.sourceTiming?.placedAt ?? o.createdAt));
+  return { ...response, ...(pendingOnly ? {} : {archivePeriod: { from: range.from, to: range.to }}), orders: rows, counts: { active: rows.filter(o => o.category === 'active').length, shipped: rows.filter(o => o.category === 'shipped').length, archive: rows.filter(o => o.category === 'archive').length, cancelled: rows.filter(o => o.category === 'cancelled').length, all: rows.length } };
 }

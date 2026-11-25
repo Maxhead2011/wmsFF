@@ -7,7 +7,7 @@ afterEach(() => vi.unstubAllEnvs());
 it('applies fabric mode after cabinet/branch scoping without replacing response metadata', async () => {
  const scoped = { orders: [{ id: 'order', reservation: null, storageBoxes: [] }], sync: { partial: true }, fetchedAt: '' };
  const decorated = { ...scoped, orders: [{ ...scoped.orders[0], reservation: { status: 'FABRIC_ON_DEMAND', withoutBox: true } }] };
- const service = { listFbsOrders: vi.fn(async () => scoped), decorateFbsFabricDisplay: vi.fn(async () => decorated) };
+ const service = { restoreFbsAwaitingForDisplay: vi.fn(async (_client, response) => response), listFbsOrders: vi.fn(async () => scoped), decorateFbsFabricDisplay: vi.fn(async () => decorated) };
  const controller: any = Object.create(MarketplaceConnectionsController.prototype); controller.connections = service;
  const response = await controller.listFbsOrders({ id: 'user' }, 'client', undefined);
  expect(service.decorateFbsFabricDisplay).toHaveBeenCalledWith('client', scoped);

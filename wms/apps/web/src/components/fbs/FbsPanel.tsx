@@ -150,7 +150,7 @@ import {
 import './fbs.css';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 
-import { requestSupplyOrders, type RequestSupplyTarget } from './requestSupplyAction';
+import { requestSupplyOrders, fbsDisplayCategory, retainFbsClient, requestSupplyNeedsArchive, type RequestSupplyTarget } from './requestSupplyAction';
 
 type FbsPanelProps = {
   requestSupplyTarget?: RequestSupplyTarget | null;
@@ -634,9 +634,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
       const rows = await fetchFbsActiveClients(session.accessToken, marketplace);
       setActiveClients(rows);
       setSelectedClientId((current) => {
-        if (requestSupplyClient.current) return requestSupplyClient.current;
-        if (rows.some((item) => item.client.id === current)) return current;
-        return rows[0]?.client.id ?? current;
+        return retainFbsClient(current, rows, requestSupplyClient.current ?? '');
       });
     } catch {
       setActiveClients([]);
@@ -1702,7 +1700,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
       setSelectedClientId(target.request.clientId);
       return;
     }
-    if (target.request.status === 'DONE') {
+    if (requestSupplyNeedsArchive(target)) {
       const period = { ...defaultFbsArchivePeriod(), from: target.request.createdAt.slice(0, 10) };
       if (activeView !== 'archive' || archivePeriod.from !== period.from || archivePeriod.to !== period.to) {
         setArchivePeriod(period);
@@ -5756,7 +5754,7 @@ function FbsOrdersView({
   }, [view]);
   const category = view;
   const orders = filterOrdersByStore(data?.orders ?? [], stores, selectedStoreId)
-    .filter((order) => order.category === category)
+    .filter((order) => fbsDisplayCategory(order) === category)
     .sort((left, right) => compareFbsOrders(left, right, orderSort));
   const warehouseGroups = groupFbsOrdersByWarehouse(orders, clockNow);
   const hasWildberriesWarehouseFilter = orders.some(
@@ -7813,7 +7811,7 @@ function filterFbsOrdersByMarketplace(
   const connections = source.connections.filter((connection) => connection.marketplace === marketplace);
   const orders = source.orders.filter((order) => order.marketplace === marketplace);
   const count = (category: FbsOrderSummary['category']) =>
-    orders.filter((order) => order.category === category).length;
+    orders.filter((order) => fbsDisplayCategory(order) === category).length;
   return {
     ...source,
     connected: connections.length > 0,
