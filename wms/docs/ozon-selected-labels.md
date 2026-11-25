@@ -1,6 +1,6 @@
 # Selected Ozon label reads
 
-Prepared 25.11.2026 for our WMS. PR/publication proof is recorded after verification.
+Published 25.11.2026 via PR1082 to our WMS. [Publication proof](releases/ozon-selected-labels-release.json).
 
 Printing a selected Ozon posting previously fell through the WB-only reader into
 `resolveSelectedFbsOrders` / `loadFbsOrders`, loading all client marketplace orders,
@@ -26,3 +26,5 @@ overlay on the current runtime; source parity remains false. Web is unchanged.
 prohibiting full refresh and business writes. Candidate results:3299 three pages
 in1393ms;3290 eleven pages in1186ms, no warnings. These are observed timings, not
 a guarantee of Ozon/CDN latency. No physical print jobs are submitted by tests.
+
+Public post-deployment API check:3299 returned3 pages in1174ms without warnings. Temporary verification session was logged out; no print submission.

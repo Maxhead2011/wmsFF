@@ -1,0 +1,140 @@
+{
+  "published": true,
+  "pr": 1082,
+  "mergeCommitSha": "0902ce783211d540e5ccf500217abed341d613da",
+  "head": "385474d28f519c1be8654f1d5ea15f22d080beb4",
+  "images": {
+    "api": "sha256:af4c6eb179480fe855a4be40502df825af03cd85fd7a1a982df04fc5ba355600",
+    "web": "sha256:fa76cf77d2ead176f24c0ee8d4588ac627d5d3f8af7386b5feabf2813dfcb2fe"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 804,
+  "webFiles": 3371,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi3299": {
+    "status": 201,
+    "ms": 1174,
+    "pageCount": 3,
+    "warnings": [],
+    "fileName": "FBS_OZON_all_labels.pdf"
+  },
+  "candidateRuntime": {
+    "passed": true,
+    "reports": [
+      {
+        "request": 3299,
+        "ms": 1175,
+        "pages": 3,
+        "warnings": [],
+        "calls": [
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 271
+          },
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 127
+          },
+          {
+            "path": "/v3/posting/fbs/package-label/create",
+            "ms": 95
+          },
+          {
+            "path": "/v2/posting/fbs/package-label/get",
+            "ms": 163
+          },
+          {
+            "path": "label-cdn",
+            "ms": 175
+          }
+        ],
+        "noFullRefresh": true,
+        "noBusinessWrites": true
+      },
+      {
+        "request": 3290,
+        "ms": 1234,
+        "pages": 11,
+        "warnings": [],
+        "calls": [
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 74
+          },
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 80
+          },
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 74
+          },
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 72
+          },
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 70
+          },
+          {
+            "path": "/v3/posting/fbs/get",
+            "ms": 74
+          },
+          {
+            "path": "/v3/posting/fbs/package-label/create",
+            "ms": 65
+          },
+          {
+            "path": "/v2/posting/fbs/package-label/get",
+            "ms": 58
+          },
+          {
+            "path": "label-cdn",
+            "ms": 14
+          },
+          {
+            "path": "/v3/posting/fbs/package-label/create",
+            "ms": 65
+          },
+          {
+            "path": "/v2/posting/fbs/package-label/get",
+            "ms": 55
+          },
+          {
+            "path": "label-cdn",
+            "ms": 13
+          },
+          {
+            "path": "/v3/posting/fbs/package-label/create",
+            "ms": 70
+          },
+          {
+            "path": "/v2/posting/fbs/package-label/get",
+            "ms": 51
+          },
+          {
+            "path": "label-cdn",
+            "ms": 13
+          }
+        ],
+        "noFullRefresh": true,
+        "noBusinessWrites": true
+      }
+    ]
+  },
+  "apiTests": 4933,
+  "webTests": 682,
+  "apiTypecheck": "14 existing baseline errors outside changed logic",
+  "baseRelease": 1080,
+  "physicalPrintSubmitted": false
+}
