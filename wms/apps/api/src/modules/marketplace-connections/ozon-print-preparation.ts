@@ -1,4 +1,5 @@
 import {BadRequestException, ConflictException} from '@nestjs/common';
+import {prepareMissingOzonGtd} from './ozon-gtd-absence';
 
 type Selection={connectionId:string;id:string};
 type Json=(url:string,init:RequestInit)=>Promise<any>;
@@ -56,7 +57,7 @@ async function prepareUnlocked(db:any,clientId:string,selections:Selection[],use
   if(!l||l.syncStatus!=='ACTIVE'||!['SUBMITTED','IN_REVIEW','APPROVED','IN_WORK','PACKED'].includes(l.request.status)||!user.activeWarehouseId||l.request.warehouseId!==user.activeWarehouseId)
    throw new BadRequestException(`Заказ ${s.id} недоступен в открытой заявке выбранного филиала.`);
   const headers={'Client-Id':c.sellerId,'Api-Key':c.apiKey,'Content-Type':'application/json'};
-  const response=await json('https://api-seller.ozon.ru/v3/posting/fbs/get',{method:'POST',headers,body:JSON.stringify({posting_number:s.id,with:{barcodes:true}})});
+  const response=await json('https://api-seller.ozon.ru/v3/posting/fbs/get',{method:'POST',headers,body:JSON.stringify({posting_number:s.id,with:{barcodes:true}}),signal:AbortSignal.timeout(20000)});
   const posting=response.result??response;
   if(posting.posting_number!==s.id)throw new BadRequestException('Ozon вернул другой номер заказа.');
   if(!['awaiting_packaging','awaiting_deliver'].includes(posting.status))throw new BadRequestException(`Заказ ${s.id} уже передан или недоступен для сборки.`);
@@ -67,11 +68,34 @@ async function prepareUnlocked(db:any,clientId:string,selections:Selection[],use
  for(const plan of plans){
   const {s,headers,posting,products,requestId}=plan;
   if(posting.status==='awaiting_packaging'&&!plan.requiresPhysicalSubmission){
+   const gtdExemplars=await prepareMissingOzonGtd(posting,headers,json);
+   if(gtdExemplars.length)await db.auditLog.create({data:{userId:user.id,action:'OZON_GTD_ABSENCE_CONFIRMED',entity:'ClientRequest',entityId:requestId,payload:{orderId:s.id,connectionId:s.connectionId,exemplarIds:gtdExemplars,reason:'User-configured empty GTD policy',otherExemplarFieldsPreserved:true}}});
    const value={requestId,products,preparedBy:user.id,preparedAt:new Date().toISOString()};
    const settingKey=key(clientId,s.connectionId,s.id);
    await db.systemSetting.upsert({where:{key:settingKey},create:{key:settingKey,value},update:{value}});
    await db.auditLog.create({data:{userId:user.id,action:'OZON_LABEL_PREPARATION_REQUESTED',entity:'ClientRequest',entityId:requestId,payload:{orderId:s.id,connectionId:s.connectionId,products}}});
-   await json('https://api-seller.ozon.ru/v4/posting/fbs/ship',{method:'POST',headers,body:JSON.stringify({posting_number:s.id,packages:[{products}],with:{additional_data:true}})});
+   try {
+    await json('https://api-seller.ozon.ru/v4/posting/fbs/ship',{method:'POST',headers,body:JSON.stringify({posting_number:s.id,packages:[{products}],with:{additional_data:true}}),signal:AbortSignal.timeout(30000)});
+    // FIX: Ozon may acknowledge ship before its label status becomes available.
+    const readySignal=AbortSignal.timeout(15000);let ready=false;
+    for(let attempt=0;attempt<8;attempt++){
+     if(attempt)await new Promise(resolve=>setTimeout(resolve,750));readySignal.throwIfAborted();
+     const current=await json('https://api-seller.ozon.ru/v3/posting/fbs/get',{method:'POST',headers,body:JSON.stringify({posting_number:s.id}),signal:readySignal});
+     const actual=current.result??current;
+     if(actual.posting_number!==s.id)throw new BadRequestException('Ozon вернул другой номер заказа.');
+     if(actual.status==='awaiting_deliver'){ready=true;break;}
+     if(actual.status!=='awaiting_packaging')throw new ConflictException(`Статус отправления ${s.id} изменился в Ozon. Обновите заявку перед печатью.`);
+    }
+    if(!ready)throw new ConflictException(`Ozon принял подготовку отправления ${s.id}, но ещё не разрешил стикеры. Повторите печать через несколько секунд.`);
+   } catch(error) {
+    // FIX: explain the rejected selected posting; requirements alone never block already completed exemplar data.
+    if(error instanceof Error&&error.message.includes('EXEMPLAR_INFO_NOT_FILLED_COMPLETELY')) {
+     const fields:Record<string,string>={products_requiring_gtd:'ГТД',products_requiring_rnpt:'РНПТ',products_requiring_country:'страна происхождения',products_requiring_mandatory_mark:'КИЗ',products_requiring_imei:'IMEI',products_requiring_weight:'вес',products_requiring_jw_uin:'УИН'};
+     const details=Object.entries(fields).flatMap(([field,label])=>(posting.requirements?.[field]??[]).map((id:unknown)=>{const product=posting.products.find((p:any)=>String(p.sku)===String(id));return `${product?.offer_id||id}: ${label}`;}));
+     throw new BadRequestException(`Отправление ${s.id}: Ozon не разрешил подготовить стикеры — не заполнены сведения об экземплярах товара.${details.length?' Требуются '+details.join('; ')+'.':''} Заполните сведения в кабинете Ozon и повторите печать. Для отсутствующей ГТД нужен явный признак «ГТД отсутствует», а не пустое поле. Код: EXEMPLAR_INFO_NOT_FILLED_COMPLETELY.`);
+    }
+    throw error;
+   }
   }
  }
  const requiresPhysicalSubmission=plans.filter(p=>p.requiresPhysicalSubmission&&p.posting.status==='awaiting_packaging').map(p=>p.s);

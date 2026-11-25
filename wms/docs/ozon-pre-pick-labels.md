@@ -1,3 +1,13 @@
+## Print progress dialog and absent GTD (prepared 25.11.2026)
+
+Request3319 / posting0214691742-0254-3 was rejected with EXEMPLAR_INFO_NOT_FILLED_COMPLETELY. Ozon required GTD for red_50; its exemplar had an empty number and is_gtd_absent=false. User confirmed GTD is absent and authorized the same policy for analogous future preparations. The exact exemplar was changed to is_gtd_absent=true, preserving every other field; Ozon returned gtd_check_status=passed and ship_available. Normal preparation then moved the posting to awaiting_deliver and produced the complete seven-page request PDF. No physical print job was submitted.
+
+`ozon-gtd-absence.ts` applies this policy only inside enabled own-WMS print preparation for selected awaiting_packaging postings without the existing mandatory-marking submission requirement. It changes only empty required GTD, preserves known numbers and other exemplar fields, validates composition/IDs, verifies Ozon acknowledgement and records an audit. Existing marked-order/physical picking path remains. After ship, bounded polling waits for label eligibility. Individual network waits are bounded. No warehouse scans, stock, physical completion or billing are fabricated.
+
+`FbsRequestActionDialog` replaces the bottom-of-list message with a native top-layer dialog: request number, stage, elapsed time, actionable explanation, optional technical details, close/Escape. The request continues if hidden. Native confirmation decline closes progress; success opens the existing printer dialog. Raw legacy exemplar errors are also explained. Error handling never declares all document requirements missing merely because they are listed by Ozon.
+
+Tests: ozon-gtd-absence.spec.ts, ozon-print-preparation.spec.ts, FbsRequestActionDialog.spec.ts; exact compiled runtime test and full-app browser (error, printer transition, cancel, mobile), all business browser APIs intercepted. API4941/web685 pass; same14 existing API type errors, web types pass. Guards: controls24 and request folds. Exact API2/web3 with shared live React; sourceParityVerified=false. Sold WMS is not deployed.
+
 # Ozon FBS: стикеры перед физической сборкой
 
 Опубликовано 25.11.2026 через [PR1072](https://github.com/Maxhead2011/wmsFF/pull/1072) в `feature/la_panthera`. [Доказательства выпуска](releases/ozon-pre-pick-1072.json).

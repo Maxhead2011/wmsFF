@@ -15,6 +15,7 @@ function fixture() {
  };
  db.$transaction=async(fn:any)=>fn(db);
  const json=vi.fn(async(url:string)=>{
+  if(url.endsWith('/create-or-get'))return {posting_number:'o',multi_box_qty:1,products:[{product_id:42,quantity:2,exemplars:[{exemplar_id:1,gtd:'already-filled'},{exemplar_id:2,gtd:'already-filled'}]}]};
   if(url.endsWith('/get'))return {result:structuredClone(posting)};
   if(url.endsWith('/ship')){posting.status='awaiting_deliver';return {result:[{posting_number:'o'}]};}
   throw Error('Unexpected URL');
@@ -22,6 +23,18 @@ function fixture() {
  return {db,json,posting,records,run:()=>prepareOzonPrint(db,'client',[{connectionId:'c',id:'o'}],{id:'u',activeWarehouseId:'w'},json)};
 }
 describe('Ozon labels before physical picking',()=>{
+ // TEST: request3319 must name the posting, article and missing GTD instead of a bare Ozon code.
+ it('explains incomplete exemplar data using the live posting requirements',async()=>{
+  const f=fixture();f.posting.products[0].offer_id='red_50';f.posting.requirements.products_requiring_gtd=[42];
+  const original=f.json.getMockImplementation()!;f.json.mockImplementation(async(url:string)=>{if(url.endsWith('/ship'))throw Error('Ozon вернул HTTP 400 (3): EXEMPLAR_INFO_NOT_FILLED_COMPLETELY.');return original(url);});
+  await expect(f.run()).rejects.toThrow(/Отправление o[\s\S]*red_50[\s\S]*ГТД/);
+  expect(f.db.stockMovement.create).not.toHaveBeenCalled();
+ });
+ // TEST: requirements alone do not mean data is missing; a successful submission stays allowed.
+ it('accepts a required GTD already completed at Ozon and bounds network waits',async()=>{
+  const f=fixture();f.posting.requirements.products_requiring_gtd=[42];await expect(f.run()).resolves.toMatchObject({prepared:1});
+  for(const call of f.json.mock.calls)expect((call as any)[1].signal).toBeInstanceOf(AbortSignal);
+ });
  it('rejects a concurrent preparation before contacting Ozon',async()=>{
   const f=fixture();f.db.$queryRaw.mockResolvedValue([{locked:false}]);
   await expect(f.run()).rejects.toThrow('уже выполняется');expect(f.json).not.toHaveBeenCalled();
