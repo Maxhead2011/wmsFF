@@ -1,0 +1,29 @@
+// TEST: actual analytics components, scoped requests, tabs, recommendations and stale-response protection.
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const {createRequire}=require('node:module');
+const web=path.resolve(__dirname,'../../..'),req=createRequire(path.join(web,'package.json'));
+const esbuild=createRequire(req.resolve('vite/package.json'))('esbuild');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+test('three analytics sections and warehouse recommendations work in desktop and mobile',async()=>{
+ const result=await esbuild.build({stdin:{contents:`import React from 'react';import {createRoot} from 'react-dom/client';import {AnalyticsPanel} from './src/components/analytics/AnalyticsPanel';window.mount=()=>createRoot(document.getElementById('root')).render(<AnalyticsPanel session={{accessToken:'test',user:{id:'client',roleCodes:['CLIENT'],permissionCodes:[],fulfillmentAnalyticsEnabled:true,analyticsEnabled:false}}}/>);`,resolveDir:web,loader:'tsx'},bundle:true,write:false,jsx:'automatic',loader:{'.css':'empty'},format:'iife',plugins:[{name:'mock-api',setup(build){build.onResolve({filter:/\/lib\/api$/},()=>({path:'api',namespace:'test'}));build.onLoad({filter:/.*/,namespace:'test'},()=>({contents:`export const request=(path)=>window.testRequest(path);export const fetchAnalyticsClients=()=>window.testRequest('/wb-clients');export const fetchAnalyticsDashboard=()=>{};export const syncAnalyticsDashboard=()=>{};export const connectAnalyticsApi=()=>{};`}));}}]});
+ const browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'msedge'});
+ try{
+  const page=await browser.newPage({viewport:{width:1450,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.setContent('<div id="root"></div>');await page.addStyleTag({content:fs.readFileSync(path.join(__dirname,'fulfillment.css'),'utf8')});
+  await page.evaluate(()=>{window.calls=[];window.testRequest=async path=>{window.calls.push(path);if(path.endsWith('/clients'))return [{id:'own',code:'001',name:'Test client',warehouses:[{id:'ff',name:'Our FF'}]}];if(window.slow)await new Promise(r=>window.release=r);const fbo=path.includes('channel=FBO');return {generatedAt:'2026-11-25T09:00:00Z',period:{from:'2026-08-27',to:'2026-11-24'},summary:{products:1,shippedUnits:840,receivedUnits:1000,currentUnits:100,freeUnits:60},quality:{completedRequests:84,unclassifiedRequests:0,missingSkuUnits:0},items:[{skuId:'sku',name:'Test product',article:'ARTICLE',size:'M',color:'Blue',receivedUnits:1000,returnedUnits:0,currentUnits:100,freeUnits:60,shippedUnits:840,shipmentRequests:84,shippingDays:84,averageDaily:10,abc:'A',xyz:'X',sharePercent:100,currentStorageDays:null,currentAgeCoveragePercent:0,shippedStorageDays:15,shippedAgeCoveragePercent:95,daysOfStock:6,recommendedUnits:fbo?null:170,toReplenish:fbo?null:110,surplusUnits:fbo?null:0,warnings:['STOCK_HISTORY_UNRELIABLE'],weeklyUnits:[70,70,70,70,70,70,70,70],stockoutDays:null}]};};});
+  await page.addScriptTag({content:result.outputFiles[0].text});await page.evaluate(()=>window.mount());await page.waitForTimeout(200);assert.deepEqual(errors,[]);
+  await page.getByLabel('Клиент',{exact:true}).selectOption('own');await page.getByRole('button',{name:'Рассчитать',exact:true}).click();
+  await page.getByRole('button',{name:'Test product',exact:true}).waitFor();
+  assert.equal(await page.getByRole('columnheader',{name:'Довезти, шт.',exact:true}).count(),1);
+  assert.match(await page.locator('tbody').innerText(),/170\s+110/);
+  await page.getByRole('button',{name:'Test product',exact:true}).click();assert.match(await page.getByRole('region',{name:'Подробности товара'}).innerText(),/Историю остатков нельзя подтвердить/);
+  await page.getByLabel('Найти товар').fill('missing');assert.equal(await page.locator('tbody tr').count(),0);await page.getByLabel('Найти товар').fill('ARTICLE');assert.equal(await page.locator('tbody tr').count(),1);
+  await page.setViewportSize({width:390,height:844});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.getByRole('button',{name:'Отгрузки ФБО',exact:true}).click();await page.getByRole('button',{name:'Рассчитать',exact:true}).click();await page.getByRole('button',{name:'Test product',exact:true}).waitFor();assert.equal(await page.getByRole('columnheader',{name:'Довезти, шт.',exact:true}).count(),0);
+  await page.getByRole('button',{name:'Wildberries',exact:true}).click();await page.getByText('Аналитика Wildberries не подключена для этой учётной записи.').waitFor();assert.equal(await page.evaluate(()=>window.calls.some(p=>p.includes('wb-clients'))),false);
+  await page.getByRole('button',{name:'Отгрузки ФБС',exact:true}).click();await page.evaluate(()=>window.slow=true);await page.getByRole('button',{name:'Рассчитать',exact:true}).click();await page.waitForFunction(()=>typeof window.release==='function');
+  await page.getByLabel('Доставка на ФФ, дней').fill('10');await page.evaluate(()=>window.release());await page.waitForTimeout(50);assert.equal(await page.locator('tbody tr').count(),0);
+  const calls=await page.evaluate(()=>window.calls.filter(p=>p.includes('dashboard')));assert(calls.every(p=>p.includes('clientId=own')&&p.includes('warehouseId=ff')&&!p.includes('refresh=')));assert.deepEqual(errors,[]);
+  if(process.env.FULFILLMENT_SCREENSHOT){await page.evaluate(()=>window.slow=false);await page.getByRole('button',{name:'Рассчитать',exact:true}).click();await page.getByRole('button',{name:'Test product',exact:true}).waitFor();await page.setViewportSize({width:1450,height:1000});await page.screenshot({path:process.env.FULFILLMENT_SCREENSHOT,fullPage:true});}
+ }finally{await browser.close();}
+});

@@ -30,6 +30,7 @@ import {
   type AuthSession,
 } from '../../lib/api';
 import './analytics.css';
+import { FulfillmentPanel } from './FulfillmentPanel';
 import { useRememberedClientId } from '../../lib/rememberedClient';
 import { SpiritChart } from './SpiritChart';
 
@@ -52,7 +53,7 @@ const availabilityOptions = [
   { value: 'nonLiquid', label: 'Неликвид' },
 ];
 
-export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
+function WildberriesAnalyticsPanel({ session }: AnalyticsPanelProps) {
   // FIX: observe only the visual preference; switching themes does not reload data.
   const [isSpirit, setSpirit] = useState(() => typeof document !== 'undefined' && document.documentElement.dataset.uiVariant === 'spirit');
   useEffect(() => {
@@ -532,4 +533,13 @@ function formatDateTime(value: string) {
 
 function errorMessage(caught: unknown) {
   return caught instanceof Error ? caught.message : 'Не удалось загрузить аналитику.';
+}
+
+// FIX: warehouse analytics does not require a Wildberries API connection.
+export function AnalyticsPanel({ session }: AnalyticsPanelProps) {
+  const [tab, setTab] = useState<'FBS' | 'FBO' | 'WB'>('FBS');
+  if (!session.user.fulfillmentAnalyticsEnabled) return <WildberriesAnalyticsPanel session={session} />;
+  return <section className="ff-analytics"><nav aria-label="Разделы аналитики" className="ff-tabs">
+    {([['FBS','Отгрузки ФБС'],['FBO','Отгрузки ФБО'],['WB','Wildberries']] as const).map(([id,label]) => <button key={id} type="button" aria-current={tab===id?'page':undefined} onClick={()=>setTab(id)}>{label}</button>)}
+  </nav>{tab==='WB' ? session.user.analyticsEnabled ? <WildberriesAnalyticsPanel session={session}/> : <p role="status">Аналитика Wildberries не подключена для этой учётной записи.</p> : <FulfillmentPanel key={tab+session.user.id} session={session} channel={tab}/>}</section>;
 }

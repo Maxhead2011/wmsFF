@@ -1,3 +1,5 @@
+Аналитика ФФ (в разработке, не опубликовано): [методика, доступ и тесты](fulfillment-analytics.md). Три вкладки ФБС/ФБО/Wildberries, ABC/XYZ, хранение и рекомендованный запас ФБС; own-only флаг `WMS_FULFILLMENT_ANALYTICS_ENABLED`.
+
 Published 25.11.2026 PR1075: [WB pending handovers and request3361 label client context](wb-awaiting-handover.md). API3/web4; all799/3362 hashes verified, public browser PDF6/printer/client/current-vs-archive passed, no print submission. Web679/API4897, TypeScript and compiled runtime passed. Own WMS only; environment/other containers unchanged. Baseline `2026-11-25-wb-awaiting-handover`, sourceParityVerified=false. [Proof](releases/wb-awaiting-1075.json).
 
 Prepared: [WB awaiting handover and request3361 labels](wb-awaiting-handover.md). API3/web4, no business writes; web679/API4897, compiled runtime, TypeScript, PDF6/printer/client/archive browser checks.

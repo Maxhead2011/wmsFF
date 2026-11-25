@@ -79,6 +79,7 @@ export type AuthUser = {
   name: string;
   isDemo?: boolean;
   analyticsEnabled?: boolean;
+  fulfillmentAnalyticsEnabled?: boolean;
   relabelingEnabled?: boolean;
   administrationEnabled?: boolean;
   workspaceVisibility?: Record<string, boolean>;

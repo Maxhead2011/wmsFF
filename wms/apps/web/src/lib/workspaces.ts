@@ -518,7 +518,7 @@ export function canOpenWorkspace(user: AuthUser, item: WorkspaceNavItem) {
   if (item.requiresAdministrationAccess && !user.administrationEnabled) {
     return false;
   }
-  if (item.requiresAnalyticsAccess && !user.analyticsEnabled) {
+  if (item.requiresAnalyticsAccess && !user.analyticsEnabled && !user.fulfillmentAnalyticsEnabled) {
     return false;
   }
   if (item.requiresRelabelingAccess && !user.relabelingEnabled) {

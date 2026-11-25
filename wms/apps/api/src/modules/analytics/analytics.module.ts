@@ -5,10 +5,12 @@ import { AnalyticsAutoSyncService } from './analytics-auto-sync.service';
 import { AnalyticsCryptoService } from './analytics-crypto.service';
 import { AnalyticsPrismaService } from './analytics-prisma.service';
 import { AnalyticsService } from './analytics.service';
+import { FulfillmentAnalyticsService } from './fulfillment.service';
+import { FulfillmentAnalyticsController } from './fulfillment.controller';
 
 @Module({
   imports: [AuthModule],
-  controllers: [AnalyticsController],
-  providers: [AnalyticsPrismaService, AnalyticsCryptoService, AnalyticsService, AnalyticsAutoSyncService],
+  controllers: [AnalyticsController, FulfillmentAnalyticsController],
+  providers: [AnalyticsPrismaService, AnalyticsCryptoService, AnalyticsService, AnalyticsAutoSyncService, FulfillmentAnalyticsService],
 })
 export class AnalyticsModule {}

@@ -1,0 +1,39 @@
+import 'reflect-metadata';
+import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
+import {FulfillmentAnalyticsService} from '../src/modules/analytics/fulfillment.service';
+import {ClientScopeService} from '../src/modules/auth/client-scope.service';
+import type {AuthUser} from '../src/modules/auth/auth.types';
+const user={id:'reader',roleCodes:['CLIENT'],permissionCodes:[],clientScopeMode:'LIMITED',clientIds:['own'],writableClientIds:[],warehouseIds:[],isDemo:false} as AuthUser;
+const query={clientId:'own',warehouseId:'ff',dateFrom:'2026-01-01',dateTo:'2026-03-01',channel:'FBS' as const};
+// TEST: access failures must occur before any business-data query.
+describe('fulfillment client and warehouse isolation',()=>{
+ beforeEach(()=>vi.stubEnv('WMS_FULFILLMENT_ANALYTICS_ENABLED','true'));
+ afterEach(()=>vi.unstubAllEnvs());
+ it('disables all fulfillment reads when the own-WMS flag is absent',async()=>{
+  vi.stubEnv('WMS_FULFILLMENT_ANALYTICS_ENABLED','');const s=new FulfillmentAnalyticsService({} as any,new ClientScopeService());
+  await expect(s.clients(user)).rejects.toThrow('не включена');await expect(s.dashboard(query,user)).rejects.toThrow('не включена');
+ });
+ it('denies a client URL substituted with another client',async()=>{
+  const s=new FulfillmentAnalyticsService({} as any,new ClientScopeService());await expect(s.dashboard({...query,clientId:'other'},user)).rejects.toThrow('Нет доступа');
+ });
+ it('denies a warehouse outside an employee scope',async()=>{
+  const s=new FulfillmentAnalyticsService({} as any,new ClientScopeService());await expect(s.dashboard(query,{...user,roleCodes:['EMPLOYEE']})).rejects.toThrow('Нет доступа к складу');
+ });
+ it('does not bypass warehouse scope with a mixed CLIENT/OPERATOR role',async()=>{
+  const s=new FulfillmentAnalyticsService({} as any,new ClientScopeService());await expect(s.dashboard(query,{...user,roleCodes:['CLIENT','OPERATOR']})).rejects.toThrow('Нет доступа к складу');
+ });
+ it('does not permit hidden clients for a global account',async()=>{
+  const s=new FulfillmentAnalyticsService({} as any,new ClientScopeService());await expect(s.dashboard(query,{...user,clientScopeMode:'ALL',hiddenClientIds:['own']})).rejects.toThrow('Демонстрационные');
+ });
+ it('limits client selection and rejects a warehouse not connected to the client',async()=>{
+  const prisma={client:{findMany:vi.fn().mockResolvedValue([{id:'own',name:'Own'}]),findFirst:vi.fn().mockResolvedValue({id:'own'})},warehouseClient:{findMany:vi.fn().mockResolvedValue([]),findFirst:vi.fn().mockResolvedValue(null)}};
+  const s=new FulfillmentAnalyticsService(prisma as any,new ClientScopeService());await s.clients(user);
+  expect(prisma.client.findMany.mock.calls[0][0].where).toEqual({id:{in:['own']},isDemo:false});
+  await expect(s.dashboard(query,user)).rejects.toThrow('Склад не подключён');
+ });
+ it('rejects a real client when used through a demo session',async()=>{
+  const prisma={client:{findFirst:vi.fn().mockResolvedValue(null)}};const s=new FulfillmentAnalyticsService(prisma as any,new ClientScopeService());
+  await expect(s.dashboard(query,{...user,isDemo:true})).rejects.toThrow('Клиент не найден');
+  expect(prisma.client.findFirst.mock.calls[0][0].where).toEqual({id:'own',isDemo:true});
+ });
+});

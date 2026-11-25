@@ -114,6 +114,7 @@ export class AuthGuard implements CanActivate {
       name: user.name,
       isDemo: user.isDemo,
       analyticsEnabled: user.analyticsEnabled,
+      fulfillmentAnalyticsEnabled: process.env.WMS_FULFILLMENT_ANALYTICS_ENABLED === 'true',
       relabelingEnabled:
         hasGlobalClientAccess ||
         resolvedScope.relabelingEnabled,
