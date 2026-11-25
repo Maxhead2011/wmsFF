@@ -19,7 +19,7 @@ describe.skipIf(!url).sequential('fulfillment SQL integration',()=>{
    '"Client" (id text PRIMARY KEY,name text,code text,"isDemo" boolean)',
    '"Warehouse" (id text PRIMARY KEY,name text)',
    '"WarehouseClient" ("clientId" text,"warehouseId" text)',
-   '"Sku" (id text PRIMARY KEY,"clientId" text,name text,article text,size text,color text)',
+   '"Sku" (id text PRIMARY KEY,"clientId" text,name text,article text,size text,color text,category text,brand text,"marketplacePayload" jsonb)',
    '"ClientRequest" (id text PRIMARY KEY,"clientId" text,"warehouseId" text,type text,status text)',
    '"ClientRequestEvent" ("requestId" text,"clientId" text,"statusTo" text,"createdAt" timestamp)',
    '"ClientRequestItem" ("requestId" text,"skuId" text,quantity int)',
@@ -33,7 +33,7 @@ describe.skipIf(!url).sequential('fulfillment SQL integration',()=>{
    `INSERT INTO "Client" VALUES ('c','Client','C',false),('other','Other','O',false)`,
    `INSERT INTO "Warehouse" VALUES ('w','FF'),('else','Other')`,
    `INSERT INTO "WarehouseClient" VALUES ('c','w'),('other','else')`,
-   `INSERT INTO "Sku" VALUES ('a','c','A','AA',null,null),('b','c','B','BB',null,null),('foreign','other','Secret',null,null,null)`,
+   `INSERT INTO "Sku" (id,"clientId",name,article,size,color) VALUES ('a','c','A','AA',null,null),('b','c','B','BB',null,null),('foreign','other','Secret',null,null,null)`,
    `INSERT INTO "ClientRequest" VALUES ('fbs','c','w','OUTBOUND','DONE'),('old','c','w','OUTBOUND','DONE'),('fbo','c','w','OUTBOUND','DONE'),('other','c','w','OUTBOUND','DONE'),('pending','c','w','OUTBOUND','IN_WORK'),('cancelled','c','w','OUTBOUND','CANCELLED'),('secret','other','w','OUTBOUND','DONE'),('elsewhere','c','else','OUTBOUND','DONE')`,
    `INSERT INTO "ClientRequestEvent" VALUES ('fbs','c','DONE','2026-09-01'),('fbs','c','DONE','2026-09-02'),('old','c','DONE','2026-07-01'),('old','c','DONE','2026-09-01'),('fbo','c','DONE','2026-09-04'),('other','c','DONE','2026-09-05'),('secret','other','DONE','2026-09-01'),('elsewhere','c','DONE','2026-09-01')`,
    `INSERT INTO "FbsOrderRequestLink" VALUES ('fbs','c'),('fbs','c'),('old','c'),('secret','other'),('elsewhere','c')`,
@@ -56,4 +56,13 @@ describe.skipIf(!url).sequential('fulfillment SQL integration',()=>{
   const result=await service.dashboard({...q,channel:'FBO'},user);expect(result.summary.shippedUnits).toBe(20);expect(result.items.find(i=>i.skuId==='b')).toMatchObject({shipmentRequests:1,recommendedUnits:null});
  });
  it('retains scoped client/warehouse discovery without a WB connection',async()=>{expect(await service.clients(user)).toEqual([{id:'c',name:'Client',code:'C',warehouses:[{id:'w',name:'FF'}]}]);});
+ it('deduplicates requests across model variants and does not expose raw catalog payloads',async()=>{
+  await p.$executeRawUnsafe(`UPDATE "Sku" SET article='AA',color='blue',"marketplacePayload"='{"private":"fixture"}' WHERE id='b'`);
+  await p.$executeRawUnsafe(`INSERT INTO "ClientRequestItem" VALUES ('fbs','b',5)`);
+  try{
+   const result=await service.dashboard(q,user);expect(result.groups.model).toHaveLength(1);
+   expect(result.groups.model[0]).toMatchObject({shippedUnits:15,shipmentRequests:1,shippingDays:1,skuCount:2});
+   expect(JSON.stringify(result)).not.toContain('marketplacePayload');expect(JSON.stringify(result)).not.toContain('fixture');
+  }finally{await p.$executeRawUnsafe(`DELETE FROM "ClientRequestItem" WHERE "requestId"='fbs' AND "skuId"='b'`);await p.$executeRawUnsafe(`UPDATE "Sku" SET article='BB',color=null,"marketplacePayload"=null WHERE id='b'`);}
+ });
 });
