@@ -1,0 +1,41 @@
+{
+  "published": true,
+  "pr": 1091,
+  "mergeCommitSha": "faddae99060eb1f44569b719a149b73239154360",
+  "head": "b457d0f3d0c725906efc635c0b8991bc9b2f4cc0",
+  "images": {
+    "api": "sha256:4814560ccf86aba1a6b4e0b05fc401f36dd5acc8e1093b936181ae160654fee3",
+    "web": "sha256:21ec6928b83ccd62a9e4cb2f7dc4e98473261dc360e5afb1519def401b0b5b74"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 807,
+  "webFiles": 3377,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "publicBrowser": {
+    "passed": true,
+    "publicBrowser": true,
+    "fbs": true,
+    "fbo": true,
+    "visible": 20,
+    "archivedExcluded": 26,
+    "noBusinessWrites": true
+  },
+  "compiledService": {
+    "passed": true,
+    "readOnly": true,
+    "total": 46,
+    "archived": 26,
+    "visible": 20,
+    "limitedScopePreserved": true
+  },
+  "apiTests": 4957,
+  "webTests": 688,
+  "apiTypecheck": "14 pre-existing errors outside changed logic",
+  "baseRelease": 1089,
+  "businessRecordsChanged": false
+}
