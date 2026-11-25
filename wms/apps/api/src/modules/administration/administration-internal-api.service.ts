@@ -114,8 +114,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'analytics',
     name: 'Аналитика',
-    prefixes: ['/analytics'],
-    routeCount: 4,
+    prefixes: ['/analytics', '/analytics/fulfillment'],
+    routeCount: 6,
     description: 'Отчёты по продажам, регионам, товарам и синхронизации аналитических данных.',
     logic: ['Читает подготовленные аналитические срезы.', 'Запускает и контролирует синхронизацию источников.', 'Формирует показатели для аналитических экранов.'],
     dependencies: ['Основная БД', 'Аналитическая БД', 'API маркетплейсов'],
