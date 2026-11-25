@@ -1,0 +1,2 @@
+# FIX: artifact checksums cover exact bytes on Windows and Linux.
+web-hashes.json -text
