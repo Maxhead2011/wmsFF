@@ -11,6 +11,7 @@ import { isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzO
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
+import { wbPrintCargo } from './wb-print-cargo';
 import { ozonLabelOrders } from './ozon-label-orders';
 import { currentOzonLabel } from './ozon-current-label';
 import { rememberRibbon } from '../../common/stock/fbs-ribbon-evidence';
@@ -21784,11 +21785,19 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const { orders } = await this.resolveFbsLabelOrders(clientId, dto.orders);
     const result = await wbAllLabels(orders, {
       sc: selected => this.getFbsSupplyStickersPdf({ clientId, orders: selected }, user, orders),
-      pvz: selected => this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user, orders),
+      pvz: selected => dto.prepareWbCargo === true && process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true'
+        ? wbPrintCargo(this,clientId,selected,user,marketplaceJsonOnce,true)
+        : this.getFbsCargoPlaceStickersPdf({ clientId, orders: selected }, user, orders),
       pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user, orders),
-    }, process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true');
+      // FIX: official Ozon posting labels only, never fabric/product labels or assembly.
+      official: async selected => {
+        const direct = await selectedOzonLabels(this.prisma, clientId, selected, marketplaceJson, marketplaceBinary);
+        if(!direct)throw new BadRequestException('Печать стикеров заказов Ozon недоступна.');
+        return {buffer:await mergeFbsStickerPdfs(direct.parts)};
+      },
+    }, process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true', dto.cargoLabelsOnly === true);
     // FIX: only a server-generated ribbon with every order pair is eligible for an agent ACK.
-    if (!result.warnings.some(w=>w.startsWith('ШК товара / заказа')))
+    if (dto.cargoLabelsOnly !== true && !result.warnings.some(w=>w.startsWith('ШК товара / заказа')))
       await rememberRibbon(this.prisma,clientId,user.id,orders,Buffer.from(result.fileBase64,'base64'));
     return result;
   }

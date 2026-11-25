@@ -8,6 +8,24 @@ async function file(width: number) { const pdf = await PDFDocument.create(); pdf
 const readers = () => ({ sc: vi.fn(() => file(11)), pvz: vi.fn(() => file(22)), pairs: vi.fn((_orders: any[]) => file(33)) });
 // TEST: page dimensions identify parts without relying on implementation text.
 describe('WB available-label ribbon', () => {
+  // TEST: cargo printing excludes every product/order pair for WB and every product label for Ozon.
+  it('prints WB supply and cargo only, and official Ozon labels only', async () => {
+    const read = { ...readers(), official: vi.fn(() => file(44)) };
+    const result = await wbAllLabels([order(), order('2'), {...order('3'),marketplace:'OZON'}], read, true, true);
+    const pdf = await PDFDocument.load(Buffer.from(result.fileBase64,'base64'));
+    expect(pdf.getPages().map(p=>p.getWidth())).toEqual([11,22,44]);
+    expect(read.pairs).not.toHaveBeenCalled();
+    expect(read.official).toHaveBeenCalledWith([expect.objectContaining({id:'3',marketplace:'OZON'})]);
+  });
+  it('never falls back to product pairs when cargo labels are missing', async () => {
+    const read = readers();
+    await expect(wbAllLabels([{...order(),supplyId:null}],read,true,true)).rejects.toThrow('Нет доступных');
+    expect(read.pairs).not.toHaveBeenCalled();
+  });
+  it('rejects cargo mode when the own-WMS feature is disabled', async () => {
+    const read=readers();await expect(wbAllLabels([order()],read,false,true)).rejects.toThrow();
+    expect(read.sc).not.toHaveBeenCalled();
+  });
   // TEST: Ozon has order/product labels, but no WB SC or pickup-point labels.
   it('downloads Ozon pairs without requesting WB documents when enabled', async () => {
     const read = readers();

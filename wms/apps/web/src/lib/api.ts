@@ -10443,10 +10443,10 @@ export async function enableFbsEmergencyAssembly(accessToken: string, requestId:
 }
 
 // FIX: return warnings with the printable ribbon, including partial availability.
-export async function downloadFbsAllLabels(accessToken: string, payload: FbsOrderSelectionPayload) {
+export async function downloadFbsAllLabels(accessToken: string, payload: FbsOrderSelectionPayload, cargoLabelsOnly = false, prepareWbCargo = false) {
   return request<{ fileBase64: string; fileName: string; pageCount: number; warnings: string[] }>(
     '/marketplace-connections/fbs/orders/all-labels',
-    { method: 'POST', accessToken, body: sanitizeFbsOrderSelectionPayload(payload) },
+    { method: 'POST', accessToken, body: {...sanitizeFbsOrderSelectionPayload(payload), ...(cargoLabelsOnly ? {cargoLabelsOnly:true} : {}), ...(prepareWbCargo ? {prepareWbCargo:true} : {})} },
   );
 }
 

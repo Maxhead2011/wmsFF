@@ -1,5 +1,6 @@
 import {fboProcessOptions,fboProcessValue} from './fboProcess';
 import {RequestRemovalButton} from './RequestRemoval';
+import {FbsLabelActions} from './FbsLabelActions';
 import { Activity, AlertTriangle, Boxes, CheckCircle2, ClipboardList, Edit3, FileDown, FileSpreadsheet, FileText, FileUp, MapPinned, PackageCheck, RefreshCw, Search, Send, ShieldCheck, Truck, Undo2, XCircle } from 'lucide-react';
 import {useContext, useState} from 'react';
 import {RequestZoneContext} from './RequestZoneProvider';
@@ -430,8 +431,7 @@ export function ClientRequestsTable({
   <details className="request-action-menu__group">
     <summary>Стикеры поставки</summary>
     <div className="request-action-menu__items">
-      <button type="button" onClick={() => onOpenFbsOrders(request, 'download')}>Скачать все ШК</button>
-      <button type="button" onClick={() => onOpenFbsOrders(request, 'print')}>Распечатать все ШК</button>
+      <FbsLabelActions onAction={action=>onOpenFbsOrders(request,action)} />
     </div>
   </details>
 </> : null}
