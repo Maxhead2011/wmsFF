@@ -4,6 +4,7 @@ import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
 import type {AuthUser} from '../auth/auth.types';
 import {analyzeFulfillment,validateFulfillmentOptions,type FulfillmentOptions,type ProductFact,type DailyFact,type StockDelta} from './fulfillment-math';
+import {groupFulfillment} from './fulfillment-groups';
 
 export const fulfillmentAnalyticsEnabled=()=>process.env.WMS_FULFILLMENT_ANALYTICS_ENABLED==='true';
 export type FulfillmentQuery={clientId:string;warehouseId:string;dateFrom:string;dateTo:string;channel:'FBS'|'FBO';leadDays?:number;reviewDays?:number;safetyDays?:number};
@@ -37,7 +38,7 @@ export class FulfillmentAnalyticsService{
   )`;
   const data=await this.prisma.$transaction(async tx=>{
    await tx.$executeRawUnsafe('SET TRANSACTION READ ONLY');
-   const products=await tx.$queryRaw<ProductFact[]>(Prisma.sql`
+   const products=await tx.$queryRaw<Array<ProductFact&{category:string|null;brand:string|null;marketplacePayload:unknown}>>(Prisma.sql`
     WITH movements AS (
      SELECT "skuId",MIN("createdAt") FILTER(WHERE type='RECEIPT' AND quantity>0) AS first_receipt,
       COALESCE(SUM(quantity) FILTER(WHERE type='RECEIPT' AND quantity>0 AND "createdAt">=${from} AND "createdAt"<${until}),0)::float AS received,
@@ -57,7 +58,9 @@ export class FulfillmentAnalyticsService{
     ), pending AS (
      SELECT i."skuId",SUM(GREATEST(i.quantity,0))::float AS units FROM "ClientRequestItem" i JOIN "ClientRequest" r ON r.id=i."requestId"
      WHERE r."clientId"=${q.clientId} AND r."warehouseId"=${q.warehouseId} AND r.type='OUTBOUND' AND r.status NOT IN ('DONE','CANCELLED','REJECTED') GROUP BY i."skuId"
-    ) SELECT s.id AS "skuId",s.name,s.article,s.size,s.color,COALESCE(m.received,0) AS "receivedUnits",COALESCE(m.returned,0) AS "returnedUnits",
+    ) SELECT s.id AS "skuId",s.name,s.article,s.size,s.color,s.category,s.brand,
+     jsonb_build_object('fabricRollBinding',s."marketplacePayload"->'fabricRollBinding') AS "marketplacePayload",
+     COALESCE(m.received,0) AS "receivedUnits",COALESCE(m.returned,0) AS "returnedUnits",
      COALESCE(b.total,0) AS "currentUnits",COALESCE(b.available,0) AS "availableUnits",COALESCE(b.allocated,0) AS "allocatedUnits",COALESCE(p.units,0) AS "openDemandUnits",
      m.first_receipt AS "firstReceiptAt",COALESCE(b.age,0) AS "ageUnitDays",COALESCE(b.known,0) AS "ageKnownUnits",0::float AS "shippedAgeUnitDays",0::float AS "shippedAgeKnownUnits",COALESCE(m.ledger,0) AS "ledgerUnits"
     FROM "Sku" s LEFT JOIN movements m ON m."skuId"=s.id LEFT JOIN balances b ON b."skuId"=s.id LEFT JOIN pending p ON p."skuId"=s.id WHERE s."clientId"=${q.clientId}
@@ -74,7 +77,7 @@ export class FulfillmentAnalyticsService{
      COALESCE(SUM(-m.quantity*EXTRACT(EPOCH FROM (m."createdAt"-COALESCE(i."receiptAt",r.at)))/86400) FILTER(WHERE COALESCE(i."receiptAt",r.at)<=m."createdAt"),0)::float AS age
     FROM "StockMovement" m JOIN completed c ON c.id=m."sourceDocument" LEFT JOIN "ReceiptStockIdentity" i ON i."boxId"=m."boxId" LEFT JOIN receipts r ON r."boxId"=m."boxId"
     WHERE m."clientId"=${q.clientId} AND m."warehouseId"=${q.warehouseId} AND m.type='SHIP' AND m.quantity<0 GROUP BY m."sourceDocument",m."skuId"
-   ) SELECT q."skuId",to_char(q.at+interval '3 hours','YYYY-MM-DD') AS date,SUM(q.units)::float AS units,COUNT(*)::int AS requests,
+   ) SELECT q."skuId",to_char(q.at+interval '3 hours','YYYY-MM-DD') AS date,SUM(q.units)::float AS units,COUNT(*)::int AS requests,array_agg(DISTINCT q.id) AS "requestIds",
     COALESCE(SUM(t.known) FILTER(WHERE t.units<=q.units),0)::float AS known,COALESCE(SUM(t.age) FILTER(WHERE t.units<=q.units),0)::float AS age
    FROM quantities q LEFT JOIN trace t ON t.id=q.id AND t."skuId"=q."skuId" GROUP BY q."skuId",date ORDER BY date,q."skuId"`);
    const deltas=await tx.$queryRaw<StockDelta[]>(Prisma.sql`SELECT "skuId",to_char("createdAt"+interval '3 hours','YYYY-MM-DD') AS date,SUM(quantity)::float AS quantity FROM "StockMovement"
@@ -87,6 +90,9 @@ export class FulfillmentAnalyticsService{
   },{isolationLevel:Prisma.TransactionIsolationLevel.RepeatableRead,timeout:60000});
   const ages=new Map<string,{age:number;known:number}>();for(const s of data.shipments){const a=ages.get(s.skuId)??{age:0,known:0};a.age+=s.age;a.known+=s.known;ages.set(s.skuId,a);}
   const products=data.products.filter(p=>p.currentUnits!==0||p.receivedUnits||p.returnedUnits||ages.has(p.skuId)).map(p=>({...p,firstReceiptAt:p.firstReceiptAt?new Date(p.firstReceiptAt).toISOString():null,shippedAgeUnitDays:ages.get(p.skuId)?.age??0,shippedAgeKnownUnits:ages.get(p.skuId)?.known??0}));
-  return {...analyzeFulfillment(products,data.shipments,data.deltas,o),client,warehouse:link.warehouse,quality:data.quality};
+  // FIX: retain private catalog evidence server-side; only derived grouping labels reach the report.
+  const facts=products.map(({category,brand,marketplacePayload,...fact})=>fact);
+  const result=analyzeFulfillment(facts,data.shipments,data.deltas,o);
+  return {...result,groups:groupFulfillment(products,data.shipments,data.deltas,o,result.items),client,warehouse:link.warehouse,quality:data.quality};
  }
 }

@@ -1,6 +1,6 @@
 const DAY=86_400_000;
 export type ProductFact={skuId:string;name:string;article:string|null;size:string|null;color:string|null;receivedUnits:number;returnedUnits:number;currentUnits:number;availableUnits:number;allocatedUnits:number;openDemandUnits:number;firstReceiptAt:string|null;ageUnitDays:number;ageKnownUnits:number;shippedAgeUnitDays:number;shippedAgeKnownUnits:number;ledgerUnits:number};
-export type DailyFact={skuId:string;date:string;units:number;requests:number};
+export type DailyFact={skuId:string;date:string;units:number;requests:number;requestIds?:string[]};
 export type StockDelta={skuId:string;date:string;quantity:number};
 export type FulfillmentOptions={dateFrom:string;dateTo:string;leadDays:number;reviewDays:number;safetyDays:number;channel:'FBS'|'FBO';asOf:string};
 export function moscowDate(value:string|Date){return new Date(new Date(value).getTime()+3*3_600_000).toISOString().slice(0,10);}
