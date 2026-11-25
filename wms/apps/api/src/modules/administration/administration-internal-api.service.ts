@@ -289,8 +289,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'print',
     name: 'Печать',
-    prefixes: ['/print', '/print/kiz-duplicates', '/print/series'],
-      routeCount: 34, // FIX: series queue, PDF ribbon and branch-scoped station media read/update.
+    prefixes: ['/print', '/print/kiz-duplicates', '/print/series', '/print/lamoda'],
+      routeCount: 35, // FIX: includes the read-only complete Lamoda label preview.
     description: 'Очереди печати, шаблоны, принтеры и повторная печать этикеток.',
     logic: ['Формирует задания печати.', 'Маршрутизирует задание в группу принтеров.', 'Хранит статус, ошибки и историю повторов.', 'Дубль КИЗ: исходный код, подпись товара и проверка повторным сканом; без изменения остатков и WB. Включается отдельно.'],
     dependencies: ['Основная БД', 'Принтеры/агент печати'],
@@ -325,8 +325,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'tsd',
     name: 'ТСД',
-    prefixes: ['/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment'],
-      routeCount: 112, // FIX: opt-in TSD physical-input session activity.
+    prefixes: ['/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment', '/tsd/requests/:id/fbo/lamoda-relabel'],
+      routeCount: 114, // FIX: read/save production fields in the existing Lamoda relabel workflow.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД. Отдельное подтверждение нарезки ФБС при включённом WMS_FBS_FABRIC_CUT_ENABLED.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Печатает два целевых ШК переклейки через станцию и проверяет подтверждение печати.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

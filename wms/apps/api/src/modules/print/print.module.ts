@@ -1,3 +1,4 @@
+import { LamodaLabelController } from './lamoda-label.controller';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from '../auth/auth.module';
@@ -14,7 +15,7 @@ import { PrintSeriesService } from './print-series.service';
 
 @Module({
   imports: [AuthModule, ConfigModule],
-  controllers: [PrintController, KizDuplicateController, PrintSeriesController],
+  controllers: [LamodaLabelController, PrintController, KizDuplicateController, PrintSeriesController],
   providers: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService, KizDuplicateService, PrintSeriesService],
   exports: [LabelTemplateService, PrintJobService, PrintPrinterService, PrintQueueWorkerService, TsplLabelService],
 })

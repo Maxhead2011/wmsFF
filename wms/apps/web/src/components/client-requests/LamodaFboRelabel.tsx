@@ -1,10 +1,12 @@
 import {useState} from 'react';
+import {LamodaRelabelDataForm} from './LamodaRelabelDataForm';
 import {resolveLamodaRelabel,fetchLamodaRelabelStations,printLamodaRelabel,type FboPlan,type FboAction} from '../../lib/api';
 
 // FIX: labels and progress are server-owned; a browser refresh never confirms a physical scan.
 export function LamodaFboRelabel({plan,accessToken,disabled,command,refresh}:{plan:FboPlan;accessToken:string;disabled:boolean;command:(action:string,extra:Partial<FboAction>)=>Promise<void>;refresh:()=>Promise<void>}) {
  const [source,setSource]=useState(''),[sourceKiz,setSourceKiz]=useState(''),[selected,setSelected]=useState(''),[stations,setStations]=useState<Array<{id:string;name:string;printerName:string}>>([]),[station,setStation]=useState('');
  const [barcode,setBarcode]=useState(''),[kiz,setKiz]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [labelReady,setLabelReady]=useState(false);
  const units=plan.relabelUnits??[],unit=units.find(u=>u.id===selected);
  async function resolve(){setBusy(true);setError('');setSelected('');setBarcode('');setKiz('');try{const u=await resolveLamodaRelabel(accessToken,plan.requestId,{barcode:source,kiz:sourceKiz||undefined});setSelected(u.id);await refresh();}catch(e){setError(String(e));}finally{setBusy(false);}}
  async function load(){setBusy(true);setError('');try{setStations(await fetchLamodaRelabelStations(accessToken,plan.requestId));}catch(e){setError(String(e));}finally{setBusy(false);}}
@@ -12,11 +14,12 @@ export function LamodaFboRelabel({plan,accessToken,disabled,command,refresh}:{pl
  if(!plan.relabelRequired)return null;
  return <section aria-label="Переклейка Lamoda"><h3>Переклейка Lamoda</h3><p>Ожидает проверки: {units.length} шт. Сканируйте складской ШК, чтобы найти соответствие Lamoda. Напечатайте этикетку, наклейте её на товар и отсканируйте новый ШК. Для маркированного товара также сканируйте КИЗ.</p>
  {error&&<p role="alert">{error}</p>}
+ <LamodaRelabelDataForm requestId={plan.requestId} token={accessToken} disabled={disabled} onReady={setLabelReady} onSaved={refresh}/>
  <fieldset disabled={disabled||busy}><label>Складской ШК<input value={source} onChange={e=>{setSource(e.target.value);setSelected('');}} autoComplete="off"/></label><label>КИЗ товара, если маркирован<input value={sourceKiz} onChange={e=>{setSourceKiz(e.target.value);setSelected('');}} autoComplete="off"/></label><button type="button" disabled={!source.trim()} onClick={()=>void resolve()}>Найти соответствие Lamoda</button></fieldset>
  {unit&&<fieldset disabled={disabled||busy}><p>{unit.label?.name} · размер {unit.label?.size??'—'} · ШК Lamoda: {unit.label?.barcode}</p>
  <p>Артикул Lamoda: {unit.label?.article}. Печать: {unit.printStatus??'не отправлена'}.</p>
  <button type="button" onClick={()=>void load()}>Найти станции печати</button><select aria-label="Станция печати" value={station} onChange={e=>setStation(e.target.value)}><option value="">Выберите станцию</option>{stations.map(s=><option key={s.id} value={s.id}>{s.name} · {s.printerName}</option>)}</select>
- <button type="button" disabled={!station||!!unit.printStatus&&unit.printStatus!=='FAILED'} onClick={()=>void print()}>Напечатать 2 этикетки 58 × 40</button>
+ <button type="button" disabled={!labelReady||!station||!!unit.printStatus&&unit.printStatus!=='FAILED'} onClick={()=>void print()}>Напечатать 2 этикетки 58 × 40</button>
  <button type="button" onClick={()=>void refresh()}>Проверить печать</button>
  <label>Новый ШК Lamoda<input value={barcode} onChange={e=>setBarcode(e.target.value)} autoComplete="off"/></label>
  {unit.kiz&&<label>КИЗ этой единицы<input value={kiz} onChange={e=>setKiz(e.target.value)} autoComplete="off"/></label>}

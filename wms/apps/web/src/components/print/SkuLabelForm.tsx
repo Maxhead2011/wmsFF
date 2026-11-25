@@ -11,6 +11,7 @@ import {
 } from '../../lib/api';
 import { TsplPreviewCard } from './TsplPreviewCard';
 import { useRememberedClientId } from '../../lib/rememberedClient';
+import { previewLamodaLabel, type LamodaPreview } from '../../lib/lamodaLabelPrint';
 
 type SkuLabelFormProps = {
   session: AuthSession;
@@ -27,6 +28,8 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
   const [error, setError] = useState('');
   const [isLoading, setLoading] = useState(false);
   const [isSubmitting, setSubmitting] = useState(false);
+  const [template,setTemplate]=useState('standard');
+  const [lamodaPreview,setLamodaPreview]=useState<LamodaPreview|null>(null);
 
   const selectedClient = useMemo(() => clients.find((client) => client.id === clientId) ?? null, [clientId, clients]);
   const selectedSku = useMemo(() => skus.find((sku) => sku.internalSku === skuCode) ?? null, [skuCode, skus]);
@@ -82,9 +85,11 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
     setBarcode('');
     setName('');
     setPreview(null);
+    setLamodaPreview(null);
   }
 
   function changeSku(nextSkuCode: string) {
+    setLamodaPreview(null);
     setSkuCode(nextSkuCode);
     setBarcode('');
     const sku = skus.find((item) => item.internalSku === nextSkuCode);
@@ -98,8 +103,15 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
     setSubmitting(true);
     setError('');
     setPreview(null);
+    setLamodaPreview(null);
 
     try {
+      // FIX: the Lamoda preset uses the same complete server renderer as relabeling.
+      if(template==='lamoda') {
+        if(!selectedSku)throw new Error('Выберите товар клиента.');
+        setLamodaPreview(await previewLamodaLabel(session.accessToken,clientId,selectedSku,barcode));
+        return;
+      }
       const nextPreview = await previewSkuLabel(session.accessToken, {
         skuCode: skuCode.trim(),
         name: (selectedSku?.name ?? name).trim(),
@@ -123,6 +135,9 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
   return (
     <form className="print-form" onSubmit={submit}>
       <div className="print-fields print-fields--sku">
+        <label><span>Шаблон этикетки</span><select value={template} onChange={event=>{setTemplate(event.target.value);setPreview(null);setLamodaPreview(null);}}>
+          <option value="standard">Обычная</option><option value="lamoda">Лукин · Lamoda · 58 × 40 мм</option>
+        </select></label>
         <label>
           <span>Клиент</span>
           <select value={clientId} onChange={(event) => changeClient(event.target.value)} disabled={isLoading}>
@@ -163,7 +178,7 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
       <div className="print-actions">
         <button className="primary-button" type="submit" disabled={!canSubmit || isSubmitting}>
           <FileText size={16} aria-hidden="true" />
-          <span>{isSubmitting ? 'Готовлю' : 'Предпросмотр TSPL'}</span>
+          <span>{isSubmitting ? 'Готовлю' : template==='lamoda'?'Предпросмотр Lamoda':'Предпросмотр TSPL'}</span>
         </button>
         <button className="primary-button print-secondary" type="button" onClick={() => void loadSkus()} disabled={!clientId || isLoading}>
           <RefreshCw size={16} aria-hidden="true" />
@@ -172,6 +187,7 @@ export function SkuLabelForm({ session }: SkuLabelFormProps) {
       </div>
 
       {preview ? <TsplPreviewCard preview={preview} fileName={safeFileName} /> : null}
+      {lamodaPreview?<section><img alt="Этикетка Lamoda 58 × 40 мм" src={'data:image/png;base64,'+lamodaPreview.imageBase64} style={{width:348,maxWidth:'100%'}}/><a className="secondary-button" download={lamodaPreview.barcode+'-lamoda-58x40.pdf'} href={'data:application/pdf;base64,'+lamodaPreview.pdfBase64}>Скачать PDF 58 × 40 мм</a></section>:null}
     </form>
   );
 }

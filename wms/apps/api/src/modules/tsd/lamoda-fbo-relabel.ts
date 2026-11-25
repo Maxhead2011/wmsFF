@@ -3,7 +3,7 @@ import { ConflictException } from '@nestjs/common';
 import type { LamodaPlanLine } from '../lamoda/lamoda-policy';
 import type { Prisma } from '@prisma/client';
 
-export type LamodaRelabelLabel = { skuId:string; barcode:string; article:string; name:string; size:string|null };
+export type LamodaRelabelLabel = { skuId:string; barcode:string; article:string; name:string; size:string|null;fullLabel?:import('../print/lamoda-label').LamodaLabel };
 type Card = { skuId:string|null; barcode:string|null; remoteSku:string; externalSku:string|null; name:string; size:string|null; linkState:string; isPresent:boolean };
 
 // FIX: freeze the marketplace identity; never print a warehouse alias or guess a size.
