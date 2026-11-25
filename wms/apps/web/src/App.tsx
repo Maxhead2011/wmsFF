@@ -1,3 +1,4 @@
+import { rememberFbsRequestClient } from './components/fbs/requestSupplyAction';
 import { ReturnsPanel } from './components/returns/ReturnsPanel';
 import {ReceiptPlacementBadge} from './components/warehouse/ReceiptPlacementPanel';
 import {magicEnabled, welcomeStyle} from './components/layout/magicAppearanceState';
@@ -1009,6 +1010,7 @@ function renderWorkspace(
           setRequestSupplyTarget({ request, action });
           return;
         }
+        rememberFbsRequestClient(session.user.id, request.clientId);
         setActiveWorkspaceId('fbs');
       }} focusRequestId={focusedRequestId} onFocusRequestHandled={clearFocusedRequest} />
         {requestSupplyTarget && <Suspense fallback={<p role="status">Загружаю стикеры и действия заявки…</p>}>

@@ -114,7 +114,8 @@ export class MarketplaceConnectionsController {
     @Query('archiveFrom') archiveFrom?: string,
     @Query('archiveTo') archiveTo?: string,
   ) {
-    const scoped = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    let scoped = await this.connections.listFbsOrders(clientId, user, refresh === 'true' || refresh === '1');
+    scoped = await this.connections.restoreFbsAwaitingForDisplay(clientId, scoped, user);
     // FIX: restore persisted shipment history before the existing store filter.
     const archived = view === 'archive' ? await this.connections.restoreFbsArchiveForDisplay(clientId, scoped, user, false, undefined, archiveFrom, archiveTo) : scoped;
     const result = this.stores ? await this.stores.decorateOrders(clientId, archived, user) : archived;
