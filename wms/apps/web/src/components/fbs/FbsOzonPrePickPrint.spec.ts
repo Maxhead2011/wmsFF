@@ -18,6 +18,18 @@ function fixture(){
  return {deps,handler,pending};
 }
 describe('Ozon print before picking',()=>{
+ // TEST: cargo-only printing never prepares or assembles even an unready Ozon posting.
+ it('prints cargo mode without any marketplace mutation or confirmation',async()=>{
+  const f=fixture();await f.handler([f.pending],'cargo');
+  expect(f.deps.window.confirm).not.toHaveBeenCalled();
+  expect(f.deps.prepareOzonFbsLabels).not.toHaveBeenCalled();expect(f.deps.assembleFbsOrders).not.toHaveBeenCalled();
+  expect(f.deps.downloadFbsAllLabels).toHaveBeenCalledWith('token',{clientId:'client',orders:[{connectionId:'connection',id:'posting'}]},true,true);
+  expect(f.deps.openWbRibbonPrint).toHaveBeenCalled();
+ });
+ it('shows cargo unavailability without falling back to assembly',async()=>{
+  const f=fixture();f.deps.downloadFbsAllLabels.mockRejectedValue(Error('Стикеры ещё не готовы'));await f.handler([f.pending],'cargo');
+  expect(f.deps.setOrderActionError).toHaveBeenCalledWith('Стикеры ещё не готовы');expect(f.deps.prepareOzonFbsLabels).not.toHaveBeenCalled();expect(f.deps.openWbRibbonPrint).not.toHaveBeenCalled();
+ });
  it('preserves the verified assembly path for orders requiring mandatory marking',async()=>{
   const f=fixture();const selected=[{connectionId:'connection',id:'posting'}];
   f.deps.prepareOzonFbsLabels.mockResolvedValue({prepared:0,requiresPhysicalSubmission:selected});

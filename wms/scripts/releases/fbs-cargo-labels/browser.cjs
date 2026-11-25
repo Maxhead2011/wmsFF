@@ -1,0 +1,35 @@
+// TEST: full published/candidate app, real dialog lifecycle; all business APIs intercepted.
+const fs=require('fs'),path=require('path'),assert=require('assert/strict'),{chromium}=require(process.env.PLAYWRIGHT_MODULE||'D:/WMSFF/_Kof/work/node_modules/playwright');
+const work=process.argv[2],candidate=process.env.CANDIDATE==='1';
+const client={id:'client',name:'Тест печати',code:'TEST',marketplaceConnections:[{marketplace:'OZON',isActive:true}]};
+const request={id:'r',number:3319,clientId:client.id,client,warehouseId:'w',warehouse:{id:'w',name:'Москва'},status:'SUBMITTED',type:'OUTBOUND',priority:'NORMAL',title:'FBS — 1 заказ(а/ов)',createdAt:'2026-11-23T15:00:00Z',updatedAt:'2026-11-23T15:00:00Z',items:[],files:[],packages:[],comments:[],fbsCompletion:{totalOrders:1,completedOrders:0,percent:0,completed:false}};
+const order={id:'0214691742-0254-3',connectionId:'c',marketplace:'OZON',supplierStatus:'awaiting_packaging',wbStatus:'awaiting_packaging',request,category:'active',requiredMeta:[],optionalMeta:[],storageBoxes:[],barcodes:[],items:[],itemCount:1};
+const user={id:'print-dialog-test',name:'Test',roleCodes:['OWNER','ADMIN'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:'w',warehouseIds:['w'],writableWarehouseIds:['w']};
+(async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{
+ const page=await browser.newPage({viewport:{width:1600,height:1000}}),errors=[];page.setDefaultTimeout(20000);page.on('pageerror',e=>errors.push(e.message));let fail=false,accept=true,prepare=0,labels=0,lastPayload=null;page.on('dialog',d=>accept?d.accept():d.dismiss());
+ await page.addInitScript(u=>localStorage.setItem('logoff-wms-session',JSON.stringify({accessToken:'synthetic',user:u})),user);
+ await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url()),p=url.pathname;
+  if(p.startsWith('/api/')){let body=[];
+   if(p.endsWith('/auth/me'))body=user;else if(p.endsWith('/branches'))body=[{id:'w',name:'Москва',isActive:true}];else if(p.endsWith('/clients'))body=[client];else if(p.endsWith('/client-requests'))body=[request];else if(p.endsWith('/box-overlaps'))body={statusCounts:[],overlaps:[],errors:[],overlappingBoxesCount:0};
+   else if(p.endsWith('/fbs/active-clients'))body=[{client,activeOrders:1}];else if(p.endsWith('/fbs/orders'))body={client,connected:true,connections:[{id:'c',marketplace:'OZON',accountName:'Ozon'}],deliveryPlan:{destination:'PICKUP_POINT',itemsPerCargoPlace:1,requiresCargoPlaces:true},orders:[order],counts:{all:1,active:1,shipped:0,archive:0,cancelled:0},fetchedAt:new Date().toISOString()};
+   else if(p.endsWith('/prepare-labels')){prepare++;await new Promise(r=>setTimeout(r,400));if(fail)return route.fulfill({status:400,json:{message:'Отправление 0214691742-0254-3: red_50: ГТД. Код: EXEMPLAR_INFO_NOT_FILLED_COMPLETELY.'}});body={prepared:1,requiresPhysicalSubmission:[]};}
+   else if(p.endsWith('/all-labels')){labels++;lastPayload=req.postDataJSON();if(fail)return route.fulfill({status:400,json:{message:'WB не подтвердил создание грузомест. Повторное создание заблокировано до сверки.'}});body={fileBase64:'',fileName:lastPayload.cargoLabelsOnly?'FBS_'+(order.marketplace==='OZON'?'OZON':'WB')+'_cargo_labels.pdf':'test.pdf',pageCount:lastPayload.cargoLabelsOnly?(order.marketplace==='OZON'?2:3):7,warnings:[]};}
+   else if(p.endsWith('/print/series/stations'))body=[{id:'printer',name:'Printer',printerName:'TSC'}];else if(p.endsWith('/print/series/formats'))body=[{id:'printer',name:'Printer',printerName:'TSC',labelWidthMm:58,labelHeightMm:40}];
+   else if(req.method()!=='GET')throw Error('Unexpected business mutation '+p);return route.fulfill({json:body});
+  }
+  if(candidate){const file=path.join(work,'web',p==='/'?'index.html':p);if(fs.existsSync(file))return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.js')?'text/javascript':'text/html'});}return route.continue();
+ });
+
+ async function open(){await page.goto('https://wms.logoff.pro/',{waitUntil:'networkidle'});await page.getByText('Заявки',{exact:true}).first().click();const row=page.locator('tr').filter({hasText:'3319'});await row.locator('summary').filter({hasText:'Стикеры поставки'}).click();return row;}
+ let row=await open();const cargo=row.getByRole('button',{name:'Печать грузомест',exact:true});await cargo.waitFor();
+ assert.equal(await row.locator('.fbs-label-action').count(),3);
+ const radius=await cargo.evaluate(e=>getComputedStyle(e).borderRadius);assert.equal(radius,'12px');
+ await page.screenshot({path:path.join(work,candidate?'candidate-buttons.png':'public-buttons.png')});
+ await cargo.click();let printer=page.getByRole('dialog',{name:'Печать грузомест Ozon',exact:true});await printer.waitFor();assert.equal(prepare,0);assert.equal(lastPayload.cargoLabelsOnly,true);assert.equal(lastPayload.prepareWbCargo,true);assert((await printer.innerText()).includes('Только стикеры заказов Ozon'));await printer.getByRole('button',{name:'Отмена',exact:true}).click();
+ await row.getByRole('button',{name:'Распечатать все ШК',exact:true}).click();printer=page.getByRole('dialog',{name:'Печать всех ШК Ozon',exact:true});await printer.waitFor();assert.equal(prepare,1);assert(!lastPayload.cargoLabelsOnly);assert.equal(lastPayload.prepareWbCargo,true);await printer.getByRole('button',{name:'Отмена',exact:true}).click();
+ const downloaded=page.waitForEvent('download');await row.getByRole('button',{name:'Скачать все ШК',exact:true}).click();await downloaded;assert(!lastPayload.cargoLabelsOnly);assert(!lastPayload.prepareWbCargo);
+ fail=true;await cargo.click();await page.getByRole('dialog').filter({hasText:'Повторное создание заблокировано'}).waitFor();assert.equal(prepare,1);await page.getByRole('dialog').getByRole('button',{name:'Закрыть',exact:true}).click();fail=false;
+ order.marketplace='WILDBERRIES';order.supplierStatus='confirm';order.supplyId='WB-GI-1';request.wbSupplyIds=['WB-GI-1'];row=await open();await row.getByRole('button',{name:'Печать грузомест',exact:true}).click();printer=page.getByRole('dialog',{name:'Печать грузомест WB',exact:true});await printer.waitFor();assert((await printer.innerText()).includes('ШК грузомест и стикер поставки WB'));assert.equal(prepare,1);await printer.getByRole('button',{name:'Отмена',exact:true}).click();
+ await page.setViewportSize({width:390,height:844});await row.getByRole('button',{name:'Печать грузомест',exact:true}).scrollIntoViewIfNeeded();const box=await row.getByRole('button',{name:'Печать грузомест',exact:true}).boundingBox();assert(box&&box.width>100);assert(!errors.length,errors.join('\n'));
+ const proof={passed:true,fullApp:true,modernButtons:true,cargoOzon:true,cargoWb:true,fullPrintPreserved:true,fullDownloadPreserved:true,noOzonAssemblyInCargo:true,errorModal:true,mobile:true,noActualBusinessWrites:true};fs.writeFileSync(path.join(work,candidate?'candidate-browser.json':'public-browser.json'),JSON.stringify(proof));console.log(JSON.stringify(proof));
+}finally{await browser.close();}})().catch(e=>{console.error(e.stack);process.exitCode=1});

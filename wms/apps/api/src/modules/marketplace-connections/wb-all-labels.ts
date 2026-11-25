@@ -7,10 +7,13 @@ type Readers = {
   sc: (orders: Order[]) => Promise<File>;
   pvz: (orders: Order[]) => Promise<File>;
   pairs: (orders: Order[]) => Promise<File>;
+  official?: (orders: Order[]) => Promise<File>;
 };
 
 // FIX: read-only ribbon; a missing section must not discard the available labels.
-export async function wbAllLabels(input: Order[], readers: Readers, ozonEnabled = false) {
+export async function wbAllLabels(input: Order[], readers: Readers, ozonEnabled = false, cargoLabelsOnly = false) {
+  // FIX: isolated own-WMS mode; never fall back to product pairs.
+  if(cargoLabelsOnly && !ozonEnabled) throw new BadRequestException('Печать грузомест не включена.');
   const orders = [...new Map(input.map(o => [JSON.stringify([o.connectionId, o.id]), o])).values()];
   if (!orders.length || orders.some(o => o.marketplace !== 'WILDBERRIES' && !(ozonEnabled && o.marketplace === 'OZON')))
     throw new BadRequestException('Выберите заказы Wildberries.');
@@ -42,14 +45,15 @@ export async function wbAllLabels(input: Order[], readers: Readers, ozonEnabled 
     }
   }
   async function pairs(batch: Order[]): Promise<void> {
-    await append(() => readers.pairs(batch), `ШК товара / заказа · ${batch.map(o => o.id).join(', ')}`,
+    await append(() => cargoLabelsOnly ? readers.official!(batch) : readers.pairs(batch), `${cargoLabelsOnly ? 'Стикеры заказов Ozon' : 'ШК товара / заказа'} · ${batch.map(o => o.id).join(', ')}`,
       batch.length > 1 ? async () => {
         const mid = Math.ceil(batch.length / 2);
         await pairs(batch.slice(0, mid)); await pairs(batch.slice(mid));
       } : undefined);
   }
-  await pairs(orders);
+  const labelOrders=cargoLabelsOnly ? orders.filter(o=>o.marketplace==='OZON') : orders;
+  if(labelOrders.length)await pairs(labelOrders);
   if (!output.getPageCount()) throw new BadRequestException(`Нет доступных этикеток. ${warnings.join(' ')}`);
   return { fileBase64: Buffer.from(await output.save()).toString('base64'),
-    fileName: orders.every(o => o.marketplace === 'OZON') ? 'FBS_OZON_all_labels.pdf' : 'FBS_WB_all_labels.pdf', pageCount: output.getPageCount(), warnings };
+    fileName: `FBS_${orders.every(o => o.marketplace === 'OZON') ? 'OZON' : 'WB'}_${cargoLabelsOnly ? 'cargo_labels' : 'all_labels'}.pdf`, pageCount: output.getPageCount(), warnings };
 }

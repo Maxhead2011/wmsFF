@@ -1,6 +1,6 @@
 import type { ClientRequestSummary, FbsOrderSummary } from '../../lib/api';
 
-export type RequestSupplyAction = 'deliver' | 'download' | 'print';
+export type RequestSupplyAction = 'deliver' | 'download' | 'print' | 'cargo';
 export type RequestSupplyTarget = { request: ClientRequestSummary; action: RequestSupplyAction };
 
 export function requestSupplyOrders(target: RequestSupplyTarget, orders: FbsOrderSummary[]) {

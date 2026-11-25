@@ -1379,7 +1379,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
     }
   }
 
-  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all: boolean | 'print' = false, onComplete?: () => void) {
+  async function downloadSelectedOrderStickers(orders: FbsOrderSummary[], all: boolean | 'print' | 'cargo' = false, onComplete?: () => void) {
     if (!selectedClientId || orders.length === 0) return;
     setOrderAction('stickers');
     setRowActionKey(orders.length === 1 ? fbsOrderSelectionKey(orders[0]) : null);
@@ -1387,7 +1387,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
     setOrderActionError('');
     try {
       // FIX: explicit boolean keeps the existing single-label click unchanged.
-      if (all === true || all === 'print') {
+      if (all === true || all === 'print' || all === 'cargo') {
         // FIX: obtain explicit consent before submitting selected Ozon postings for printing.
         const pending = orders.filter(order => order.marketplace === 'OZON' && order.supplierStatus === 'awaiting_packaging');
         if (all === 'print' && pending.length) {
@@ -1407,8 +1407,8 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
         const result = await downloadFbsAllLabels(session.accessToken, {
           clientId: selectedClientId,
           orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
-        });
-        if (all === 'print') {
+        }, all === 'cargo', all === 'cargo' || all === 'print');
+        if (all === 'print' || all === 'cargo') {
           setOrderActionMessage('Открываю выбор принтера…');
           await openWbRibbonPrint(session.accessToken, selectedClientId, result, orders.every(order => order.marketplace === 'OZON') ? 'Ozon' : 'WB');
           onComplete?.();
@@ -1725,7 +1725,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
     try {
       const orders = requestSupplyOrders(target, ordersState.data.orders);
       if (target.action === 'deliver') void deliverSelectedSupplies(orders);
-      else void downloadSelectedOrderStickers(orders, target.action === 'print' ? 'print' : true, onRequestSupplyClose);
+      else void downloadSelectedOrderStickers(orders, target.action === 'cargo' ? 'cargo' : target.action === 'print' ? 'print' : true, onRequestSupplyClose);
     } catch (caught) {
       setOrderActionError(caught instanceof Error ? caught.message : 'Не удалось открыть поставку.');
     }

@@ -44,6 +44,13 @@ export class FbsOrderSelectionItemDto {
 }
 
 export class FbsOrderSelectionDto {
+  // FIX: optional read-only print mode; default keeps the complete label set.
+  @IsOptional()
+  @IsBoolean()
+  cargoLabelsOnly?: boolean;
+  @IsOptional()
+  @IsBoolean()
+  prepareWbCargo?: boolean;
   // FIX: explicit WB shipping point, never reused as destination warehouse.
   @IsOptional()
   @IsString()
