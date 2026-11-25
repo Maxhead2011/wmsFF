@@ -537,6 +537,13 @@ export class MarketplaceConnectionsController {
     return this.connections.updateFbsWarehouseRoutes(id, dto, user);
   }
 
+  // FIX: printing has its own preparation path and never claims a physical TSD pick.
+  @Post('fbs/orders/prepare-labels')
+  @RequirePermissions()
+  prepareOzonLabels(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {
+    return this.connections.prepareOzonLabels(dto, user);
+  }
+
   @Post('fbs/orders/assemble')
   @RequirePermissions()
   assembleFbsOrders(@Body() dto: FbsOrderSelectionDto, @CurrentUser() user: AuthUser) {

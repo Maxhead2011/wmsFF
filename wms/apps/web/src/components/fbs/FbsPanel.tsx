@@ -59,6 +59,7 @@ import {
   auditFbsSupplyRequests,
   applyFbsSupplyReconciliation,
   assembleFbsOrders,
+  prepareOzonFbsLabels,
   cancelFbsOrders,
   changeFbsSuppliesDestination,
   checkFbsBranchDeliveryRecovery,
@@ -1391,11 +1392,16 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
         // FIX: obtain explicit consent before submitting selected Ozon postings for printing.
         const pending = orders.filter(order => order.marketplace === 'OZON' && order.supplierStatus === 'awaiting_packaging');
         if (all === 'print' && pending.length) {
-          if (!window.confirm('Подтвердить сборку в Ozon и распечатать стикеры?\n' + pending.map(order => order.id).join(', '))) return;
-          await assembleFbsOrders(session.accessToken, {
+          if (!window.confirm('Подготовить стикеры в Ozon для сборки?\nСтатус в Ozon изменится на «Ожидает отгрузки». Фактический отбор в WMS выполняется после печати.\n' + pending.map(order => order.id).join(', '))) return;
+          // FIX: label preparation does not require a finished physical TSD pick.
+          const prepared = await prepareOzonFbsLabels(session.accessToken, {
             clientId: selectedClientId,
             orders: pending.map(order => ({ connectionId: order.connectionId, id: order.id })),
           });
+          // FIX: mandatory marking retains the existing verified physical-pick/KIZ transport.
+          if (prepared.requiresPhysicalSubmission?.length) {
+            await assembleFbsOrders(session.accessToken, { clientId: selectedClientId, orders: prepared.requiresPhysicalSubmission });
+          }
         }
         const result = await downloadFbsAllLabels(session.accessToken, {
           clientId: selectedClientId,

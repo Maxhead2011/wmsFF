@@ -1,3 +1,5 @@
+Подготовлено 25.11.2026, не опубликовано: [стикеры Ozon FBS до физического отбора](ozon-pre-pick-labels.md). Отдельная подготовка этикеток без списания товара; сборка после печати сохраняется.
+
 Published 24.11.2026 PR1070: payroll advances, net payout preview and idempotent paid-shift overpayment credit. Own WMS only; additive migration, WMS_PAYROLL_ADVANCES_ENABLED=true. Exact API5/web2 overlay; all 798 API and 3358 web files and public assets verified, health and other containers preserved. Baseline `2026-11-24-payroll-advances`, sourceParityVerified=false. [Proof](releases/payroll-advances-1070.json), [details](payroll-advances.md).
 
 Published24.11.2026 PR1067/1068: visible selected-field deletion and branch-printer media sizes (Ozon70x120). Both editor modes and silent-agent queue verified in public full-app browser with intercepted jobs; no physical printing. Web669/2 skipped and TypeScript pass. Exact web2 delta per release, all3357 hashes and public assets verified; API/environment/other containers/sold WMS unchanged. Baseline `2026-11-24-free-label-formats`, sourceParityVerified=false. [Proof](releases/free-label-formats-1068.json).

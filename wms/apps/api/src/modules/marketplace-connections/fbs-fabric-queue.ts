@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { isOzonPrintPrepared } from './ozon-print-preparation';
 import { assignFabricOrder } from '../warehouse/fabric-fbs-assignment';
 import { FABRIC_TASK_MARKER } from '../warehouse/fabric-fbs-task-state';
 import { identifyFabricSku } from '../warehouse/fabric-fbs-availability';
@@ -26,7 +27,7 @@ export async function tryAssignFabricTask(service: any, clientId: string, order:
     if (!ozonPickLinesEnabled()) throw new ConflictException('Для нарезки Ozon требуется поштучный учёт состава заказа.');
     rows = products.map(p => ({ ...p, sku: resolveOzonLineSku(p, linked) }));
     if (!rows.some(r => identifyFabricSku(r.sku))) return { handled: false };
-    if (posting.status !== 'awaiting_packaging' || posting.requirements?.products_requiring_mandatory_mark?.length)
+    if ((posting.status !== 'awaiting_packaging' && !await isOzonPrintPrepared(service.prisma, clientId, order.connectionId, order.id, posting, order.request?.id)) || posting.requirements?.products_requiring_mandatory_mark?.length)
       throw new ConflictException('Заказ Ozon изменился или требует маркировки. Проверьте состав перед нарезкой.');
   } else {
     const sku = catalog.find((s: any) => s.id === order.product?.id);

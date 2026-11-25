@@ -254,8 +254,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
       '/marketplace-connections/fbs/reshipment', '/marketplace-connection/fbs/reshipment', '/service/fbs-manual-assembly',
       '/marketplace-connections/multishop'],
     // FIX: four draft handlers plus status, preview, explicit activation and graceful stop.
-    routeCount: 129, // FIX: available WB label ribbon.
-    description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков.',
+    routeCount: 130, // FIX: separate Ozon label preparation before physical picking.
+    description: 'Подключения WB/Ozon, заказы FBS, поставки, статусы, финансовые отчёты и распределение остатков. Подготовка стикеров Ozon до физического отбора не списывает товар WMS.',
     logic: ['Синхронизирует кабинеты, склады и заказы.', 'Сборка ФБС по номерам: администратор или собственник проверяет WB и доступные короба, создаёт одну обычную заявку в выбранном филиале с сохранением поставок WB; повторный запрос не дублирует заявку.', 'Сверяет активные поставки WB с заявками WMS и показывает отсутствующие привязки без записи в WB.', 'Резервирует товар WMS и передаёт статусы сборки.', 'Проверяет поставки филиала и создаёт локальные заявки FBS ДОВОЗ без повторной отправки статуса в WB.', 'Повторная отгрузка / довоз: проверяет доступность функции и заказы без изменений; после подтверждения администратора создаёт поставку WB и связанную заявку WMS, продолжает сохранённую операцию без дублирования.', 'Получает финансовые штрафы FBS без передачи токена WB в браузер.', 'Рассчитывает и выгружает распределённые остатки по складам.'],
     dependencies: ['Основная БД', 'WB API', 'Ozon API'],
   },
