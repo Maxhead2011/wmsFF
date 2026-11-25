@@ -9,6 +9,7 @@ import { FbsProductReserve } from './FbsProductReserve';
 import { lazy, Suspense } from 'react';
 import { filterOrdersByStore } from './store-filter';
 import { openWbRibbonPrint } from '../../lib/wbRibbonPrint';
+import { FbsRequestActionDialog } from './FbsRequestActionDialog';
 const LamodaFbs = lazy(() => import('../lamoda/LamodaPanel').then(m=>({default:m.LamodaPanel})));
 import { fetchWorkspaceClients, workspaceClients, visibleMarket, workspaceEnabled } from '../../lib/marketplaceWorkspace';
 import { startVisiblePolling } from '../../lib/visiblePolling';
@@ -1390,7 +1391,8 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
         // FIX: obtain explicit consent before submitting selected Ozon postings for printing.
         const pending = orders.filter(order => order.marketplace === 'OZON' && order.supplierStatus === 'awaiting_packaging');
         if (all === 'print' && pending.length) {
-          if (!window.confirm('Подготовить стикеры в Ozon для сборки?\nСтатус в Ozon изменится на «Ожидает отгрузки». Фактический отбор в WMS выполняется после печати.\n' + pending.map(order => order.id).join(', '))) return;
+          if (!window.confirm('Подготовить стикеры в Ozon для сборки?\nСтатус в Ozon изменится на «Ожидает отгрузки». Фактический отбор в WMS выполняется после печати.\n' + pending.map(order => order.id).join(', '))) { onComplete?.(); return; }
+          setOrderActionMessage('Проверяю сведения и подготавливаю отправления в Ozon…');
           // FIX: label preparation does not require a finished physical TSD pick.
           const prepared = await prepareOzonFbsLabels(session.accessToken, {
             clientId: selectedClientId,
@@ -1401,11 +1403,13 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
             await assembleFbsOrders(session.accessToken, { clientId: selectedClientId, orders: prepared.requiresPhysicalSubmission });
           }
         }
+        setOrderActionMessage('Получаю официальные стикеры и формирую комплект…');
         const result = await downloadFbsAllLabels(session.accessToken, {
           clientId: selectedClientId,
           orders: orders.map(order => ({ connectionId: order.connectionId, id: order.id })),
         });
         if (all === 'print') {
+          setOrderActionMessage('Открываю выбор принтера…');
           await openWbRibbonPrint(session.accessToken, selectedClientId, result, orders.every(order => order.marketplace === 'OZON') ? 'Ozon' : 'WB');
           onComplete?.();
           return;
@@ -1754,10 +1758,7 @@ export function FbsPanel({ session, onOpenRequest, requestSupplyTarget, onReques
       );
     const error = orderActionError || (ordersState.status === 'error' ? ordersState.error : '');
     return (
-      <section aria-label="Стикеры и действия заявки">
-        <p role={error ? 'alert' : 'status'}>{error || orderActionMessage || 'Загружаю стикеры и действия заявки…'}</p>
-        <button type="button" className="icon-text-button" onClick={onRequestSupplyClose}>Закрыть</button>
-      </section>
+      <FbsRequestActionDialog requestNumber={requestSupplyTarget.request.number} error={error} message={orderActionMessage} onClose={()=>onRequestSupplyClose?.()} />
     );
   }
 
