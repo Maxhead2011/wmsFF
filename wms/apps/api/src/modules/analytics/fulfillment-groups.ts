@@ -16,8 +16,9 @@ export function identifyFulfillmentProduct(p:CatalogProduct){
  let model=article||'sku:'+p.skuId,color=p.color?norm(p.color):null,size=cleanSize(p.size),lengthMetres:number|null=null,source='Артикул';
  if(!article){warnings.push('GROUP_MODEL_UNKNOWN');source='Отдельная карточка';}
  const binding=readFabricBinding(p.marketplacePayload);
- const fabric=/^(?:(gab|gabardine|satin|sat|atlas)_)?(black|white|green|red|ivory|blue)_(1|3|5|10|20|30|50)(?:-0)?$/i.exec(article);
- const fabricColor=(value:string)=>/^(ivory|айвори|шампань|айвори\s*\/\s*шампань|шампань\s*\/\s*айвори)$/i.test(value)?'Шампань / айвори':colorToken(value)??value;
+ // FIX: Ozon champagne and WB ivory identify the same fabric color, independently of cut length.
+ const fabric=/^(?:(gab|gabardine|satin|sat|atlas)_)?(black|white|green|red|ivory|champagne|blue)_(1|3|5|10|20|30|50)(?:-0)?$/i.exec(article);
+ const fabricColor=(value:string)=>/^(ivory|champagne|айвори|шампань|айвори\s*\/\s*шампань|шампань\s*\/\s*айвори)$/i.test(value)?'Шампань / айвори':colorToken(value)??value;
  if(binding){
   kind=model=BASE_FABRIC_MATERIALS[binding.material]??binding.materialName!;color=fabricColor(binding.colorName);lengthMetres=binding.lengthMm/1000;size=lengthMetres+' м';source='Привязка ткани';warnings.splice(0);
  }else if(fabric&&/ткань/.test(name)&&(/габардин|сатин|атлас/.test(name)||!!fabric[1])){
