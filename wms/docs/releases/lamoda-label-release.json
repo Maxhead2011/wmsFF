@@ -1,0 +1,40 @@
+{
+  "published": true,
+  "pr": 1094,
+  "mergeCommitSha": "965c99d484f8c48f06bf1eff488d08471c725091",
+  "head": "deb9328e6c7dd83e0d7d0a367af15ea3012300a2",
+  "images": {
+    "api": "sha256:ece2732c4fd4b907fd9cd401c4121d75eeed9521f7c87bb65ad25a650a66137b",
+    "web": "sha256:7c7c744f8d08cfa75b74f187c15644d6912e32e167feb33b7aa857c64667dc39"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 814,
+  "webFiles": 3381,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "tests": {
+    "api": 4981,
+    "web": 695,
+    "apiSkipped": 203,
+    "webSkipped": 2,
+    "baselineApiTypeErrors": 14
+  },
+  "request3405": {
+    "request": 3405,
+    "status": "SUBMITTED",
+    "saved": true,
+    "sku": 15,
+    "quantity": 144,
+    "pdfLabelsChecked": 15,
+    "sourceFieldsMatch": true,
+    "pickedUnits": 0,
+    "printJobs": 0
+  },
+  "publicBrowser": true,
+  "controls": 24,
+  "requestFolds": true,
+  "labelsDecoded": 136,
+  "physicalPrinting": false
+}
