@@ -1,0 +1,189 @@
+{
+  "published": true,
+  "pr": 1080,
+  "mergeCommitSha": "de3ca3792c1eda4f063d7475e76b0b4266c9f5fb",
+  "head": "8c6bf355c2b0c6e3efe24a37521e4d51518d20c0",
+  "images": {
+    "api": "sha256:9c2071db7f00b294fa3ccc0feedc14b34c29ee7ecb0fb464623f8d469e9e893e",
+    "web": "sha256:fa76cf77d2ead176f24c0ee8d4588ac627d5d3f8af7386b5feabf2813dfcb2fe"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 803,
+  "webFiles": 3371,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "publicAssetsVerified": true,
+  "sourceParityVerified": false,
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi": {
+    "passed": true,
+    "publicApi": true,
+    "sessionFlag": true,
+    "publicGroups": [
+      {
+        "client": "ИП Бушкова И.М.",
+        "channel": "FBS",
+        "skus": 69,
+        "models": 11,
+        "units": 1861
+      },
+      {
+        "client": "ИП Бушкова И.М.",
+        "channel": "FBO",
+        "skus": 12,
+        "models": 2,
+        "units": 70
+      },
+      {
+        "client": "ИП Елецкая Карина Равшановна",
+        "channel": "FBS",
+        "skus": 90,
+        "models": 84,
+        "units": 0
+      },
+      {
+        "client": "ИП Елецкая Карина Равшановна",
+        "channel": "FBO",
+        "skus": 90,
+        "models": 84,
+        "units": 3233
+      },
+      {
+        "client": "ИП Королев Максим Алексеевич",
+        "channel": "FBS",
+        "skus": 29,
+        "models": 29,
+        "units": 708
+      },
+      {
+        "client": "ИП Королев Максим Алексеевич",
+        "channel": "FBO",
+        "skus": 25,
+        "models": 25,
+        "units": 713
+      },
+      {
+        "client": "ИП Королева О. А.",
+        "channel": "FBS",
+        "skus": 20,
+        "models": 18,
+        "units": 195
+      },
+      {
+        "client": "ИП Королева О. А.",
+        "channel": "FBO",
+        "skus": 20,
+        "models": 19,
+        "units": 456
+      },
+      {
+        "client": "ИП Кубрин Е. В.",
+        "channel": "FBS",
+        "skus": 486,
+        "models": 46,
+        "units": 697
+      },
+      {
+        "client": "ИП Кубрин Е. В.",
+        "channel": "FBO",
+        "skus": 492,
+        "models": 46,
+        "units": 10342
+      },
+      {
+        "client": "ИП Лукин И.И.",
+        "channel": "FBS",
+        "skus": 220,
+        "models": 48,
+        "units": 26
+      },
+      {
+        "client": "ИП Лукин И.И.",
+        "channel": "FBO",
+        "skus": 200,
+        "models": 34,
+        "units": 0
+      },
+      {
+        "client": "ИП Лукин Илья Ильич",
+        "channel": "FBS",
+        "skus": 17,
+        "models": 8,
+        "units": 21
+      },
+      {
+        "client": "ИП Лукин Илья Ильич",
+        "channel": "FBO",
+        "skus": 0,
+        "models": 0,
+        "units": 0
+      },
+      {
+        "client": "ИП Лукин Илья Ильич",
+        "channel": "FBS",
+        "skus": 1312,
+        "models": 216,
+        "units": 19974
+      },
+      {
+        "client": "ИП Лукин Илья Ильич",
+        "channel": "FBO",
+        "skus": 1178,
+        "models": 192,
+        "units": 29449
+      },
+      {
+        "client": "ИП Хрупова",
+        "channel": "FBS",
+        "skus": 3,
+        "models": 1,
+        "units": 12
+      },
+      {
+        "client": "ИП Хрупова",
+        "channel": "FBO",
+        "skus": 2,
+        "models": 1,
+        "units": 0
+      }
+    ],
+    "fbsProducts": 1312,
+    "fbsRequests": 1108,
+    "fbsUnits": 19974,
+    "fboRequests": 21,
+    "realClientScope": true,
+    "foreignClientDenied": true,
+    "anonymousDenied": true,
+    "businessWrites": false
+  },
+  "fullAppBrowser": {
+    "passed": true,
+    "realOwner": true,
+    "newMaterialControl": true,
+    "realCatalog": true,
+    "realRolls": true,
+    "noBusinessWrites": true,
+    "errors": []
+  },
+  "clientBrowser": {
+    "passed": true,
+    "realClient": true,
+    "scopedOptions": true,
+    "wbEnabled": false,
+    "errors": []
+  },
+  "sessionCleanup": {
+    "temporarySessionsRevoked": 2,
+    "privateFilesRemoved": true,
+    "runtimeEnvRemoved": true
+  },
+  "apiTests": 4928,
+  "webTests": 682,
+  "apiTypecheck": "14 existing baseline errors outside analytics",
+  "baseRelease": 1078
+}
