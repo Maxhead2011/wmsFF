@@ -40,5 +40,7 @@
   "webTypecheckPassed": true,
   "physicalPrintingVerified": false,
   "firstLivePreparationVerified": false,
-  "newPathPostgresIntegrationVerified": false
+  "newPathPostgresIntegrationVerified": false,
+  "baselineTestsPassed": 8,
+  "publicModuleGraphLoadedWithoutPageErrors": true
 }
