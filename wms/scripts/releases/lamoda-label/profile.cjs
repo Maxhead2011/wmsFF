@@ -8,17 +8,22 @@ const clientId='c76b78f9-1b83-4e9b-bee3-bc28336ee1c9';
 (async()=>{
  const client=await p.client.findUniqueOrThrow({where:{id:clientId},select:{id:true,code:true,name:true}});assert.equal(client.code,'CL-000001');assert(client.name.includes('Лукин'));
  assert.equal(Object.keys(catalog.records).length,136);for(const [barcode,r] of Object.entries(catalog.records))assert.equal(validateLamodaLabel(r).barcode,barcode);
- let units=0;for(const line of shipment){const sku=await p.sku.findFirst({where:{id:line.skuId,clientId},include:{barcodes:true,lamodaProducts:{where:{isPresent:true,linkState:'CONFIRMED',account:{clientId,isActive:true}}}}});assert(sku);assert(sku.barcodes.some(b=>b.value===line.warehouseBarcode));assert.equal(sku.lamodaProducts.length,1);const card=sku.lamodaProducts[0];assert.equal(catalog.records[card.barcode]?.article,card.remoteSku);units+=line.copies;}
+ const lamodaBarcodes=new Map();let units=0;for(const line of shipment){const sku=await p.sku.findFirst({where:{id:line.skuId,clientId},include:{barcodes:true,lamodaProducts:{where:{isPresent:true,linkState:'CONFIRMED',account:{clientId,isActive:true}}}}});assert(sku);assert(sku.barcodes.some(b=>b.value===line.warehouseBarcode));assert.equal(sku.lamodaProducts.length,1);const card=sku.lamodaProducts[0];assert.equal(catalog.records[card.barcode]?.article,card.remoteSku);lamodaBarcodes.set(line.skuId,card.barcode);units+=line.copies;}
  assert.equal(shipment.length,15);assert.equal(units,144);
  const sample=Object.values(catalog.records)[0],value={...catalog,clientId,enabled:true,defaults:{brand:sample.brand,importer:sample.importer,care:sample.care,eac:sample.eac}};
  const key=lamodaLabelKey(clientId),existing=await p.systemSetting.findUnique({where:{key}});
  if(existing)assert.deepEqual(existing.value,value);
- if(!['install','install-3405'].includes(process.argv[4])){console.log(JSON.stringify({ready:true,records:136,shipmentSku:15,shipmentUnits:144}));return;}
+ let request=null;
+ if(['check-3405','install-3405'].includes(process.argv[4])){
+  request=await p.clientRequest.findFirst({where:{number:3405,clientId},include:{items:{include:{sku:{include:{barcodes:true}}}}}});assert(request);assert.equal(request.items.length,15);assert.equal(request.items.reduce((n,i)=>n+i.quantity,0),144);
+  // TEST: the request contains Lamoda codes; the workbook warehouse code was independently checked on the same SKU above.
+  for(const line of shipment){const item=request.items.find(i=>i.skuId===line.skuId);assert(item);assert.equal(item.quantity,line.copies);assert.equal(item.barcode,lamodaBarcodes.get(line.skuId));}
+ }
+ if(!['install','install-3405'].includes(process.argv[4])){console.log(JSON.stringify({ready:true,records:136,shipmentSku:15,shipmentUnits:144,requestChecked:request?.number}));return;}
  if(!existing)await p.$transaction(async tx=>{await tx.systemSetting.create({data:{key,value}});await tx.auditLog.create({data:{action:'LAMODA_LABEL_PROFILE_IMPORTED',entity:'SystemSetting',entityId:key,payload:{clientId,sourceSha256:catalog.sourceSha256,records:136,shipmentSku:15,shipmentUnits:144,source:'User supplied Lamoda PDF 23.11',authorizedBy:'Катерина',stockUnchanged:true}}});});
  let preparedRequest=null;
  if(process.argv[4]==='install-3405'){
-  const request=await p.clientRequest.findFirst({where:{number:3405,clientId},include:{items:{include:{sku:{include:{barcodes:true}}}}}});assert(request);assert.equal(request.items.length,15);assert.equal(request.items.reduce((n,i)=>n+i.quantity,0),144);
-  for(const line of shipment){const item=request.items.find(i=>i.skuId===line.skuId);assert(item);assert.equal(item.quantity,line.copies);assert.equal(item.barcode,line.warehouseBarcode);}
+  assert(request);
   const {lamodaRelabelData}=require(root+'/dist/modules/print/lamoda-relabel-data');
   const before=await p.fbsPrintJob.count({where:{requestId:request.id}});
   const view=await lamodaRelabelData(p,request,{});assert(view.enabled);assert.equal(view.drafts.length,15);
