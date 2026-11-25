@@ -1,0 +1,76 @@
+{
+  "published": true,
+  "pr": 1088,
+  "mergeCommitSha": "c3ff41ee38067043365adb43fa08c9a38ed4eb5f",
+  "head": "25681d88b7506084d6f6a2022762a9d5c35c9e6b",
+  "images": {
+    "api": "sha256:8ed4b901e4e563995a2ee4b73b0fff7e04433fab7a92ba49aec0581826ec0489",
+    "web": "sha256:21ec6928b83ccd62a9e4cb2f7dc4e98473261dc360e5afb1519def401b0b5b74"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 806,
+  "webFiles": 3377,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "publicBrowser": {
+    "passed": true,
+    "fullApp": true,
+    "modernButtons": true,
+    "cargoOzon": true,
+    "cargoWb": true,
+    "fullPrintPreserved": true,
+    "fullDownloadPreserved": true,
+    "noOzonAssemblyInCargo": true,
+    "errorModal": true,
+    "mobile": true,
+    "noActualBusinessWrites": true
+  },
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi": {
+    "passed": true,
+    "physicalPrintSubmitted": false,
+    "proofs": [
+      {
+        "request": 3319,
+        "cargoPages": 5,
+        "cargoMs": 2283,
+        "fullPages": 7,
+        "warnings": [],
+        "existingCargoUnchanged": false
+      },
+      {
+        "request": 3391,
+        "cargoPages": 3,
+        "cargoMs": 2085,
+        "warnings": [],
+        "repeatPages": 3,
+        "existingCargoUnchanged": true
+      }
+    ]
+  },
+  "candidateRuntime": {
+    "passed": true,
+    "synthetic": true,
+    "wbPages": 2,
+    "ozonPages": 1,
+    "fullSetPreserved": true,
+    "createOnce": true,
+    "noAssembly": true,
+    "dtoValidated": true
+  },
+  "apiTests": 4952,
+  "webTests": 688,
+  "apiTypecheck": "14 existing baseline errors outside changed logic",
+  "baseRelease": 1086,
+  "physicalPrintSubmitted": false,
+  "followupRequired": [
+    "Ozon official PDF also contains product labels",
+    "WB medium-length destination overflows"
+  ]
+}

@@ -21791,7 +21791,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       pairs: selected => this.getFbsOrderStickersPdf({ clientId, orders: selected }, user, orders),
       // FIX: official Ozon posting labels only, never fabric/product labels or assembly.
       official: async selected => {
-        const direct = await selectedOzonLabels(this.prisma, clientId, selected, marketplaceJson, marketplaceBinary);
+        const direct = await selectedOzonLabels(this.prisma, clientId, selected, marketplaceJson, marketplaceBinary, true);
         if(!direct)throw new BadRequestException('Печать стикеров заказов Ozon недоступна.');
         return {buffer:await mergeFbsStickerPdfs(direct.parts)};
       },

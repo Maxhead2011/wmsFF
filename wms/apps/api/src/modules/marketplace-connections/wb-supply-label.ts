@@ -52,9 +52,10 @@ export async function buildWbSupplyLabelsPdf(labels: SupplyLabel[]) {
   const content: Content[] = labels.map((label, index) => ({
     stack: [
       { text: label.supplyId, bold: true, fontSize: 10, alignment: 'center', margin: [0, 0, 0, 4] },
-      { qr: label.supplyId, fit: 107, eccLevel: 'M', alignment: 'center', margin: [0, 0, 0, 2] },
+      // FIX: reserve vertical space for wrapped pickup directions on the same physical label.
+      { qr: label.supplyId, fit: 96, eccLevel: 'M', alignment: 'center', margin: [0, 0, 0, 2] },
       { text: `${label.quantity} шт.`, fontSize: 12, margin: [0, 0, 0, 1] },
-      { text: label.destination, fontSize: label.destination.length > 35 ? 5 : label.destination.length > 20 ? 8 : 12 },
+      { text: label.destination, fontSize: label.destination.length > 35 ? 5 : label.destination.length > 12 ? 8 : 12 },
     ],
     ...(index < labels.length - 1 ? { pageBreak: 'after' as const } : {}),
   }));
