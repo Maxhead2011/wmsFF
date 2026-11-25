@@ -14,7 +14,8 @@ export class FulfillmentAnalyticsService{
  private enabled(){if(!fulfillmentAnalyticsEnabled())throw new NotFoundException('Аналитика отгрузок не включена.');}
  private warehouseScope(user:AuthUser){const clientOnly=user.roleCodes.includes('CLIENT')&&!user.roleCodes.some(r=>['ADMIN','OWNER','MANAGER','OPERATOR'].includes(r));return clientOnly||user.permissionCodes.includes('system:admin')||user.roleCodes.includes('OWNER')?undefined:{in:user.warehouseIds??[]};}
  async clients(user:AuthUser){
-  this.enabled();const filter=this.scopes.resolveClientFilter(user);const clients=await this.prisma.client.findMany({where:{id:filter,isDemo:!!user.isDemo},select:{id:true,name:true,code:true},orderBy:{name:'asc'}});
+  // FIX: match the main client directory: archived clients are not selectable in FBS/FBO analytics.
+  this.enabled();const filter=this.scopes.resolveClientFilter(user);const clients=await this.prisma.client.findMany({where:{id:filter,isDemo:!!user.isDemo,status:{not:'ARCHIVED'}},select:{id:true,name:true,code:true},orderBy:{name:'asc'}});
   const links=await this.prisma.warehouseClient.findMany({where:{clientId:{in:clients.map(c=>c.id)},warehouseId:this.warehouseScope(user)},select:{clientId:true,warehouse:{select:{id:true,name:true}}}});
   return clients.map(c=>({...c,warehouses:links.filter(l=>l.clientId===c.id).map(l=>l.warehouse)}));
  }
