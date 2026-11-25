@@ -26,6 +26,23 @@ function fixture(marketplace='WILDBERRIES') {
   return {service,db,order,user,sku,items,ledger:()=>ledger};
 }
 describe('fabric queue integration',()=>{
+  // TEST: preparing a label first must not prevent the subsequent real fabric assignment.
+  it('reserves fabric after explicit print preparation without consuming it',async()=>{
+    const f=fixture('OZON');vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');
+    f.service.readOzonFbsPickPosting.mockResolvedValue({status:'awaiting_deliver',products:[{sku:101,offer_id:'cloth',quantity:2}]});
+    const original=f.db.systemSetting.findUnique.getMockImplementation();
+    f.db.systemSetting.findUnique.mockImplementation(async(args:any)=>args.where.key.startsWith('ozon.print-preparation.v1:')
+      ?{value:{requestId:'request',products:[{product_id:101,quantity:2}]}}:original(args));
+    const result=await tryAssignFabricTask(f.service,'client',f.order,null,f.user,'device');
+    expect(result.task.status).toBe('IN_PROGRESS');expect(result.task.completedAt).toBeUndefined();
+    expect(f.ledger().rolls[0].remainingMm).toBe(20000);expect(f.ledger().fbsReservations[0].units).toBe(2);
+  });
+  it('rejects an awaiting-deliver fabric order without preparation evidence',async()=>{
+    const f=fixture('OZON');vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED','true');
+    f.service.readOzonFbsPickPosting.mockResolvedValue({status:'awaiting_deliver',products:[{sku:101,offer_id:'cloth',quantity:2}]});
+    await expect(tryAssignFabricTask(f.service,'client',f.order,null,f.user,'device')).rejects.toThrow('изменился');
+    expect(f.db.fbsTsdAssembly.create).not.toHaveBeenCalled();
+  });
   // TEST: auto-created WAITING_STOCK tasks must be claimable from raw rolls.
   it('claims an untouched waiting-stock task without consuming metres',async()=>{
     const f=fixture();

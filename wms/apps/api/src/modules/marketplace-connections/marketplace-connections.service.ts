@@ -1,4 +1,5 @@
 import {closedSupplyBillingKeys} from './wb-closed-supply-proof';
+import {prepareOzonPrint, decorateOzonPrintPrepared, hasOzonPrintPreparation} from './ozon-print-preparation';
 import { activeRule } from '../../common/client-fulfillment-policy';
 import { bindNewPickMark } from '../../common/palitra-pick-kiz';
 import { ozonUnitExemplarPayload, ozonUnitExemplarsPassed } from './ozon-fbs-unit-exemplars';
@@ -225,6 +226,7 @@ type WildberriesFbsOrder = Record<string, unknown> & {
 };
 
 type FbsOrderSummary = {
+  ozonPrintPrepared?: boolean;
   // FIX: billing-only identity of a deliberately repeated physical processing attempt.
   processingAttemptId?: string;
   processingAssemblyId?: string;
@@ -5623,7 +5625,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       }
       if (
         !link.request.fbsEmergencyAssemblyAt &&
-        !isFbsTsdSupplierStatusEligible(linkMarketplace, link.lastSupplierStatus)
+        !isFbsTsdSupplierStatusEligible(linkMarketplace, link.lastSupplierStatus) &&
+        !(linkMarketplace === MarketplaceType.OZON && link.lastSupplierStatus === 'awaiting_deliver' &&
+          await hasOzonPrintPreparation(this.prisma, link.request.client.id, link.connectionId, link.orderId, link.requestId))
       ) {
         choice.awaitingWbConfirmation += 1;
       } else if (!link.lastSkuId || !skuIdsWithStock.has(link.lastSkuId)) {
@@ -5992,6 +5996,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           response = await this.mergeSyncedFbsTsdRequestOrders(clientId, response);
         }
 
+        await decorateOzonPrintPrepared(this.prisma, clientId, response.orders);
         const candidates = response.orders
           .filter(
             (order) =>
@@ -9909,6 +9914,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       );
     }
 
+    await decorateOzonPrintPrepared(this.prisma, currentTask.clientId, response.orders);
     const candidates = response.orders
       .filter(
         (order) =>
@@ -18307,6 +18313,16 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       where: { clientId: clientFilter, completedAt: { gte: today }, taskSnapshot: { path: ['deviceCode'], equals: deviceCode } },
     }) : 0;
     return currentCount + previousCount;
+  }
+
+  // FIX: label preparation changes only Ozon's packaging status; physical WMS guards stay separate.
+  async prepareOzonLabels(dto: FbsOrderSelectionDto, user: AuthUser) {
+    const clientId = dto.clientId.trim();
+    this.clientScopes.requireClientAccess(user, clientId, 'write');
+    const result = await prepareOzonPrint(this.prisma, clientId, dto.orders, user, marketplaceJson);
+    this.fbsOrdersCache.delete(clientId);
+    this.fbsTsdRequestFallbackCache.delete(clientId);
+    return result;
   }
 
   async assembleFbsOrders(dto: FbsOrderSelectionDto, user: AuthUser) {
@@ -27283,6 +27299,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       ...order,
       request: requestByOrder.get(selectionKey(order.connectionId, order.id)) ?? null,
     }));
+    await decorateOzonPrintPrepared(this.prisma, clientId, ordersWithRequests);
     let reservationByOrder = new Map<
       string,
       NonNullable<FbsOrderSummary['reservation']>
@@ -32131,7 +32148,8 @@ function isFbsTsdAssemblyOrderEligible(order: FbsOrderSummary) {
     Boolean(order.request?.fbsEmergencyAssemblyAt) ||
     (
       order.category === 'active' &&
-      isFbsTsdSupplierStatusEligible(order.marketplace, order.supplierStatus)
+      (isFbsTsdSupplierStatusEligible(order.marketplace, order.supplierStatus) ||
+        (order.marketplace === MarketplaceType.OZON && order.supplierStatus === 'awaiting_deliver' && order.ozonPrintPrepared === true))
     )
   );
 }

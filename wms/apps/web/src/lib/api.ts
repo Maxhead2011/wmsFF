@@ -10240,6 +10240,13 @@ export async function assembleFbsOrders(accessToken: string, payload: FbsOrderSe
   });
 }
 
+// FIX: prepare official Ozon stickers before the warehouse starts picking.
+export async function prepareOzonFbsLabels(accessToken: string, payload: FbsOrderSelectionPayload) {
+  return request<{prepared: number; orderIds: string[]; requiresPhysicalSubmission?: Array<{connectionId: string; id: string}>}>('/marketplace-connections/fbs/orders/prepare-labels', {
+    method: 'POST', accessToken, body: sanitizeFbsOrderSelectionPayload(payload),
+  });
+}
+
 export async function reshipFbsOrders(accessToken: string, payload: FbsOrderSelectionPayload) {
   return request<AssembleFbsOrdersResult>('/marketplace-connections/fbs/orders/reship', {
     method: 'POST',

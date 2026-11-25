@@ -38,7 +38,8 @@ describe('AdministrationInternalApiService', () => {
     // TEST: four isolated multishop draft routes are included alongside manual assembly.
     expect(definition.prefixes).toContain('/marketplace-connections/multishop');
     // TEST: three scoped shipping point/cargo configuration routes.
-    expect(definition.routeCount).toBe(129);
+    // TEST: includes the separate Ozon print preparation endpoint.
+    expect(definition.routeCount).toBe(130);
     const controller = readFileSync(join(__dirname, '../src/modules/marketplace-connections/fbs-reshipment.controller.ts'), 'utf8');
     expect([...controller.matchAll(/@(Get|Post)\('([^']+)'\)/g)].map((match) => `${match[1]} ${match[2]}`))
       .toEqual(['Get capabilities', 'Post check', 'Post preview', 'Post create', 'Post resume']);

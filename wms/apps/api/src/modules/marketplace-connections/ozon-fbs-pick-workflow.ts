@@ -1,4 +1,5 @@
 import { activeRule } from '../../common/client-fulfillment-policy';
+import { isOzonPrintPrepared } from './ozon-print-preparation';
 import { bindNewPickMark } from '../../common/palitra-pick-kiz';
 import { ozonUnitMarksEnabled } from '../../common/ozon-unit-marks';
 import { assertOzonUnitStock, assertOzonMarkWarehouse } from './ozon-unit-stock';
@@ -96,7 +97,7 @@ async function initialize(service: any, task: any, user: any): Promise<OzonPickS
     return null;
   }
   const unitScanning = unitScanningEnabled();
-  if (posting.status !== 'awaiting_packaging' || task.marketplaceSubmittedAt || task.kiz || task.relabelRequired || (task.requiresKiz && !unitScanning)) {
+  if ((posting.status !== 'awaiting_packaging' && !await isOzonPrintPrepared(service.prisma, task.clientId, task.connectionId, task.orderId, posting, task.requestId)) || task.marketplaceSubmittedAt || task.kiz || task.relabelRequired || (task.requiresKiz && !unitScanning)) {
     throw new BadRequestException('Многотоварный заказ уже передан или требует маркировки/переклейки. Нужна проверка администратора.');
   }
   if (!unitScanning && posting.requirements?.products_requiring_mandatory_mark?.length) throw new BadRequestException('Ozon требует КИЗ: нужна отдельная проверка многотоварного заказа.');
