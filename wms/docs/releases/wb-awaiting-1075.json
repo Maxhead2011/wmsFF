@@ -1,0 +1,63 @@
+{
+  "published": true,
+  "pr": 1075,
+  "mergeCommitSha": "8711af0ae07a123b9e39301805b897447a65c473",
+  "head": "89ba5a47a85af30fbea2cb6399f8d032b0d28aea",
+  "images": {
+    "api": "sha256:1f41221cd5e8e95fdc1c82e01edabee076850a4e70f48b025a3de2902d891b54",
+    "web": "sha256:1ff4b14c8f4c544ab657a4c5dde48834401a393251102f27b3aa6125bec522a1"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 799,
+  "webFiles": 3362,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "verification": {
+    "passed": true,
+    "head": "89ba5a47a85af30fbea2cb6399f8d032b0d28aea",
+    "images": {
+      "api": "sha256:1f41221cd5e8e95fdc1c82e01edabee076850a4e70f48b025a3de2902d891b54",
+      "web": "sha256:1ff4b14c8f4c544ab657a4c5dde48834401a393251102f27b3aa6125bec522a1"
+    },
+    "noPrint": true,
+    "noBusinessWrites": true,
+    "webTests": 679,
+    "apiTests": 4897,
+    "controls": 24,
+    "webTypeScript": true,
+    "compiledRuntime": true,
+    "live3361ReadOnly": true,
+    "pdfPages": 6,
+    "candidateBrowser": true,
+    "baselineBrowserFailed": true
+  },
+  "publicAssetsVerified": true,
+  "publicBrowserPassed": true,
+  "liveRequestReadOnly": {
+    "request": {
+      "id": "e629e834-ca47-4dbf-9908-2e6e14605f07",
+      "status": "IN_WORK",
+      "updatedAt": "2026-11-25T09:23:29.387Z"
+    },
+    "orders": [
+      {
+        "id": "6350009767",
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "waiting"
+      },
+      {
+        "id": "6353411356",
+        "category": "shipped",
+        "supplierStatus": "complete",
+        "wbStatus": "waiting"
+      }
+    ],
+    "noWrites": true
+  },
+  "controlsBeforeAfter": 24,
+  "requestFoldBeforeAfter": true,
+  "baselineTests": 8
+}

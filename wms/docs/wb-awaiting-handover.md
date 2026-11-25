@@ -1,3 +1,5 @@
+Published: [PR1075](https://github.com/Maxhead2011/wmsFF/pull/1075), 25.11.2026. [Release proof](releases/wb-awaiting-1075.json).
+
 # FBS WB: ожидание сдачи и печать №003361
 
 Подготовлено 25.11.2026 для нашей ВМС. Публикация подтверждается отдельным протоколом выпуска.

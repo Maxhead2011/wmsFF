@@ -1,0 +1,17 @@
+{
+  "published": true,
+  "pr": 1075,
+  "mergeCommitSha": "8711af0ae07a123b9e39301805b897447a65c473",
+  "head": "89ba5a47a85af30fbea2cb6399f8d032b0d28aea",
+  "images": {
+    "api": "sha256:1f41221cd5e8e95fdc1c82e01edabee076850a4e70f48b025a3de2902d891b54",
+    "web": "sha256:1ff4b14c8f4c544ab657a4c5dde48834401a393251102f27b3aa6125bec522a1"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 799,
+  "webFiles": 3362,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false
+}
