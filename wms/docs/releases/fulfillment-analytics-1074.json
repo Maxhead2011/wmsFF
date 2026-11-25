@@ -1,0 +1,72 @@
+{
+  "published": true,
+  "pr": 1074,
+  "mergeCommitSha": "0de662d294161242ee009e6d6ac1ba6fa9944bc3",
+  "head": "b91dd4da307b71219ec5433179938153f0f8bcad",
+  "images": {
+    "api": "sha256:47ae4d7406e953021357091e2b881baa533a222bbbde08f493b52c410d752e10",
+    "web": "sha256:a003d3c35f041218058623da69e29a050fa5a0e05a450167e79556a78af76fe9"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 802,
+  "webFiles": 3365,
+  "onlyEnvironmentChange": "WMS_FULFILLMENT_ANALYTICS_ENABLED=true",
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "publicAssetsVerified": true,
+  "sourceParityVerified": false,
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi": {
+    "passed": true,
+    "publicApi": true,
+    "sessionFlag": true,
+    "fbsProducts": 1312,
+    "fbsRequests": 1108,
+    "fbsUnits": 19974,
+    "fboRequests": 21,
+    "realClientScope": true,
+    "foreignClientDenied": true,
+    "anonymousDenied": true,
+    "businessWrites": false
+  },
+  "fullAppBrowser": {
+    "passed": true,
+    "live": true,
+    "fullApp": true,
+    "threeTabs": true,
+    "recommendations": true,
+    "mobile": true,
+    "noMutationsSent": true,
+    "errors": []
+  },
+  "clientBrowser": {
+    "passed": true,
+    "realClientBrowser": true,
+    "wbAnalyticsEnabled": false,
+    "onlyOwnClientOptions": true,
+    "clientCount": 1,
+    "noMutationsSent": true
+  },
+  "sessionCleanup": {
+    "temporaryValidationSessionsRevoked": true,
+    "privateLocalSessionFilesRemoved": true,
+    "serverTemporaryEnvironmentRemoved": true
+  },
+  "apiTests": 4915,
+  "webTests": 682,
+  "focusedApiTests": 21,
+  "apiTypecheck": "14 errors in files unchanged from PR1075/1076 base; no analytics errors",
+  "baseRelease": 1075,
+  "candidateBuilderReproducesPublishedDelta": true,
+  "apiTypecheckBaselineUnchangedFiles": [
+    "src/modules/marketplace-connections/fbs-saved-archive.spec.ts",
+    "src/modules/marketplace-connections/marketplace-connections.service.ts",
+    "src/modules/marketplace-connections/ozon-current-label.spec.ts",
+    "src/modules/tsd/fbo-fbs-reservations.ts",
+    "src/modules/yandex-fby/yandex-fby.service.ts"
+  ]
+}

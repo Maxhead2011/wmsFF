@@ -1,0 +1,22 @@
+require('/app/apps/api/node_modules/reflect-metadata');
+const assert=require('node:assert/strict'),{createRequire}=require('node:module');
+const req=createRequire('/app/apps/api/dist/main.js');
+const {PrismaClient}=req('@prisma/client'),{ClientScopeService}=req('./modules/auth/client-scope.service.js');
+const {FulfillmentAnalyticsService}=req('./modules/analytics/fulfillment.service.js'),{FulfillmentAnalyticsController,FulfillmentQueryDto}=req('./modules/analytics/fulfillment.controller.js');
+const {AnalyticsModule}=req('./modules/analytics/analytics.module.js');
+assert(Reflect.getMetadata('controllers',AnalyticsModule).includes(FulfillmentAnalyticsController));
+assert(Reflect.getMetadata('providers',AnalyticsModule).includes(FulfillmentAnalyticsService));
+const p=new PrismaClient(),s=new FulfillmentAnalyticsService(p,new ClientScopeService());
+(async()=>{try{
+ const {ValidationPipe}=req('@nestjs/common');const dto=await new ValidationPipe({whitelist:true,forbidNonWhitelisted:true,transform:true}).transform({clientId:'c',warehouseId:'w',dateFrom:'2026-08-27',dateTo:'2026-11-24',channel:'FBS',leadDays:'7',reviewDays:'7',safetyDays:'3'},{type:'query',metatype:FulfillmentQueryDto});assert.equal(dto.leadDays,7);
+ const rows=await p.$queryRawUnsafe(`SELECT r."clientId",r."warehouseId",COUNT(*)::int n FROM "ClientRequest" r JOIN "Client" c ON c.id=r."clientId" WHERE r.type='OUTBOUND' AND r.status='DONE' AND c."isDemo"=false AND r."warehouseId" IS NOT NULL GROUP BY r."clientId",r."warehouseId" ORDER BY n DESC LIMIT 1`);
+ const q={...dto,...rows[0]},user={id:'read-only-validation',roleCodes:['CLIENT'],permissionCodes:[],clientScopeMode:'LIMITED',clientIds:[q.clientId],writableClientIds:[],isDemo:false};
+ delete process.env.WMS_FULFILLMENT_ANALYTICS_ENABLED;await assert.rejects(()=>s.clients(user),/не включена/);
+ process.env.WMS_FULFILLMENT_ANALYTICS_ENABLED='true';const clients=await s.clients(user);assert.equal(clients.length,1);assert.equal(clients[0].id,q.clientId);
+ await assert.rejects(()=>s.dashboard({...q,clientId:'not-owned'},user),/Нет доступа/);
+ await assert.rejects(()=>s.dashboard(q,{...user,roleCodes:['CLIENT','OPERATOR'],warehouseIds:[]}),/Нет доступа к складу/);
+ const start=Date.now(),fbs=await s.dashboard(q,user),fbo=await s.dashboard({...q,channel:'FBO'},user);
+ assert(fbs.items.length>0);assert(fbo.items.every(i=>i.recommendedUnits===null));assert(fbs.items.every(i=>i.toReplenish===null||i.toReplenish===Math.max(0,i.recommendedUnits-i.freeUnits)));
+ assert.equal(fbs.summary.shippedUnits,fbs.items.reduce((sum,i)=>sum+i.shippedUnits,0));
+ console.log(JSON.stringify({passed:true,readOnly:true,registered:true,flagOff:true,clientIsolation:true,warehouseIsolation:true,strictDto:true,fbsProducts:fbs.items.length,fbsRequests:fbs.quality.completedRequests,fbsUnits:fbs.summary.shippedUnits,fboRequests:fbo.quality.completedRequests,durationMs:Date.now()-start}));
+}finally{await p.$disconnect();}})().catch(e=>{console.error(e.message);process.exitCode=1;});
