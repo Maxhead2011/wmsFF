@@ -1,0 +1,8 @@
+const fs=require('fs'),path=require('path'),cp=require('child_process'),assert=require('assert/strict');
+const repo=path.resolve(__dirname,'../../../..'),r=path.resolve(process.argv[2]),ts=require(repo+'/wms/node_modules/typescript');
+const compile=s=>ts.transpileModule(s,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,experimentalDecorators:true,emitDecoratorMetadata:true}}).outputText,norm=s=>s.replace(/\r\n/g,'\n').trim(),changes=[];
+const old=n=>cp.execFileSync('git',['show','c3ff41ee:'+n],{cwd:repo,encoding:'utf8',maxBuffer:16777216});
+function write(n,s){changes.push(n);for(const kind of ['api','candidate']){const p=r+'/'+kind+'/'+n;fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s);}}
+for(const name of ['ozon-direct-label','wb-supply-label','ozon-posting-label-pages']){const src='wms/apps/api/src/modules/marketplace-connections/'+name+'.ts',dst='modules/marketplace-connections/'+name+'.js';if(name!=='ozon-posting-label-pages')assert.equal(norm(compile(old(src))),norm(fs.readFileSync(r+'/base-api/'+dst,'utf8')),name);write(dst,compile(fs.readFileSync(repo+'/'+src,'utf8')));}
+const dst='modules/marketplace-connections/marketplace-connections.service.js';let s=fs.readFileSync(r+'/base-api/'+dst,'utf8');const a='selectedOzonLabels)(this.prisma, clientId, selected, marketplaceJson, marketplaceBinary)';assert.equal(s.split(a).length,2);s=s.replace(a,'selectedOzonLabels)(this.prisma, clientId, selected, marketplaceJson, marketplaceBinary, true)');write(dst,s);
+fs.writeFileSync(r+'/api-changes.json',JSON.stringify(changes));console.log(JSON.stringify(changes));

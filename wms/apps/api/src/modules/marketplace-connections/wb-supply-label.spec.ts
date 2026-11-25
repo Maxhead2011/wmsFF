@@ -75,6 +75,11 @@ it('keeps one 58x40 page per supply with a long direction', async () => {
   ]);
   expect((await PDFDocument.load(buffer)).getPageCount()).toBe(2);
 });
+// TEST: the medium-length real destination previously overflowed onto a separate label.
+it('keeps Moscow pickup destination on the supply sticker',async()=>{
+ const b=await buildWbSupplyLabelsPdf([{supplyId:'WB-GI-320469823',quantity:2,destination:'Москва (Белая дача)'}]);
+ expect((await PDFDocument.load(b)).getPageCount()).toBe(1);
+});
 it('preserves the legacy delivery guard when our WMS flag is off', async () => {
   vi.stubEnv('WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED', 'false');
   const service: any = Object.create(MarketplaceConnectionsService.prototype);

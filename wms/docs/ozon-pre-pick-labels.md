@@ -1,3 +1,7 @@
+## Official PDF content validation (prepared 25.11.2026)
+
+Prepared follow-up to PR1088: real Ozon label PDFs contain additional product pages. Cargo-only mode retains pages proven by posting number, scanit or official posting barcode and rejects incomplete coverage. Full PDF mode remains unchanged. WB supply QR/text fits medium-length destinations on one label. Exact API4/web0 over captured PR1088; tests and real-PDF check cover3319 (5→2 pages). The intermediate PR1088 runtime is captured as `2026-11-25-fbs-cargo-labels` with its observed follow-up requirements. The source/API filtering path is opt-in for cargo only; unmatched/unknown pages are not guessed.
+
 ## Cargo-only printing and WB missing cargo (prepared 25.11.2026)
 
 `FbsLabelActions` provides three modern controls. Full download and full print retain the existing product/order set. Cargo printing requests only WB supply and cargo labels, or official Ozon posting labels. It never calls Ozon preparation, physical assembly, delivery or stock/billing completion. The printer dialog names the selected set correctly; errors retain the top-layer explanation.
