@@ -1,0 +1,59 @@
+{
+  "published": true,
+  "pr": 1093,
+  "mergeCommitSha": "64a729e2ea257889b757142ea6cf9f533863a400",
+  "head": "7511ad062a1053c293e8c4dae738887cd6eb4bf5",
+  "images": {
+    "api": "sha256:cd9a954822d33cfec945a6cc706a6a0333a2b2e82951137b38b073a19d8cb993",
+    "web": "sha256:21ec6928b83ccd62a9e4cb2f7dc4e98473261dc360e5afb1519def401b0b5b74"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 807,
+  "webFiles": 3377,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "publicBrowser": {
+    "passed": true,
+    "publicBrowser": true,
+    "fbs": true,
+    "fbo": true,
+    "visible": 16,
+    "branchId": "afb244a1-50ae-4ae6-9111-afe85949fa58",
+    "onlySelectedWarehouse": true,
+    "noBusinessWrites": true
+  },
+  "compiledService": {
+    "passed": true,
+    "readOnly": true,
+    "branches": [
+      {
+        "id": "5bf26aae-424d-41d0-8357-5ee573d99410",
+        "city": "Ногинск",
+        "name": "Ногинск - Дмитрий",
+        "visible": 4
+      },
+      {
+        "id": "afb244a1-50ae-4ae6-9111-afe85949fa58",
+        "city": "Москва",
+        "name": "ФФ Москва",
+        "visible": 16
+      },
+      {
+        "id": "5bf26aae-424d-41d0-8357-5ee573d99410",
+        "city": "Ногинск",
+        "name": "Ногинск - Дмитрий",
+        "visible": 4
+      }
+    ],
+    "limitedScopePreserved": true
+  },
+  "apiTests": 4959,
+  "webTests": 688,
+  "apiTypecheck": "14 pre-existing errors outside changed logic",
+  "baseRelease": 1091,
+  "businessRecordsChanged": false
+}
