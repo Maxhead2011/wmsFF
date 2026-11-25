@@ -1,3 +1,5 @@
+Prepared 25.11.2026: FBS/FBO analytics client selector excludes ARCHIVED, matching the primary client directory. ACTIVE/PAUSED and existing client/demo/warehouse scopes remain. Exact API1/web0; read-only compiled verification finds20 eligible clients and26 archived clients excluded.
+
 Published 25.11.2026 PR1084: English champagne is now recognized by the fabric article parser and maps to the same color key as ivory. Real Bushkova cards:14 SKU, one Atlas/satin model, one Champagne/ivory color, seven lengths1/3/5/10/20/30/50m. Explicit fabric-name guard remains; unrelated goods stay separate. Only analytics grouping changes; warehouse SKU and stock identities remain intact. Tests: fulfillment-groups.spec.ts and scripts/releases/fabric-champagne/runtime-test.cjs.
 
 # Аналитика отгрузок и запасов ФФ

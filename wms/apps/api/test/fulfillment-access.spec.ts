@@ -28,8 +28,17 @@ describe('fulfillment client and warehouse isolation',()=>{
  it('limits client selection and rejects a warehouse not connected to the client',async()=>{
   const prisma={client:{findMany:vi.fn().mockResolvedValue([{id:'own',name:'Own'}]),findFirst:vi.fn().mockResolvedValue({id:'own'})},warehouseClient:{findMany:vi.fn().mockResolvedValue([]),findFirst:vi.fn().mockResolvedValue(null)}};
   const s=new FulfillmentAnalyticsService(prisma as any,new ClientScopeService());await s.clients(user);
-  expect(prisma.client.findMany.mock.calls[0][0].where).toEqual({id:{in:['own']},isDemo:false});
+  expect(prisma.client.findMany.mock.calls[0][0].where).toEqual({id:{in:['own']},isDemo:false,status:{not:'ARCHIVED'}});
   await expect(s.dashboard(query,user)).rejects.toThrow('Склад не подключён');
+ });
+ // TEST: archived clients must not become options or trigger warehouse lookups; paused clients remain eligible.
+ it('omits archived clients from the selector while preserving active and paused clients',async()=>{
+  const rows=[{id:'active',name:'Active',status:'ACTIVE'},{id:'paused',name:'Paused',status:'PAUSED'},{id:'archive',name:'Archived',status:'ARCHIVED'}];
+  const prisma={client:{findMany:vi.fn(async({where}:any)=>rows.filter(r=>!where.status?.not||r.status!==where.status.not))},warehouseClient:{findMany:vi.fn(async(_query:any)=>[])}};
+  const s=new FulfillmentAnalyticsService(prisma as any,new ClientScopeService());
+  const result=await s.clients({...user,roleCodes:['OWNER'],clientScopeMode:'ALL'});
+  expect(result.map(c=>c.id)).toEqual(['active','paused']);
+  expect(prisma.warehouseClient.findMany.mock.calls[0][0].where.clientId.in).toEqual(['active','paused']);
  });
  it('rejects a real client when used through a demo session',async()=>{
   const prisma={client:{findFirst:vi.fn().mockResolvedValue(null)}};const s=new FulfillmentAnalyticsService(prisma as any,new ClientScopeService());
