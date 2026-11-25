@@ -1,3 +1,5 @@
+import {fbsDisplayCategory} from './requestSupplyAction';
+import {retainFbsClient,requestSupplyNeedsArchive} from './requestSupplyAction';
 import { expect, it } from 'vitest';
 import type { ClientRequestSummary, FbsOrderSummary } from '../../lib/api';
 import { requestSupplyOrders } from './requestSupplyAction';
@@ -40,4 +42,25 @@ it('rejects Ozon delivery and unsupported or partial label selections', () => {
   expect(() => requestSupplyOrders({request, action:'deliver'}, oz)).toThrow();
   expect(() => requestSupplyOrders({request, action:'print'}, oz.slice(0,1))).toThrow('полный состав');
   expect(() => requestSupplyOrders({request, action:'print'}, [order('1', {marketplace:'YANDEX_MARKET'}),order('2')])).toThrow();
+});
+
+// TEST: regression3361: shipped Korolev is absent from the active-client directory.
+it('retains the archive client and loads history for IN_WORK label actions',()=>{
+ expect(retainFbsClient('korolev',[{client:{id:'other'}}])).toBe('korolev');
+ expect(retainFbsClient('other',[{client:{id:'other'}}],'korolev')).toBe('korolev');
+ expect(retainFbsClient('',[{client:{id:'first'}}])).toBe('first');
+ const r={...request,status:'IN_WORK'} as ClientRequestSummary;
+ expect(requestSupplyNeedsArchive({request:r,action:'print'})).toBe(true);
+ expect(requestSupplyNeedsArchive({request:r,action:'download'})).toBe(true);
+ expect(requestSupplyNeedsArchive({request:r,action:'deliver'})).toBe(false);
+});
+
+// TEST: physical packing/marketplace preparation cannot archive an unaccepted WB order.
+it('keeps WB waiting active without changing action category; accepts confirmed WB and Ozon',()=>{
+ const waiting=order('3361',{category:'shipped',supplierStatus:'complete',wbStatus:'waiting',request:{id:'r',status:'IN_WORK'} as any});
+ expect(fbsDisplayCategory(waiting)).toBe('active');expect(waiting.category).toBe('shipped');
+ expect(fbsDisplayCategory({...waiting,wbStatus:'sorted'})).toBe('shipped');
+ expect(fbsDisplayCategory({...waiting,request:{id:'r',status:'DONE'} as any})).toBe('shipped');
+ expect(fbsDisplayCategory({...waiting,marketplace:'OZON',supplierStatus:'delivering'})).toBe('shipped');
+ expect(fbsDisplayCategory({...waiting,category:'cancelled'})).toBe('cancelled');
 });

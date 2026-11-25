@@ -2193,6 +2193,14 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return (this.scopeFbsOrdersForUser as (...args: any[]) => Promise<FbsOrdersResponse>)(restored, user, allBranches, displayWarehouseId);
   }
 
+  // FIX: pending handovers survive a cold display cache; never enter the operational TSD queue.
+  async restoreFbsAwaitingForDisplay(clientId:string,response:FbsOrdersResponse,user:AuthUser,allBranches=false,displayWarehouseId?:string) {
+    if(process.env.WMS_FBS_ACTION_STATUS_ENABLED!=='true')return response;
+    this.clientScopes.requireClientAccess(user,clientId,'read');
+    const restored=await restoreSavedFbsArchive(this.prisma,clientId,response,undefined,undefined,true);
+    return (this.scopeFbsOrdersForUser as (...args:any[])=>Promise<FbsOrdersResponse>)(restored,user,allBranches,displayWarehouseId);
+  }
+
   private async scopeFbsOrdersForUser(
     response: FbsOrdersResponse,
     user: AuthUser,

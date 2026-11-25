@@ -31,3 +31,25 @@ export function requestSupplyOrders(target: RequestSupplyTarget, orders: FbsOrde
   }
   return linked;
 }
+
+// FIX: a client with only shipped/archived orders remains selected.
+export function retainFbsClient(current:string, active:{client:{id:string}}[], explicit='') {
+  return explicit || current || active[0]?.client.id || '';
+}
+// FIX: label retrieval must include persisted shipped orders even while WMS is IN_WORK.
+export function requestSupplyNeedsArchive(target:RequestSupplyTarget) {
+  return target.action !== 'deliver' || target.request.status === 'DONE';
+}
+// FIX: request navigation carries its client instead of reusing another screen's client.
+export function rememberFbsRequestClient(userId:string,clientId?:string) {
+  if(!clientId?.trim())return;
+  const storageKey=`logoff-wms:last-client:${userId}`;
+  window.localStorage.setItem(storageKey,clientId);
+  window.dispatchEvent(new CustomEvent('logoff-wms:last-client-change',{detail:{storageKey,clientId}}));
+}
+
+// FIX: marketplace preparation is not handover; retain raw category for operational action guards.
+export function fbsDisplayCategory(order:Pick<FbsOrderSummary,'category'|'marketplace'|'supplierStatus'|'wbStatus'|'request'>) {
+  if(order.marketplace==='WILDBERRIES' && order.category==='shipped' && order.supplierStatus==='complete' && order.wbStatus==='waiting' && order.request?.status!=='DONE')return 'active';
+  return order.category;
+}

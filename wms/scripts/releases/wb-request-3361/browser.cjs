@@ -1,0 +1,29 @@
+// TEST: exact published modules; actual3361 label bytes, mocked business endpoints and no print POST.
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');const {chromium}=require(process.env.PLAYWRIGHT_MODULE);
+const work=process.argv[2],live=JSON.parse(fs.readFileSync(path.join(work,'request.json'))),labels=JSON.parse(fs.readFileSync(path.join(work,'labels.json')));
+const client={...live.client,marketplaceConnections:[{marketplace:'WILDBERRIES',isActive:true}]},other={id:'other',code:'OTHER',name:'Другой клиент',marketplaceConnections:client.marketplaceConnections};
+const request={id:live.links[0].requestId,number:3361,clientId:client.id,client,warehouseId:'w',warehouse:{id:'w',name:'Москва'},status:'IN_WORK',type:'OUTBOUND',priority:'NORMAL',title:'FBS — 2 заказ(а/ов)',createdAt:'2026-11-25T08:30:14.906Z',updatedAt:'2026-11-25T09:23:29.387Z',items:[],files:[],packages:[],comments:[],fbsCompletion:{totalOrders:2,completedOrders:2,percent:100,completed:true}};
+const orders=labels.orders.map(o=>({...o,request,category:'shipped',requiredMeta:[],optionalMeta:[],storageBoxes:[],barcodes:o.barcodes||[],items:o.items||[]}));
+const user={id:'wb3361-test',name:'Test',email:'test@example.invalid',roleCodes:['OWNER','ADMIN'],permissionCodes:['system:admin'],clientScopeMode:'ALL',clientIds:[],writableClientIds:[],activeWarehouseId:'w',warehouseIds:['w'],writableWarehouseIds:['w']};
+(async()=>{const browser=await chromium.launch({channel:'msedge',headless:true});try{const page=await browser.newPage({viewport:{width:1700,height:1100}});page.setDefaultTimeout(12000);const errors=[],calls=[],reads=[];page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE ERROR',e.stack)});
+await page.addInitScript(u=>{localStorage.setItem('logoff-wms-session',JSON.stringify({accessToken:'synthetic',user:u}));localStorage.setItem('logoff-wms:last-client:'+u.id,'other');},user);
+await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url()),p=url.pathname;if(p.startsWith('/api/')){let body=[];if(process.env.DEBUG)console.log(p,url.search);
+if(p.endsWith('/auth/me'))body=user;else if(p.endsWith('/branches'))body=[{id:'w',name:'Москва',isActive:true}];else if(p.endsWith('/clients'))body=[other,client];else if(p.endsWith('/client-requests'))body=[request];else if(p.endsWith('/box-overlaps'))body={statusCounts:[],overlaps:[],errors:[],overlappingBoxesCount:0};
+else if(p.endsWith('/fbs/active-clients'))body=[{client:other,activeOrders:1}];
+else if(p.endsWith('/fbs/orders')){reads.push(Object.fromEntries(url.searchParams));const own=url.searchParams.get('clientId')===client.id,history=url.searchParams.get('view')==='archive';body={client:own?client:other,connected:true,connections:[{id:orders[0].connectionId,marketplace:'WILDBERRIES',accountName:'WB'}],deliveryPlan:{destination:'PICKUP_POINT',itemsPerCargoPlace:1,requiresCargoPlaces:true},orders:own?orders:[],counts:{all:2,active:0,shipped:2,archive:0,cancelled:0},fetchedAt:new Date().toISOString()};}
+else if(p.endsWith('/all-labels')){calls.push(req.postDataJSON());body=labels.pdf;}
+else if(p.endsWith('/print/series/stations'))body=[{id:'printer',name:'Printer',printerName:'TSC'}];else if(p.endsWith('/print/series/formats'))body=[{id:'printer',name:'Printer',printerName:'TSC',labelWidthMm:58,labelHeightMm:40}];
+else if(req.method()!=='GET')throw Error('Unexpected mutation '+p);
+return route.fulfill({json:body});}
+if(process.env.CANDIDATE==='1'){const file=path.join(work,'web',p==='/'?'index.html':p);if(fs.existsSync(file))return route.fulfill({body:fs.readFileSync(file),contentType:file.endsWith('.js')?'text/javascript':'text/html'});}return route.continue();});
+await page.goto('https://wms.logoff.pro/',{waitUntil:'networkidle'});await page.getByText('Заявки',{exact:true}).first().click();
+const row=page.locator('tr').filter({hasText:request.title});await row.waitFor().catch(async e=>{console.log((await page.locator('body').innerText()).slice(-5000));throw e});
+await row.getByText('Стикеры поставки',{exact:true}).click();await row.getByRole('button',{name:'Распечатать все ШК',exact:true}).click();
+const dialog=page.getByRole('dialog',{name:'Печать всех ШК WB'});await dialog.waitFor();assert(await row.isVisible());assert.equal(await dialog.getByLabel('Станция и принтер').inputValue(),'printer');assert((await dialog.innerText()).includes('6 стр.'));await dialog.getByRole('button',{name:'Отмена',exact:true}).click();
+assert.equal(calls.length,1);assert.equal(calls[0].clientId,client.id);assert.deepEqual(calls[0].orders.map(o=>o.id).sort(),['6350009767','6353411356']);assert(reads.some(r=>r.clientId===client.id&&r.view==='archive'));
+await page.evaluate(u=>localStorage.setItem('logoff-wms:last-client:'+u,'other'),user.id);await row.getByRole('button',{name:'К заказам FBS',exact:true}).click();await page.waitForTimeout(1000);assert.equal(await page.evaluate(u=>localStorage.getItem('logoff-wms:last-client:'+u),user.id),client.id);
+await page.getByRole('button',{name:/FBS WB/}).click();
+await page.waitForTimeout(500);assert.equal(await page.evaluate(u=>localStorage.getItem('logoff-wms:last-client:'+u),user.id),client.id);
+await page.locator('.fbs-panel tr').filter({hasText:'WB-GI-320337363'}).waitFor().catch(async e=>{console.log('READS',reads);console.log((await page.locator('body').innerText()).slice(-4500));throw e});await page.locator('.fbs-panel button').filter({hasText:'Архив заявок'}).first().click();await page.waitForTimeout(600);assert.equal(await page.locator('.fbs-panel tr').filter({hasText:'WB-GI-320337363'}).count(),0);assert.equal(await page.evaluate(u=>localStorage.getItem('logoff-wms:last-client:'+u),user.id),client.id);
+assert.deepEqual(errors,[]);console.log('PASS3361: actual6page ribbon, exact2orders, printer dialog, client navigation; no print job');
+}finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1});

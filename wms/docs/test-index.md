@@ -1,5 +1,9 @@
 Аналитика ФФ (в разработке, не опубликовано): [методика, доступ и тесты](fulfillment-analytics.md). Три вкладки ФБС/ФБО/Wildberries, ABC/XYZ, хранение и рекомендованный запас ФБС; own-only флаг `WMS_FULFILLMENT_ANALYTICS_ENABLED`.
 
+Published 25.11.2026 PR1075: [WB pending handovers and request3361 label client context](wb-awaiting-handover.md). API3/web4; all799/3362 hashes verified, public browser PDF6/printer/client/current-vs-archive passed, no print submission. Web679/API4897, TypeScript and compiled runtime passed. Own WMS only; environment/other containers unchanged. Baseline `2026-11-25-wb-awaiting-handover`, sourceParityVerified=false. [Proof](releases/wb-awaiting-1075.json).
+
+Prepared: [WB awaiting handover and request3361 labels](wb-awaiting-handover.md). API3/web4, no business writes; web679/API4897, compiled runtime, TypeScript, PDF6/printer/client/archive browser checks.
+
 PR1072: API4893 passed/199 skipped (отдельный набор KIZ DB исключён с тем же сбоем сбора на базе), web677 passed/2 skipped, web TypeScript, 6 сценариев фактического опубликованного обработчика, точный runtime-контроллер/сервис и controls24 до/после. Первая живая подготовка и физическая печать не проверялись. [Подробности](ozon-pre-pick-labels.md).
 
 Published24.11.2026 PR1067/1068: visible selected-field deletion and branch-printer media sizes (Ozon70x120). Both editor modes and silent-agent queue verified in public full-app browser with intercepted jobs; no physical printing. Web669/2 skipped and TypeScript pass. Exact web2 delta per release, all3357 hashes and public assets verified; API/environment/other containers/sold WMS unchanged. Baseline `2026-11-24-free-label-formats`, sourceParityVerified=false. [Proof](releases/free-label-formats-1068.json).
