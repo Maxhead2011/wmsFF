@@ -45,4 +45,20 @@ describe('fulfillment client and warehouse isolation',()=>{
   await expect(s.dashboard(query,{...user,isDemo:true})).rejects.toThrow('Клиент не найден');
   expect(prisma.client.findFirst.mock.calls[0][0].where).toEqual({id:'own',isDemo:true});
  });
+ // TEST: the header branch controls both client options and warehouse options, including a return switch.
+ it('shows only active links in the selected branch and preserves shared clients',async()=>{
+  const rows=[{id:'moscow'},{id:'noginsk'},{id:'shared'},{id:'inactive'}];
+  const links=[{clientId:'moscow',warehouseId:'m',status:'ACTIVE'},{clientId:'noginsk',warehouseId:'n',status:'ACTIVE'},{clientId:'shared',warehouseId:'m',status:'ACTIVE'},{clientId:'shared',warehouseId:'n',status:'ACTIVE'},{clientId:'inactive',warehouseId:'m',status:'INACTIVE'}];
+  const prisma={client:{findMany:vi.fn(async({where}:any)=>rows.filter(c=>!where.warehouseLinks||links.some(l=>l.clientId===c.id&&l.warehouseId===where.warehouseLinks.some.warehouseId&&l.status===where.warehouseLinks.some.status)))},warehouseClient:{findMany:vi.fn(async({where}:any)=>links.filter(l=>where.clientId.in.includes(l.clientId)&&(!where.warehouseId||l.warehouseId===where.warehouseId)&&(!where.status||l.status===where.status)).map(l=>({...l,warehouse:{id:l.warehouseId,name:l.warehouseId}})))}};
+  const s=new FulfillmentAnalyticsService(prisma as any,new ClientScopeService());
+  for(const branch of ['m','n','m']){
+   const result=await s.clients({...user,roleCodes:['OWNER'],clientScopeMode:'ALL',activeWarehouseId:branch});
+   expect(result.map(c=>c.id)).toEqual([branch==='m'?'moscow':'noginsk','shared']);
+   expect(result.every(c=>c.warehouses.length===1&&c.warehouses[0].id===branch)).toBe(true);
+  }
+ });
+ it('does not expand employee access through an unavailable selected branch',async()=>{
+  const s=new FulfillmentAnalyticsService({} as any,new ClientScopeService());
+  await expect(s.clients({...user,roleCodes:['OPERATOR'],warehouseIds:['m'],activeWarehouseId:'n'})).rejects.toThrow('Нет доступа к складу');
+ });
 });
