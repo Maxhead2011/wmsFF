@@ -5,6 +5,20 @@ const p=(id:string,extra:any={}):ProductFact=>({skuId:id,name:id,article:id,colo
 const o={dateFrom:'2026-08-03',dateTo:'2026-10-25',leadDays:7,reviewDays:7,safetyDays:3,channel:'FBS' as const,asOf:'2026-10-26T09:00:00Z'};
 // TEST: actual catalog shapes; categories are not model identifiers and variants are not interchangeable stock.
 describe('fulfillment model hierarchy',()=>{
+ // TEST: Ozon champagne and WB ivory are the same fabric color at every real cut length.
+ it('combines champagne and ivory into one color and seven lengths without changing totals',()=>{
+  const lengths=[1,3,5,10,20,30,50];
+  const products=['champagne','ivory'].flatMap(color=>lengths.map(length=>p(`${color}_${length}`,{article:`${color}_${length}`,name:'Ткань для шитья атлас сатин',brand:color==='champagne'?null:'WB'})));
+  const identities=products.map(identifyFulfillmentProduct);
+  expect(new Set(identities.map(i=>i.modelKey)).size).toBe(1);
+  expect(new Set(identities.map(i=>i.colorKey)).size).toBe(1);
+  expect(new Set(identities.map(i=>i.sizeKey)).size).toBe(7);
+  expect(identities.every(i=>i.color==='Шампань / айвори')).toBe(true);
+  const base=analyzeFulfillment(products,[],[],o),groups=groupFulfillment(products,[],[],o,base.items);
+  expect(groups.color).toHaveLength(1);expect(groups.color[0].skuCount).toBe(14);expect(groups.size).toHaveLength(7);
+  expect(groups.color[0].currentUnits).toBe(base.summary.currentUnits);
+  expect(identifyFulfillmentProduct(p('unrelated',{name:'Лента подарочная',article:'champagne_3'})).lengthMetres).toBeNull();
+ });
  it('groups Nostalgie across color and optional garment prefix without merging another model',()=>{
   const a=identifyFulfillmentProduct(p('a',{article:'Костюм_ностальджи_молочнокоричневый',color:'коричневый,молочный',size:'S / 42'}));
   const b=identifyFulfillmentProduct(p('b',{article:'Ностальджи_синий',color:'синий,темно-синий',size:'M / 44'}));
