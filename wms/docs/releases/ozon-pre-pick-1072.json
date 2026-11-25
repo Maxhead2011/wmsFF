@@ -1,0 +1,44 @@
+{
+  "published": true,
+  "pr": 1072,
+  "mergeCommitSha": "256a8f3a47aa08aba65aea14ff32e74a688c9ecf",
+  "head": "d4d829020c438f3f8f20932ef1b38ccf2d6d1b28",
+  "images": {
+    "api": "sha256:2fa87e8a4bf380674eb3025de2d3ea09c333bd6843735a07c4b4493b89c1a569",
+    "web": "sha256:d1f8ff2e38865326c34b958ded7c009c3dd2761cdcdfb3900ff918195abf0429"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 799,
+  "webFiles": 3359,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "publicAssetsVerified": true,
+  "publicWebHandlerBrowserCases": 6,
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "apiChangedFiles": [
+    "modules/administration/administration-internal-api.service.js",
+    "modules/marketplace-connections/fbs-fabric-queue.js",
+    "modules/marketplace-connections/marketplace-connections.controller.js",
+    "modules/marketplace-connections/marketplace-connections.service.js",
+    "modules/marketplace-connections/ozon-fbs-pick-workflow.js",
+    "modules/marketplace-connections/ozon-print-preparation.js"
+  ],
+  "webChangedFiles": [
+    "index.html",
+    "assets/ozon-pre-pick-fbs-20261125.js"
+  ],
+  "apiTestsPassed": 4893,
+  "apiTestsSkipped": 199,
+  "extraExcludedSuite": "kiz-duplicate.integration.spec.ts (same collection failure on baseline without dedicated DB)",
+  "webTestsPassed": 677,
+  "webTestsSkipped": 2,
+  "apiTypecheckUnchangedBaselineDiagnostics": 56,
+  "webTypecheckPassed": true,
+  "physicalPrintingVerified": false,
+  "firstLivePreparationVerified": false,
+  "newPathPostgresIntegrationVerified": false
+}
