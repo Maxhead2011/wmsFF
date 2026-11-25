@@ -1,0 +1,52 @@
+{
+  "published": true,
+  "pr": 1086,
+  "mergeCommitSha": "56f65d4f48f587343a519b944e448afd2c3a2e8f",
+  "head": "30dc8cd1362632ec7f64ead8a8696ce9f5627a06",
+  "images": {
+    "api": "sha256:189368828811e6ddf5d0b7b63b6320379ce70f2dcc1f2dd8b350257e700ad2b8",
+    "web": "sha256:8da9f49854b5197d9d92c52d9862b80d8151754acfe4defe2a69046276f7ea7d"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 805,
+  "webFiles": 3373,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "publicBrowser": {
+    "passed": true,
+    "fullApp": true,
+    "topLayerError": true,
+    "postingExplanation": true,
+    "printerTransition": true,
+    "cancelCloses": true,
+    "mobile": true,
+    "noActualBusinessWrites": true
+  },
+  "controlsBefore": 24,
+  "controlsAfter": 24,
+  "requestFoldsBefore": true,
+  "requestFoldsAfter": true,
+  "liveApi3319": {
+    "status": 201,
+    "ms": 1803,
+    "pageCount": 7,
+    "warnings": [],
+    "fileName": "FBS_OZON_all_labels.pdf"
+  },
+  "candidateRuntime": {
+    "passed": true,
+    "synthetic": true,
+    "gtdAbsentBeforeShip": true,
+    "otherFieldsPreserved": true,
+    "repeatNoDuplicateShip": true,
+    "disabledFeatureRejected": true
+  },
+  "apiTests": 4941,
+  "webTests": 685,
+  "apiTypecheck": "14 existing baseline errors outside changed logic",
+  "baseRelease": 1084,
+  "physicalPrintSubmitted": false
+}
