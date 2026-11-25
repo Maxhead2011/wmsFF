@@ -1,4 +1,4 @@
-## Print progress dialog and absent GTD (prepared 25.11.2026)
+## Print progress dialog and absent GTD (published 25.11.2026, PR1086)
 
 Request3319 / posting0214691742-0254-3 was rejected with EXEMPLAR_INFO_NOT_FILLED_COMPLETELY. Ozon required GTD for red_50; its exemplar had an empty number and is_gtd_absent=false. User confirmed GTD is absent and authorized the same policy for analogous future preparations. The exact exemplar was changed to is_gtd_absent=true, preserving every other field; Ozon returned gtd_check_status=passed and ship_available. Normal preparation then moved the posting to awaiting_deliver and produced the complete seven-page request PDF. No physical print job was submitted.
 
