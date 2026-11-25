@@ -5,7 +5,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { RequirePermissions } from '../auth/decorators/require-permissions.decorator';
 import { ClientScopeService } from '../auth/client-scope.service';
 import type { AuthUser } from '../auth/auth.types';
-import { addFabricColor, BASE_FABRIC_COLORS, createFabricBinding, FabricColor, readFabricBinding } from './fabric-catalog';
+import { addFabricMaterial, BASE_FABRIC_MATERIALS, FabricMaterial, addFabricColor, BASE_FABRIC_COLORS, createFabricBinding, FabricColor, readFabricBinding } from './fabric-catalog';
 import { identifyFabricSku } from './fabric-fbs-availability';
 
 @Controller('warehouse/fabric-catalog/:clientId')
@@ -27,25 +27,29 @@ export class FabricCatalogController {
     const saved = await this.db.systemSetting.findUnique({ where: { key: this.key(id) } });
     const colors = ((saved?.value as { colors?: FabricColor[] } | null)?.colors ?? []);
     const skus = await this.db.sku.findMany({ where: { clientId: id, isDraft: false }, select: { id: true, name: true, internalSku: true, marketplace: true, marketplaceProductId: true, marketplaceOfferId: true, marketplacePayload: true, barcodes: { select: { value: true } } } });
-    return { colors, baseColors: BASE_FABRIC_COLORS, version: saved?.updatedAt.toISOString() ?? null, skus: skus.map(s => ({ id: s.id, name: s.name, internalSku: s.internalSku, marketplace: s.marketplace, productId: s.marketplaceProductId, offerId: s.marketplaceOfferId, barcodes: s.barcodes.map(b => b.value), binding: readFabricBinding(s.marketplacePayload) })) };
+    const materials=((saved?.value as {materials?:FabricMaterial[]}|null)?.materials??[]);
+    return { colors, materials, baseMaterials:BASE_FABRIC_MATERIALS, baseColors: BASE_FABRIC_COLORS, version: saved?.updatedAt.toISOString() ?? null, skus: skus.map(s => ({ id: s.id, name: s.name, internalSku: s.internalSku, marketplace: s.marketplace, productId: s.marketplaceProductId, offerId: s.marketplaceOfferId, barcodes: s.barcodes.map(b => b.value), binding: readFabricBinding(s.marketplacePayload) })) };
   }
   @Post()
   @RequirePermissions('stock:write')
   async save(@Param('clientId') id: string, @Body() body: { action: string; name?: string; material: string; colorId?: string; lengthMm?: number; skuId?: string; version: string | null }, @CurrentUser() user: AuthUser) {
     await this.check(id, user, true);
-    if (!body || typeof body !== 'object' || !['CREATE_COLOR', 'BIND_SKU'].includes(body.action) || !Object.prototype.hasOwnProperty.call(body, 'version')) throw new BadRequestException('Укажите действие и текущую версию каталога.');
+    if (!body || typeof body !== 'object' || !['CREATE_MATERIAL', 'CREATE_COLOR', 'BIND_SKU'].includes(body.action) || !Object.prototype.hasOwnProperty.call(body, 'version')) throw new BadRequestException('Укажите действие и текущую версию каталога.');
     const result = await this.db.$transaction(async tx => {
       // FIX: serialize color creation and SKU binding with receipt and FBS metre accounting.
       await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtext($1))', 'fabric.rolls.v1:' + id);
       const saved = await tx.systemSetting.findUnique({ where: { key: this.key(id) } });
       if ((saved?.updatedAt.toISOString() ?? null) !== body.version) throw new ConflictException('Каталог изменился. Обновите данные.');
       let colors = ((saved?.value as { colors?: FabricColor[] } | null)?.colors ?? []);
+      let materials=((saved?.value as {materials?:FabricMaterial[]}|null)?.materials??[]);
       let outcome: unknown;
       try {
-        if (body.action === 'CREATE_COLOR') {
-          const added = addFabricColor(colors, body.material, body.name!); colors = added.colors; outcome = added;
+        if(body.action==='CREATE_MATERIAL'){
+          const added=addFabricMaterial(materials,body.name!);materials=added.materials;outcome=added;
+        } else if (body.action === 'CREATE_COLOR') {
+          const added = addFabricColor(colors, body.material, body.name!,materials); colors = added.colors; outcome = added;
         } else if (body.action === 'BIND_SKU') {
-          const binding = createFabricBinding(colors, body.material, body.colorId!, body.lengthMm!);
+          const binding = createFabricBinding(colors, body.material, body.colorId!, body.lengthMm!,materials);
           const sku = await tx.sku.findFirst({ where: { id: body.skuId, clientId: id, isDraft: false } });
           if (!body.skuId || !sku) throw new Error('Товар выбранного клиента не найден.');
           if (!sku.marketplaceProductId && !sku.marketplaceOfferId && !(await tx.marketplaceProductLink.findFirst({ where: { clientId: id, skuId: sku.id } }))) throw new Error('Сначала свяжите карточку товара WMS с маркетплейсом.');
@@ -57,7 +61,8 @@ export class FabricCatalogController {
           outcome = { skuId: sku.id, binding };
         } else throw new Error('Неизвестное действие.');
       } catch (error) { throw new BadRequestException(error instanceof Error ? error.message : 'Не удалось сохранить.'); }
-      await tx.systemSetting.upsert({ where: { key: this.key(id) }, create: { key: this.key(id), value: { colors }, updatedByUserId: user.id }, update: { value: { colors }, updatedByUserId: user.id } });
+      const value={...(saved?.value&&typeof saved.value==='object'&&!Array.isArray(saved.value)?saved.value:{}),colors,materials} as Prisma.InputJsonValue;
+      await tx.systemSetting.upsert({ where: { key: this.key(id) }, create: { key: this.key(id), value, updatedByUserId: user.id }, update: { value, updatedByUserId: user.id } });
       await tx.auditLog.create({ data: { userId: user.id, action: 'FABRIC_CATALOG_' + body.action, entity: 'FabricRolls', entityId: id, payload: { warehouseId: user.activeWarehouseId, result: outcome } as Prisma.InputJsonValue } });
       return outcome;
     });

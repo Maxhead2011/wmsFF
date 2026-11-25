@@ -20,6 +20,18 @@ describe('fabric catalog endpoints', () => {
     expect(db.sku.update).not.toHaveBeenCalled();
     expect(db.auditLog.create).toHaveBeenCalledOnce();
   });
+  it('creates a material, preserves colors and reuses its normalized name on a fresh version',async()=>{
+    const stamp=new Date('2026-11-25T10:00:00Z'),value={colors:[{id:'pink',material:'SATIN',name:'Пудровый'}],retained:true};
+    db.systemSetting.findUnique.mockResolvedValue({value,updatedAt:stamp});
+    const first=await service.save('client',{action:'CREATE_MATERIAL',material:'SATIN',name:'Фатин',version:stamp.toISOString()},user);
+    const written=db.systemSetting.upsert.mock.calls[0][0].update.value;
+    expect(written).toMatchObject({colors:value.colors,retained:true,materials:[{name:'Фатин'}]});
+    expect(db.sku.update).not.toHaveBeenCalled();
+    db.systemSetting.findUnique.mockResolvedValue({value:written,updatedAt:stamp});
+    const again=await service.save('client',{action:'CREATE_MATERIAL',material:'SATIN',name:' ФАТИН ',version:stamp.toISOString()},user);
+    expect(again.result).toMatchObject({reused:true,material:(first.result as any).material});
+    expect(db.systemSetting.upsert.mock.calls[1][0].update.value.materials).toHaveLength(1);
+  });
   it('rejects stale catalog versions before any writes', async () => {
     db.systemSetting.findUnique.mockResolvedValue({ updatedAt: new Date('2026-11-09'), value: {} });
     await expect(service.save('client', { action: 'CREATE_COLOR', material: 'SATIN', name: 'Пудровый', version: null }, user)).rejects.toThrow('Каталог изменился');

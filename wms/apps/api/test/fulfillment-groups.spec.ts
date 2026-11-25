@@ -39,6 +39,18 @@ describe('fulfillment model hierarchy',()=>{
   const b=identifyFulfillmentProduct(p('b',{name:'Ткань габардин 10 метров',article:'gab_white_10'}));
   expect(a.modelKey).toBe(b.modelKey);expect(a.colorKey).not.toBe(b.colorKey);expect(b.lengthMetres).toBe(10);
  });
+ it('uses one atlas/satin material, ivory/champagne color and all real cut lengths',()=>{
+  const a=identifyFulfillmentProduct(p('a',{name:'Ткань атлас сатин белый 1 метр',article:'white_1',brand:'WB brand'}));
+  const b=identifyFulfillmentProduct(p('b',{name:'Ткань атлас 50 метров',article:'white_50',brand:null}));
+  expect(a).toMatchObject({kind:'Атлас / сатин',model:'Атлас / сатин',color:'белый',lengthMetres:1});expect(a.modelKey).toBe(b.modelKey);
+  expect(identifyFulfillmentProduct(p('c',{name:'Ткань атлас сатин',article:'ivory_20'}))).toMatchObject({color:'Шампань / айвори',lengthMetres:20});
+  const custom=identifyFulfillmentProduct(p('d',{article:'tulle',marketplacePayload:{fabricRollBinding:{version:1,material:'material-12345678-1234-1234-1234-123456789012',materialName:'Фатин',color:'white',colorName:'Белый',lengthMm:3000}}}));
+  expect(custom).toMatchObject({kind:'Фатин',model:'Фатин',lengthMetres:3});
+  expect(identifyFulfillmentProduct(p('e',{name:'Резинка атласная',article:'white_1'})).lengthMetres).toBeNull();
+  const products=[p('f',{name:'Ткань атлас',article:'white_3'})];
+  const result=groupFulfillment(products,[],[],o,analyzeFulfillment(products,[],[],o).items);
+  expect(result.kind[0].children).toEqual([result.color[0].skuId]);
+ });
  it('does not merge missing articles or unrelated products with a generic title',()=>{
   const a=identifyFulfillmentProduct(p('a',{name:'Костюм',article:null}));
   const b=identifyFulfillmentProduct(p('b',{name:'Костюм',article:null}));

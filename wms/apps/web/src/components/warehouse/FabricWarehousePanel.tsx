@@ -8,13 +8,15 @@ type Color = { id: string; material: string; name: string };
 type Roll = { id: string; code: string; material: string; color: string; remainingMm: number; warehouseId: string };
 type Group = { key: string; material: string; colorName: string; whole: number; open: number; rawMeters: number; rawLiters: number; rolls: Roll[]; ready: { pieces: number; meters: number }[]; fbs: { pieces: number; meters: number }; fbo: { pieces: number; meters: number } };
 type Rolls = { enabled: boolean; version: string | null; groups?: Group[]; history?: { createdAt: string; action: string; payload?: { reason?: string } }[] };
-type Catalog = { version: string | null; colors: Color[]; baseColors: Record<string, string>; skus: { id: string; name: string; internalSku: string; marketplace: string | null; productId: string | null; offerId: string | null; barcodes: string[]; binding: { material: string; color: string; lengthMm: number } | null }[] };
-const MATERIALS: Record<string, string> = { SATIN: 'Атлас', GABARDINE: 'Габардин' };
+type Catalog = { version: string | null; materials?:{id:string;name:string}[];baseMaterials?:Record<string,string>; colors: Color[]; baseColors: Record<string, string>; skus: { id: string; name: string; internalSku: string; marketplace: string | null; productId: string | null; offerId: string | null; barcodes: string[]; binding: { material: string; color: string; lengthMm: number } | null }[] };
+const BASE_MATERIALS: Record<string, string> = { SATIN: 'Атлас / сатин', GABARDINE: 'Габардин' };
 export function FabricWarehousePanel({ session }: { session: AuthSession }) {
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [clientId, setClientId] = useRememberedClientId(session.user.id);
   const [rolls, setRolls] = useState<Rolls | null>(null), [catalog, setCatalog] = useState<Catalog | null>(null);
   const [material, setMaterial] = useState('SATIN'), [color, setColor] = useState('black'), [name, setName] = useState('');
+  const [materialName,setMaterialName]=useState('');
+  const MATERIALS={...(catalog?.baseMaterials??BASE_MATERIALS),...Object.fromEntries((catalog?.materials??[]).map(m=>[m.id,m.name]))};
   const [count, setCount] = useState(1), [skuId, setSkuId] = useState(''), [meters, setMeters] = useState(5);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
   const [rollId, setRollId] = useState(''), [operation, setOperation] = useState('ADJUST'), [delta, setDelta] = useState(0), [reason, setReason] = useState('');
@@ -29,11 +31,11 @@ export function FabricWarehousePanel({ session }: { session: AuthSession }) {
     try { const [r, c] = await Promise.all([request<Rolls>(path, { accessToken: token }), request<Catalog>('/warehouse/fabric-catalog/' + encodeURIComponent(clientId), { accessToken: token })]); if (g === generation.current) { setRolls(r); setCatalog(c); } }
     catch (e) { if (g === generation.current) setError(e instanceof Error ? e.message : String(e)); }
   }
-  useEffect(() => { setRolls(null); setCatalog(null); setSkuId(''); setColor('black'); setMessage(''); pending.current = null; if (clientId) void load(); return () => { generation.current++; }; }, [clientId, token, session.user.activeWarehouseId]);
+  useEffect(() => { setRolls(null); setCatalog(null); setSkuId(''); setMaterial('SATIN');setMaterialName('');setName('');setColor('black'); setMessage(''); pending.current = null; if (clientId) void load(); return () => { generation.current++; }; }, [clientId, token, session.user.activeWarehouseId]);
   async function saveCatalog(action: string) {
     if (!catalog || busy) return; setBusy(true); setError(''); const g = generation.current;
-    try { const result = await request<{ result: { color?: Color; reused?: boolean }; catalog: Catalog }>('/warehouse/fabric-catalog/' + encodeURIComponent(clientId), { accessToken: token, method: 'POST', body: { action, material, name, skuId, colorId: color, lengthMm: Math.round(meters * 1000), version: catalog.version } });
-      if (g !== generation.current) return; setCatalog(result.catalog); if (result.result.color) { setColor(result.result.color.id); setName(''); } setMessage(result.result.reused ? 'Такой цвет уже есть — он выбран.' : action === 'CREATE_COLOR' ? 'Цвет добавлен и выбран для приёмки.' : 'Привязка товара сохранена.'); await load();
+    try { const result = await request<{ result: { material?:{id:string;name:string};color?: Color; reused?: boolean }; catalog: Catalog }>('/warehouse/fabric-catalog/' + encodeURIComponent(clientId), { accessToken: token, method: 'POST', body: { action, material, name:action==='CREATE_MATERIAL'?materialName:name, skuId, colorId: color, lengthMm: Math.round(meters * 1000), version: catalog.version } });
+      if (g !== generation.current) return; setCatalog(result.catalog); if (result.result.color) { setColor(result.result.color.id); setName(''); } if(result.result.material){setMaterial(result.result.material.id);setColor('black');setMaterialName('');} setMessage(action==='CREATE_MATERIAL'?(result.result.reused?'Такая ткань уже есть — она выбрана.':'Ткань добавлена и выбрана для приёмки.'):result.result.reused ? 'Такой цвет уже есть — он выбран.' : action === 'CREATE_COLOR' ? 'Цвет добавлен и выбран для приёмки.' : 'Привязка товара сохранена.'); await load();
     } catch (e) { if (g === generation.current) setError(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   }
   async function saveRoll(body: Record<string, unknown>) {
@@ -71,6 +73,8 @@ export function FabricWarehousePanel({ session }: { session: AuthSession }) {
         <label>Ткань<select disabled={busy} value={material} onChange={e => { setMaterial(e.target.value); setColor('black'); }}>{Object.entries(MATERIALS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
         <label>Цвет<select disabled={busy} value={color} onChange={e => setColor(e.target.value)}>{colors.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <span className="fabric-selected-color"><FabricColorLabel name={colors.find(c => c.id === color)?.name ?? color} /></span></div>
+        {/* FIX: a material is created in the selected client's catalog before any receipt or SKU binding. */}
+        <form onSubmit={e=>{e.preventDefault();void saveCatalog('CREATE_MATERIAL');}}><label>Новый вид ткани<input value={materialName} maxLength={80} disabled={busy} onChange={e=>setMaterialName(e.target.value)} placeholder="Например, Фатин"/></label><button disabled={busy||!materialName.trim()}>Добавить вид ткани</button></form>
         <form onSubmit={e => { e.preventDefault(); void saveCatalog('CREATE_COLOR'); }}><label>Новый цвет<input value={name} maxLength={80} disabled={busy} onChange={e => setName(e.target.value)} placeholder="Например, Пудровый" /></label><button disabled={busy || !name.trim()}>Добавить цвет</button></form>
         <form onSubmit={e => { e.preventDefault(); void saveRoll({ action: 'RECEIVE', material, color, count }); }}><label>Количество рулонов<input type="number" min={1} max={500} step={1} value={count} disabled={busy} onChange={e => setCount(Number(e.target.value))} /></label><button disabled={busy || !Number.isInteger(count) || count < 1 || count > 500}>Принять рулоны</button></form>
         </section>
