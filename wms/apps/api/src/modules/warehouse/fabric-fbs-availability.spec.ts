@@ -4,6 +4,14 @@ import { identifyFabricSku, fabricMaterialAvailability } from './fabric-fbs-avai
 const sku = { id: 'sku', name: 'Ткань сатин', internalSku: 'white_3' };
 const ledger = { rolls: [{ id: 'r', warehouseId: 'w', material: 'SATIN', color: 'white', remainingMm: 10000, cutMm: 0, createdAt: '2026-11-05' }] };
 describe('fabric source availability', () => {
+  it('uses a newly registered material without consuming satin or another warehouse',()=>{
+    const material='material-12345678-1234-1234-1234-123456789012';
+    const custom={...sku,marketplacePayload:{fabricRollBinding:{version:1,material,materialName:'Фатин',color:'white',colorName:'Белый',lengthMm:3000}}};
+    const customLedger={rolls:[{...ledger.rolls[0],material}]};
+    expect(fabricMaterialAvailability(customLedger,custom,'w',2)).toMatchObject({available:true,totalMm:6000,material});
+    expect(fabricMaterialAvailability(ledger,custom,'w',1)).toMatchObject({available:false});
+    expect(fabricMaterialAvailability(customLedger,custom,'other',1)).toMatchObject({available:false});
+  });
   // TEST: new colors use the same continuous-roll and branch guards as legacy articles.
   it('reserves exact metres for a custom color bound to a marketplace SKU', () => {
     const custom = { ...sku, internalSku: 'marketplace-offer', marketplacePayload: { fabricRollBinding: { version: 1, material: 'SATIN', color: 'custom-pink', colorName: 'Пудровый', lengthMm: 5000 } } };

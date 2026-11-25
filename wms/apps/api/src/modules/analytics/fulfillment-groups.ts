@@ -1,4 +1,5 @@
 import {analyzeFulfillment,type ProductFact,type DailyFact,type StockDelta,type FulfillmentOptions} from './fulfillment-math';
+import {readFabricBinding,BASE_FABRIC_MATERIALS} from '../warehouse/fabric-catalog';
 
 type CatalogProduct=ProductFact&{category?:string|null;brand?:string|null;marketplacePayload?:unknown};
 const norm=(s:string)=>s.normalize('NFKC').toLocaleLowerCase('ru').replace(/ё/g,'е').trim().replace(/\s+/g,' ');
@@ -14,13 +15,13 @@ export function identifyFulfillmentProduct(p:CatalogProduct){
  let kind=p.category&&!/^\d+$/.test(p.category)?p.category:'Вид не определён';
  let model=article||'sku:'+p.skuId,color=p.color?norm(p.color):null,size=cleanSize(p.size),lengthMetres:number|null=null,source='Артикул';
  if(!article){warnings.push('GROUP_MODEL_UNKNOWN');source='Отдельная карточка';}
- const payload=p.marketplacePayload as {attributes?:{attributes?:{id:number;values?:{value?:string}[]}[]};fabricRollBinding?:{material?:string;colorName?:string;lengthMm?:number}}|null;
- const binding=payload?.fabricRollBinding;
- const fabric=/^(gab|gabardine|satin|sat)_([^_]+)_(\d+(?:[.,]\d+)?)$/i.exec(article);
- if(binding&&['SATIN','GABARDINE'].includes(binding.material??'')&&Number.isFinite(binding.lengthMm)&&binding.lengthMm!>0){
-  kind='Ткани';model=binding.material==='SATIN'?'Сатин':'Габардин';color=binding.colorName??color;lengthMetres=binding.lengthMm!/1000;size=lengthMetres+' м';source='Привязка ткани';
- }else if(fabric&&/(ткан|габардин|сатин)/.test(name)){
-  kind='Ткани';model=/^gab/.test(fabric[1])?'Габардин':'Сатин';color=colorToken(fabric[2])??fabric[2];lengthMetres=Number(fabric[3].replace(',','.'));size=lengthMetres+' м';source='Артикул ткани';
+ const binding=readFabricBinding(p.marketplacePayload);
+ const fabric=/^(?:(gab|gabardine|satin|sat|atlas)_)?(black|white|green|red|ivory|blue)_(1|3|5|10|20|30|50)(?:-0)?$/i.exec(article);
+ const fabricColor=(value:string)=>/^(ivory|айвори|шампань|айвори\s*\/\s*шампань|шампань\s*\/\s*айвори)$/i.test(value)?'Шампань / айвори':colorToken(value)??value;
+ if(binding){
+  kind=model=BASE_FABRIC_MATERIALS[binding.material]??binding.materialName!;color=fabricColor(binding.colorName);lengthMetres=binding.lengthMm/1000;size=lengthMetres+' м';source='Привязка ткани';warnings.splice(0);
+ }else if(fabric&&/ткань/.test(name)&&(/габардин|сатин|атлас/.test(name)||!!fabric[1])){
+  kind=model=fabric[1]?.startsWith('gab')?'Габардин':'Атлас / сатин';color=fabricColor(fabric[2]);lengthMetres=Number(fabric[3]);size=lengthMetres+' м';source='Артикул ткани';
  }else{
   const slash=article.split('/');
   if(slash.length===4&&garmentKinds[slash[0]]&&slash[1]&&slash[2]&&/^\d{2}(?:\d{2}|-\d{2})?$/.test(slash[3])){
@@ -51,7 +52,7 @@ export function identifyFulfillmentProduct(p:CatalogProduct){
   }
  }
  if(kind==='Костюмы спортивные'||kind==='Спортивные костюмы')kind='Костюмы';
- const kindKey=norm(kind),modelKey=JSON.stringify([kindKey,norm(p.brand??''),norm(model)]);
+ const kindKey=norm(kind),modelKey=JSON.stringify([kindKey,lengthMetres!==null?'':norm(p.brand??''),norm(model)]);
  if(/^\d+$/.test(model)||model.startsWith('sku:'))model=p.name;
  // Unknown color/size stays separate per SKU instead of inventing an interchangeable variant.
  const colorKey=JSON.stringify([modelKey,color?norm(color):'unknown:'+p.skuId]);
@@ -88,6 +89,7 @@ export function groupFulfillment(products:CatalogProduct[],daily:DailyFact[],del
    const members=groups.get(p.skuId)!,children=members.map(m=>itemById.get(m.skuId)!),sum=(f:'recommendedUnits'|'toReplenish'|'surplusUnits'|'freeUnits')=>children.reduce((n,x)=>n+(x[f]??0),0);
    const known=children.filter(x=>x.recommendedUnits!==null).length,allKnown=known===members.length;
    let next:typeof levels[number]|undefined=levels[levels.indexOf(level)+1];
+   if(level==='kind'&&members.every(m=>identities.get(m.skuId)!.lengthMetres!==null))next='color';
    // FIX: non-sized products do not acquire a fake size level; missing values in mixed groups remain explicit.
    if(next==='color'&&!members.some(m=>identities.get(m.skuId)!.color))next='size';
    if(next==='size'&&!members.some(m=>identities.get(m.skuId)!.size))next=undefined;
