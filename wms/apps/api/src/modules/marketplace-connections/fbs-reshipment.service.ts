@@ -1,4 +1,5 @@
 import type { FbsOrderSelectionDto } from './dto/fbs-order-selection.dto';
+import { existingSupplyPreview, createExistingSupplyReshipment } from './fbs-existing-supply-reshipment';
 import { NO_STOCK_SUPPLY_NAME, stockTransferBlockedReason, type StockTransferPurpose } from './fbs-stock-transfer';
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
@@ -43,7 +44,9 @@ export class FbsReshipmentService {
     requireFbsReshipmentClientAccess(user, clientId);
     this.scopes.requireClientAccess(user, clientId, 'write');
     const warehouseId = user.activeWarehouseId;
-    if (!warehouseId || (user.writableWarehouseIds && !user.writableWarehouseIds.includes(warehouseId))) {
+    // FIX: system administrators have global branch access; an empty explicit list is not a denial for them.
+    const globalAdmin = !user.roleCodes.includes('CLIENT') && user.permissionCodes?.includes('system:admin');
+    if (!warehouseId || (!globalAdmin && user.writableWarehouseIds && !user.writableWarehouseIds.includes(warehouseId))) {
       throw new ForbiddenException('Выберите доступный для работы филиал.');
     }
     const [client, warehouse] = await Promise.all([
@@ -221,6 +224,7 @@ export class FbsReshipmentService {
 
   async preview(dto: PreviewFbsReshipmentDto, user: AuthUser) {
     const warehouseId = await this.authorize(dto.clientId, user);
+    if (dto.existingSupplyId) { this.selection(dto); return existingSupplyPreview(this.prisma, this.connections, dto, warehouseId, user); }
     const plan = await this.plan(dto, warehouseId, user);
     return { orders: plan.rows.map(row => row.view), orderCount: plan.rows.length,
       additionalUnits: dto.mode === 'NEW_ITEM' ? plan.rows.filter(row => row.task.status === 'COMPLETED').length : 0, previewToken: plan.previewToken,
@@ -231,6 +235,11 @@ export class FbsReshipmentService {
   async create(dto: CreateFbsReshipmentDto, user: AuthUser) {
     const warehouseId = await this.authorize(dto.clientId, user); this.selection(dto);
     if (dto.confirm !== true || !/^[a-f0-9]{64}$/.test(dto.previewToken)) throw new BadRequestException('Подтвердите предварительную проверку и выбранный способ.');
+    if (dto.existingSupplyId) {
+      const result = await createExistingSupplyReshipment(this.prisma, this.connections, dto, warehouseId, user);
+      this.connections.invalidateRepeatAssemblyCache(dto.clientId);
+      return result;
+    }
     // FIX: resolve a lost response before re-reading now-changed WB/task state.
     const previous = await this.prisma.fbsReshipmentRun.findFirst({ where: { clientId: dto.clientId, warehouseId,
       previewToken: dto.previewToken, mode: dto.mode } });

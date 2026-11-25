@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, Equals, IsArray, IsIn, IsString, Length, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, Equals, IsArray, IsIn, IsOptional, IsString, Length, ValidateNested } from 'class-validator';
 import type { ReshipmentMode } from '../fbs-reshipment';
 
 export class CheckFbsReshipmentDto {
@@ -10,6 +10,8 @@ class ReshipmentOrderDto {
   @IsString() @Length(1, 100) connectionId!: string;
 }
 export class PreviewFbsReshipmentDto extends CheckFbsReshipmentDto {
+  // FIX: import a verified existing WB supply without creating or moving anything in WB.
+  @IsOptional() @IsString() @Length(1, 100) existingSupplyId?: string;
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100)
   @ValidateNested({ each: true }) @Type(() => ReshipmentOrderDto) orders!: ReshipmentOrderDto[];
   @IsIn(['SAME_ITEM', 'NEW_ITEM']) mode!: ReshipmentMode;
