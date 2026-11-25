@@ -11,6 +11,7 @@ import { isPvzLossRequest, isPvzLossTask, pvzLossEnabled, pvzLossOrderKeys, pvzO
 import { PDFDocument } from 'pdf-lib';
 import { listPostPick, queuePostPick, SOS_POST_PICK } from './sos-post-pick';
 import { wbAllLabels } from './wb-all-labels';
+import { ozonLabelOrders } from './ozon-label-orders';
 import { currentOzonLabel } from './ozon-current-label';
 import { rememberRibbon } from '../../common/stock/fbs-ribbon-evidence';
 import { fbsActionStatusEnabled } from '../../common/stock/fbs-request-auto-status';
@@ -21767,6 +21768,9 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       return { orders: orders as FbsLabelOrder[] };
     }
     if (process.env.WMS_FBS_UNMARKED_PAIRED_LABELS_ENABLED === 'true') {
+      // FIX: Ozon label reads must not enter the full client order/history refresh.
+      const ozonOrders = await ozonLabelOrders(this.prisma, clientId, selections, marketplaceJson);
+      if (ozonOrders) return { orders: ozonOrders as FbsLabelOrder[] };
       const orders = await wbLabelOrders(this.prisma, clientId, selections, fetchWildberriesFbsHistory, marketplaceJson);
       if (orders) return { orders: orders as FbsLabelOrder[] };
     }
