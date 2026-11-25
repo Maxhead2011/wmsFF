@@ -1,0 +1,86 @@
+{
+  "published": true,
+  "pr": 1097,
+  "mergeCommitSha": "2bbdd94de3e77c33150100f5443962c7ce4f939d",
+  "head": "a4563c5c54fb9902cba68e4d8706dca392e40c75",
+  "images": {
+    "api": "sha256:4cd279b98a8117401b642b3430962a48aae9c22da7ea55fed0cef22fbc8e8b0f",
+    "web": "sha256:7c7c744f8d08cfa75b74f187c15644d6912e32e167feb33b7aa857c64667dc39"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 815,
+  "webFiles": 3381,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "operation": {
+    "passed": true,
+    "runId": "3fe56085-6350-49e1-92a5-1a6b779bacd7",
+    "status": "CREATED",
+    "mode": "NEW_ITEM",
+    "supplyId": "WB-GI-320629696",
+    "requestId": "ae98dc8a-ad88-4f08-860a-e0b36c26dcd1",
+    "requestNumber": 3409,
+    "requestStatus": "IN_WORK",
+    "orders": 5,
+    "units": 5,
+    "tasksWaiting": 5,
+    "oldChargesUnchanged": true,
+    "oldInvoicesUnchanged": true,
+    "sourceItemsUnchanged": true,
+    "newCharges": 0,
+    "newInvoices": 0,
+    "idempotenceVerified": true,
+    "noScansOrReservations": true
+  },
+  "compiledPreview": {
+    "passed": true,
+    "readOnly": true,
+    "preview": {
+      "previewToken": "1d95848a69215bf4b2593975a6d95e59698ef55de3e8913e2cf550f2354f6daf",
+      "orderCount": 5,
+      "additionalUnits": 5,
+      "supplyId": "WB-GI-320629696",
+      "orders": [
+        {
+          "id": "6317866670",
+          "connectionId": "cffe0d2d-accc-4edc-aa56-aef92e1a7b54",
+          "sourceRequestNumber": 3229,
+          "skuId": "d89fb7e0-df1e-4238-a49f-e4667409062e"
+        },
+        {
+          "id": "6317973454",
+          "connectionId": "cffe0d2d-accc-4edc-aa56-aef92e1a7b54",
+          "sourceRequestNumber": 3229,
+          "skuId": "444f5eda-c6e0-4657-baaa-caeef48ed337"
+        },
+        {
+          "id": "6318076875",
+          "connectionId": "cffe0d2d-accc-4edc-aa56-aef92e1a7b54",
+          "sourceRequestNumber": 3229,
+          "skuId": "984df8e0-3505-4076-9a4d-02b1780c61ee"
+        },
+        {
+          "id": "6333591339",
+          "connectionId": "cffe0d2d-accc-4edc-aa56-aef92e1a7b54",
+          "sourceRequestNumber": 3372,
+          "skuId": "d271188b-ac8c-4398-a929-fec91212c8a2"
+        },
+        {
+          "id": "6351037069",
+          "connectionId": "cffe0d2d-accc-4edc-aa56-aef92e1a7b54",
+          "sourceRequestNumber": 3358,
+          "skuId": "afb9b790-ca4a-452a-8f1a-2fa7f991bad2"
+        }
+      ],
+      "warning": "Новая физическая сборка без прежних сканов ТСД. Списание только при сканировании; прежние заявки и начисления сохраняются."
+    }
+  },
+  "apiTests": 4987,
+  "apiTypecheck": "14 pre-existing errors outside changed logic",
+  "baseRelease": 1094,
+  "authorizedNewAssemblyCreated": true
+}
