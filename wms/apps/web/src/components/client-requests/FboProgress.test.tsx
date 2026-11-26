@@ -6,8 +6,8 @@ const plan={needed:1092,picked:1092,packed:721,lines:[],route:[],boxes:[],wholeB
 // TEST: summary history can be empty while server totals remain visible beneath both meters.
 it('shows all four counts without inferring them from paginated history',()=>{
  const html=renderToStaticMarkup(<FboProgress plan={plan as any}/>);
- for(const text of ['Осталось упаковать целых коробов: 8','Отобрано коробов: 24','Упаковано коробов: 12','Частичный отбор — 92 ед.','Целыми коробами — 20 коробов'])expect(html).toContain(text);
- expect(html.indexOf('Отобрано коробов: 24')).toBeGreaterThan(html.indexOf('</meter>'));
+ for(const text of ['Осталось упаковать целых коробов: 8','Коробов-источников использовано: 24','Упаковано коробов: 12','Частичный отбор — 92 ед.','Целыми коробами — 20 коробов'])expect(html).toContain(text);
+ expect(html.indexOf('Коробов-источников использовано: 24')).toBeGreaterThan(html.indexOf('</meter>'));
 });
 it('keeps legacy installations unchanged when statistics are absent',()=>{
  const html=renderToStaticMarkup(<FboProgress plan={{...plan,boxStatistics:undefined} as any}/>);expect(html).not.toContain('Отобрано коробов:');expect(html).not.toContain('Частичный отбор');
