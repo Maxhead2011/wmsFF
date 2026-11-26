@@ -1,6 +1,12 @@
 import {it,expect,vi} from 'vitest';
 import {fboBoxStatistics} from '../src/modules/tsd/fbo-box-statistics';
 import {onlinePlanView} from '../src/modules/tsd/online-plan-view';
+// TEST: completed picking includes packed units, excludes returned units and deduplicates whole boxes.
+it('splits completed picking into partial units and whole physical boxes',()=>{
+ const units=[{state:'PICKED',sourceBoxCode:'A',wholeBox:true},{state:'PACKED',sourceBoxCode:'A',wholeBox:true},{state:'PICKED',sourceBoxCode:'B',wholeBox:false},{state:'PACKED',sourceBoxCode:'B',wholeBox:false},{state:'PICKED',sourceBoxCode:'',wholeBox:false},{state:'RETURNED',sourceBoxCode:'C',wholeBox:true}];
+ expect(fboBoxStatistics(units,[],[])).toMatchObject({pickedPartialUnits:3,pickedWholeBoxes:1,pickedWholeUnits:2,pickedBoxes:2});
+ expect(fboBoxStatistics([],[],[])).toMatchObject({pickedPartialUnits:0,pickedWholeBoxes:0,pickedWholeUnits:0});
+});
 // TEST: remaining picking is route work only, never previously picked/packed boxes.
 it('separates remaining partial units from whole-box picking and loose storage',()=>{
  const units=[{state:'PICKED',sourceBoxCode:'DONE',wholeBox:true},{state:'PACKED',sourceBoxCode:'OLD',wholeBox:false}];
@@ -13,12 +19,12 @@ it('counts distinct sources, closed nonempty parcels and completed plus remainin
  const units=[{state:'PACKED',sourceBoxCode:'A',wholeBox:true,targetBoxId:'X'},{state:'PACKED',sourceBoxCode:'A',wholeBox:true,targetBoxId:'X'},{state:'PICKED',sourceBoxCode:'B',wholeBox:false},{state:'RETURNED',sourceBoxCode:'C',wholeBox:true},{state:'PACKED',sourceBoxCode:'B',wholeBox:false,targetBoxId:'Y'}];
  const route=[{boxCode:'D',wholeBox:true,tasks:[{quantity:20}]},{boxCode:'E',wholeBox:false,tasks:[{quantity:3},{quantity:2}]}];
  const boxes=[{boxId:'X',closedAt:new Date()},{boxId:'Y',closedAt:null},{boxId:'EMPTY',closedAt:new Date()}];
- expect(fboBoxStatistics(units,route,boxes)).toEqual({remainingWholeBoxes:0,pickedBoxes:2,packedBoxes:1,partialUnits:7,wholeBoxes:2,remainingPartialPickUnits:5,remainingWholePickBoxes:1,remainingWholePickUnits:20});
- expect(fboBoxStatistics(units,[],boxes)).toEqual({remainingWholeBoxes:0,pickedBoxes:2,packedBoxes:1,partialUnits:2,wholeBoxes:1,remainingPartialPickUnits:0,remainingWholePickBoxes:0,remainingWholePickUnits:0});
+ expect(fboBoxStatistics(units,route,boxes)).toEqual({remainingWholeBoxes:0,pickedBoxes:2,packedBoxes:1,partialUnits:7,wholeBoxes:2,remainingPartialPickUnits:5,remainingWholePickBoxes:1,remainingWholePickUnits:20,pickedPartialUnits:2,pickedWholeBoxes:1,pickedWholeUnits:2});
+ expect(fboBoxStatistics(units,[],boxes)).toEqual({remainingWholeBoxes:0,pickedBoxes:2,packedBoxes:1,partialUnits:2,wholeBoxes:1,remainingPartialPickUnits:0,remainingWholePickBoxes:0,remainingWholePickUnits:0,pickedPartialUnits:2,pickedWholeBoxes:1,pickedWholeUnits:2});
 });
 it('retains totals in summary and excludes loose storage from box count',()=>{
  const boxStatistics=fboBoxStatistics([{state:'PICKED',sourceBoxCode:'',wholeBox:false}],[],[],4);
- expect(boxStatistics).toEqual({remainingWholeBoxes:0,pickedBoxes:0,packedBoxes:0,partialUnits:5,wholeBoxes:0,remainingPartialPickUnits:4,remainingWholePickBoxes:0,remainingWholePickUnits:0});
+ expect(boxStatistics).toEqual({remainingWholeBoxes:0,pickedBoxes:0,packedBoxes:0,partialUnits:5,wholeBoxes:0,remainingPartialPickUnits:4,remainingWholePickBoxes:0,remainingWholePickUnits:0,pickedPartialUnits:1,pickedWholeBoxes:0,pickedWholeUnits:0});
  vi.stubEnv('WMS_MENU_READS_ENABLED','true');expect(onlinePlanView({boxStatistics,pickedUnits:[{}]},'summary')).toMatchObject({boxStatistics,pickedUnits:[]});vi.unstubAllEnvs();
 });
 

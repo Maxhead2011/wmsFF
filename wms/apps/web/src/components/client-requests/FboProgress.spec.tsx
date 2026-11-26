@@ -9,6 +9,16 @@ import {buildFboNavigation,workspaceNav} from '../../lib/workspaces';
 import type {AuthSession,ClientRequestSummary,FboPlan} from '../../lib/api';
 
 describe('FBO live execution and navigation',()=>{
+ // TEST: a partially emptied source box must never be labelled as a whole-box pick.
+ it('breaks down picked progress and labels all source boxes accurately',()=>{
+  const plan={needed:100,picked:55,packed:20,route:[],boxes:[],lines:[],boxStatistics:{partialUnits:60,wholeBoxes:5,pickedBoxes:12,packedBoxes:1,pickedPartialUnits:15,pickedWholeBoxes:2,pickedWholeUnits:40}} as unknown as FboPlan;
+  const html=renderToStaticMarkup(<FboProgress plan={plan}/>);
+  expect(html).toContain('Частично отобрано — 15 шт.');
+  expect(html).toContain('Целыми коробами отобрано — 2 кор. · 40 шт.');
+  expect(html).toContain('Коробов-источников использовано: 12');
+  expect(html).not.toContain('Отобрано коробов:');
+  expect(html).toContain('55%');
+ });
  // TEST: remaining work distinguishes piece picks, whole boxes and unassigned stock.
  it('shows remaining partial and whole-box picking without counting completed work',()=>{
   const plan={needed:100,picked:55,packed:20,route:[],boxes:[],lines:[],boxStatistics:{partialUnits:60,wholeBoxes:5,pickedBoxes:3,packedBoxes:1,remainingPartialPickUnits:10,remainingWholePickBoxes:2,remainingWholePickUnits:30}} as unknown as FboPlan;
