@@ -1,0 +1,51 @@
+{
+  "pr": 1099,
+  "api": {
+    "image": "sha256:ba9b7d855025549dff4da59a8ac6204fec3b9c8c94e085b2d03eec80c4728db3",
+    "changes": {
+      "modules/tsd/fbo-box-statistics.js": "82cbafdcbfd08d12e0708dbca825bbc4154e385ff94057f329062295f83a1cc7"
+    }
+  },
+  "web": {
+    "image": "sha256:4fb1562faa9c5030466a4f9d289c483665dc70c381af57e92c36b3a15c485e50",
+    "changes": {
+      "index.html": "f47cef1ae308c7a293b397f99dfc11139903c581aaa4eaac5237dbd15cf4e3e8",
+      "assets/fbo-pick-breakdown-20261126.js": "0f4fa27e92d71ea6b5840302544c4e229426ff548e93e06f68f6a853c416403f"
+    }
+  },
+  "health": true,
+  "approvedFlags": {},
+  "otherContainersUnchanged": true,
+  "tests": {
+    "apiPassed": 4989,
+    "apiSkipped": 203,
+    "webPassedFullRun": 696,
+    "webCaptionRetryPassed": 11,
+    "webSkipped": 2,
+    "webTypes": true
+  },
+  "request3303": {
+    "noWrites": true,
+    "request": 3303,
+    "needed": 3159,
+    "picked": 2354,
+    "remaining": 805,
+    "stats": {
+      "remainingWholeBoxes": 248,
+      "pickedBoxes": 405,
+      "packedBoxes": 41,
+      "partialUnits": 1126,
+      "wholeBoxes": 275,
+      "remainingPartialPickUnits": 641,
+      "remainingWholePickBoxes": 27,
+      "remainingWholePickUnits": 164,
+      "pickedPartialUnits": 485,
+      "pickedWholeBoxes": 248,
+      "pickedWholeUnits": 1869
+    },
+    "unassigned": 0
+  },
+  "publicIndexVerified": true,
+  "publicBrowser": true,
+  "sourceParityVerified": false
+}
