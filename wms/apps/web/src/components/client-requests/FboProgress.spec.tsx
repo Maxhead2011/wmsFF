@@ -9,6 +9,16 @@ import {buildFboNavigation,workspaceNav} from '../../lib/workspaces';
 import type {AuthSession,ClientRequestSummary,FboPlan} from '../../lib/api';
 
 describe('FBO live execution and navigation',()=>{
+ // TEST: remaining work distinguishes piece picks, whole boxes and unassigned stock.
+ it('shows remaining partial and whole-box picking without counting completed work',()=>{
+  const plan={needed:100,picked:55,packed:20,route:[],boxes:[],lines:[],boxStatistics:{partialUnits:60,wholeBoxes:5,pickedBoxes:3,packedBoxes:1,remainingPartialPickUnits:10,remainingWholePickBoxes:2,remainingWholePickUnits:30}} as unknown as FboPlan;
+  const html=renderToStaticMarkup(<FboProgress plan={plan}/>);
+  const card=html.match(/<article class="is-warning">(.*?)<\/article>/)?.[1]??'';
+  expect(card).toContain('Частичный отбор — 10 шт.');
+  expect(card).toContain('Целыми коробами — 2 кор. · 30 шт.');
+  expect(card).toContain('Без маршрута отбора — 5 шт.');
+  expect(card).not.toContain('60');
+ });
  // TEST: pending accepted stock is not labelled as missing in the online monitor.
  it('explains waiting for placement without reporting a missing box',()=>{
   const plan={needed:3,picked:0,packed:0,pendingPlacementQuantity:3,pendingLocations:[{skuId:'s',boxCode:'FFL_TEST_1',pallet:'',zone:'',quantity:3}],route:[],boxes:[],lines:[{id:'l',skuId:'s',name:'Suit',needed:3,picked:0,packed:0,remaining:3,pendingPlacementQuantity:3}]} as unknown as FboPlan;

@@ -12,6 +12,10 @@ export function FboProgress({plan,paused=false,accessToken}:{plan:FboPlan;paused
   const lines=plan.lines.filter(l=>(`${l.name} ${l.article??''} ${l.size??''} ${l.barcode}`).toLocaleLowerCase('ru-RU').includes(q))
     .filter(l=>tab==='remaining'?l.remaining>0:tab==='picked'?l.picked>0:tab==='packed'?l.packed>0:true);
   const percentage=(value:number)=>plan.needed?Math.min(100,Math.round(value/plan.needed*100)):0;
+  // FIX: do not derive remaining picking from totals that include completed work.
+  const stats=plan.boxStatistics,remaining=Math.max(0,plan.needed-plan.picked);
+  const hasPickingBreakdown=stats?.remainingPartialPickUnits!==undefined&&stats.remainingWholePickBoxes!==undefined&&stats.remainingWholePickUnits!==undefined;
+  const unassigned=hasPickingBreakdown?Math.max(0,remaining-stats.remainingPartialPickUnits!-stats.remainingWholePickUnits!):0;
   return <section className="fbo-progress" aria-label="Онлайн-выполнение FBO">
     <p className="inline-status">Онлайн-выполнение · {paused?'Автообновление приостановлено на время сканирования или повтора операции':'Обновление каждые 5 секунд'}{plan.observedAt?` · ${time(plan.observedAt)} МСК`:''}</p>
     {/* FIX: placement waiting is separate from a physical shortage. */}
@@ -20,7 +24,7 @@ export function FboProgress({plan,paused=false,accessToken}:{plan:FboPlan;paused
       <article><span>Нужно</span><strong>{plan.needed}</strong>{plan.boxStatistics&&<div className="fbo-picking-breakdown"><span>Частичный отбор — {plan.boxStatistics.partialUnits} ед.</span><span>Целыми коробами — {plan.boxStatistics.wholeBoxes} коробов</span></div>}</article>
       <article className="is-done"><span>Отобрано</span><strong>{plan.picked}</strong></article>
       <article className="is-done"><span>Упаковано</span><strong>{plan.packed}</strong></article>
-      <article className="is-warning"><span>Осталось отобрать</span><strong>{Math.max(0,plan.needed-plan.picked)}</strong></article>
+      <article className="is-warning"><span>Осталось отобрать</span><strong>{remaining}</strong>{hasPickingBreakdown&&<div className="fbo-picking-breakdown"><span>Частичный отбор — {stats!.remainingPartialPickUnits} шт.</span><span>Целыми коробами — {stats!.remainingWholePickBoxes} кор. · {stats!.remainingWholePickUnits} шт.</span>{unassigned>0&&<span>Без маршрута отбора — {unassigned} шт.</span>}</div>}</article>
     </div>
     <div className="fbo-progress-bars">{[['Отбор',plan.picked],['Упаковка',plan.packed]].map(([label,count])=><section className="online-execution-progress" key={label}><div><strong>{percentage(Number(count))}%</strong><span>{label}: {count} из {plan.needed}</span></div><meter aria-label={String(label)} min={0} max={100} value={percentage(Number(count))}/>{plan.boxStatistics&&<p className="fbo-box-count">{label==='Отбор'?`Отобрано коробов: ${plan.boxStatistics.pickedBoxes}`:`Упаковано коробов: ${plan.boxStatistics.packedBoxes}`}</p>}{label==='Упаковка'&&plan.boxStatistics?.remainingWholeBoxes!==undefined&&<p className="fbo-box-count">Осталось упаковать целых коробов: {plan.boxStatistics.remainingWholeBoxes}</p>}</section>)}</div>
     <div className="fbo-progress-filters"><label>Поиск товара, артикула или ШК<input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Название, размер, штрихкод"/></label><div role="group" aria-label="Фильтр выполнения">{[['all','Все позиции'],['remaining','Не отобрано'],['picked','Отобрано'],['packed','Упаковано']].map(([value,label])=><button className="icon-text-button" key={value} aria-pressed={tab===value} onClick={()=>setTab(value)}>{label}</button>)}</div></div>
