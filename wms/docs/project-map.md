@@ -1040,3 +1040,5 @@ PostgreSQL: fbo-two-stage.integration.spec.ts проверяет заверше�
 Ledger: payroll-advances.ts и методы PayrollService. UI: PayrollAdvances, PayrollManagement, PayrollHistory. Миграция: 20261124170000_payroll_advances. Четыре маршрута учтены в каталоге API. [Описание](payroll-advances.md).
 
 Payroll advances published via PR1070; own-only flag enabled and new baseline verified. PayrollService paid-shift recovery preserves issued cash and credits the next payout. See [release proof](releases/payroll-advances-1070.json).
+
+WB FBS disable verification (candidate for our WMS): [runtime preparation and retry regression](../scripts/releases/wb-disable-zero/).

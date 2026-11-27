@@ -1,3 +1,4 @@
+import { saveWbPublicationChoices, needsDisableVerification } from './wb-disable-verification';
 import {closedSupplyBillingKeys} from './wb-closed-supply-proof';
 import {prepareOzonPrint, decorateOzonPrintPrepared, hasOzonPrintPreparation} from './ozon-print-preparation';
 import { activeRule } from '../../common/client-fulfillment-policy';
@@ -1285,6 +1286,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           : Math.min(calculated.targetAmount, wbAmount);
         const amounts = { ...calculated, targetAmount };
         const needsSync =
+          (!publication.enabled && (wbAmounts.get(ids.chrtId) ?? 0) > 0) ||
           publication.lastSyncedAmount !== amounts.targetAmount ||
           Boolean(publication.lastError) ||
           !publication.lastSyncedAt ||
@@ -1523,7 +1525,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId,
           connectionId,
           skuId: { in: enabledSkuIds },
-          warehouseId: { in: desiredWarehouseIds },
+          warehouseId: { in: desiredWarehouseIds, not: primaryWarehouseId },
           enabled: false,
         },
         data: { enabled: true },
@@ -1535,7 +1537,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           clientId,
           connectionId,
           skuId: { in: disabledSkuIds },
-          warehouseId: { in: desiredWarehouseIds },
+          warehouseId: { in: desiredWarehouseIds, not: primaryWarehouseId },
           enabled: true,
         },
         data: { enabled: false },
@@ -1562,7 +1564,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         );
       }
       const needsSync =
-        publication.lastSyncedAmount !== row.amount ||
+        needsDisableVerification(row.enabled) ||
+          publication.lastSyncedAmount !== row.amount ||
         Boolean(publication.lastError) ||
         !publication.lastSyncedAt ||
         Date.now() - publication.lastSyncedAt.getTime() >= FBS_AUTO_RECONCILE_INTERVAL_MS;
@@ -6905,7 +6908,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         skuId: sku.id,
       },
     };
-    const publication = await this.prisma.fbsStockPublication.upsert({
+    const [publication] = await saveWbPublicationChoices(this.prisma, [this.prisma.fbsStockPublication.upsert({
       where: publicationKey,
       create: {
         clientId,
@@ -6927,7 +6930,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
         lastWmsAmount: quantity.sellable,
         lastError: null,
       },
-    });
+    })], clientId, [sku.id], dto.enabled, false);
     const stockPlan = await this.calculateFbsRelabelStockPlan(
       clientId,
       executionWarehouseId,
@@ -7235,7 +7238,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // Persist the choice before the remote call so the status remains visible
     // even if WB is temporarily unavailable.  lastError is cleared on a new
     // explicit choice and is filled below if WB rejects a batch.
-    const publications = await this.prisma.$transaction(
+    const publications = await saveWbPublicationChoices(this.prisma,
       prepared.map((item) =>
         this.prisma.fbsStockPublication.upsert({
           where: {
@@ -7263,6 +7266,7 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
           },
         }),
       ),
+      clientId, prepared.map(item => item.sku.id), dto.enabled, true,
     );
 
     const publicationBySku = new Map(publications.map((publication) => [publication.skuId, publication]));
