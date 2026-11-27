@@ -1,3 +1,5 @@
+Published PR1111: WB FBS disable queues reconciliation. Verified API baseline 2026-11-28-wb-disable-zero.
+
 Published PR1109: LOGOFF server-choice 276, pallet placement scoped to active branch clients. Moscow server verification returned 16 clients and excluded 26 archived records. [APK verification](releases/tsd-placement-276-candidate.json). API baseline 2026-11-27-tsd-placement-276.
 
 Published 27.11.2026 PR1107: [TSD275 OEM silent update](tsd-managed-update.md), Urovo and HT330 hardware verification,372 Android tests. Public server-choice275; standard270 and all container images unchanged. [Release proof](releases/tsd-managed-update-published.json).
