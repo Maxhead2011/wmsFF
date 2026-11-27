@@ -1,0 +1,10 @@
+{
+  "packageId": "pro.logoff.wms.tsd.servers",
+  "versionCode": 276,
+  "versionName": "0.1.276-placement-clients",
+  "sha256": "5a79aabdce44b50368c264b408d6f55ec57bd672dace8e15b2c769312f3c10ce",
+  "size": 6071321,
+  "baselineSha256": "b66ead95d9d738377503f2d49ec92c1c983c40b504a27b2beb91a8cfc155ac7b",
+  "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+  "resourcesPreserved": true
+}

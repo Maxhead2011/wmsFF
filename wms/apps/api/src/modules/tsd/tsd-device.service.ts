@@ -229,14 +229,20 @@ export class TsdDeviceService {
     };
   }
 
-  async listClientsForDevice(user: AuthUser) {
+  async listClientsForDevice(user: AuthUser, placement = false) {
     await this.touchActiveDevice(user.deviceId);
+    // FIX: a placement session without a selected warehouse has no eligible clients.
+    if (placement && !user.activeWarehouseId) return [];
     const clientFilter = this.clientScopes.resolveClientFilter(user);
 
     const clients = await this.prisma.client.findMany({
       where: {
         ...(clientFilter === undefined ? {} : { id: clientFilter }),
-        status: { not: ClientStatus.ARCHIVED },
+        status: placement ? ClientStatus.ACTIVE : { not: ClientStatus.ARCHIVED },
+        ...(placement ? {
+          isDemo: !!user.isDemo,
+          warehouseLinks: { some: { warehouseId: user.activeWarehouseId!, status: 'ACTIVE' } },
+        } : {}),
       },
       orderBy: [{ name: 'asc' }, { code: 'asc' }],
       select: {

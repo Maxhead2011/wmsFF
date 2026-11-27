@@ -123,6 +123,9 @@ public interface WmsApi {
         @Body TsdSyncRequest request
     );
 
+    @GET("api/v1/tsd/placement/clients")
+    Call<List<TsdClientSummary>> listPlacementClients(@Header("Authorization") String authorization);
+
     @GET("api/v1/tsd/clients")
     Call<List<TsdClientSummary>> listClients(@Header("Authorization") String authorization);
 

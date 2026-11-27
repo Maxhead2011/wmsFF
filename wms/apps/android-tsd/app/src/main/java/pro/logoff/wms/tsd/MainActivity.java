@@ -235,6 +235,8 @@ public class MainActivity extends Activity {
     private SkuSortingScanState skuSortingState;
     private boolean skuSortingAudit;
     private String skuSortingPallet = "";
+    private final List<TsdClientSummary> palletClients = new ArrayList<>();
+    private int palletClientLoad;
     private String storagePalletClientId = "";
     private String selectedFbsCargoPlanId = "";
     private String selectedFbsRequestId = "";
@@ -1587,6 +1589,27 @@ public class MainActivity extends Activity {
         },10000);
     }
 
+    private void loadPalletClients() {
+        final int load = ++palletClientLoad;
+        palletClients.clear();
+        renderStoragePalletAssemblyScreen();
+        TsdSession session = safeSession();
+        if (session == null) return;
+        runBackground(() -> {
+            WmsApi api = WmsApiFactory.create(activeBaseUrl);
+            Response<List<TsdClientSummary>> response = "logoff".equals(BuildConfig.FLAVOR)
+                ? api.listPlacementClients(session.authorizationHeader()).execute()
+                : api.listClients(session.authorizationHeader()).execute();
+            if (!response.isSuccessful()) throw new IOException(inventoryHttpError(response));
+            mainHandler.post(() -> {
+                if (load != palletClientLoad || screen != Screen.STORAGE_PALLET ||
+                    !session.hasSameAccessToken(safeSession())) return;
+                if (response.body() != null) palletClients.addAll(response.body());
+                renderStoragePalletAssemblyScreen();
+            });
+        });
+    }
+
     private void openStoragePalletAssembly() {
         placementActionSequence++;placementActionBusy=false;placementTask=null;receiptPlacementMode=false;placementTasks.clear();
         storagePalletAssembly = null;
@@ -1594,7 +1617,7 @@ public class MainActivity extends Activity {
         storagePalletClientId = "";
         statusMessage = tr("Проверяю открытую паллету…", "Ochiq pallet tekshirilmoqda…");
         screen = Screen.STORAGE_PALLET;
-        renderStoragePalletAssemblyScreen();
+        loadPalletClients();
         TsdSession session = safeSession();
         if (session == null) {
             return;
@@ -1671,7 +1694,7 @@ public class MainActivity extends Activity {
             clientSpinner.setAdapter(clientAdapter);
             clientAdapter.add(tr("Выберите клиента", "Mijozni tanlang"));
             int selected = 0;
-            for (TsdClientSummary client : clients) {
+            for (TsdClientSummary client : palletClients) {
                 clientAdapter.add(client.name + " · " + client.code);
                 if (client.id.equals(storagePalletClientId)) {
                     selected = clientAdapter.getCount() - 1;
@@ -1689,7 +1712,7 @@ public class MainActivity extends Activity {
             });
             root.addView(storagePalletScanInput);
             root.addView(primaryMenuButton(tr("Открыть паллету", "Palletni ochish"), view -> submitStoragePalletScan()));
-            root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadClients(true)));
+            root.addView(secondaryButton(tr("Обновить клиентов", "Mijozlarni yangilash"), view -> loadPalletClients()));
         } else {
             String clientName = pallet.client == null ? "-" : safeText(pallet.client.name);
             String zoneName = pallet.zone == null
@@ -1775,12 +1798,12 @@ public class MainActivity extends Activity {
         request.put("deviceCode", session.deviceCode);
         if (pallet == null) {
             int selected = clientSpinner == null ? 0 : clientSpinner.getSelectedItemPosition();
-            if (placementTask==null && (selected <= 0 || selected > clients.size())) {
+            if (placementTask==null && (selected <= 0 || selected > palletClients.size())) {
                 statusMessage = tr("Выберите клиента паллет-сорта.", "Pallet-sort mijozini tanlang.");
                 renderStoragePalletAssemblyScreen();
                 return;
             }
-            storagePalletClientId = placementTask==null ? clients.get(selected - 1).id : placementTask.clientId;
+            storagePalletClientId = placementTask==null ? palletClients.get(selected - 1).id : placementTask.clientId;
             request.put("clientId", storagePalletClientId);
             request.put("palletCode", code);
         } else {
@@ -10498,6 +10521,8 @@ public class MainActivity extends Activity {
     }
 
     private void refreshClientOptions() {
+        // FIX: late generic client responses must not rewrite the placement selector.
+        if (screen == Screen.STORAGE_PALLET) return;
         if (clientAdapter == null || clientSpinner == null) {
             return;
         }

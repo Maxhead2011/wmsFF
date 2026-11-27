@@ -177,6 +177,13 @@ export class TsdDeviceController {
     return this.storageLocations.deleteTsdPallet(id, user);
   }
 
+  @Get('placement/clients')
+  @ApiBearerAuth()
+  @RequirePermissions('stock:write')
+  listPlacementClients(@CurrentUser() user: AuthUser) {
+    return this.devices.listClientsForDevice(user, true);
+  }
+
   @Get('clients')
   @ApiBearerAuth()
   @RequirePermissions('stock:write')

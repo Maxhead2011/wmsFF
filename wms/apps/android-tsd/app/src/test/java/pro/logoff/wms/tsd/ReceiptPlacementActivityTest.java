@@ -32,6 +32,33 @@ public class ReceiptPlacementActivityTest {
             assertTrue(text(a).contains("Размещено 1 из 2"));
         }
     }
+    // TEST: a late receipt list cannot reintroduce an archived or foreign client.
+    @Test public void placementKeepsItsOwnClientList() throws Exception {
+        try (var controller = Robolectric.buildActivity(MainActivity.class)) {
+            MainActivity a = controller.get();
+            set(a, "executor", new QuietExecutor());
+            set(a, "monitorExecutor", new QuietExecutor());
+            controller.setup();
+            for (String field : Arrays.asList("clients", "palletClients")) {
+                Field list = MainActivity.class.getDeclaredField(field);
+                list.setAccessible(true);
+                TsdClientSummary client = new TsdClientSummary();
+                client.id = field;
+                client.name = field;
+                client.code = "1";
+                ((List<TsdClientSummary>) list.get(a)).add(client);
+            }
+            render(a);
+            Method refresh = MainActivity.class.getDeclaredMethod("refreshClientOptions");
+            refresh.setAccessible(true);
+            refresh.invoke(a);
+            Field field = MainActivity.class.getDeclaredField("clientSpinner");
+            field.setAccessible(true);
+            Spinner spinner = (Spinner) field.get(a);
+            assertEquals(2, spinner.getCount());
+            assertTrue(spinner.getItemAtPosition(1).toString().startsWith("palletClients"));
+        }
+    }
     private void render(MainActivity a)throws Exception{Method m=MainActivity.class.getDeclaredMethod("renderStoragePalletAssemblyScreen");m.setAccessible(true);m.invoke(a);}
     private static void set(Object a,String field,Object value)throws Exception{Field f=MainActivity.class.getDeclaredField(field);f.setAccessible(true);f.set(a,value);}
     private String text(MainActivity a){return walk(a.getWindow().getDecorView());}
