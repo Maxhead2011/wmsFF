@@ -333,7 +333,7 @@ public class MainActivity extends Activity {
                 if(outbox.counts().pending!=0 || pendingUpdateScans()){
                     mainHandler.post(()->{appUpdateBusy=false;releaseUpdateBarrier();showUpdateStatus("Обновление скачано. Установка ожидает подтверждения незавершённых операций или приёмки.",false);});return;
                 }
-                mainHandler.post(()->{
+                ManagedApkInstaller.afterBarrierFocus(mainHandler,()->{
                     if(!idleUpdateState() || updateBarrier==null || !updateBarrier.isShowing() || !updateBarrier.getWindow().getDecorView().hasWindowFocus()){
                         releaseUpdateBarrier();appUpdateBusy=false;return;
                     }
@@ -11757,7 +11757,14 @@ public class MainActivity extends Activity {
         return result.toString();
     }
 
+    // FIX: OEM installer reports failures without retrying an ambiguous installation.
+    void managedUpdateStatus(String message, boolean failed) {
+        if(failed){appUpdateBusy=false;releaseUpdateBarrier();}
+        showUpdateStatus(message, failed);
+    }
+
     private void installUpdateApk(File apk) throws Exception {
+        if (idleUpdateEnabled() && ManagedApkInstaller.tryInstall(this, apk)) return;
         PackageInstaller installer = getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         if(idleUpdateEnabled() && Build.VERSION.SDK_INT>=31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);

@@ -1,0 +1,20 @@
+{
+  "model": "DT40",
+  "fromVersion": 272,
+  "toVersion": 273,
+  "normalIdlePath": true,
+  "systemConfirmation": false,
+  "preservedEntries": 140,
+  "queues": [
+    {
+      "status": "REJECTED",
+      "count": 75
+    },
+    {
+      "status": "SYNCED",
+      "count": 4394
+    }
+  ],
+  "guardVerified": true,
+  "dataPreserved": true
+}

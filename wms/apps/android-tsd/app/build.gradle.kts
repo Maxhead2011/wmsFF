@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 271 // FIX: durable checkpoint permits safe idle upgrade.
-            versionName = "0.1.271-idle-checkpoint"
+            versionCode = 275 // FIX: durable checkpoint permits safe idle upgrade.
+            versionName = "0.1.275-managed-update"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -97,6 +97,7 @@ android {
 }
 
 dependencies {
+    implementation(files("libs/unitech-appctrl-aidl-1.2.25.jar")) // FIX: official OEM IPC, only used in own server-choice updater.
     implementation("androidx.room:room-runtime:2.7.1")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
@@ -111,7 +112,7 @@ dependencies {
 // FIX: the ordinary APK and other brands have independent release channels.
 androidComponents.onVariants(androidComponents.selector().withName("logoffServers")) { variant ->
     variant.outputs.forEach { output ->
-        output.versionCode.set(271)
-        output.versionName.set("0.1.271-idle-checkpoint")
+        output.versionCode.set(273)
+        output.versionName.set("0.1.275-managed-update")
     }
 }

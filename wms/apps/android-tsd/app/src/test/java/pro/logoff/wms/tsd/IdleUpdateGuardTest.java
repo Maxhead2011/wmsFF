@@ -37,4 +37,14 @@ public class IdleUpdateGuardTest {
     @Test public void invalidPositionStillBlocksUpdate() {
         assertTrue(IdleUpdateGuard.hasFboScan(Collections.singletonMap("request:position", "broken")));
     }
+    // TEST: DT40 has a durable receipt draft from22November; preserve it while replacing the package.
+    @Test public void validPersistedReceiptDoesNotBlockUpgrade() {
+        java.util.Map<String,Object> entries=new java.util.LinkedHashMap<>();
+        String draft="{\"version\":1,\"items\":[{\"barcode\":\"460123\",\"quantity\":2}]}";
+        entries.put("receipt-box-draft:v1:old-box",draft);
+        assertFalse(IdleUpdateGuard.hasReceiptDraft(entries));
+        assertEquals(draft,entries.get("receipt-box-draft:v1:old-box"));
+        entries.put("receipt-box-draft:v1:broken","{broken");
+        assertTrue(IdleUpdateGuard.hasReceiptDraft(entries));
+    }
 }

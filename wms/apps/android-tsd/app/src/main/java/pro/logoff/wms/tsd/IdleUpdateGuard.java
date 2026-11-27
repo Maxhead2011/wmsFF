@@ -15,7 +15,13 @@ final class IdleUpdateGuard {
     // FIX: receipt drafts in released builds survive navigation to the menu.
     static boolean hasReceiptDraft(Map<String, ?> entries) {
         for (String key : entries.keySet()) {
-            if (key.startsWith("receipt-box-draft:v1:")) return true;
+            if (key.startsWith("receipt-box-draft:v1:")) {
+                // FIX: an intact saved draft survives replacement; in-flight operations remain guarded separately.
+                try {
+                    JSONObject draft = new JSONObject((String)entries.get(key));
+                    if(draft.optInt("version") != 1 || draft.optJSONArray("items") == null) return true;
+                } catch(Exception invalid) { return true; }
+            }
         }
         return false;
     }
