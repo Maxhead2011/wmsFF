@@ -66,7 +66,7 @@ final class FboTwoStageScreen {
         return pickingChoices()?FboPickingRoute.select(candidate,pickingMode,state.source,state.pallet):candidate.route;
     }
     // FIX: a server-approved remainder can be taken whole without leaving partial picking.
-    private boolean showWholePicking(TsdFboPlan.Route row){return !pickingChoices()||pickingMode==FboPickingRoute.Mode.WHOLE_BOXES||pickingMode==FboPickingRoute.Mode.PARTIAL||FboScanState.reusableBin(plan,row.boxCode);}
+    private boolean showWholePicking(TsdFboPlan.Route row){if(productOnly())return false;return !pickingChoices()||pickingMode==FboPickingRoute.Mode.WHOLE_BOXES||pickingMode==FboPickingRoute.Mode.PARTIAL||FboScanState.reusableBin(plan,row.boxCode);}
     private boolean partialWholePicking(){return pickingChoices()&&pickingMode==FboPickingRoute.Mode.PARTIAL;}
     private String wholePickingTitle(){return partialWholePicking()&&!FboScanState.reusableBin(plan,state.source)?"Забрать остаток короба целиком":FboScanState.wholePickTitle(plan,state.source);}
     private void choosePickingMode(FboPickingRoute.Mode mode){
@@ -97,9 +97,9 @@ final class FboTwoStageScreen {
     private boolean directed(){return ozon()||lamoda();}
     private boolean productAvailable(){return packing&&directed()&&"logoff".equals(BuildConfig.FLAVOR)&&plan.packingByProductSupported;}
     // FIX: only our Ozon packing uses the product-first flow; other marketplaces retain their modes.
-    private boolean productOnly(){return false;} // FIX: Ozon offers both packing modes.
+    private boolean productOnly(){return plan!=null&&plan.plannedPackingRequired&&"logoff".equals(BuildConfig.FLAVOR);} // FIX: Ozon offers both packing modes.
     private void resumeProductOnly(){
-        if(!packing||!ozon()||!"logoff".equals(BuildConfig.FLAVOR)||prefs.getBoolean(pendingKey+":directionPacking",false)||!"PACKING".equals(screenPhase())||state.productMode||state.pending()!=null)return;
+        if(!packing||!ozon()||!"logoff".equals(BuildConfig.FLAVOR)||(!productOnly()&&prefs.getBoolean(pendingKey+":directionPacking",false))||!"PACKING".equals(screenPhase())||state.productMode||state.pending()!=null)return;
         // Keep the saved box, undo identity and pending commands. A saved barcode still needs a box scan.
         state.productMode=true;
         state.productReady=!state.productKiz.isEmpty();
@@ -107,7 +107,9 @@ final class FboTwoStageScreen {
             if(FboScanState.matches(plan,line,state.barcode)&&!line.requiresKiz)state.productReady=true;
     }
     private boolean productActive(){return productAvailable()&&state.productMode&&"PACKING".equals(screenPhase());}
+    private TsdFboPlan.PackingSuggestion resolvedPacking;
     private TsdFboPlan.PackingSuggestion productSuggestion(){
+        if(productOnly())return resolvedPacking;
         if(plan.packingSuggestions==null||plan.lines==null)return null;
         for(TsdFboPlan.Line l:plan.lines)if(FboScanState.matches(plan,l,state.barcode))
             for(TsdFboPlan.PackingSuggestion s:plan.packingSuggestions)if(l.skuId!=null&&l.skuId.equals(s.skuId))return s;
@@ -124,13 +126,15 @@ final class FboTwoStageScreen {
         if(state.barcode.isEmpty()){
             TsdFboPlan.Line found=null;for(TsdFboPlan.Line l:plan.lines)if(FboScanState.matches(plan,l,value)&&l.picked>l.packed){found=l;break;}
             if(found==null){message="Этот ШК не ожидает упаковки.";packingErrorSpeech=true;render();return;}
-            state.barcode=value;state.productKiz="";state.productReady=!found.requiresKiz;state.target="";
+            resolvedPacking=null;state.packingUnitId="";state.barcode=value;state.productKiz="";state.productReady=!found.requiresKiz;state.target="";
         }else if(!state.productReady){
             if(!AssemblyScanVoice.isKiz(value)){message="Отсканируйте КИЗ товара.";packingErrorSpeech=true;render();return;}
             state.productKiz=value;state.productReady=true;
         }else{
             TsdFboPlan.PackingSuggestion suggestion=productSuggestion();
             if(suggestion==null){message="Нет направления для этого товара. Обновите заявку.";packingErrorSpeech=true;render();return;}
+            // FIX: the confirmed Ozon cargo sticker identifies the same planned physical carton.
+            if(productOnly()&&value.equals(suggestion.cargoId))value=suggestion.targetBoxCode;
             if(suggestion.targetBoxCode!=null&&!suggestion.targetBoxCode.equals(value)){
                 message="Сканируйте короб "+suggestion.targetBoxCode+" · "+suggestion.direction;packingErrorSpeech=true;render();return;
             }
@@ -140,19 +144,32 @@ final class FboTwoStageScreen {
             if(!value.matches("(?i)^FFL[\\w-]{1,96}$")){message="Отсканируйте ШК короба FFL.";packingErrorSpeech=true;render();return;}
             state.direction=suggestion.direction;state.target=value;send("PACK_PRODUCT",state.productKiz);return;
         }
+        if(productOnly()&&state.productReady){resolvePacking();return;}
         TsdFboPlan.PackingSuggestion suggestion=productSuggestion();
         if(suggestion!=null)state.direction=suggestion.direction;
         message=suggestion==null?"Нет направления для этого товара. Обновите заявку.":state.productReady?"Подтвердите вложение сканированием короба.":"Отсканируйте КИЗ товара.";
         feedbackColor=Color.rgb(187,247,208);render();
     }
+    // FIX: resolve without moving stock, then require a physical scan of the displayed box.
+    private void resolvePacking(){
+        if(busy||closed)return;busy=true;resolvedPacking=null;state.packingUnitId="";message="Проверяю товар и короб по плану…";render();
+        Map<String,String> body=new LinkedHashMap<>();body.put("barcode",state.barcode);if(!state.productKiz.isEmpty())body.put("kiz",state.productKiz);
+        executor.execute(()->{try{
+            Response<TsdFboPlan.PackingSuggestion> response=api.resolvePlannedPacking(session.authorizationHeader(),id,body).execute();
+            if(!response.isSuccessful()||response.body()==null)throw new Exception(error(response));
+            TsdFboPlan.PackingSuggestion result=response.body();handler.post(()->{if(closed)return;busy=false;resolvedPacking=result;state.packingUnitId=result.packingUnitId;state.direction=result.direction;message="Сканируйте короб "+result.targetBoxCode;render();});
+        }catch(Exception e){handler.post(()->{if(closed)return;busy=false;message=e.getMessage();packingErrorSpeech=true;render();});}});
+    }
     private void productInstructions(LinearLayout root){
-        text(root,"Упаковка по товару");
+        text(root,productOnly()?"Упаковка по плану Ozon":"Упаковка по товару");
         if(!state.barcode.isEmpty()){
             text(root,"ШК: "+state.barcode);
             if(state.productReady){
                 TsdFboPlan.PackingSuggestion s=productSuggestion();
                 if(s!=null)card(root,s.direction+" · "+(s.targetBoxCode==null?"Сканируйте новый пустой короб": "Сканируйте короб "+s.targetBoxCode),Color.rgb(254,240,138));
+                else if(productOnly())button(root,"Повторно проверить товар и нужный короб",ready(),this::resolvePacking);
                 else text(root,"Нет направления для этого товара. Обновите заявку.");
+                if(productOnly()&&s!=null)text(root,"Грузоместо Ozon: "+s.cargoId+" · осталось этого товара: "+s.remaining);
             }
             button(root,"Отложить товар",ready(),()->{state.barcode="";state.productReady=false;state.productKiz="";state.target="";message="";render();});
         }else{

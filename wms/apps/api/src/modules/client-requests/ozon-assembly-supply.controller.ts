@@ -22,6 +22,8 @@ export class OzonAssemblySupplyController {
  @Post('bind') bind(@Param('id') id:string,@Body() body:{connectionId:string;orderId:string},@CurrentUser() user:AuthUser){return this.service.bind(id,body,user);}
  @Post('mapping') map(@Param('id') id:string,@Body() body:{mapping:Record<string,string>},@CurrentUser() user:AuthUser){return this.service.map(id,body.mapping,user);}
  @Post('refresh') refresh(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.refresh(id,user);}
+ @Post('packing-plan') packingPlan(@Param('id') id:string,@Body() body:{boxes:unknown;confirm?:boolean},@CurrentUser() user:AuthUser){return this.service.savePackingPlan(id,body,user);}
+ @Post('packing-plan/upload') uploadPlan(@Param('id') id:string,@Body() body:{confirm?:boolean;replaceEmpty?:boolean},@CurrentUser() user:AuthUser){return this.service.uploadPackingPlan(id,body,user);}
  @Post('upload') upload(@Param('id') id:string,@Body() body:{confirm:boolean},@CurrentUser() user:AuthUser){return this.service.upload(id,body.confirm,user);}
  @Post('status') status(@Param('id') id:string,@CurrentUser() user:AuthUser){return this.service.status(id,user);}
  // FIX: scoped click history, independent of label generation.

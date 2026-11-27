@@ -38,6 +38,8 @@ public interface WmsApi {
     @GET("api/v1/tsd/requests/{id}/fbo")
     Call<TsdFboPlan> getFboPlanAtLocation(@Header("Authorization") String authorization,@Path("id") String id,
         @Query("palletCode") String palletCode,@Query("sourceBoxCode") String sourceBoxCode);
+    @POST("api/v1/tsd/requests/{id}/fbo/packing-plan/resolve")
+    Call<TsdFboPlan.PackingSuggestion> resolvePlannedPacking(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
     @POST("api/v1/tsd/requests/{id}/fbo/actions")
     Call<TsdFboPlan> actFbo(@Header("Authorization") String authorization,@Path("id") String id,@Body Map<String,String> request);
     // FIX: only opted-in LOGOFF terminals use independent acknowledgement and read-only status.

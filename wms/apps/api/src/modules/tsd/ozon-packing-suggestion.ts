@@ -28,10 +28,10 @@ export function ozonPackingSuggestions(directions: OzonDirection[], boxes: Packi
 }
 
 // FIX: new boxes and first unit commit together; every failure rolls back the enclosing transaction.
-export async function prepareOzonProductBox(tx: Prisma.TransactionClient, requestId: string, target: { id: string; code: string }, direction: string | undefined) {
+export async function prepareOzonProductBox(tx: Prisma.TransactionClient, requestId: string, target: { id: string; code: string }, direction: string | undefined, plannedKey?: string) {
     const parcel = await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
     if (parcel) {
-        if (parcel.requestId !== requestId || parcel.closedAt || parcel.wholeBox || parcel.direction !== direction)
+        if (parcel.requestId !== requestId || parcel.closedAt || parcel.wholeBox || parcel.direction !== direction || (plannedKey && parcel.id !== plannedKey))
             throw new ConflictException('Сканируйте открытый короб указанного направления.');
         return parcel;
     }
@@ -40,5 +40,5 @@ export async function prepareOzonProductBox(tx: Prisma.TransactionClient, reques
         await tx.stockBalance.count({ where: { boxId: target.id, quantity: { not: 0 } } }) ||
         await tx.productMark.count({ where: { boxId: target.id } }))
         throw new ConflictException('Нужен новый пустой короб указанного направления.');
-    return tx.fboAssemblyBox.create({ data: { requestId, boxId: target.id, activeBoxId: target.id, boxCode: target.code, direction } });
+    return tx.fboAssemblyBox.create({ data: { ...(plannedKey?{id:plannedKey}:{}), requestId, boxId: target.id, activeBoxId: target.id, boxCode: target.code, direction } });
 }

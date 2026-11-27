@@ -7,6 +7,19 @@ import pro.logoff.wms.tsd.network.TsdFboPlan;
 import static org.junit.Assert.*;
 
 public class FboScanStateTest {
+    // TEST: an unanswered planned scan retains its exact unit across retries and restart.
+    @Test public void plannedUnitSurvivesRestartAndClearsAfterAcceptance(){
+        FboScanState original=new FboScanState();original.packingUnitId="unit-1";original.barcode="123";original.target="FFL_ONE";
+        Map<String,String> payload=original.prepare("PACK_PRODUCT","kiz-1");
+        FboScanState restored=new FboScanState();restored.restore(payload);restored.packingUnitId="unit-2";
+        assertEquals(payload,restored.prepare("PACK_PRODUCT","kiz-2"));assertEquals("unit-1",payload.get("packingUnitId"));
+        assertEquals("",restored.confirmedPosition(payload).get("packingUnitId"));restored.accepted();assertEquals("",restored.packingUnitId);
+    }
+    @Test public void plannedIdentityDoesNotLeakIntoOtherCommands(){
+        FboScanState state=new FboScanState();state.packingUnitId="unit-1";
+        assertFalse(state.prepare("CLOSE_BOX",null).containsKey("packingUnitId"));
+        FboScanState copy=new FboScanState();copy.restoreCheckpoint(state.checkpoint());assertEquals("unit-1",copy.packingUnitId);
+    }
     // TEST: pair survives retries, but successful confirmation clears the selected carton.
     @Test public void ozonPairRetryKeepsBothScans(){
         FboScanState s=new FboScanState();s.target="FFL_TEST";s.barcode="1000000000064215123";

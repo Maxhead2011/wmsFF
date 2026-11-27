@@ -1,3 +1,4 @@
+import {plannedPackingEnabled,plannedSuggestions,assertPlannedUnit,assertPlannedBoxComplete} from '../client-requests/ozon-packing-plan';
 import { readLamodaLabel } from '../print/lamoda-label.service';
 import {lamodaRelabelData} from '../print/lamoda-relabel-data';
 import { buildLamodaLabelPdf, lamodaLabelImage } from '../print/lamoda-label';
@@ -59,6 +60,23 @@ export class FboTwoStageService {
     // FIX: an administrative transaction owner retries the whole recovery after rollback.
     private recoveryTransaction = false;
     constructor(private readonly prisma: PrismaService, private readonly scopes: ClientScopeService, private readonly balances: StockBalancesService, private readonly stock: StockOperationsService, private readonly lock: InventoryLockService, private readonly files: ClientRequestMarketplaceFilesService) { }
+    // FIX: resolution is advisory; exact identity and quota are rechecked under the action lock.
+    async resolvePlannedPacking(id:string,body:{barcode?:string;kiz?:string},user:AuthUser) {
+        if(!plannedPackingEnabled())throw new NotFoundException('Упаковка по плану выключена.');
+        const r=await this.load(this.prisma,id,user,'write');this.requireFbo(r);
+        const shipment=await this.prisma.ozonFboShipment.findUnique({where:{requestId:id}});
+        const link=shipment?.integration as any,plan=link?.packingPlan;
+        if(!plan)throw new ConflictException('Нет плана упаковки.');
+        assertSupplyMutable(link,'PACK_PRODUCT');
+        const units=await this.prisma.fboAssemblyUnit.findMany({where:{requestId:id,state:{not:'RETURNED'}},orderBy:{id:'asc'}});
+        const mark=body.kiz?await this.exactMark(this.prisma,body.kiz,r.clientId):null;
+        const unit=units.find(u=>u.state==='PICKED'&&!u.wholeBox&&fboBarcodeMatches(u.skuId,body.barcode,r.items)&&(mark?u.markId===mark.id:!u.markId));
+        if(!unit)throw new ConflictException('Товар не отобран или уже упакован. Проверьте ШК и КИЗ.');
+        const boxes=await this.prisma.fboAssemblyBox.findMany({where:{requestId:id}});
+        const suggestion=plannedSuggestions(plan,units,boxes).find(v=>v.skuId===unit.skuId);
+        if(!suggestion)throw new ConflictException('В плане нет свободного места для этой единицы.');
+        return {...suggestion,packingUnitId:unit.id};
+    }
     async eligible(requestId: string, user: AuthUser) {
         if (!fboTwoStageEnabled())
             return false;
@@ -291,10 +309,11 @@ export class FboTwoStageService {
             // FIX: only our enabled Ozon deployment advertises the additive workflow.
             unboxedPickingSupported: unboxed,
             reopenPackingBoxSupported: ozonReopenSupported(ozonShipment),
+            plannedPackingRequired: !!(ozonShipment?.integration as any)?.packingPlan,
             packingByProductSupported: !!ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true',
             packingUndoSupported: process.env.WMS_FBO_PACK_UNDO_ENABLED === 'true',
             packingSuggestions: ozonShipment && process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED === 'true'
-                ? ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units, await activeRule(tx,r.clientId,'zones') ? {integration:ozonShipment.integration, enabled:true} : undefined) : [],
+                ? (ozonShipment.integration as any)?.packingPlan ? plannedSuggestions((ozonShipment.integration as any).packingPlan,units,assembly?.boxes??[]) : ozonPackingSuggestions(ozonShipment.directions as OzonDirection[], assembly?.boxes ?? [], units, await activeRule(tx,r.clientId,'zones') ? {integration:ozonShipment.integration, enabled:true} : undefined) : [],
             // FIX: Ozon uses the same parallel packing capability; direction limits still apply.
             ozonLabelControlRequired: !!ozonShipment&&ozonLabelControlEnabled()&&assembly?.phase!=='COMPLETED',
             parallelPackingSupported: process.env.WMS_FBO_PARALLEL_PACKING_ENABLED === 'true',
@@ -329,11 +348,13 @@ export class FboTwoStageService {
         if(lamoda && !lamodaAssemblyEnabled()) throw new BadRequestException('Сборка Lamoda выключена.');
         const shipment = ozonShipment ?? (lamoda ? {...lamoda,integration:null} : null);
             const directions = shipment?.directions as OzonDirection[] | undefined;
+            const packingPlan=(ozonShipment?.integration as any)?.packingPlan;
             const key = `${id}:${dto.operationId}`, payloadHash = hash([
                 dto.action, dto.sourceBoxCode ?? null, dto.targetBoxCode ?? null, dto.barcode ?? null, dto.kiz ?? null, dto.palletCode ?? null,
                 ...(directions ? [dto.direction ?? null] : []),
                 ...(dto.undoOperationId === undefined ? [] : [dto.undoOperationId]),
                 ...(dto.relabelUnitId === undefined ? [] : [dto.relabelUnitId]),
+                ...(dto.packingUnitId === undefined ? [] : [dto.packingUnitId]),
             ]);
             const previous = await tx.fboAssemblyAction.findUnique({ where: { id: key } });
             if (previous) {
@@ -372,6 +393,7 @@ export class FboTwoStageService {
             const directionBoxes = directions ? await tx.fboAssemblyBox.findMany({ where: { requestId: id } }) : [];
             if (directions && ['SORTED', 'FINISH'].includes(dto.action) && directionProgress(directions, directionBoxes, units).some(d => d.items.some(i => i.packed !== i.quantity)))
                 throw new ConflictException('Не все направления упакованы в количестве из файла клиента.');
+            if(packingPlan&&['SORTED','CONFIRM_BOX','FINISH'].includes(dto.action))for(const b of packingPlan.boxes)assertPlannedBoxComplete(packingPlan,units,b.boxCode);
             const lines = remainingFboLines(r.items, units);
             const requirePhase = (phase: string) => { if (a!.phase !== phase)
                 throw new ConflictException('Этап изменился. Обновите заявку.'); };
@@ -497,18 +519,21 @@ export class FboTwoStageService {
                 if (byProduct && (!directions || process.env.WMS_OZON_PACK_BY_PRODUCT_ENABLED !== 'true'))
                     throw new ConflictException('Упаковка по товару недоступна.');
                 if (byProduct) assertDirectionCapacity(directions!, directionBoxes, units, dto.direction, []);
+                if(packingPlan&&!packingPlan.boxes.some((b:any)=>b.boxCode===dto.targetBoxCode&&b.direction===dto.direction))throw new ConflictException('Сканируйте короб из плана указанного направления.');
                 const target = byProduct ? await this.target(tx, r, dto.targetBoxCode) : await this.box(tx, r, dto.targetBoxCode);
                 if (byProduct) await this.requireIdleBox(tx, target.id, id);
-                const parcel = byProduct ? await prepareOzonProductBox(tx, id, target, dto.direction)
+                const parcel = byProduct ? await prepareOzonProductBox(tx, id, target, dto.direction, packingPlan?.boxes.find((b:any)=>b.boxCode===target.code)?.key)
                     : await tx.fboAssemblyBox.findUnique({ where: { activeBoxId: target.id } });
                 if (!parcel || parcel.requestId !== id || parcel.closedAt || parcel.wholeBox)
                     throw new ConflictException('Сначала откройте короб для упаковки.');
                 const mark = dto.kiz ? await this.exactMark(tx, dto.kiz, r.clientId) : null;
                 // FIX: packing accepts the same registered SKU aliases as picking; KIZ/state checks remain mandatory.
-                const unit = units.find(u => !u.wholeBox && u.state === 'PICKED' &&
+                if(packingPlan&&!dto.packingUnitId)throw new ConflictException('Обновите ТСД: для плана нужна идентификация упаковываемой единицы.');
+                const unit = units.find(u => (!packingPlan||u.id===dto.packingUnitId) && !u.wholeBox && u.state === 'PICKED' &&
                     (relabelRequired?!!u.lamodaRelabelConfirmedAt&&relabelLabels.some(l=>l.skuId===u.skuId&&l.barcode===dto.barcode):fboBarcodeMatches(u.skuId, dto.barcode, r.items)) && (mark ? u.markId === mark.id : !u.markId));
                 if (!unit)
                     throw new ConflictException('Единица не отобрана для этой заявки или уже вложена. Проверьте ШК и КИЗ.');
+                if(packingPlan)assertPlannedUnit(packingPlan,units,target.code,unit.id);
                 assertLamodaRelabelPacked(relabelRequired,unit.lamodaRelabelConfirmedAt);
                 if (directions) assertDirectionCapacity(directions, directionBoxes, units, parcel.direction, [unit]);
                 if (ozonShipment && await activeRule(tx,r.clientId,'zones')) {
@@ -564,6 +589,7 @@ export class FboTwoStageService {
                     throw new ConflictException('Короб не открыт или уже закрыт.');
                 if (!units.some(u => u.targetBoxId === b.boxId && u.state === 'PACKED'))
                     throw new ConflictException('Нельзя закрыть пустой короб.');
+                if(packingPlan)assertPlannedBoxComplete(packingPlan,units,b.boxCode);
                 await tx.fboAssemblyBox.update({ where: { id: b.id }, data: { closedAt: new Date() } });
             }
             else if (dto.action === 'SORTED') {

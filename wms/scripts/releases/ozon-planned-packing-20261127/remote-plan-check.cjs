@@ -1,0 +1,10 @@
+// TEST: read back the current Ozon cargo IDs and exact barcode quantities; no write endpoints.
+const assert=require('node:assert/strict');const {PrismaClient}=require('@prisma/client');const {OzonAssemblySupplyService}=require('./dist/modules/client-requests/ozon-assembly-supply.service');
+const p=new PrismaClient(),svc=new OzonAssemblySupplyService(p,null);
+(async()=>{try{const rows=await p.ozonFboShipment.findMany({where:{request:{number:{in:[3349,3350,3352,3392,3393,3395]},clientId:'c401202c-be57-4310-9939-2ea36767da37'}},include:{request:{select:{number:true,clientId:true}}}});assert.equal(rows.length,6);const results=[];
+for(const row of rows){const link=row.integration,plan=link.packingPlan;assert.equal(plan.state,'ACTIVE');const c=await svc.connection(link.connectionId,row.request.clientId);
+ for(const supplyId of new Set(plan.boxes.map(b=>b.supplyId))){const boxes=plan.boxes.filter(b=>b.supplyId===supplyId),remote=(await svc.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supplyId)]})).supplies_cargoes.find(s=>String(s.supply_id)===supplyId);assert.equal(remote.transport_cargoes.length,0);assert.equal(remote.cargoes_without_transport_cargoes.length,boxes.length);
+  for(const b of boxes){const cargo=remote.cargoes_without_transport_cargoes.find(x=>String(x.cargo_id)===b.cargoId);assert(cargo?.bundle_id);const bundle=await svc.call(c,'/v1/supply-order/bundle',{bundle_ids:[cargo.bundle_id],limit:100});assert(!bundle.has_next);const actual={};for(const i of bundle.items)actual[String(i.barcode)]=(actual[String(i.barcode)]||0)+Number(i.quantity);assert.deepEqual(actual,Object.fromEntries(b.items.map(i=>[i.barcode,i.quantity])));}
+ }results.push({number:row.request.number,boxes:plan.boxes.length,units:plan.boxes.reduce((q,b)=>q+b.items.reduce((a,i)=>a+i.quantity,0),0),exact:true});}
+ console.log(JSON.stringify({passed:true,readOnly:true,checkedAt:new Date().toISOString(),requests:results}));
+}finally{await p.$disconnect()}})().catch(e=>{console.error(e.message);process.exitCode=1});

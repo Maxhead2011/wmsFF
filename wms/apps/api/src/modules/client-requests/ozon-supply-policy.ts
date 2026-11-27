@@ -1,3 +1,4 @@
+import {assertPlannedAction,plannedPackingEnabled,type PackingPlan} from './ozon-packing-plan';
 import {ozonLabelControlEnabled} from '../tsd/ozon-label-control';
 import { ConflictException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -5,11 +6,12 @@ import type { OzonDirection } from '../tsd/ozon-fbo-directions';
 
 export type SupplySnapshot = { id: string; name: string; items: Array<{ barcode: string; offerId: string; quantity: number; quant: number; placementZone?: string; sku?: string }> };
 export type SupplyIntegration = {
+  packingPlan?: PackingPlan;
   orders?: SupplyOrderSnapshot[];
   editDeadlineAt?: string | null;
   connectionId: string; orderId: string; orderNumber: string; place: string; date: string; state: string;
   supplies: SupplySnapshot[]; mapping: Record<string, string>; checkedAt: string;
-  operations: Record<string, { state: 'SENDING'|'UNKNOWN'|'ACCEPTED'|'SUCCESS'|'FAILED'; operationId?: string; error?: string; cargoes?: Array<{key:string;cargoId:string;barcode?:string}>; labelOperationId?: string; labelUrl?: string }>;
+  operations: Record<string, { state: 'QUEUED'|'SENDING'|'UNKNOWN'|'ACCEPTED'|'SUCCESS'|'FAILED'; operationId?: string; error?: string; cargoes?: Array<{key:string;cargoId:string;barcode?:string}>; labelOperationId?: string; labelUrl?: string }>;
   frozenHash?: string;
   adjustment?: {state:string;[key:string]:any};
 };
@@ -99,6 +101,8 @@ export function confirmedPlannedPicking(integration:any,action:string):boolean {
 export function assertSupplyMutable(integration: unknown, action: string) {
   assertNoOzonAdjustment(integration);
   if(confirmedPlannedPicking(integration,action))return;
+  const plan=(integration as SupplyIntegration|null)?.packingPlan;
+  if(plan){if(!confirmedPlannedPicking(integration,'PICK_UNIT'))throw new ConflictException('Состав грузомест не подтверждён. Проверьте результат Ozon.');if(!plannedPackingEnabled())throw new ConflictException('Упаковка по плану выключена. Обратитесь к администратору.');assertPlannedAction(plan,action);return;}
 
   if((integration as SupplyIntegration|null)?.frozenHash && action!=='FINISH'&&!(ozonLabelControlEnabled()&&action==='CONFIRM_BOX')) throw new ConflictException('Состав зафиксирован для Ozon. Изменение требует отдельной сверки грузомест.');
 }
