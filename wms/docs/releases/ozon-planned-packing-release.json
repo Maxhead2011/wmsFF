@@ -1,0 +1,227 @@
+{
+  "published": true,
+  "pr": 1104,
+  "mergeCommitSha": "17c0d8a69e38aff70ed6157d9a280f2bf0f10bbe",
+  "head": "cb245e3d5875e195981cb5747fa88f88b822ce75",
+  "images": {
+    "api": "sha256:69916ee5a68a31c6c93033123e1cce25881a7d3225ce97e65d97eec40820fbbe",
+    "web": "sha256:234df9213263328e49b2c1f07e3f2ac4b5352dfd7a9c1bb611139228f598a0e2"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 816,
+  "webFiles": 3386,
+  "environmentChanges": {
+    "WMS_OZON_PLANNED_PACKING_ENABLED": "true"
+  },
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": false,
+  "runtime": {
+    "passed": true,
+    "requests": [
+      {
+        "number": 3349,
+        "cargoes": 1,
+        "plannedUnits": 28,
+        "picked": 28,
+        "packed": 0,
+        "simulation": "PASS"
+      },
+      {
+        "number": 3350,
+        "cargoes": 3,
+        "plannedUnits": 71,
+        "picked": 71,
+        "packed": 0,
+        "simulation": "PASS"
+      },
+      {
+        "number": 3352,
+        "cargoes": 2,
+        "plannedUnits": 45,
+        "picked": 45,
+        "packed": 0,
+        "simulation": "PASS"
+      },
+      {
+        "number": 3392,
+        "cargoes": 5,
+        "plannedUnits": 146,
+        "picked": 146,
+        "packed": 0,
+        "simulation": "PASS"
+      },
+      {
+        "number": 3393,
+        "cargoes": 3,
+        "plannedUnits": 63,
+        "picked": 61,
+        "packed": 0,
+        "simulation": "PASS"
+      },
+      {
+        "number": 3395,
+        "cargoes": 3,
+        "plannedUnits": 85,
+        "picked": 85,
+        "packed": 0,
+        "simulation": "PASS"
+      }
+    ],
+    "realActionRollback": true,
+    "replayNoDuplicate": true,
+    "wrongBoxRejected": true,
+    "incompleteBoxRejected": true,
+    "stockAndBillingUnchanged": true
+  },
+  "apiTests": 5015,
+  "skipped": 203,
+  "testLimitation": "One unrelated KIZ duplicate integration file excluded: missing test database URL.",
+  "postPublication": {
+    "passed": true,
+    "readOnly": true,
+    "checkedAt": "2026-11-27T14:56:19.976Z",
+    "requests": [
+      {
+        "number": 3349,
+        "phase": "PACKING",
+        "picked": 28,
+        "needed": 28,
+        "packed": 0,
+        "hint": {
+          "box": "FFL_OZ_3349_001",
+          "cargoId": "1022126847016000"
+        }
+      },
+      {
+        "number": 3350,
+        "phase": "PACKING",
+        "picked": 71,
+        "needed": 71,
+        "packed": 0,
+        "hint": {
+          "box": "FFL_OZ_3350_003",
+          "cargoId": "1022126847024000"
+        }
+      },
+      {
+        "number": 3352,
+        "phase": "PACKING",
+        "picked": 45,
+        "needed": 45,
+        "packed": 0,
+        "hint": {
+          "box": "FFL_OZ_3352_001",
+          "cargoId": "1022126847028000"
+        }
+      },
+      {
+        "number": 3392,
+        "phase": "PICKING",
+        "picked": 146,
+        "needed": 146,
+        "packed": 0,
+        "hint": {
+          "box": "FFL_OZ_3392_005",
+          "cargoId": "1022126847060000"
+        }
+      },
+      {
+        "number": 3393,
+        "phase": "PICKING",
+        "picked": 61,
+        "needed": 63,
+        "packed": 0,
+        "hint": {
+          "box": "FFL_OZ_3393_001",
+          "cargoId": "1022126847098000"
+        }
+      },
+      {
+        "number": 3395,
+        "phase": "PACKING",
+        "picked": 85,
+        "needed": 85,
+        "packed": 0,
+        "hint": {
+          "box": "FFL_OZ_3395_002",
+          "cargoId": "1022126847124000"
+        }
+      }
+    ]
+  },
+  "remoteOzon": {
+    "passed": true,
+    "readOnly": true,
+    "checkedAt": "2026-11-27T14:48:23.118Z",
+    "requests": [
+      {
+        "number": 3349,
+        "boxes": 1,
+        "units": 28,
+        "exact": true
+      },
+      {
+        "number": 3350,
+        "boxes": 3,
+        "units": 71,
+        "exact": true
+      },
+      {
+        "number": 3352,
+        "boxes": 2,
+        "units": 45,
+        "exact": true
+      },
+      {
+        "number": 3392,
+        "boxes": 5,
+        "units": 146,
+        "exact": true
+      },
+      {
+        "number": 3393,
+        "boxes": 3,
+        "units": 63,
+        "exact": true
+      },
+      {
+        "number": 3395,
+        "boxes": 3,
+        "units": 85,
+        "exact": true
+      }
+    ]
+  },
+  "apks": {
+    "logoff-tsd": {
+      "packageId": "pro.logoff.wms.tsd",
+      "versionCode": 270,
+      "versionName": "0.1.270-ozon-plan",
+      "sha256": "99514c43da48f61475a109ca2eb3d85013ab777404312f3ca4472decabdcd3d7",
+      "size": 6063129,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-ozon-plan-270.apk",
+      "releasedAt": "2026-11-27T14:56:16.661008+00:00",
+      "releaseNotes": "Упаковка по плану Ozon: подсказка короба, проверка стикера грузоместа, КИЗ, количества и повторных запросов."
+    },
+    "logoff-tsd-server-choice": {
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 270,
+      "versionName": "0.1.270-ozon-plan",
+      "sha256": "f8bc4d667a70d1e83d019b1c207dbd07eba4c4800393f95b04e8b61f7ef74ee7",
+      "size": 6067225,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-servers-ozon-plan-270.apk",
+      "releasedAt": "2026-11-27T14:56:16.687575+00:00",
+      "releaseNotes": "Упаковка по плану Ozon: подсказка короба, проверка стикера грузоместа, КИЗ, количества и повторных запросов."
+    }
+  },
+  "webTests": 697,
+  "androidTests": 363,
+  "physicalDeviceTested": false,
+  "publicBrowserChecks": {
+    "compactControls": 24,
+    "requestFolds": true
+  }
+}
