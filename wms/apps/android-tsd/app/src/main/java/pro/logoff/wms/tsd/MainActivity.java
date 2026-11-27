@@ -331,7 +331,7 @@ public class MainActivity extends Activity {
         executor.execute(()->{
             try {
                 if(outbox.counts().pending!=0 || pendingUpdateScans()){
-                    mainHandler.post(()->{appUpdateBusy=false;releaseUpdateBarrier();});return;
+                    mainHandler.post(()->{appUpdateBusy=false;releaseUpdateBarrier();showUpdateStatus("Обновление скачано. Установка ожидает подтверждения незавершённых операций или приёмки.",false);});return;
                 }
                 mainHandler.post(()->{
                     if(!idleUpdateState() || updateBarrier==null || !updateBarrier.isShowing() || !updateBarrier.getWindow().getDecorView().hasWindowFocus()){
@@ -11685,7 +11685,7 @@ public class MainActivity extends Activity {
                     if (!automatic) showUpdateStatus("На ТСД уже установлена актуальная версия.", false);
                     return;
                 }
-                if(idleUpdateEnabled()) mainHandler.post(()->{waitingUpdate=apk;appUpdateBusy=false;tryIdleUpdate();});
+                if(idleUpdateEnabled()) mainHandler.post(()->{waitingUpdate=apk;appUpdateBusy=false;showUpdateStatus("Обновление скачано и проверено. Ожидаю безопасной установки в главном меню.",false);tryIdleUpdate();});
                 else installUpdateApk(apk);
             } catch (Throwable error) {
                 appUpdateBusy = false;

@@ -1,0 +1,28 @@
+{
+  "tests": {
+    "tests": 365,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "apk": {
+    "packageId": "pro.logoff.wms.tsd.servers",
+    "versionCode": 271,
+    "versionName": "0.1.271-idle-checkpoint",
+    "sha256": "1473950998daa5e8eafaf4f8f50593a22bd0b87effde7b18821aa7d596f42f52",
+    "size": 6067225,
+    "baselineSha256": "f8bc4d667a70d1e83d019b1c207dbd07eba4c4800393f95b04e8b61f7ef74ee7",
+    "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+    "resourcesPreserved": true
+  },
+  "physical": {
+    "model": "HT330",
+    "before": 267,
+    "after": 271,
+    "checkpointEntriesPreserved": 8,
+    "queuePreserved": true,
+    "guardVerified": true,
+    "playProtectConfirmationRequired": true,
+    "fullyUnattendedVerified": false
+  }
+}

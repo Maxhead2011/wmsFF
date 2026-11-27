@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 270 // FIX: verified Ozon planned packing.
-            versionName = "0.1.270-ozon-plan"
+            versionCode = 271 // FIX: durable checkpoint permits safe idle upgrade.
+            versionName = "0.1.271-idle-checkpoint"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -111,7 +111,7 @@ dependencies {
 // FIX: the ordinary APK and other brands have independent release channels.
 androidComponents.onVariants(androidComponents.selector().withName("logoffServers")) { variant ->
     variant.outputs.forEach { output ->
-        output.versionCode.set(270)
-        output.versionName.set("0.1.270-ozon-plan")
+        output.versionCode.set(271)
+        output.versionName.set("0.1.271-idle-checkpoint")
     }
 }

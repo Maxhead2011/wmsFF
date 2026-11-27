@@ -25,8 +25,9 @@ final class IdleUpdateGuard {
             String key=e.getKey();
             if(key.endsWith(":position")){
                 try {
-                    JSONObject pos=new JSONObject((String)e.getValue());
-                    if(!pos.optString("barcode").isEmpty() || !pos.optString("productKiz").isEmpty())return true;
+                    // FIX: a persisted UI checkpoint survives package replacement; it is not a pending API command.
+                    // Validate it, preserve every byte and continue blocking actual command keys below.
+                    new JSONObject((String)e.getValue());
                 } catch(Exception invalid){return true;}
             } else if(!(key.endsWith(":directionPacking") || key.endsWith(":mode") || key.endsWith(":picking-mode") || key.endsWith(":fast"))) return true;
         }
