@@ -81,8 +81,24 @@ export function packedCargoes(directions: OzonDirection[], link: SupplyIntegrati
   return result;
 }
 export function cargoHash(cargoes:Record<string,any[]>) {return createHash('sha256').update(JSON.stringify(Object.entries(cargoes).sort(([a],[b])=>a.localeCompare(b)))).digest('hex');}
+// FIX: an accepted advance cargo plan fixes packing, not unfinished physical picking.
+export function confirmedPlannedPicking(integration:any,action:string):boolean {
+ if(process.env.WMS_OZON_FBO_IMPORT_ENABLED!=='true'||!['START','PICK_UNIT','FINISH_PICK'].includes(action))return false;
+ const p=integration?.packingPlan;
+ if(!integration?.frozenHash||p?.state!=='ACTIVE'||!Number.isSafeInteger(p.version)||p.version<1||!Array.isArray(p.boxes)||!p.boxes.length)return false;
+ const keys=new Set<string>(),codes=new Set<string>(),cargoIds=new Set<string>();
+ for(const b of p.boxes){
+  if(!b||typeof b.key!=='string'||!b.key||keys.has(b.key)||typeof b.boxCode!=='string'||!b.boxCode||codes.has(b.boxCode)||!/^\d+$/.test(b.cargoId??'')||cargoIds.has(b.cargoId)||integration.mapping?.[b.direction]!==b.supplyId)return false;
+  const op=integration.operations?.[b.supplyId];
+  if(op?.state!=='SUCCESS'||!Array.isArray(op.cargoes)||op.cargoes.filter((c:any)=>c.key===b.key&&c.cargoId===b.cargoId).length!==1)return false;
+  keys.add(b.key);codes.add(b.boxCode);cargoIds.add(b.cargoId);
+ }
+ const ops=Object.values(integration.operations??{}) as any[];
+ return ops.every(op=>op.state==='SUCCESS'&&Array.isArray(op.cargoes))&&ops.reduce((n,op)=>n+op.cargoes.length,0)===p.boxes.length;
+}
 export function assertSupplyMutable(integration: unknown, action: string) {
   assertNoOzonAdjustment(integration);
+  if(confirmedPlannedPicking(integration,action))return;
 
   if((integration as SupplyIntegration|null)?.frozenHash && action!=='FINISH'&&!(ozonLabelControlEnabled()&&action==='CONFIRM_BOX')) throw new ConflictException('Состав зафиксирован для Ozon. Изменение требует отдельной сверки грузомест.');
 }
