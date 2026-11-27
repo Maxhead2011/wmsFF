@@ -1,4 +1,5 @@
-Pending publication: [Ozon planned packing](ozon-planned-packing.md), API exact-unit/box quotas and TSD270. Own-WMS flag only; continued picking retained. See the release checks and limitations in the linked document.
+Published 27.11.2026 PR1104: [Ozon planned packing](ozon-planned-packing.md), exact-unit/box/SKU quotas, durable replay and TSD270 (both own-WMS channels). Read-only production checks: six requests,17 cargoes/438 planned units;3393 picked61/63,3392 awaits finish-picking. API5015/web697/Android363 passed; API203/web2 skipped, unrelated KIZ integration DB unavailable and14 pre-existing API type errors. Exact816 API/3386 web hashes, public controls24/request folds and signed APK emulator flows verified. Physical terminal not tested. Only own-WMS flag enabled; sold and business records untouched by release. Baseline `2026-11-27-ozon-planned-packing`; sourceParityVerified=false. [Proof](releases/ozon-planned-packing-release.json).
+
 
 Published 27.11.2026 PR1103: confirmed advance Ozon cargo plans permit START/PICK_UNIT/FINISH_PICK. Read-only verification covered six requests; no stock or billing changes. API5005 tests, exact runtime guard checks and all file hashes verified. Baseline `2026-11-27-ozon-planned-picking`; sourceParityVerified=false. [Proof](releases/ozon-planned-picking-release.json).
 
