@@ -1,5 +1,8 @@
 import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 export class FboActionDto {
+    // FIX: bind retries to one picked physical unit rather than consuming another SKU instance.
+    @IsOptional() @IsString() @MaxLength(100)
+    packingUnitId?: string;
     @IsOptional()
     @IsString()
     @MaxLength(100)

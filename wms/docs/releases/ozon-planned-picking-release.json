@@ -1,0 +1,81 @@
+{
+  "published": true,
+  "pr": 1103,
+  "mergeCommitSha": "0f0927705cc0a62c6cb35b8d32de0df0f5c867b9",
+  "head": "1e12b73d5cfd342d4f0f1f6090820f8d52fa53b1",
+  "images": {
+    "api": "sha256:83ca92666363ee06d3fee67d6fcc68629b2e6471653d1c54779399751cebeb98",
+    "web": "sha256:4fb1562faa9c5030466a4f9d289c483665dc70c381af57e92c36b3a15c485e50"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 815,
+  "webFiles": 3382,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "runtime": {
+    "passed": true,
+    "readOnly": true,
+    "requests": [
+      {
+        "number": 3349,
+        "status": "SUBMITTED",
+        "picked": 0,
+        "packed": 0,
+        "pickingAllowed": true,
+        "packingProtected": true
+      },
+      {
+        "number": 3350,
+        "status": "IN_WORK",
+        "phase": "PACKING",
+        "picked": 71,
+        "packed": 0,
+        "pickingAllowed": true,
+        "packingProtected": true
+      },
+      {
+        "number": 3352,
+        "status": "IN_WORK",
+        "phase": "PACKING",
+        "picked": 45,
+        "packed": 0,
+        "pickingAllowed": true,
+        "packingProtected": true
+      },
+      {
+        "number": 3392,
+        "status": "IN_WORK",
+        "phase": "PICKING",
+        "picked": 146,
+        "packed": 0,
+        "pickingAllowed": true,
+        "packingProtected": true
+      },
+      {
+        "number": 3393,
+        "status": "IN_WORK",
+        "phase": "PICKING",
+        "picked": 54,
+        "packed": 0,
+        "pickingAllowed": true,
+        "packingProtected": true
+      },
+      {
+        "number": 3395,
+        "status": "IN_WORK",
+        "phase": "PACKING",
+        "picked": 85,
+        "packed": 0,
+        "pickingAllowed": true,
+        "packingProtected": true
+      }
+    ]
+  },
+  "apiTests": 5005,
+  "skipped": 203,
+  "testLimitation": "One unrelated KIZ duplicate integration file excluded: missing test database URL."
+}

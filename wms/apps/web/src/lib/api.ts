@@ -11315,6 +11315,7 @@ export async function fetchTsdAssemblyPlan(accessToken: string, requestId: strin
 }
 
 export type FboPlan = {
+  plannedPackingRequired?:boolean;
   boxStatistics?:{pickedPartialUnits?:number;pickedWholeBoxes?:number;pickedWholeUnits?:number;remainingPartialPickUnits?:number;remainingWholePickBoxes?:number;remainingWholePickUnits?:number;remainingWholeBoxes?:number;pickedBoxes:number;packedBoxes:number;partialUnits:number;wholeBoxes:number};
   relabelRequired?:boolean;
   relabelUnits?:Array<{id:string;skuId:string;sourceBarcode:string;kiz:string|null;pickedByUserId:string;printId:string|null;printStatus:string|null;label:{barcode:string;name:string;size:string|null;article:string}}>;
@@ -11332,9 +11333,11 @@ export type FboPlan = {
   boxes:Array<{code:string;direction?:string|null;wholeBox:boolean;closed:boolean;confirmed:boolean;quantity:number}>;
 };
 export async function fetchFboHistory(accessToken:string,id:string,offset:number) {return request<{pickedUnits:NonNullable<FboPlan['pickedUnits']>;total:number;offset:number}>(`/tsd/requests/${id}/fbo?view=history&offset=${offset}`,{accessToken});}
-export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string;direction?:string;relabelUnitId?:string};
+export type FboAction = {action:string;operationId:string;palletCode?:string;sourceBoxCode?:string;targetBoxCode?:string;barcode?:string;kiz?:string;direction?:string;relabelUnitId?:string;packingUnitId?:string};
 export function fetchLamodaRelabelStations(accessToken:string,id:string) {return request<Array<{id:string;name:string;printerName:string}>>(`/tsd/requests/${id}/fbo/lamoda-relabel/stations`,{accessToken});}
 export function printLamodaRelabel(accessToken:string,id:string,body:{unitId:string;stationId:string;printId:string}) {return request<{status:string;printId:string}>(`/tsd/requests/${id}/fbo/lamoda-relabel/print`,{accessToken,method:'POST',body});}
+export type PlannedPackingResolution={packingUnitId:string;skuId:string;barcode:string;direction:string;targetBoxCode:string;cargoId:string;remaining:number};
+export function resolvePlannedPacking(accessToken:string,id:string,body:{barcode:string;kiz?:string}){return request<PlannedPackingResolution>(`/tsd/requests/${id}/fbo/packing-plan/resolve`,{accessToken,method:'POST',body});}
 export async function fetchFboPlan(accessToken:string,id:string) { const load=()=>request<FboPlan>(`/tsd/requests/${id}/fbo${import.meta.env.VITE_MENU_READS_ENABLED==='true'?'?view=summary':''}`,{accessToken});return import.meta.env.VITE_MENU_READS_ENABLED==='true'?sharedRead(JSON.stringify([accessToken,id,'fbo']),load):load(); }
 export async function actFbo(accessToken:string,id:string,body:FboAction) {
   const response=await fetch(`${API_BASE_URL}/tsd/requests/${id}/fbo/actions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${accessToken}`},body:JSON.stringify(body)});
@@ -12724,11 +12727,13 @@ export function checkKizHistory(accessToken: string, kiz: string) {
 }
 
 // FIX: scoped unified Ozon assembly integration.
+export type OzonPlannedBox={key:string;boxCode:string;supplyId:string;direction:string;cargoId?:string;items:Array<{skuId:string;barcode:string;quantity:number;zone:string}>};
 export type OzonSupplyView = {
+ plannedPackingSupported?:boolean;
  requestId:string;connections:Array<{id:string;accountName:string|null;sellerId:string|null}>;
  directions:Array<{name:string;items:Array<{skuId:string;barcode:string;quantity:number}>}>;
  differences:string[];packingError:string;
- link:null|{editDeadlineAt?:string|null;checkedAt?:string;orders?:Array<{editDeadlineAt?:string|null;checkedAt?:string;orderId:string;orderNumber:string;place:string;date:string;state:string;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>}>;connectionId:string;orderId:string;orderNumber:string;place:string;date:string;state:string;frozenHash?:string;mapping:Record<string,string>;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number}>}>;operations:Record<string,{state:string;error?:string;labelOperationId?:string;labelUrl?:string}>};
+ link:null|{packingPlan?:{version:number;state:string;boxes:OzonPlannedBox[]};editDeadlineAt?:string|null;checkedAt?:string;orders?:Array<{editDeadlineAt?:string|null;checkedAt?:string;orderId:string;orderNumber:string;place:string;date:string;state:string;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number;placementZone?:string}>}>}>;connectionId:string;orderId:string;orderNumber:string;place:string;date:string;state:string;frozenHash?:string;mapping:Record<string,string>;supplies:Array<{id:string;name:string;items:Array<{barcode:string;quantity:number;placementZone?:string}>}>;operations:Record<string,{state:string;error?:string;labelOperationId?:string;labelUrl?:string}>};
 };
 export function ozonAssemblySupply(accessToken:string,id:string,action?:string,body:unknown={}){
  return request<OzonSupplyView>(`/ozon-fbo-import/requests/${encodeURIComponent(id)}/supply${action?'/'+action:''}`,{accessToken,...(action?{method:'POST',body}:{})});

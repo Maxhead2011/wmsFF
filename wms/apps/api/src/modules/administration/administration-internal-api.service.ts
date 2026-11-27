@@ -151,7 +151,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'client-requests',
     name: 'Заявки клиентов',
     prefixes: ['/client-request-removal', '/client-requests', '/client-requests/:id/wb-fbo-supply', '/ozon-fbo-import', '/ozon-fbo-import/requests/:id/supply'], // FIX: same request-import access and monitoring group.
-    routeCount: 67, // FIX: prepare the complete Ozon cargo label set. // FIX: include batch target discovery and per-request marketplace reconciliation.
+    routeCount: 69, // FIX: advance cargo plan draft/upload. // FIX: prepare the complete Ozon cargo label set. // FIX: include batch target discovery and per-request marketplace reconciliation.
     description: 'Онлайн-заявки, документы, маршруты сборки и управление заказами FBS.',
     logic: ['Создаёт и изменяет заявки.', 'Считает активные заявки FBO WB/Ozon с учётом доступа и филиала.', 'Связывает заказы, короба, файлы и события.', 'Перестраивает маршруты и управляет проблемными заказами.'],
     dependencies: ['Основная БД', 'Склад', 'Подключения маркетплейсов'],
@@ -326,7 +326,7 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
     id: 'tsd',
     name: 'ТСД',
     prefixes: ['/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment', '/tsd/requests/:id/fbo/lamoda-relabel'],
-      routeCount: 114, // FIX: read/save production fields in the existing Lamoda relabel workflow.
+      routeCount: 115, // FIX: read-only planned packing resolution. // FIX: read/save production fields in the existing Lamoda relabel workflow.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД. Отдельное подтверждение нарезки ФБС при включённом WMS_FBS_FABRIC_CUT_ENABLED.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Печатает два целевых ШК переклейки через станцию и проверяет подтверждение печати.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

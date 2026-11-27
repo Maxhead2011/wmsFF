@@ -23,8 +23,9 @@ public class TsdFboPlan {
     public boolean packingUndoSupported;
     // FIX: physical source box is optional only when the server advertises loose storage.
     public boolean unboxedPickingSupported;
+    public boolean plannedPackingRequired;
     public List<PackingSuggestion> packingSuggestions;
-    public static class PackingSuggestion { public String skuId, barcode, direction, targetBoxCode; }
+    public static class PackingSuggestion { public String skuId, barcode, direction, targetBoxCode, cargoId, packingUnitId; public int remaining; }
     public boolean parallelPackingSupported;
     public boolean localRouteEnabled;
     // FIX: absence keeps old servers and sold applications on the original scanner flow.

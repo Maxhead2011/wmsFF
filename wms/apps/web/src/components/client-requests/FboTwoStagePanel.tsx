@@ -6,7 +6,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react';
 import { startFboPolling } from './fboLivePolling';
 import { FboProgress } from './FboProgress';
 import { assemblyProductLabel } from '../../lib/assemblyProductDisplay';
-import { actFbo, fetchFboPlan, downloadFboWbFile, type FboPlan, type FboAction } from '../../lib/api';
+import { resolvePlannedPacking,type PlannedPackingResolution,actFbo, fetchFboPlan, downloadFboWbFile, type FboPlan, type FboAction } from '../../lib/api';
 
 // FIX: pallet scan narrows the list before the source box can be selected.
 export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:string) {
@@ -19,6 +19,7 @@ export function selectFboLocation(route:FboPlan['route'], pallet:string, scan:st
 export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClose, embedded=false }: {initial:FboPlan;accessToken:string;userId:string;canWrite:boolean;onClose:()=>void;embedded?:boolean}) {
   const panel=useRef<HTMLDivElement>(null);
   const [plan,setPlan]=useState(initial),[code,setCode]=useState(''),[source,setSource]=useState(''),[target,setTarget]=useState(''),[barcode,setBarcode]=useState('');
+  const [planned,setPlanned]=useState<PlannedPackingResolution|null>(null),[plannedKiz,setPlannedKiz]=useState('');
   const [pallet,setPallet]=useState('');
   const [direction,setDirection]=useState('');
   const [scanMode,setScanMode]=useState(false);
@@ -38,7 +39,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   async function command(action:string,extra:Partial<FboAction>={}) {
     if(inFlight.current || (!canWrite||adjusting)) return;
     const dto=pending??{action,operationId:crypto.randomUUID(),palletCode:pallet,direction:direction||undefined,...extra};inFlight.current=true;setBusy(true);setError('');setPending(dto);
-    try {localStorage.setItem(storageKey,JSON.stringify(dto));const next=await actFbo(accessToken,plan.requestId,dto);setPlan(next);localStorage.removeItem(storageKey);setPending(null);setBarcode('');setCode('');
+    try {localStorage.setItem(storageKey,JSON.stringify(dto));const next=await actFbo(accessToken,plan.requestId,dto);setPlan(next);localStorage.removeItem(storageKey);setPending(null);setBarcode('');setCode('');setPlanned(null);setPlannedKiz('');
       if(!next.route.some(r=>r.boxCode===source))setSource('');
       if(!next.route.some(r=>r.pallet===pallet))setPallet('');
       if(!next.boxes.some(b=>b.code===target&&!b.closed) || next.phase!=='PACKING')setTarget('');
@@ -48,6 +49,12 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     finally{inFlight.current=false;setBusy(false);setTimeout(()=>field.current?.focus(),0);}
   }
   async function scan(event:FormEvent){event.preventDefault();const value=code.trim();if(!value||busy||pending)return;setCode('');
+    if(plan.plannedPackingRequired&&plan.phase==='PACKING'){
+      if(planned){if(value!==planned.targetBoxCode&&value!==planned.cargoId){setError(`Сканируйте короб ${planned.targetBoxCode}`);return;}await command('PACK_PRODUCT',{targetBoxCode:planned.targetBoxCode,direction:planned.direction,barcode,kiz:plannedKiz||undefined,packingUnitId:planned.packingUnitId});return;}
+      const line=plan.lines.find(l=>(l.barcode===value||l.barcodes?.includes(value))&&l.picked>l.packed);
+      if(!barcode){if(!line){setError('Товар не ожидает упаковки.');return;}setBarcode(value);if(line.requiresKiz){setError('');return;}}
+      setBusy(true);setError('');try{const result=await resolvePlannedPacking(accessToken,plan.requestId,{barcode:barcode||value,...(barcode?{kiz:value}:{})});setPlanned(result);setPlannedKiz(barcode?value:'');}catch(e){setError(String(e));setBarcode('');}finally{setBusy(false);}return;
+    }
     if(plan.phase==='CONTROL'){await command('CONFIRM_BOX',{targetBoxCode:value});return;}
     if(plan.phase==='PICKING'&&!source){const selected=selectFboLocation(plan.route,pallet,value);if(!selected){setError(pallet?'Короб не входит в список на этом паллете.':'Сначала отсканируйте паллет. Короб без паллета можно сканировать сразу.');return;}setPallet(selected.pallet);setSource(selected.source);setError('');return;}
     if(plan.phase==='PACKING'&&!target){if(plan.wholeBoxes.includes(value)){await command('PACK_BOX',{sourceBoxCode:value});return;}await command('OPEN_BOX',{targetBoxCode:value});return;}
@@ -60,7 +67,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
   // FIX: a saved uncertain write does not prevent read-only reconciliation.
   async function refresh(){if(inFlight.current)return;inFlight.current=true;setRefreshing(true);setBusy(true);try{const next=await fetchFboPlan(accessToken,plan.requestId);if(!active.current)return;setPlan(next);if(!next.route.some(r=>r.boxCode===source&&r.pallet===pallet)){setSource('');setBarcode('');}if(!next.route.some(r=>r.pallet===pallet))setPallet('');if(!next.boxes.some(b=>b.code===target&&!b.closed))setTarget('');setError('');}catch(e){if(active.current)setError(`Не удалось обновить статистику: ${String(e)}`);}finally{inFlight.current=false;if(active.current){setBusy(false);setRefreshing(false);}}}
   async function download(){try{const file=await downloadFboWbFile(accessToken,plan.requestId);const a=document.createElement('a');const url=URL.createObjectURL(file);a.href=url;a.download='wb-packages.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){setError(String(e));}}
-  const hint=plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
+  const hint=plan.plannedPackingRequired&&plan.phase==='PACKING'?(planned?`ШК короба ${planned.targetBoxCode}`:barcode?'КИЗ товара':'ШК товара'):plan.phase==='CONTROL'?'ШК короба поставки':plan.phase==='PICKING'&&!source?(pallet?'ШК короба на выбранном паллете':'ШК паллета или короба без паллета'):plan.phase==='PACKING'&&!target?'ШК короба для упаковки или целого отобранного короба':barcode?'КИЗ товара':'ШК товара';
   return <div ref={panel} className={embedded?"fbo-inline-execution":"online-execution-modal"} role={embedded?"region":"dialog"} aria-modal={embedded?undefined:true} aria-label="Двухэтапная сборка ФБО"><section className={embedded?"fbo-inline-execution__panel":"online-execution-modal__panel"} style={embedded?{display:"block",width:"100%",minWidth:0}:{display:'block',maxWidth:1000,width:'95vw',maxHeight:'92vh',overflow:'auto',padding:24}}>
     {/* FIX: standard header enables retained la_panthera windows; reads never trap the user. */}
     <header className={embedded?"fbo-inline-execution__header":"online-execution-modal__header"} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:16}}>
@@ -71,7 +78,7 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     <FboProgress plan={plan} accessToken={accessToken} paused={scanMode||!!pending}/>
     {plan.marketplace==='LAMODA'&&<LamodaFboRelabel plan={plan} accessToken={accessToken} disabled={!canWrite||busy||!!pending||adjusting} command={command} refresh={refresh}/>}
     {!!plan.directions?.length&&<section aria-label="Направления сборки"><h3>Единая сборка · направления</h3>{plan.directions.map(d=><details key={d.name}><summary>{d.name}: упаковано {d.packed} из {d.needed}</summary><ul>{d.items.map(i=><li key={i.skuId}>{plan.lines.find(l=>l.skuId===i.skuId)?.name} · {i.barcode}: {i.packed} из {i.quantity}</li>)}</ul></details>)}
-    {plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||adjusting||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
+    {!plan.plannedPackingRequired&&plan.phase==='PACKING'&&<label>Направление короба<select disabled={busy||adjusting||!!pending||!!target} value={target?(plan.boxes.find(b=>b.code===target)?.direction??direction):direction} onChange={e=>setDirection(e.target.value)}><option value="">Выберите направление</option>{plan.directions.map(d=><option key={d.name} value={d.name}>{d.name} · {d.packed}/{d.needed}</option>)}</select></label>}</section>}
     {plan.compositionChanged&&<p role="alert">Состав заявки изменился. Требуется сверка.</p>}
     {plan.shortage>0&&<p role="alert">Недостаточно доступного остатка: {plan.shortage} ед.</p>}
     {/* FIX: accepted stock must not be presented as physically missing. */}
@@ -83,13 +90,14 @@ export function FboTwoStagePanel({ initial, accessToken, userId, canWrite, onClo
     {canWrite&&['PICKING','PACKING','CONTROL'].includes(plan.phase)&&<details onToggle={e=>setScanMode(e.currentTarget.open)}><summary>Сканирование в ВМС</summary><form onSubmit={scan} style={{display:'flex',gap:12,alignItems:'end',flexWrap:'wrap',margin:'20px 0'}}><label style={{display:'grid',gap:8,flex:'1 1 240px'}}>{hint}<input ref={field} value={code} onChange={e=>setCode(e.target.value)} disabled={busy||adjusting||!!pending} style={{minHeight:44,padding:10,border:'1px solid var(--line)',borderRadius:6}}/></label><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending}>Подтвердить скан</button></form></details>}
     {sourceTask&&plan.phase==='PICKING'&&<div><p>{sourceTask.boxCode} · {sourceTask.pallet} · {sourceTask.zone}</p>{sourceTask.tasks.map(t=><p key={t.skuId}>Отберите {t.quantity} ед. · {assemblyProductLabel(t, `${t.name} · ${t.barcode}`)}</p>)}
       {sourceTask.recount&&<p role="alert">Количество и КИЗ расходятся. Требуется актуализация короба.</p>}
-      {sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
+      {!plan.plannedPackingRequired&&sourceTask.wholeBox&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('PICK_BOX',{sourceBoxCode:source})}>Короб забран целиком</button>}
       <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending} onClick={()=>{setSource('');setBarcode('');}}>Другой исходный короб</button></div>}
     {plan.phase==='PICKING'&&<><p>Осталось отобрать: {plan.needed-plan.picked}</p><button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||plan.picked!==plan.needed||(!canWrite||adjusting)} onClick={()=>void command('FINISH_PICK')}>Перейти к упаковке</button>
       {!!pallet&&<p>Паллет {pallet} <button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending} onClick={()=>{setPallet('');setSource('');setBarcode('');}}>Другой паллет</button></p>}
       {!pallet&&<ul>{[...new Set(plan.route.map(r=>r.pallet).filter(Boolean))].map(p=><li key={p}>{p} · Нужных коробов: {plan.route.filter(r=>r.pallet===p).length}</li>)}</ul>}
       <div className="online-execution-table-wrap"><table className="online-execution-table"><thead><tr><th>Паллет / зона</th><th>Нужный короб</th><th>Отобрать</th></tr></thead><tbody>{plan.route.filter(r=>r.pallet===pallet).map(r=><tr key={r.boxCode}><td>{r.pallet||'Без паллета'} · {r.zone}</td><td>{r.boxCode}</td><td>{r.tasks.map(t=>`${assemblyProductLabel(t, t.name)}: ${t.quantity}`).join('; ')}</td></tr>)}</tbody></table></div></>}
-    {plan.phase==='PACKING'&&<><p>{target?`Открыт короб ${target}`:'Отсканируйте короб для упаковки'} · Осталось вложить {plan.needed-plan.packed}</p>
+    {plan.plannedPackingRequired&&plan.phase==='PACKING'&&<section aria-label="Упаковка по плану"><h3>Упаковка по плану Ozon</h3><p>Сканируйте товар, затем КИЗ и указанный короб. Каждое вложение проверяется по составу Ozon.</p>{planned&&<p role="status"><strong>{planned.direction} · {planned.targetBoxCode}</strong> · Ozon {planned.cargoId} · осталось {planned.remaining} шт.</p>}{barcode&&<button disabled={busy||!!pending} onClick={()=>{setBarcode('');setPlanned(null);setPlannedKiz('');}}>Отложить товар</button>}{plan.boxes.filter(b=>!b.closed).map(b=><button key={b.code} disabled={busy||!!pending||!!barcode} onClick={()=>void command('CLOSE_BOX',{targetBoxCode:b.code})}>Закрыть {b.code}</button>)}</section>}
+    {plan.phase==='PACKING'&&<><p>{plan.plannedPackingRequired?'Упаковка по предварительному плану':target?`Открыт короб ${target}`:'Отсканируйте короб для упаковки'} · Осталось вложить {plan.needed-plan.packed}</p>
       {!!target&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('CLOSE_BOX',{targetBoxCode:target})}>Закрыть короб</button>}
       {!!target&&plan.boxes.some(b=>b.code===target&&!b.quantity&&!b.closed)&&<button className="icon-text-button" style={{minHeight:42,margin:4,padding:"8px 14px"}} disabled={busy||adjusting||!!pending||(!canWrite||adjusting)} onClick={()=>void command('CANCEL_EMPTY_BOX',{targetBoxCode:target})}>Отложить пустой короб</button>}
       {plan.wholeBoxes.length>0&&<p>Целые короба к добавлению: {plan.wholeBoxes.join(', ')}</p>}

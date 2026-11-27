@@ -1,3 +1,4 @@
+import {plannedPackingEnabled,validatePackingPlan} from './ozon-packing-plan';
 import {BadGatewayException,BadRequestException,ConflictException,Injectable,NotFoundException} from '@nestjs/common';
 import {PrismaService} from '../../common/prisma/prisma.service';
 import {ClientScopeService} from '../auth/client-scope.service';
@@ -45,7 +46,7 @@ export class OzonAssemblySupplyService {
   if(!response.ok)throw new BadGatewayException(`Ozon: HTTP ${response.status}. Этикетки не отправлены в печать.`);
   const buffer=Buffer.from(await response.arrayBuffer());
   if(buffer.length>20_000_000)throw new BadRequestException('Файл этикеток слишком велик.');
-  const rendered=await renderOzonPrintPages(await annotateOzonLabels(buffer,op.cargoes ?? [],s.request.fboAssembly?.boxes ?? []),direction.cargoIds);
+  const rendered=await renderOzonPrintPages(await annotateOzonLabels(buffer,op.cargoes ?? [],link?.packingPlan?.boxes.map(b=>({id:b.key,boxCode:b.boxCode,direction:b.direction}))??s.request.fboAssembly?.boxes ?? []),direction.cargoIds);
   const current=await this.load(id,user);
   if(ozonPrintManifest(current.directions as unknown as Array<{name:string}>,current.integration as SupplyIntegration).fingerprint!==manifest.fingerprint)throw new ConflictException('Состав грузомест изменился. Подготовьте этикетки заново.');
   return {...manifest,clientId:s.request.clientId,...rendered};
@@ -53,7 +54,7 @@ export class OzonAssemblySupplyService {
  // FIX: scoped read-only export remains available after reopening a completed assembly.
  async cargoMappingFile(id:string,user:AuthUser){
   const s=await this.load(id,user);
-  return {fileName:`ozon-boxes-${s.request.number}.xlsx`,buffer:await cargoMappingWorkbook(s.request.fboAssembly?.boxes??[],s.integration as SupplyIntegration|null)};
+  return {fileName:`ozon-boxes-${s.request.number}.xlsx`,buffer:await cargoMappingWorkbook(s.integration?.packingPlan?.boxes?.map((b:any)=>({id:b.key,boxCode:b.boxCode,direction:b.direction}))??s.request.fboAssembly?.boxes??[],s.integration as SupplyIntegration|null)};
  }
  // FIX: persist the authenticated click before returning an existing label URL; no marketplace write.
  async labelDownload(id:string,supplyId:string,user:AuthUser){
@@ -70,7 +71,7 @@ export class OzonAssemblySupplyService {
   if (!url.hostname.endsWith('.ozone.ru') && url.hostname !== 'ozone.ru') throw new BadRequestException('Некорректная ссылка Ozon.');
   const response = await fetch(url,{redirect:'error',signal:AbortSignal.timeout(20000)});
   if (!response.ok) throw new BadGatewayException('Скачивание стикеров не удалось. Обновите этикетки Ozon.');
-  const pdf = await annotateOzonLabels(Buffer.from(await response.arrayBuffer()),op.cargoes ?? [],s.request.fboAssembly?.boxes ?? []);
+  const pdf = await annotateOzonLabels(Buffer.from(await response.arrayBuffer()),op.cargoes ?? [],link?.packingPlan?.boxes.map(b=>({id:b.key,boxCode:b.boxCode,direction:b.direction}))??s.request.fboAssembly?.boxes ?? []);
   return {url:url.href,pdfBase64:pdf.toString('base64')};
  }
  private async load(id:string,user:AuthUser,mode:'read'|'write'='read',db:any=this.db){
@@ -144,7 +145,7 @@ export class OzonAssemblySupplyService {
   const s=await this.load(id,user),link=s.integration as SupplyIntegration|null;
   const connections=await this.db.clientMarketplaceConnection.findMany({where:{clientId:s.request.clientId,marketplace:'OZON',isActive:true},select:{id:true,accountName:true,sellerId:true}});
   let packingError='';if(link)try{packedCargoes(s.directions,link,s.request.fboAssembly);}catch(e){packingError=e instanceof Error?e.message:String(e);}
-  return {requestId:id,directions:s.directions,connections,link,differences:link?supplyDifferences(s.directions,link):[],packingError};
+  return {plannedPackingSupported:plannedPackingEnabled(),requestId:id,directions:s.directions,connections,link,differences:link?supplyDifferences(s.directions,link):[],packingError};
  }
  async bind(id:string,body:{connectionId:string;orderId:string},user:AuthUser){
   const s=await this.load(id,user,'write');if(s.integration?.frozenHash)throw new ConflictException('Состав уже отправляется. Привязка заблокирована.');
@@ -181,8 +182,122 @@ export class OzonAssemblySupplyService {
   await this.locked(id,user,async(cur,tx)=>{const l=cur.integration as SupplyIntegration;if(!l||bindingIdentity(l)!==bindingIdentity(old))throw new ConflictException('Привязка изменилась. Обновите экран.');await this.save(tx,id,mergeSupplyOrders(l,orders),user,'OZON_SUPPLY_REFRESH');});
   return this.view(id,user);
  }
+ // FIX: a planned composition is separate from physical scans and never fabricates packing.
+ async savePackingPlan(id:string,body:{boxes:unknown;confirm?:boolean},user:AuthUser){
+  if(!plannedPackingEnabled())throw new NotFoundException('Упаковка по плану выключена.');
+  if(body.confirm!==true)throw new BadRequestException('Подтвердите предварительный план упаковки.');
+  await this.refresh(id,user);
+  await this.locked(id,user,async(s,tx)=>{
+   const link=s.integration as SupplyIntegration;
+   if(link.frozenHash||Object.keys(link.operations??{}).length)throw new ConflictException('Отправленный план нельзя менять без сверки Ozon.');
+   if(s.request.fboAssembly?.boxes?.length||s.request.fboAssembly?.units?.some((u:any)=>u.state==='PACKED'||u.wholeBox&&u.state!=='RETURNED'))throw new ConflictException('Упаковка уже начата. Нельзя заменить фактическое наполнение планом.');
+   const boxes=validatePackingPlan(body.boxes,s.directions,link);
+   const previous=link.packingPlan;
+   if(previous&&previous.state!=='DRAFT')throw new ConflictException('Операция Ozon ещё не завершена.');
+   const clean=boxes.map(b=>({key:b.key,boxCode:b.boxCode,supplyId:b.supplyId,direction:b.direction,items:b.items.map(i=>({skuId:i.skuId,barcode:i.barcode,quantity:i.quantity,zone:i.zone}))}));
+   for(const b of clean)if(await tx.box.findUnique({where:{code:b.boxCode}}))throw new ConflictException('ШК планируемого короба уже используется.');
+   link.packingPlan={version:(previous?.version??0)+1,state:'DRAFT',boxes:clean};
+   await this.save(tx,id,link,user,'OZON_PACKING_PLAN_SAVED');
+  });return this.view(id,user);
+ }
+ async uploadPackingPlan(id:string,body:{confirm?:boolean;replaceEmpty?:boolean},user:AuthUser){
+  if(!plannedPackingEnabled())throw new NotFoundException('Упаковка по плану выключена.');
+  if(body.confirm!==true)throw new BadRequestException('Подтвердите передачу плана в Ozon.');
+  const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration,plan=l.packingPlan;
+  if(!plan||plan.state!=='DRAFT')throw new ConflictException('Нет нового плана. Для отправленного плана проверьте результат.');
+  const c=await this.connection(l.connectionId,s.request.clientId);
+  // A fresh snapshot must match before the claim; existing nonempty cargo is never overwritten.
+  const snapshots=[];for(const order of supplyOrders(l))snapshots.push(...supplyOrders(await this.snapshot(c,order.orderId)));
+  const fresh=mergeSupplyOrders(l,snapshots);validatePackingPlan(plan.boxes,s.directions,fresh);
+  if(snapshots.some(o=>!['DATA_FILLING','READY_TO_SUPPLY'].includes(o.state)))throw new ConflictException('Ozon больше не разрешает заполнение поставки.');
+  const replacements:Record<string,boolean>={},emptyIds:Record<string,string[]>={},payload:Record<string,any[]>={};
+  for(const supply of fresh.supplies){
+   const result=await this.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supply.id)]});
+   const r=result.supplies_cargoes?.find((v:any)=>String(v.supply_id)===supply.id);
+   if(!r||!Array.isArray(r.transport_cargoes)||r.transport_cargoes.length||!Array.isArray(r.cargoes_without_transport_cargoes))throw new ConflictException('Не удалось однозначно проверить существующие грузоместа.');
+   emptyIds[supply.id]=r.cargoes_without_transport_cargoes.map((b:any)=>String(b.cargo_id)).sort();
+   replacements[supply.id]=r.cargoes_without_transport_cargoes.length>0;
+   if(replacements[supply.id]){
+    if(!body.replaceEmpty)throw new ConflictException('Пустые грузоместа уже созданы. Подтвердите их замену и печать новых этикеток.');
+    for(const box of r.cargoes_without_transport_cargoes){
+     if(!box.bundle_id)throw new ConflictException('Ozon не вернул состав существующего грузоместа.');
+     const bundle=await this.call(c,'/v1/supply-order/bundle',{bundle_ids:[box.bundle_id],limit:100});
+     if(!Array.isArray(bundle.items)||bundle.has_next||bundle.items.some((i:any)=>Number(i.quantity)!==0))throw new ConflictException('В Ozon уже есть наполненные грузоместа. Замена запрещена.');
+    }
+   }
+   payload[supply.id]=plan.boxes.filter(b=>b.supplyId===supply.id).map(b=>({key:b.key,value:{type:'BOX',items:b.items.map(i=>{const item=supply.items.find(x=>x.barcode===i.barcode)!;return {barcode:i.barcode,offer_id:item.offerId,quantity:i.quantity,quant:item.quant||1};})}}));
+  }
+  await this.locked(id,user,async(cur,tx)=>{
+   const link=cur.integration as SupplyIntegration;
+   if(JSON.stringify(link.packingPlan)!==JSON.stringify(plan)||link.frozenHash||Object.keys(link.operations).length||bindingIdentity(link)!==bindingIdentity(l))throw new ConflictException('План изменился. Обновите страницу.');
+   validatePackingPlan(plan.boxes,cur.directions,fresh);
+   if(cur.request.fboAssembly?.boxes?.length)throw new ConflictException('Упаковка уже начата.');
+   link.packingPlan!.state='SENDING';link.frozenHash=cargoHash(payload);
+   link.packingPlan!.dispatch={};
+   for(const supplyId of Object.keys(payload)){link.operations[supplyId]={state:'QUEUED'};link.packingPlan!.dispatch[supplyId]={cargoes:payload[supplyId],replaceEmpty:replacements[supplyId],emptyCargoIds:emptyIds[supplyId]};}
+   await this.save(tx,id,link,user,'OZON_PLANNED_CARGO_CLAIMED');
+  });
+  return this.status(id,user);
+ }
+ // FIX: claim only one queued supply. A crash after claim is deliberately not retried.
+ private async dispatchPlanned(id:string,user:AuthUser){
+  const s=await this.load(id,user,'write'),link=s.integration as SupplyIntegration,plan=link.packingPlan;
+  if(!plan?.dispatch||plan.state==='ACTIVE'||Object.values(link.operations).some(o=>!['QUEUED','SUCCESS'].includes(o.state)))return;
+  const supplyId=Object.keys(plan.dispatch).find(k=>link.operations[k]?.state==='QUEUED');if(!supplyId)return;
+  const entry=plan.dispatch[supplyId],c=await this.connection(link.connectionId,s.request.clientId);
+  const order=supplyOrders(link).find(o=>o.supplies.some(v=>v.id===supplyId));if(!order)throw new ConflictException('Нет заявки Ozon для направления.');
+  const fresh=await this.snapshot(c,order.orderId);
+  if(!['DATA_FILLING','READY_TO_SUPPLY'].includes(fresh.state))throw new ConflictException('Ozon больше не разрешает заполнение поставки.');
+  validatePackingPlan(plan.boxes,s.directions,mergeSupplyOrders(link,supplyOrders(link).map(o=>o.orderId===order.orderId?supplyOrders(fresh)[0]:o)));
+  const existing=await this.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supplyId)]});
+  const remote=existing.supplies_cargoes?.find((v:any)=>String(v.supply_id)===supplyId);
+  if(!remote||!Array.isArray(remote.transport_cargoes)||remote.transport_cargoes.length||!Array.isArray(remote.cargoes_without_transport_cargoes)||JSON.stringify(remote.cargoes_without_transport_cargoes.map((b:any)=>String(b.cargo_id)).sort())!==JSON.stringify(entry.emptyCargoIds))throw new ConflictException('Грузоместа Ozon изменились после подготовки плана.');
+  for(const b of remote.cargoes_without_transport_cargoes){
+   if(!b.bundle_id)throw new ConflictException('Нет состава грузоместа Ozon.');
+   const contents=await this.call(c,'/v1/supply-order/bundle',{bundle_ids:[b.bundle_id],limit:100});
+   if(!Array.isArray(contents.items)||contents.has_next||contents.items.some((i:any)=>Number(i.quantity)!==0))throw new ConflictException('Грузоместо уже наполнено. Замена запрещена.');
+  }
+  const claimed=await this.locked(id,user,async(cur,tx)=>{const l=cur.integration as SupplyIntegration;
+   if(l.frozenHash!==link.frozenHash||l.operations[supplyId]?.state!=='QUEUED'||Object.values(l.operations).some(o=>!['QUEUED','SUCCESS'].includes(o.state)))return false;
+   l.operations[supplyId]={state:'SENDING'};await this.save(tx,id,l,user,'OZON_PLANNED_CARGO_SENDING');return true;
+  });if(!claimed)return;
+  try{
+   const result=await this.call(c,'/v1/cargoes/create',{supply_id:Number(supplyId),delete_current_version:entry.replaceEmpty,cargoes:entry.cargoes},false);
+   if(!result.operation_id)throw new Error('Ozon не вернул номер операции.');
+   await this.locked(id,user,async(cur,tx)=>{const l=cur.integration as SupplyIntegration;l.operations[supplyId]={state:'ACCEPTED',operationId:String(result.operation_id)};await this.save(tx,id,l,user,'OZON_PLANNED_CARGO_ACCEPTED');});
+  }catch(e){
+   await this.locked(id,user,async(cur,tx)=>{const l=cur.integration as SupplyIntegration;if(!l.operations[supplyId].operationId)l.operations[supplyId]={state:'UNKNOWN',error:e instanceof Error?e.message:String(e)};await this.save(tx,id,l,user,'OZON_PLANNED_CARGO_UNCERTAIN');});
+   throw new ConflictException('Ответ Ozon не подтверждён. Повтор заблокирован до сверки.');
+  }
+ }
+ // FIX: activate only after exact remote cargo IDs and per-box quantities are read back.
+ private async activatePlanned(id:string,user:AuthUser){
+  const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration,p=l.packingPlan;
+  if(!p||p.state==='ACTIVE'||!Object.values(l.operations).length||Object.values(l.operations).some(o=>o.state!=='SUCCESS'))return;
+  const c=await this.connection(l.connectionId,s.request.clientId),ids=new Set<string>();
+  const verified=structuredClone(p.boxes);
+  for(const supplyId of new Set(p.boxes.map(b=>b.supplyId))){
+   const expected=verified.filter(b=>b.supplyId===supplyId),op=l.operations[supplyId];
+   if(op.cargoes?.length!==expected.length)throw new ConflictException('Ozon подтвердил другое число грузомест.');
+   for(const b of expected){const matches=op.cargoes.filter(v=>v.key===b.key);if(matches.length!==1||!/^\d+$/.test(matches[0].cargoId)||ids.has(matches[0].cargoId))throw new ConflictException('Неоднозначное сопоставление грузомест Ozon.');b.cargoId=matches[0].cargoId;ids.add(b.cargoId);}
+   const result=await this.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supplyId)]});
+   const remote=result.supplies_cargoes?.find((v:any)=>String(v.supply_id)===supplyId);
+   if(!remote||!Array.isArray(remote.transport_cargoes)||remote.transport_cargoes.length||!Array.isArray(remote.cargoes_without_transport_cargoes)||remote.cargoes_without_transport_cargoes.length!==expected.length)throw new ConflictException('Состав грузомест Ozon не совпал с планом.');
+   for(const b of expected){const cargo=remote.cargoes_without_transport_cargoes.find((v:any)=>String(v.cargo_id)===b.cargoId);if(!cargo?.bundle_id)throw new ConflictException('Не найден состав короба Ozon.');
+    const result=await this.call(c,'/v1/supply-order/bundle',{bundle_ids:[cargo.bundle_id],limit:100});
+    if(!Array.isArray(result.items)||result.has_next)throw new ConflictException('Состав короба Ozon не подтверждён полностью.');
+    const actual=new Map<string,number>();for(const i of result.items)actual.set(String(i.barcode),(actual.get(String(i.barcode))||0)+Number(i.quantity));
+    if(actual.size!==b.items.length||b.items.some(i=>actual.get(i.barcode)!==i.quantity))throw new ConflictException('Количество товара в коробе Ozon не совпало с планом.');
+   }
+  }
+  await this.locked(id,user,async(cur,tx)=>{const link=cur.integration as SupplyIntegration;
+   if(JSON.stringify(link.packingPlan)!==JSON.stringify(p)||link.frozenHash!==l.frozenHash||JSON.stringify(link.operations)!==JSON.stringify(l.operations))throw new ConflictException('План изменился во время сверки.');
+   link.packingPlan!.boxes=verified;link.packingPlan!.state='ACTIVE';await this.save(tx,id,link,user,'OZON_PACKING_PLAN_ACTIVE');
+  });
+ }
  async upload(id:string,confirm:boolean,user:AuthUser){
   if(confirm!==true)throw new BadRequestException('Подтвердите передачу проверенных коробов.');
+  if((await this.load(id,user,'write')).integration?.packingPlan)throw new ConflictException('Грузоместа уже управляются планом. Используйте проверку результата.');
   await this.refresh(id,user);
   const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration,c=await this.connection(l.connectionId,s.request.clientId);
   if(supplyOrders(l).some(o=>o.state!=='DATA_FILLING'&&o.supplies.some(s=>!l.operations[s.id]||l.operations[s.id].state==='FAILED')))throw new ConflictException('Не все неотправленные заявки Ozon в статусе заполнения данных.');
@@ -221,7 +336,7 @@ export class OzonAssemblySupplyService {
   const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration;if(!l)throw new ConflictException('Нет привязки.');const c=await this.connection(l.connectionId,s.request.clientId);
   for(const [supplyId,op] of Object.entries(l.operations)){
    // FIX: legacy explicit 429 failures can be released only after a fresh empty-cargo read.
-   if(op.state==='UNKNOWN'&&!op.operationId&&op.error?.startsWith('Ozon: HTTP 429.')){
+   if(!l.packingPlan&&op.state==='UNKNOWN'&&!op.operationId&&op.error?.startsWith('Ozon: HTTP 429.')){
     const result=await this.call(c,'/v1/cargoes/supplies/get',{supply_ids:[Number(supplyId)]});
     const remote=result.supplies_cargoes?.find((v:any)=>String(v.supply_id)===supplyId);
     if(remote&&Array.isArray(remote.transport_cargoes)&&Array.isArray(remote.cargoes_without_transport_cargoes)&&!remote.transport_cargoes.length&&!remote.cargoes_without_transport_cargoes.length){
@@ -235,11 +350,14 @@ export class OzonAssemblySupplyService {
    if(!op.operationId)continue;
    const r=await this.call(c,'/v2/cargoes/create/info',{operation_id:op.operationId});
    const state=r.status==='SUCCESS'?'SUCCESS':r.status==='FAILED'?'FAILED':'ACCEPTED';
-   await this.locked(id,user,async(cur,tx)=>{const link=cur.integration as SupplyIntegration;const current=link.operations[supplyId];if(current.operationId!==op.operationId)return;
+   await this.locked(id,user,async(cur,tx)=>{const link=cur.integration as SupplyIntegration;const current=link.operations[supplyId];if(current.operationId!==op.operationId||current.state==='SUCCESS'&&state!=='SUCCESS')return;
     current.state=state;current.error=r.errors&&(Array.isArray(r.errors)?r.errors.length:Object.keys(r.errors).length)?JSON.stringify(r.errors):undefined;
     if(state==='SUCCESS')current.cargoes=(r.result?.cargoes??[]).map((v:any)=>({key:String(v.key),cargoId:String(v.value?.cargo_id??'')}));
     await this.save(tx,id,link,user,'OZON_CARGO_STATUS');});
-  }return this.view(id,user);
+  }
+  await this.activatePlanned(id,user);
+  await this.dispatchPlanned(id,user);
+  return this.view(id,user);
  }
  async labels(id:string,supplyId:string,user:AuthUser){
   const s=await this.load(id,user,'write'),l=s.integration as SupplyIntegration,op=l?.operations[supplyId];
