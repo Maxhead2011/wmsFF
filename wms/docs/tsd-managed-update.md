@@ -1,6 +1,6 @@
 # Managed TSD update 275
 
-Validated release candidate for our server-choice package, PR1107. Public channel is switched only after merge by the guarded publisher. [Verification](releases/tsd-managed-update-verification.json).
+Published27.11.2026 after merge of PR1107. Public metadata and both APK download URLs match the verified275 hash. All container images and the standard270 channel remain unchanged. [Publication proof](releases/tsd-managed-update-published.json). [Verification](releases/tsd-managed-update-verification.json).
 
 Urovo DT40 normal authenticated idle path installed273 without system confirmation. All140 saved entries and4469 operation records were preserved. HT330 normal idle path installed final275 through the preinstalled Unitech AppCtrl service without system confirmation; all9 saved entries and its empty queue were preserved. One-time diagnostic bootstrap preceded these tests and is not counted as proof of automatic installation.
 

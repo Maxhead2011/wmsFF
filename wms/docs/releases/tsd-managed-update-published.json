@@ -1,0 +1,15 @@
+{
+  "logoff-tsd-server-choice": {
+    "packageId": "pro.logoff.wms.tsd.servers",
+    "versionCode": 275,
+    "versionName": "0.1.275-managed-update",
+    "sha256": "b66ead95d9d738377503f2d49ec92c1c983c40b504a27b2beb91a8cfc155ac7b",
+    "size": 6071321,
+    "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-servers-managed-275.apk",
+    "releasedAt": "2026-11-27T16:30:03.562520+00:00",
+    "releaseNotes": "\u0422\u0438\u0445\u0430\u044f \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 \u0447\u0435\u0440\u0435\u0437 \u0441\u0435\u0440\u0432\u0438\u0441\u044b Urovo \u0438 Unitech; \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d\u043d\u044b\u0435 \u043f\u043e\u0437\u0438\u0446\u0438\u0438 \u0438 \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a\u0438 \u043d\u0435 \u0431\u043b\u043e\u043a\u0438\u0440\u0443\u044e\u0442 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435; \u043e\u0447\u0435\u0440\u0435\u0434\u044c \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u0442\u0441\u044f."
+  },
+  "pr": 1107,
+  "containerImagesUnchanged": true,
+  "standardChannelUnchanged": true
+}
