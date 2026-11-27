@@ -1,21 +1,13 @@
-# Managed TSD update candidate 273
+# Managed TSD update 275
 
-Status: unpublished; public server-choice feed remains 270 until physical verification and PR merge.
+Validated release candidate for our server-choice package, PR1107. Public channel is switched only after merge by the guarded publisher. [Verification](releases/tsd-managed-update-verification.json).
 
-Only our server-choice package uses OEM installation: Urovo DeviceManager and the preinstalled system Unitech AppCtrl service. Package identity, version and exact signing certificate are validated before dispatch. No device-owner enrollment, Play Protect disabling, data clearing or WMS uninstall is used. Unknown manufacturers retain the existing Android installer.
+Urovo DT40 normal authenticated idle path installed273 without system confirmation. All140 saved entries and4469 operation records were preserved. HT330 normal idle path installed final275 through the preinstalled Unitech AppCtrl service without system confirmation; all9 saved entries and its empty queue were preserved. One-time diagnostic bootstrap preceded these tests and is not counted as proof of automatic installation.
 
-Durable FBO position checkpoints and valid receipt drafts are preserved and no longer masquerade as unsent commands. Actual pending commands, outbox rows, active work and malformed drafts continue to block replacement. Installation takes scanner focus before rechecking durable queues. An unconfirmed OEM request is surfaced after 90 seconds without immediate retransmission.
+Final275 adds explicit Unitech_Electronics firmware matching and a150ms delay before the final barrier-focus check. The exact APK, signature and resource-preservation proof are linked above. All372 Android tests pass. No system protection was disabled, no WMS data cleared and no WMS uninstall performed. Diagnostic helpers were removed and temporary stay-awake settings restored.
 
-## Verification
+Durable FBO positions and valid receipt drafts are preserved and do not block replacement. Actual pending commands/outbox entries, active work and malformed drafts still block. The scanner barrier must own focus before installation. Package identity, version and signing certificate are validated before OEM dispatch; uncertain OEM requests surface after90 seconds without immediate retransmission.
 
-370 Android unit tests passed; exact signed APK overlays published 270, preserving other ZIP resources and legacy behavior. Candidate SHA-256: `109e6e24fe9f7d53c6168b61a6d7157dabe96e9abe3b37505c5a047b48e31306`.
+Supported OEMs: Urovo and Unitech/Unitech_Electronics. Unknown manufacturers retain the Android installer and may require confirmation. Previous267–270 installations can still need one-time bootstrap if their old guard blocks installation; automatic migration of every older device is not proven. Versions271–274 were internal tests, not public releases.
 
-Urovo OEM bootstrap accepted and replaced the process without a system confirmation. Normal idle-path verification and Unitech hardware verification remain required before publication. On Urovo, 75 rejected and 4394 synced records and saved work were retained. A logged-out terminal currently cannot enter the authenticated idle-update path; do not describe a cached APK as an installed update.
-
-Physical test versions 271/272 are not public releases. Older installed versions may require one-time bootstrap to obtain the corrected update guard. Full unattended fleet migration from those versions is not yet established.
-
-## Scope and source
-
-Files: MainActivity.installUpdateApk/managedUpdateStatus, ManagedApkInstaller, IdleUpdateGuard.hasReceiptDraft, logoff manifest, Android build version/dependency and corresponding unit tests. Release helpers live under scripts/releases/tsd-managed-update-273. No API/web images, stock, billing or sold-WMS runtime change.
-
-Official Unitech generated AIDL interface provenance is recorded alongside the dependency in app/libs. The OEM service itself is supplied by device firmware.
+Scope: MainActivity.installUpdateApk/managedUpdateStatus and final focus dispatch, ManagedApkInstaller, IdleUpdateGuard.hasReceiptDraft, logoff manifest, Android version/dependency and tests. Release helpers: scripts/releases/tsd-managed-update-273 (final version275). No API/web images, stock, billing, standard270 channel or sold-WMS runtime changes. Source/runtime parity remains false; exact overlay of public270 is used.

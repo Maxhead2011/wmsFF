@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 273 // FIX: durable checkpoint permits safe idle upgrade.
-            versionName = "0.1.273-managed-update"
+            versionCode = 275 // FIX: durable checkpoint permits safe idle upgrade.
+            versionName = "0.1.275-managed-update"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -113,6 +113,6 @@ dependencies {
 androidComponents.onVariants(androidComponents.selector().withName("logoffServers")) { variant ->
     variant.outputs.forEach { output ->
         output.versionCode.set(273)
-        output.versionName.set("0.1.273-managed-update")
+        output.versionName.set("0.1.275-managed-update")
     }
 }

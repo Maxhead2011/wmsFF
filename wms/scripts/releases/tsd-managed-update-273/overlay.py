@@ -10,6 +10,11 @@ for name in ['installUpdateApk','managedUpdateStatus']:
  key=next(k for k in b if ' '+name+'(' in k)
  if key in a:s=s.replace(a[key],b[key])
  else:s+='\n'+b[key]+'\n'
+# FIX: preserve the published lambda while delaying only its final focus check.
+key=next(k for k in methods(s) if 'lambda$tryIdleUpdate$3(' in k)
+m=methods(s)[key];call='invoke-virtual {v0, v1}, Landroid/os/Handler;->post(Ljava/lang/Runnable;)Z'
+assert m.count(call)==1
+s=s.replace(m,m.replace(call,'invoke-static {v0, v1}, Lpro/logoff/wms/tsd/ManagedApkInstaller;->afterBarrierFocus(Landroid/os/Handler;Ljava/lang/Runnable;)Z'))
 s=s.replace('0.1.271-idle-checkpoint','0.1.'+str(version)+'-managed-update');p.write_text(s,encoding='utf-8')
 for p in donor.rglob('ManagedApkInstaller*.smali'):shutil.copyfile(p,folder/p.name)
 for p in donor.rglob('IAppCtrlAidl*.smali'):

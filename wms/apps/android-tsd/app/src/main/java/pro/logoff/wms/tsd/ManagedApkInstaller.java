@@ -11,9 +11,11 @@ import com.unitech.appctrlapi.aidl.*;
 
 /** FIX: only verified self-updates use the preinstalled manufacturer's installer. */
 final class ManagedApkInstaller {
+    // FIX: let Android grant the scanner barrier focus before the final safety check.
+    static boolean afterBarrierFocus(Handler handler, Runnable action) { return handler.postDelayed(action, 150L); }
     static String route(String manufacturer) {
         if ("urovo".equalsIgnoreCase(manufacturer)) return "urovo";
-        if ("unitech".equalsIgnoreCase(manufacturer)) return "unitech";
+        if ("unitech".equalsIgnoreCase(manufacturer) || "unitech_electronics".equalsIgnoreCase(manufacturer)) return "unitech";
         return "standard";
     }
     static boolean unitechSucceeded(int result) { return result == 0; }

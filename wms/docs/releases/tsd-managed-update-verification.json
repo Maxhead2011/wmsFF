@@ -1,0 +1,52 @@
+{
+  "urovoSilentVerified": true,
+  "unitechSilentVerified": true,
+  "dataPreserved": true,
+  "urovo": {
+    "model": "DT40",
+    "fromVersion": 272,
+    "toVersion": 273,
+    "normalIdlePath": true,
+    "systemConfirmation": false,
+    "preservedEntries": 140,
+    "queues": [
+      {
+        "status": "REJECTED",
+        "count": 75
+      },
+      {
+        "status": "SYNCED",
+        "count": 4394
+      }
+    ],
+    "guardVerified": true,
+    "dataPreserved": true
+  },
+  "unitech": {
+    "model": "HT330",
+    "fromVersion": 274,
+    "toVersion": 275,
+    "normalIdlePath": true,
+    "systemConfirmation": false,
+    "preservedEntries": 9,
+    "queues": [],
+    "guardVerified": true,
+    "dataPreserved": true
+  },
+  "apk": {
+    "packageId": "pro.logoff.wms.tsd.servers",
+    "versionCode": 275,
+    "versionName": "0.1.275-managed-update",
+    "sha256": "b66ead95d9d738377503f2d49ec92c1c983c40b504a27b2beb91a8cfc155ac7b",
+    "size": 6071321,
+    "baselineSha256": "f8bc4d667a70d1e83d019b1c207dbd07eba4c4800393f95b04e8b61f7ef74ee7",
+    "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+    "resourcesPreserved": true
+  },
+  "tests": {
+    "tests": 372,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -1,4 +1,4 @@
-"""Publish server-choice273 only."""
+"""Publish server-choice275 only."""
 from pathlib import Path
 from datetime import datetime,timezone
 import subprocess,json,sys,hashlib,re,fcntl,time
@@ -13,11 +13,11 @@ pr=json.loads((r/'pr.json').read_text());assert pr['merged'] and pr['base']=='fe
 physical=json.loads((r/'managed-physical-proof.json').read_text())
 assert physical['urovoSilentVerified'] and physical['unitechSilentVerified'] and physical['dataPreserved']
 root=Path('/var/www/wms-updates');cfg=Path('/etc/nginx/sites-available/default');oldcfg=cfg.read_bytes();config=oldcfg.decode();oldmetas={};values={}
-channels=[('logoff-tsd-server-choice','logoff-tsd-servers-managed-273',270)]
+channels=[('logoff-tsd-server-choice','logoff-tsd-servers-managed-275',270)]
 for channel,file,version in channels:
  proof=json.loads((r/(file+'.json')).read_text());payload=(r/(file+'.apk')).read_bytes();oldmetas[channel]=(root/(channel+'.json')).read_bytes();old=json.loads(oldmetas[channel])
  assert old['versionCode']==version and old['sha256']==proof['baselineSha256'] and old['packageId']==proof['packageId']
- assert proof['versionCode']==273 and proof['resourcesPreserved'] and proof['certificateSha256']=='70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da'
+ assert proof['versionCode']==275 and proof['resourcesPreserved'] and proof['certificateSha256']=='70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da'
  assert sha(payload)==proof['sha256'] and len(payload)==proof['size']
  assert json.loads(fetch('/downloads/'+channel+'.json'))==old
  pattern=r'(location = /downloads/'+re.escape(channel)+r'\.apk\s*\{\s*alias )[^;]+;'
@@ -28,7 +28,7 @@ for channel,file,version in channels:
  values[channel]={k:proof[k] for k in ['packageId','versionCode','versionName','sha256','size']}
  values[channel].update(apkUrl='https://wms.logoff.pro/downloads/'+file+'.apk',releasedAt=datetime.now(timezone.utc).isoformat(),releaseNotes='Тихая установка через сервисы Urovo и Unitech; сохранённые позиции и черновики не блокируют обновление; очередь сохраняется.')
 assert json.loads(fetch('/api/v1/health'))['status']=='ok'
-if not apply:print('Server-choice273 preflight passed');sys.exit()
+if not apply:print('Server-choice275 preflight passed');sys.exit()
 assert not (r/'apk-published.json').exists();(r/'nginx.before').write_bytes(oldcfg)
 for channel,b in oldmetas.items():(r/(channel+'.before.json')).write_bytes(b)
 try:

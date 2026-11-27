@@ -1,4 +1,4 @@
-Candidate TSD273: [OEM silent update verification](tsd-managed-update.md); unpublished, public server-choice feed still270.
+Candidate TSD275: [OEM silent update verification](tsd-managed-update.md); unpublished, public server-choice feed still270.
 
 Pending TSD server-choice271: [persisted FBO checkpoint no longer blocks idle update](tsd-idle-update-checkpoint.md). Queues/commands/receipt safeguards retained; standard270 and sold unchanged.
 

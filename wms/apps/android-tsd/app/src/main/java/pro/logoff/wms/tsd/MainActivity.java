@@ -333,7 +333,7 @@ public class MainActivity extends Activity {
                 if(outbox.counts().pending!=0 || pendingUpdateScans()){
                     mainHandler.post(()->{appUpdateBusy=false;releaseUpdateBarrier();showUpdateStatus("Обновление скачано. Установка ожидает подтверждения незавершённых операций или приёмки.",false);});return;
                 }
-                mainHandler.post(()->{
+                ManagedApkInstaller.afterBarrierFocus(mainHandler,()->{
                     if(!idleUpdateState() || updateBarrier==null || !updateBarrier.isShowing() || !updateBarrier.getWindow().getDecorView().hasWindowFocus()){
                         releaseUpdateBarrier();appUpdateBusy=false;return;
                     }
