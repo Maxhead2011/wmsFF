@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="unitech.appctrl.aidl" />
+    <queries><package android:name="com.unitech.appctrlservice" /></queries>
     <!-- FIX: brand-specific launcher resources do not change sold installations. -->
     <application android:icon="@mipmap/ic_logoff_launcher" android:roundIcon="@mipmap/ic_logoff_launcher" />
 </manifest>
