@@ -1,3 +1,5 @@
+TSD276 release candidate: LOGOFF pallet placement uses GET /api/v1/tsd/placement/clients (active client and active membership of the selected warehouse). Server-choice baseline: 275. Deploy API before the APK.
+
 Published 27.11.2026 PR1107: [TSD275 OEM silent update](tsd-managed-update.md), Urovo and HT330 hardware verification,372 Android tests. Public server-choice275; standard270 and all container images unchanged. [Release proof](releases/tsd-managed-update-published.json).
 
 TSD271 checkpoint fix is included in published275;271 was an internal pilot.
