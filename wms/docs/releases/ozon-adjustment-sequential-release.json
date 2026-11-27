@@ -1,0 +1,43 @@
+{
+  "published": true,
+  "pr": 1101,
+  "mergeCommitSha": "fe359658613aaa94f27ecf5410eaf9e52cf91a8c",
+  "head": "3d00486e1556e710ff46d524bb74cc3da4270084",
+  "images": {
+    "api": "sha256:253eeb131b4e54becd037ecac70f59c012f0f75d610d488838066951ce53df9e",
+    "web": "sha256:4fb1562faa9c5030466a4f9d289c483665dc70c381af57e92c36b3a15c485e50"
+  },
+  "health": true,
+  "allHashesVerified": true,
+  "apiFiles": 815,
+  "webFiles": 3382,
+  "environmentUnchanged": true,
+  "otherContainersUnchanged": true,
+  "businessRecordsChangedByRelease": false,
+  "sourceParityVerified": false,
+  "webUnchanged": true,
+  "operation": {
+    "state": "APPLIED",
+    "ufaPreserved": true,
+    "yaroslavl": {
+      "state": "SUCCESS",
+      "operationId": "01a21d02-d249-7e51-ab53-d1c4548da4a3"
+    },
+    "physicalUnchanged": true,
+    "billingUnchanged": true,
+    "requestStockMovementsUnchanged": true,
+    "concurrentStockActivityRequest": 3350,
+    "replayNoOp": true,
+    "remoteCompositionMatches": true,
+    "assemblyUnlocked": true
+  },
+  "runtime": {
+    "passed": true,
+    "successPreserved": true,
+    "oneRejectedRetry": true,
+    "replayNoWrites": true
+  },
+  "apiTests": 4992,
+  "skipped": 203,
+  "testLimitation": "One unrelated KIZ duplicate integration file requires a missing test DB URL; remaining full suite passed."
+}
