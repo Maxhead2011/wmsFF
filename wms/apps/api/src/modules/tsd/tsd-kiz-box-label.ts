@@ -5,6 +5,12 @@ import {PDFParse} from 'pdf-parse';
 import {configurePdfMake} from '../../common/pdf/pdfmake';
 // FIX: two distinct warehouse labels, WB-like bold identifier, no truncation of encoded codes.
 export function kizBoxLabelDefinition(code:string,title:string):TDocumentDefinitions{
+ // FIX: explicit missing-placement label is text only, never a location QR.
+ if(code==='ПАЛЕТ НЕ ОПРЕДЕЛЕН'&&title==='ПАЛЛЕТ-СОРТ'){
+  const mm=72/25.4;
+  return {pageSize:{width:58*mm,height:40*mm},pageMargins:3*mm,defaultStyle:{font:'DejaVuSans',bold:true},
+   content:[{text:'ПАЛЕТ\nНЕ ОПРЕДЕЛЕН',fontSize:15,alignment:'center',margin:[0,10*mm,0,0]}]};
+ }
  if(!/^[A-Za-z0-9_-]{1,96}$/.test(code))throw new Error('Некорректный код этикетки.');
  const mm=72/25.4;
  const qr={bcid:'qrcode',text:code,scale:3,eclevel:'M'};

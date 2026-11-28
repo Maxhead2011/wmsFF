@@ -1,4 +1,4 @@
-Prepared 28.11.2026: [Box-only KIZ printing without a pallet](tsd-kiz-box-print.md). Own-WMS API queue, Windows agent and TSD messages; strict FBS pairs and idempotency retained. Not published. Tests: tsd-kiz-box-print, tsd-relabel-print, box-only.test.cjs, KizBoxPrintActivityTest.
+28.11.2026: [Missing pallet print label](tsd-kiz-box-print.md). Two labels remain: box QR then bold text placeholder without QR when placement is absent. Only lookup and label renderer change; existing agent and APK279 remain compatible.
 
 Published 28.11.2026 PR1123: [Ozon ready-to-ship caption](ozon-ready-shipment-caption.md). Read-only live handler and public component: 3421 green/date, 3487 deadline. Baseline 2026-11-28-ozon-ready-caption; sourceParityVerified=false. API5038/web701 passed; APK279, business data and sold WMS unchanged.
 

@@ -14,15 +14,6 @@ import retrofit2.*;
 import static org.junit.Assert.*;
 @RunWith(RobolectricTestRunner.class) @Config(sdk=28)
 public class KizBoxPrintActivityTest {
- // TEST: unplaced boxes have one label; placed boxes keep the existing pair.
- @Test public void missingPalletDescribesSingleBoxLabel(){
-  try(var c=Robolectric.buildActivity(KizBoxPrintActivity.class)){
-   KizBoxPrintActivity a=c.get();Map<String,Object> j=new HashMap<>();j.put("boxCode","FFL_TEST");j.put("palletCode","");j.put("status","QUEUED");
-   assertTrue(KizBoxPrintActivity.printLocation(j).contains("только короб"));assertFalse(KizBoxPrintActivity.printLocation(j).contains("null"));
-   assertTrue(a.describe(j).startsWith("Стикер короба"));j.put("status","PRINTED");assertTrue(a.describe(j).contains("стикера короба"));
-   j.put("palletCode","PALLET");assertTrue(a.describe(j).contains("двух этикеток"));assertTrue(KizBoxPrintActivity.printLocation(j).contains("Паллет-сорт: PALLET"));
-  }
- }
  // TEST: one print action replaces Phone before utility buttons for every warehouse role.
  @Test public void printingReplacesPhoneInMainMenu()throws Exception{
   for(String role:Arrays.asList("OWNER","ADMIN","OPERATOR","WAREHOUSE_KEEPER"))try(var c=Robolectric.buildActivity(MainActivity.class).setup()){

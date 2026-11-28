@@ -11,14 +11,6 @@ vi.mock('../src/modules/tsd/tsd-relabel-label', () => ({ buildTsdRelabelLabel: v
 afterEach(() => vi.unstubAllEnvs());
 
 const printId = '11111111-1111-4111-8111-111111111111';
-// TEST: no blank/fabricated pallet QR and no fall-through to FBS sorting labels.
-it('box-only print job is claimed without a second label',async()=>{
- const job={id:'box-job',source:'TSD_KIZ_BOX_LABELS',productName:'',stickerBase64:'BOX-PNG'};
- const db:any={fbsPrintStation:{update:vi.fn()},fbsPrintJob:{findFirst:vi.fn(async()=>job),updateMany:vi.fn(async()=>({count:1})),findUniqueOrThrow:vi.fn(async()=>job)}};
- const service=Object.create(MarketplaceConnectionsService.prototype);service.prisma=db;
- const result=await service.claimFbsPrintJob('station',{});
- expect(result.stickerBase64).toBe('BOX-PNG');expect(result.sortingLabel).toBeNull();expect(db.fbsPrintJob.updateMany).toHaveBeenCalledTimes(1);
-});
 const user = { id: 'worker', name: 'Склад', deviceCode: 'TSD-1', activeWarehouseId: 'wh' } as never;
 const input = { printId, stationId: 'station', sourceBox: 'FFL_LKB2409_001',
   oldBarcode: '2040000000001', newBarcode: '2040000000002', size: 'M' };

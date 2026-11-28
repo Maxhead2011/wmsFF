@@ -74,12 +74,6 @@ function Invoke-AgentQueueCycle($cfg) {
     Invoke-DurablePrint $cfg 'fbs' $job.id {
       $primaryImage = [Convert]::FromBase64String($job.stickerBase64)
       $isRelabel = $job.source -eq 'TSD_RELABEL'
-      # FIX: only an explicit warehouse box-only job may omit the second image.
-      $boxOnly = $job.source -eq 'TSD_KIZ_BOX_LABELS' -and $job.labelCount -eq 1 -and -not $job.productName -and -not $job.sortingLabel
-      if ($boxOnly) {
-        Print-OneLabel $primaryImage $cfg.printerName $cfg.labelWidthMm $cfg.labelHeightMm
-        return
-      }
       # FIX: preserve published full-pair validation and exact label images.
       if (-not $job.sortingLabel.imageBase64 -or $job.sortingLabel.contentType -ne 'image/png') { throw 'The second label image is unavailable. Refresh the task before printing.' }
       $secondImage = [Convert]::FromBase64String($job.sortingLabel.imageBase64)
