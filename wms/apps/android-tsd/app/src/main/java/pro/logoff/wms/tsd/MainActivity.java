@@ -803,13 +803,14 @@ public class MainActivity extends Activity {
             if (KizLocationPolicy.canOpen(BuildConfig.FLAVOR, session) || KizSearchPolicy.canOpen(BuildConfig.FLAVOR, session)) {
                 root.addView(primaryMenuButton("КИЗЫ", view -> renderKizMenu()));
             }
-            root.addView(primaryMenuButton(
+            if (!"logoff".equals(BuildConfig.FLAVOR)) root.addView(primaryMenuButton(
                 phoneMode
                     ? tr("Телефон: камера включена", "Telefon: kamera yoqilgan")
                     : tr("Телефон", "Telefon"),
                 view -> togglePhoneMode()
             ));
         }
+        KizBoxPrintActivity.addMenu(this,root); // FIX: replace Phone before utility actions, including keeper-only access.
         if ("logoff".equals(BuildConfig.FLAVOR)) ReturnsActivity.addMenu(this, root);
         root.addView(secondaryButton(tr("Синхронизировать очередь", "Navbatni sinxronlash") + " (" + pendingCount + ")", view -> syncPending()));
         if (!isWarehouseKeeperOnly(session)) {
@@ -821,7 +822,6 @@ public class MainActivity extends Activity {
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
-        KizBoxPrintActivity.addMenu(this,root); // FIX: last main-menu button for every own-WMS worker.
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
@@ -1486,7 +1486,7 @@ public class MainActivity extends Activity {
                 if (safeSession() != null) return;
                 final String target = position == 1 ? ServerSettings.BACKUP : ServerSettings.MAIN;
                 new TsdUi.DialogBuilder(MainActivity.this).setTitle("Сменить сервер WMS?")
-                    .setMessage(ServerSettings.name(target) + "\n" + ServerSettings.baseUrl(target)
+                    .setMessage(ServerSettings.name(target)
                         + "\nНесинхронизированные операции останутся на прежнем сервере. Для выбранного сервера используется отдельный вход.")
                     .setNegativeButton("Отмена", (dialog, which) -> {})
                     .setPositiveButton("Переключить", (dialog, which) -> {

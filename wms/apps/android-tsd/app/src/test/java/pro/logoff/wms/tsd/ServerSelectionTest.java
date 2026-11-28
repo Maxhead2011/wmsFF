@@ -51,6 +51,12 @@ public class ServerSelectionTest {
         databases.clear();
     }
 
+    // TEST: users choose logical server names, while connection addresses remain unchanged.
+    @Test public void serverChoicesHideAddresses() {
+        assertArrayEquals(new String[]{"Основной", "Резервный"}, ServerSettings.NAMES);
+        assertEquals("https://wms.logoff.pro/", ServerSettings.baseUrl(ServerSettings.MAIN));
+        assertEquals("https://77.37.144.211/", ServerSettings.baseUrl(ServerSettings.BACKUP));
+    }
     @Test public void legacyMainSessionStaysMainAndBackupNeverReusesIt() {
         saveSession(app, "legacy-main-token");
         Context main = new ServerScopedContext(app, ServerSettings.MAIN);
