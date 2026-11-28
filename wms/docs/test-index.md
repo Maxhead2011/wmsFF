@@ -1004,3 +1004,6 @@ Current baseline `2026-11-28-kiz-print-277-fabric-demand` includes subsequently 
 
 
 28.11.2026: [TSD279 installer callback and bounded wait](tsd-update-install-279.md). Android382; compiled-artifact regression; emulator system confirmation and installation. Own server-choice only. Published PR1119; both servers and emulator installation279 verified, test data marker retained. [Proof](releases/tsd-update-install-279-published.json).
+
+
+28.11.2026: [Ozon readiness caption](ozon-ready-shipment-caption.md). Prepared: confirmed cargoes replace deadline with green readiness and handover date; no stock/status writes.
