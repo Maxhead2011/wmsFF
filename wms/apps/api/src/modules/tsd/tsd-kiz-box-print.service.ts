@@ -32,8 +32,8 @@ export class TsdKizBoxPrintService {
   const codes=[...new Set(placements.map((p:any)=>p.pallet.code))];
   if(codes.length>1)throw new ConflictException('Найдено несколько размещений короба. Обратитесь к администратору.');
   const legacy=b.pallet?.clientId===m.clientId&&b.pallet?.warehouseId===warehouseId?b.pallet.code:null;
-  const palletCode=codes[0]||legacy;
-  if(!palletCode)throw new ConflictException('Короб найден, но паллет-сорт не указан.');
+  // FIX: keep the existing two-label protocol without fabricating a pallet QR.
+  const palletCode=codes[0]||legacy||'ПАЛЕТ НЕ ОПРЕДЕЛЕН';
   return {identity:key,markId:m.id,clientId:m.clientId,warehouseId,boxId:b.id,boxCode:b.code,palletCode:String(palletCode)};
  }
  async stations(user:AuthUser){this.scope(user);return this.prisma.fbsPrintStation.findMany({where:{enabled:true,labelWidthMm:58,labelHeightMm:40,lastSeenAt:{gt:new Date(Date.now()-45000)}},select:{id:true,name:true,printerName:true},orderBy:{name:'asc'}});}
