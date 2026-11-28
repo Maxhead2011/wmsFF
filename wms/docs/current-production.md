@@ -1,3 +1,5 @@
+Published 28.11.2026 PR1123: [Ozon ready-to-ship caption](ozon-ready-shipment-caption.md). Read-only live handler and public component: 3421 green/date, 3487 deadline. Baseline 2026-11-28-ozon-ready-caption; sourceParityVerified=false. API5038/web701 passed; APK279, business data and sold WMS unchanged.
+
 Ozon TSD box-confirmation release candidate. Verified one-module API delta in 2026-11-28-ozon-box-confirm.
 
 PR1121 web release: zone cards and the Ozon plan button. Verified candidate 2026-11-28-zone-cards-plan-button.

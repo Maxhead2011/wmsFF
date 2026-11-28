@@ -1,3 +1,5 @@
+Published 28.11.2026 PR1123: [Ozon ready-to-ship caption](ozon-ready-shipment-caption.md). Read-only live handler and public component: 3421 green/date, 3487 deadline. Baseline 2026-11-28-ozon-ready-caption; sourceParityVerified=false. API5038/web701 passed; APK279, business data and sold WMS unchanged.
+
 Published PR1114: open fabric demand and handed-over Ozon accounting. Verified API and web baseline 2026-11-28-fabric-demand.
 
 28.11.2026 — [Печать QR короба и паллет-сорта по КИЗ, ТСД277](tsd-kiz-box-print.md). Наша ВМС; штатная озвучка, изолированная очередь без списаний.
