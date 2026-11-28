@@ -1,0 +1,66 @@
+{
+  "published": {
+    "base": "sha256:951a6a53a11d89587f7423bb3de0e5d11fe988fad41035dec3c0cfc6db204507",
+    "image": "sha256:1488a29a1198572b67b9342168b2e56390ce6f9dea629a29052f6fa7a7951db2",
+    "changes": [
+      "modules/administration/administration-internal-api.service.js",
+      "modules/marketplace-connections/marketplace-connections.service.js",
+      "modules/tsd/tsd-kiz-box-label.js",
+      "modules/tsd/tsd-kiz-box-print.controller.js",
+      "modules/tsd/tsd-kiz-box-print.service.js",
+      "modules/tsd/tsd.module.js"
+    ],
+    "files": 820,
+    "web": "sha256:234df9213263328e49b2c1f07e3f2ac4b5352dfd7a9c1bb611139228f598a0e2",
+    "health": true,
+    "otherContainersUnchanged": true,
+    "pr": {
+      "merged": true,
+      "base": "feature/la_panthera",
+      "number": 1113,
+      "merge": "b0c4275946991a33c606c38a7d505acc4baf9ce8",
+      "url": "https://github.com/Maxhead2011/wmsFF/pull/1113"
+    }
+  },
+  "apk-published": {
+    "logoff-tsd-server-choice": {
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 277,
+      "versionName": "0.1.277-kiz-box-print",
+      "sha256": "7f447d154f3806703619ddc3a9d7f6fa9dbf93848919af08ddcdcccda876f8f9",
+      "size": 6079513,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-servers-kiz-print-277.apk",
+      "releasedAt": "2026-11-28T08:10:19.523115+00:00",
+      "releaseNotes": "Print box and pallet-sort QR labels by KIZ; existing voice prompts"
+    }
+  },
+  "public-check": {
+    "wms.logoff.pro": {
+      "versionCode": 277,
+      "sha256": "7f447d154f3806703619ddc3a9d7f6fa9dbf93848919af08ddcdcccda876f8f9",
+      "size": 6079513
+    },
+    "77.37.144.211": {
+      "versionCode": 277,
+      "sha256": "7f447d154f3806703619ddc3a9d7f6fa9dbf93848919af08ddcdcccda876f8f9",
+      "size": 6079513
+    }
+  },
+  "api-verified": {
+    "readOnly": true,
+    "box": "FFL_LKBBOX_456",
+    "pallet": "PALET_SORT_1009",
+    "workerLookup": true,
+    "missingKizRejected": true,
+    "onlinePrinters": 1,
+    "physicalPrinting": false
+  },
+  "updater276": "INSTRUMENTATION_RESULT: verified=Published APK276 updater downloaded and SHA-verified277 from main and backup; installation and printing not invoked\nINSTRUMENTATION_CODE: -1\n",
+  "subsequentRelease1114": {
+    "images": {
+      "/wms-local-api": "sha256:eadb0f4cef4d0a115d22ef9ba25c580945786a19aa2373a1ce5a292ce17bb305",
+      "/wms-local-web": "sha256:4ab84de8b7c0d110dc0aeec4b2beccf4a37e5b8b3874c129f4741ba54f867258"
+    },
+    "ownSixModulesPreserved": true
+  }
+}
