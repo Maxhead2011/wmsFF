@@ -1,5 +1,6 @@
 import {readOzonStockDecision} from './ozon-stock-decision';
-import {supplyOrders,type SupplyIntegration} from './ozon-supply-policy';
+import {ozonShipmentCaptions} from './ozon-shipment-caption';
+import {type SupplyIntegration} from './ozon-supply-policy';
 import { fboProgressLabels } from '../tsd/fbo-progress-status';
 import { requestStoreContexts } from '../clients/request-store-context';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
@@ -78,7 +79,7 @@ export class OzonFboImportService {
     return rows.map(r=>({...stores.get(r.id),id:r.id,number:r.number,title:r.title,status:r.status,fboProgressLabel:progressLabels[r.id],desiredDate:r.desiredDate,destinationCity:r.destinationCity,
       ...(all?{clientId:r.clientId,clientName:r.client?.name??null,clientCode:r.client?.code??null,warehouseName:r.warehouse?.name??null,createdAt:r.createdAt,
         itemCount:r.items.length,itemsPreview:r.items.slice(0,3).map(i=>({name:i.name??null,barcode:i.barcode??null,quantity:i.quantity}))}:{}),
-      editDeadlines:r.ozonShipment?.integration?supplyOrders(r.ozonShipment.integration as SupplyIntegration).map(o=>({orderId:o.orderId,orderNumber:o.orderNumber,editDeadlineAt:o.editDeadlineAt??null,checkedAt:o.checkedAt})):[],
+      editDeadlines:r.ozonShipment?.integration?ozonShipmentCaptions(r.ozonShipment.integration as SupplyIntegration):[],
       quantity:r.items.reduce((s,i)=>s+i.quantity,0),directions:(r.ozonShipment!.directions as unknown[]).length,phase:r.fboAssembly?.phase??'NOT_STARTED'}));
   }
   async preview(file: Express.Multer.File, dto: OzonFboImportDto, user: AuthUser) {

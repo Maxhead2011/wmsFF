@@ -3,6 +3,16 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import {OzonEditCountdown,deadlineDisplay} from './OzonEditCountdown';
 // TEST: countdown boundaries, missing deadlines and per-order clocks.
 describe('Ozon deadline countdown',()=>{
+ // TEST: accepted cargoes replace the editing alarm, even when its old deadline is absent.
+ it('shows green readiness and the handover date without stale deadline warnings',()=>{
+  const html=renderToStaticMarkup(<OzonEditCountdown enabled orders={[{orderId:'1',orderNumber:'A',readyToShip:true,handoverAt:'2026-11-28T14:00:00Z',editDeadlineAt:null,checkedAt:'2026-01-01T00:00:00Z'} as any]}/>);
+  expect(html).toContain('Готово к отгрузке');expect(html).toContain('is-ready');expect(html).toContain('Дата сдачи:');expect(html).toContain('17:00:00');expect(html).toContain('МСК');expect(html).not.toContain('Дедлайн неизвестен');expect(html).not.toContain('Срок получен ранее');
+ });
+ // TEST: a ready order must not conceal another pending order, or invent a missing date.
+ it('keeps pending deadlines and explicitly reports an absent handover date',()=>{
+  const html=renderToStaticMarkup(<OzonEditCountdown enabled orders={[{orderId:'1',orderNumber:'A',readyToShip:true,editDeadlineAt:'2026-11-28T14:00:00Z'},{orderId:'2',orderNumber:'B',readyToShip:false,editDeadlineAt:null}]}/>);
+  expect(html).toContain('Дата сдачи: не указана в Ozon');expect(html).toContain('Дедлайн неизвестен');expect(html).not.toContain('17:00:00');
+ });
  const now=Date.parse('2026-10-26T12:00:00Z');
  it('does not guess an absent or invalid deadline',()=>{expect(deadlineDisplay(null,now).tone).toBe('unknown');expect(deadlineDisplay('bad',now).tone).toBe('unknown');});
  it('expires at the deadline without displaying negative time',()=>{expect(deadlineDisplay('2026-10-26T12:00:00Z',now).tone).toBe('expired');expect(deadlineDisplay('2026-10-25T12:00:00Z',now).text).not.toContain('-');});

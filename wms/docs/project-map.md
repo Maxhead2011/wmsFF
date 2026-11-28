@@ -1067,3 +1067,6 @@ Current baseline `2026-11-28-kiz-print-277-fabric-demand` includes subsequently 
 Zone summary and Ozon packing-plan primary action: web-only overlay in scripts/releases/zone-cards-plan-button.
 
 Ozon TSD box confirmation: legacy frozen supplies use the same label-control binding as cargo validation. Runtime regression: scripts/releases/ozon-confirm-box/runtime.test.cjs.
+
+
+28.11.2026: [Ozon readiness caption](ozon-ready-shipment-caption.md). Prepared: confirmed cargoes replace deadline with green readiness and handover date; no stock/status writes.
