@@ -6,7 +6,8 @@ import { FabricColorLabel } from './FabricColorLabel';
 
 type Color = { id: string; material: string; name: string };
 type Roll = { id: string; code: string; material: string; color: string; remainingMm: number; warehouseId: string };
-type Group = { key: string; material: string; colorName: string; whole: number; open: number; rawMeters: number; rawLiters: number; rolls: Roll[]; ready: { pieces: number; meters: number }[]; fbs: { pieces: number; meters: number }; fbo: { pieces: number; meters: number } };
+type CutTotals = { pieces: number; meters: number };
+type Group = { key: string; material: string; colorName: string; whole: number; open: number; rawMeters: number; rawLiters: number; rolls: Roll[]; required?: { fbs: CutTotals; fbo: CutTotals }; ready: { pieces: number; meters: number }[]; fbs: { pieces: number; meters: number }; fbo: { pieces: number; meters: number } };
 type Rolls = { enabled: boolean; version: string | null; groups?: Group[]; history?: { createdAt: string; action: string; payload?: { reason?: string } }[] };
 type Catalog = { version: string | null; materials?:{id:string;name:string}[];baseMaterials?:Record<string,string>; colors: Color[]; baseColors: Record<string, string>; skus: { id: string; name: string; internalSku: string; marketplace: string | null; productId: string | null; offerId: string | null; barcodes: string[]; binding: { material: string; color: string; lengthMm: number } | null }[] };
 const BASE_MATERIALS: Record<string, string> = { SATIN: 'Атлас / сатин', GABARDINE: 'Габардин' };
@@ -65,7 +66,8 @@ export function FabricWarehousePanel({ session }: { session: AuthSession }) {
       <p>Рулон — 100 м. Остатки рулонов и готовые отрезы учитываются отдельно.</p>
       <div className="warehouse-topic-grid">{rolls.groups?.map(g => <article className="warehouse-panel" key={g.key}>
         <h3 className="fabric-card-title"><span className="fabric-material">{MATERIALS[g.material]}</span><FabricColorLabel name={g.colorName} /></h3><p>Целых: {g.whole} · открытых: {g.open} · в рулонах: {g.rawMeters.toLocaleString('ru-RU')} м</p><p>Объём хранения: {g.rawLiters.toLocaleString('ru-RU')} л</p>
-        <p>Готовые отрезы: {g.ready.reduce((n, r) => n + r.pieces, 0)} шт.</p><p>FBS: {g.fbs.pieces} отрезов / {g.fbs.meters} м · FBO: {g.fbo.pieces} отрезов / {g.fbo.meters} м</p>
+        <p>Готовые отрезы: {g.ready.reduce((n, r) => n + r.pieces, 0)} шт.</p><p>Необходимо · {g.required ? `FBS: ${g.required.fbs.pieces} отрезов / ${g.required.fbs.meters} м · FBO: ${g.required.fbo.pieces} отрезов / ${g.required.fbo.meters} м` : "нет данных"}</p>
+        <p>Отгружено · FBS: {g.fbs.pieces} отрезов / {g.fbs.meters} м · FBO: {g.fbo.pieces} отрезов / {g.fbo.meters} м</p>
         <details><summary>Остаток каждого рулона</summary>{g.rolls.map(r => <p key={r.id}>{r.code}: {(r.remainingMm / 1000).toLocaleString('ru-RU')} м</p>)}</details>
       </article>)}</div>
       {canManage ? <>

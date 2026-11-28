@@ -1048,3 +1048,5 @@ Ledger: payroll-advances.ts и методы PayrollService. UI: PayrollAdvances,
 Payroll advances published via PR1070; own-only flag enabled and new baseline verified. PayrollService paid-shift recovery preserves issued cash and credits the next payout. See [release proof](releases/payroll-advances-1070.json).
 
 WB FBS disable verification (candidate for our WMS): [runtime preparation and retry regression](../scripts/releases/wb-disable-zero/).
+
+Fabric open demand and handed-over fabric accounting: see wms/scripts/releases/fabric-current-demand. Ozon cut credits and request item ledger entries are consumed once. Existing physical stocktakes form the opening balance.

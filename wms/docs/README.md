@@ -707,3 +707,5 @@ PostgreSQL: fbo-two-stage.integration.spec.ts проверяет заверше�
 [Авансы и зачёт переплат ФОТ](payroll-advances.md) — опубликовано через PR1070, наша WMS.
 
 WB FBS disable verification (candidate for our WMS): [runtime preparation and retry regression](../scripts/releases/wb-disable-zero/).
+
+Fabric open demand and handed-over fabric accounting: see wms/scripts/releases/fabric-current-demand. Ozon cut credits and request item ledger entries are consumed once. Existing physical stocktakes form the opening balance.
