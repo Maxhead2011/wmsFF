@@ -1,0 +1,11 @@
+# ТСД279: зависание установки
+
+В опубликованном server-choice APK278 метод installUpdateApk содержал встроенную строку `pro.logoff.wms.tsd.UPDATE_INSTALL_STATUS`, а onCreate регистрировал `pro.logoff.wms.tsd.servers.UPDATE_INSTALL_STATUS`. Предыдущий overlay перенёс метод из другой сборки с уже встроенной константой. Исходники сами по себе эту ошибку не показывали. В эмуляторе подтверждено: диалог остаётся, busy=true, Android PackageInstaller ждёт согласия пользователя (sealed, progress0.8, permissions=false).
+
+Исправление: обе стороны вызывают updateInstallAction(), вычисляющий имя по установленному packageName. При запросе Android закрывается барьер и снимается busy. Generic installer получает тайм-аут90с; ответ или уничтожение Activity отменяет таймер. OEM Urovo/Unitech остаётся прежним, со своим тайм-аутом. Бизнес-операции, очереди, серверы и печать не меняются.
+
+Файлы: MainActivity (action/receiver/install/status/onDestroy), UpdateInstallFeedback, тесты UpdateInstallFeedbackTest, версия Android и scripts/releases/tsd-update-install-279. Наша server-choice сборка; проданная и стандарт270 не публикуются. API/web baseline `2026-11-28-kiz-print-277-fabric-demand` сохранён; sourceParity=false.
+
+Проверки:382 Android теста; regression test_artifact.py падает на старом APK и проходит на кандидате. Кандидат — точечный overlay278 с прежними ресурсами и подписью. В эмуляторе тестовый APK с тем же DEX, но versionCode277, прошёл кнопку меню → загрузку опубликованного278 → разрешение Android → подтверждение → установленный278. Физическая установка не проверена, печать не запускалась. [Доказательства кандидата](releases/tsd-update-install-279-candidate.json).
+
+Ограничение миграции: ошибочный обновлятор старых установок не исправляется изменением серверной ссылки. На таких устройствах первый переход к279 может потребовать штатной ручной установки; дальнейшие обновления используют исправленный путь. На устройствах без OEM installer подтверждение Android допустимо и не означает ручное скачивание.

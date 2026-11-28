@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 278 // FIX: printing box and pallet labels by KIZ.
-            versionName = "0.1.278-print-menu"
+            versionCode = 279 // FIX: printing box and pallet labels by KIZ.
+            versionName = "0.1.279-update-install"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -113,6 +113,6 @@ dependencies {
 androidComponents.onVariants(androidComponents.selector().withName("logoffServers")) { variant ->
     variant.outputs.forEach { output ->
         output.versionCode.set(278)
-        output.versionName.set("0.1.278-print-menu")
+        output.versionName.set("0.1.279-update-install")
     }
 }
