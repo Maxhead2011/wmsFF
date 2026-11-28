@@ -1,3 +1,5 @@
+Ozon TSD box-confirmation release candidate. Verified one-module API delta in 2026-11-28-ozon-box-confirm.
+
 PR1121 web release: zone cards and the Ozon plan button. Verified candidate 2026-11-28-zone-cards-plan-button.
 
 Published 28.11.2026 PR1119: server-choice **279** (`0.1.279-update-install`). Fixed mismatched installer callback action; confirmation releases barrier/busy; missing generic callback times out90s. Android382 passed. Both servers deliver verified279. Same candidate DEX under test version278 exercised menu download of public279, Android confirmation and completed installation279; private test marker preserved. No physical installation or printing. API/web baseline and standard270/sold unchanged. [Proof](releases/tsd-update-install-279-published.json).
