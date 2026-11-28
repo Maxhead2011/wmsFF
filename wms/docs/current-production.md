@@ -2,6 +2,8 @@ Published 28.11.2026 PR1113: [TSD277 box/pallet QR printing by KIZ](tsd-kiz-box-
 
 Current baseline `2026-11-28-kiz-print-277-fabric-demand` includes subsequently published PR1114: API `sha256:eadb0f4cef4d0a115d22ef9ba25c580945786a19aa2373a1ce5a292ce17bb305`, web `sha256:4ab84de8b7c0d110dc0aeec4b2beccf4a37e5b8b3874c129f4741ba54f867258`. All six PR1113 modules preserved byte-for-byte. Source parity=false; standard270 and sold unchanged by this release.
 
+Published PR1114: open fabric demand and handed-over Ozon accounting. Verified API and web baseline 2026-11-28-fabric-demand.
+
 Сверено 28.11.2026: image ID работающих wms-local-api и wms-local-web совпадают с manifest baseline `2026-11-28-wb-disable-zero` (PR1111). Это сверка image ID, не повторная проверка всех файлов runtime. [Операции по №3405 и история коробов](operations-lukin-20261126-27.md) зарегистрированы отдельно от выпусков кода; исторические состояния не считать текущими остатками.
 
 Published PR1111: WB FBS disable queues reconciliation. Verified API baseline 2026-11-28-wb-disable-zero.
