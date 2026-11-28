@@ -1003,4 +1003,4 @@ Current baseline `2026-11-28-kiz-print-277-fabric-demand` includes subsequently 
 28.11.2026: [TSD278: Print replaces Phone; server labels; update verification](tsd-print-menu-278.md). Android378 passed; signed APK menu checks passed. Published PR1117: both servers and actual277 menu update verified; [proof](releases/tsd-print-menu-278-published.json). No physical printing or installation.
 
 
-28.11.2026: [TSD279 installer callback and bounded wait](tsd-update-install-279.md). Android382; compiled-artifact regression; emulator system confirmation and installation. Own server-choice only.
+28.11.2026: [TSD279 installer callback and bounded wait](tsd-update-install-279.md). Android382; compiled-artifact regression; emulator system confirmation and installation. Own server-choice only. Published PR1119; both servers and emulator installation279 verified, test data marker retained. [Proof](releases/tsd-update-install-279-published.json).
