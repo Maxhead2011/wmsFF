@@ -38,6 +38,7 @@ final class KizLocationScreen {
     private final TextView result;
     private final Button check;
     private final LinearLayout decisions;
+    private String lastPrintKiz="";
     private TsdKizLocationResponse lastResponse;
     private Map<String,Object> foundCase;
     private AlertDialog decisionDialog;
@@ -104,12 +105,16 @@ final class KizLocationScreen {
                 if (closed || activity.isDestroyed()) return;
                 busy = false; check.setEnabled(true); input.setEnabled(true);
                 result.setText(displayed); input.setText(""); input.requestFocus();
-                lastResponse=received; renderDecisions();
+                lastPrintKiz=scan; lastResponse=received; renderDecisions();
             });
         });
     }
     private void renderDecisions() {
         decisions.removeAllViews();
+        if(lastResponse!=null&&lastResponse.found&&!lastResponse.ambiguous){
+            Button print=new TsdUi.Button(activity);print.setText("Напечатать стикер короба");
+            print.setOnClickListener(v->KizBoxPrintActivity.open(activity,lastPrintKiz));decisions.addView(print);
+        }
         if(lastResponse!=null&&lastResponse.foundCandidate!=null){renderFound();return;}
         if(lastResponse==null||lastResponse.reviews==null)return;
         if(lastResponse.reviews.isEmpty()&&lastResponse.found){

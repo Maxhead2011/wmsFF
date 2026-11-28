@@ -1,3 +1,7 @@
+28.11.2026 — [Печать QR короба и паллет-сорта по КИЗ, ТСД277](tsd-kiz-box-print.md). Наша ВМС; штатная озвучка, изолированная очередь без списаний.
+
+28.11.2026: [Лукин — исправление КИЗа №3405 и история четырёх коробов](operations-lukin-20261126-27.md). Привязка XL / 50, проверки с откатом, сотрудники/время отбора №3303 и прежние паллеты. Исторические результаты 26–27 ноября; не новый выпуск приложения.
+
 Published PR1111: WB FBS disable queues reconciliation. Verified API baseline 2026-11-28-wb-disable-zero.
 
 Published PR1109: LOGOFF server-choice 276, pallet placement scoped to active branch clients. Moscow server verification returned 16 clients and excluded 26 archived records. [APK verification](releases/tsd-placement-276-candidate.json). API baseline 2026-11-27-tsd-placement-276.

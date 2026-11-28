@@ -1,0 +1,25 @@
+const fs=require('fs'),path=require('path'),ts=require('typescript');
+const root=path.resolve(process.argv[2]),src=path.resolve('apps/api/src');
+const base=path.join(root,'base-api'),out=path.join(root,'api-payload');fs.mkdirSync(out,{recursive:true});
+const options={module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,experimentalDecorators:true,emitDecoratorMetadata:true,esModuleInterop:true};
+const write=(name,s)=>{const p=path.join(out,name);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,s);};
+function once(s,a,b){if(s.split(a).length!==2)throw Error('Expected exactly once: '+a);return s.replace(a,b);}
+for(const name of ['tsd-kiz-box-print.service','tsd-kiz-box-print.controller','tsd-kiz-box-label'])write('modules/tsd/'+name+'.js',ts.transpileModule(fs.readFileSync(path.join(src,'modules/tsd',name+'.ts'),'utf8'),{compilerOptions:options}).outputText);
+let s=fs.readFileSync(path.join(base,'modules/tsd/tsd.module.js'),'utf8');
+s=once(s,'controllers: [','controllers: [require("./tsd-kiz-box-print.controller").TsdKizBoxPrintController,');
+s=once(s,'providers: [','providers: [require("./tsd-kiz-box-print.service").TsdKizBoxPrintService,');write('modules/tsd/tsd.module.js',s);
+s=fs.readFileSync(path.join(base,'modules/marketplace-connections/marketplace-connections.service.js'),'utf8');
+s=once(s,"['TSD_RELABEL', sos_post_pick_1.SOS_POST_PICK]","['TSD_RELABEL', 'TSD_KIZ_BOX_LABELS', sos_post_pick_1.SOS_POST_PICK]");
+s=once(s,"const sortingLabel = job.source === 'TSD_RELABEL'","const sortingLabel = job.source === 'TSD_KIZ_BOX_LABELS' ? {contentType:'image/png',imageBase64:await require('../tsd/tsd-kiz-box-label').buildKizBoxLabel(job.productName,'ПАЛЛЕТ-СОРТ'),widthMm:58,heightMm:40,templateVersion:'tsd-kiz-box-v1'} : job.source === 'TSD_RELABEL'");
+s=once(s,"if (job.source === 'TSD_RELABEL' || job.source === sos_post_pick_1.SOS_POST_PICK)","if (job.source === 'TSD_RELABEL' || job.source === 'TSD_KIZ_BOX_LABELS' || job.source === sos_post_pick_1.SOS_POST_PICK)");
+const source=fs.readFileSync(path.join(src,'modules/marketplace-connections/marketplace-connections.service.ts'),'utf8');
+const start=source.indexOf('    // FIX: warehouse label acknowledgement'),end=source.indexOf('    const data: Prisma.FbsPrintJobUpdateManyMutationInput',start);
+if(start<0||end<0)throw Error('Missing acknowledgement block');
+const block=ts.transpileModule('async function f(){'+source.slice(start,end)+'}',{compilerOptions:options}).outputText;
+s=once(s,'    async finishFbsPrintJob(id, success, error, user) {','    async finishFbsPrintJob(id, success, error, user) {\n'+block.slice(block.indexOf('{')+1,block.lastIndexOf('}')));
+write('modules/marketplace-connections/marketplace-connections.service.js',s);
+s=fs.readFileSync(path.join(base,'modules/administration/administration-internal-api.service.js'),'utf8');
+s=once(s,"prefixes: ['/tsd',", "prefixes: ['/tsd/kiz-box-print', '/tsd',");
+s=once(s,'routeCount: 113,','routeCount: 117,');
+write('modules/administration/administration-internal-api.service.js',s);
+console.log('Exact API6 prepared');

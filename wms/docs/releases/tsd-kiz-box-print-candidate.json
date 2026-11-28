@@ -1,0 +1,89 @@
+{
+  "stage": {
+    "base": "sha256:951a6a53a11d89587f7423bb3de0e5d11fe988fad41035dec3c0cfc6db204507",
+    "image": "sha256:1488a29a1198572b67b9342168b2e56390ce6f9dea629a29052f6fa7a7951db2",
+    "changes": [
+      "modules/administration/administration-internal-api.service.js",
+      "modules/marketplace-connections/marketplace-connections.service.js",
+      "modules/tsd/tsd-kiz-box-label.js",
+      "modules/tsd/tsd-kiz-box-print.controller.js",
+      "modules/tsd/tsd-kiz-box-print.service.js",
+      "modules/tsd/tsd.module.js"
+    ],
+    "files": 820
+  },
+  "isolated": {
+    "image": "sha256:1488a29a1198572b67b9342168b2e56390ce6f9dea629a29052f6fa7a7951db2",
+    "fullNestHealth": true,
+    "result": {
+      "passed": true,
+      "concurrentRetry": true,
+      "exclusiveClaim": true,
+      "noAutoReclaim": true,
+      "lateAck": true,
+      "stockUnchanged": true,
+      "labels": 2,
+      "physicalPrinting": false
+    }
+  },
+  "apk": {
+    "packageId": "pro.logoff.wms.tsd.servers",
+    "versionCode": 277,
+    "versionName": "0.1.277-kiz-box-print",
+    "sha256": "7f447d154f3806703619ddc3a9d7f6fa9dbf93848919af08ddcdcccda876f8f9",
+    "size": 6079513,
+    "baselineSha256": "5a79aabdce44b50368c264b408d6f55ec57bd672dace8e15b2c769312f3c10ce",
+    "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+    "resourcesPreserved": true
+  },
+  "overlay": {
+    "changed": [
+      "smali\\pro\\logoff\\wms\\tsd\\BuildConfig.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizLocationScreen.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\MainActivity.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\network\\WmsApi.smali"
+    ],
+    "added": [
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrint277Click.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda0.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda1.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda10.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda11.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda12.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda13.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda14.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda15.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda16.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda17.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda18.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda19.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda2.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda20.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda21.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda22.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda23.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda3.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda4.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda5.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda6.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda7.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda8.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$$ExternalSyntheticLambda9.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$1.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity$2.smali",
+      "smali\\pro\\logoff\\wms\\tsd\\KizBoxPrintActivity.smali"
+    ],
+    "preservedClasses": 4795
+  },
+  "qr203dpi": true,
+  "emulator": "INSTRUMENTATION_RESULT: verified=signed APK277: screen opens, printer choice, scan, synthetic pair queue, stable retry after lost response, last menu button; no physical printer\nINSTRUMENTATION_CODE: -1\n",
+  "tests": {
+    "api": 5030,
+    "apiSkipped": 203,
+    "web": 697,
+    "webSkipped": 2,
+    "android": 376
+  },
+  "physicalPrinting": false,
+  "typecheck": "14 existing baseline errors; no new errors"
+}

@@ -1,3 +1,5 @@
+import {TsdKizBoxPrintController} from './tsd-kiz-box-print.controller';
+import {TsdKizBoxPrintService} from './tsd-kiz-box-print.service';
 import {OzonStockAdjustmentController} from './ozon-stock-adjustment.controller';
 import {LamodaRelabelDataController} from './lamoda-relabel-data.controller';
 import {OzonStockAdjustmentService} from './ozon-stock-adjustment.service';
@@ -27,8 +29,8 @@ import { ClientRequestMarketplaceFilesService } from '../client-requests/client-
 
 @Module({
   imports: [AuthModule, StockModule, MarketplaceConnectionsModule, WarehouseModule, InventoryModule],
-  controllers: [LamodaRelabelDataController,OzonStockAdjustmentController,TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
-  providers: [OzonStockAdjustmentService, OzonAssemblySupplyService,
+  controllers: [TsdKizBoxPrintController,LamodaRelabelDataController,OzonStockAdjustmentController,TsdDeviceController, TsdSyncController, FboTwoStageController, ReceiptBarcodeReviewController],
+  providers: [TsdKizBoxPrintService,OzonStockAdjustmentService, OzonAssemblySupplyService,
     ReceiptBarcodeReviewService,
     FboTwoStageService,
     ClientRequestMarketplaceFilesService,

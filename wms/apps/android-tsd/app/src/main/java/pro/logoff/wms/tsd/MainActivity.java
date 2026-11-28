@@ -821,6 +821,7 @@ public class MainActivity extends Activity {
         if (!statusMessage.isEmpty()) {
             root.addView(messageView(statusMessage));
         }
+        KizBoxPrintActivity.addMenu(this,root); // FIX: last main-menu button for every own-WMS worker.
         root.addView(versionView());
         setScrollableContent(root);
         refreshHeaderText();
