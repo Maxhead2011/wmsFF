@@ -32,8 +32,8 @@ export class TsdKizBoxPrintService {
   const codes=[...new Set(placements.map((p:any)=>p.pallet.code))];
   if(codes.length>1)throw new ConflictException('Найдено несколько размещений короба. Обратитесь к администратору.');
   const legacy=b.pallet?.clientId===m.clientId&&b.pallet?.warehouseId===warehouseId?b.pallet.code:null;
-  const palletCode=codes[0]||legacy;
-  if(!palletCode)throw new ConflictException('Короб найден, но паллет-сорт не указан.');
+  // FIX: a valid box can be unplaced; never invent or require a pallet label.
+  const palletCode=codes[0]||legacy||'';
   return {identity:key,markId:m.id,clientId:m.clientId,warehouseId,boxId:b.id,boxCode:b.code,palletCode:String(palletCode)};
  }
  async stations(user:AuthUser){this.scope(user);return this.prisma.fbsPrintStation.findMany({where:{enabled:true,labelWidthMm:58,labelHeightMm:40,lastSeenAt:{gt:new Date(Date.now()-45000)}},select:{id:true,name:true,printerName:true},orderBy:{name:'asc'}});}
@@ -41,7 +41,7 @@ export class TsdKizBoxPrintService {
   if(!job||job.source!==KIZ_BOX_PRINT_SOURCE||job.requestedById!==user.id||job.requestId!==this.scope(user))throw new NotFoundException('Задание печати не найдено.');
   this.clients.requireClientAccess(user,job.assemblyId,'read');
   if(kiz&&job.kiz!==this.identity(kiz).key||stationId&&stationId!==job.stationId)throw new ConflictException('Идентификатор уже использован для другой печати.');
-  return {printId:job.historyId,status:job.status,stationId:job.stationId,boxCode:job.stickerCode,palletCode:job.productName,error:job.errorMessage,printedAt:job.printedAt};
+  return {printId:job.historyId,status:job.status,stationId:job.stationId,boxCode:job.stickerCode,palletCode:job.productName,labelCount:job.productName?2:1,error:job.errorMessage,printedAt:job.printedAt};
  }
  async create(body:{kiz:string;stationId:string;printId:string},user:AuthUser){
   this.scope(user);this.identity(body.kiz);
@@ -55,7 +55,7 @@ export class TsdKizBoxPrintService {
    const job=await tx.fbsPrintJob.create({data:{stationId:body.stationId,historyId:body.printId,assemblyId:found.clientId,requestId:found.warehouseId,
     orderId:`BOX:${found.boxCode}`,kiz:found.identity,warehouseName:found.warehouseId,productName:found.palletCode,stickerCode:found.boxCode,
     stickerMime:'image/png',stickerBase64:image,source:KIZ_BOX_PRINT_SOURCE,requestedById:user.id,requestedBy:user.name,deviceCode:user.deviceCode??null}});
-   await tx.auditLog.create({data:{userId:user.id,action:'TSD_KIZ_BOX_LABELS_QUEUED',entity:'FbsPrintJob',entityId:job.id,payload:{...found,stationId:body.stationId,labels:2}}});
+   await tx.auditLog.create({data:{userId:user.id,action:'TSD_KIZ_BOX_LABELS_QUEUED',entity:'FbsPrintJob',entityId:job.id,payload:{...found,stationId:body.stationId,labels:found.palletCode?2:1}}});
    return this.owned(job,user,body.kiz,body.stationId);
   });}catch(e:any){if(e.code!=='P2002')throw e;return this.owned(await this.prisma.fbsPrintJob.findUnique({where:{historyId:body.printId}}),user,body.kiz,body.stationId);}
  }

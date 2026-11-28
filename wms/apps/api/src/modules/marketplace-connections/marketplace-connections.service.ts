@@ -17891,7 +17891,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     // FIX: the existing quiet agent prints both images. A relabel job contains
     // two identical target-product labels instead of an FBS order/sorting pair.
     const sortingLabel = job.source === 'TSD_KIZ_BOX_LABELS'
-      ? {contentType:'image/png' as const,imageBase64:await require('../tsd/tsd-kiz-box-label').buildKizBoxLabel(job.productName,'ПАЛЛЕТ-СОРТ'),widthMm:58,heightMm:40,templateVersion:'tsd-kiz-box-v1'}
+      // FIX: box-only jobs have no second label and must not fall through to FBS.
+      ? (job.productName ? {contentType:'image/png' as const,imageBase64:await require('../tsd/tsd-kiz-box-label').buildKizBoxLabel(job.productName,'ПАЛЛЕТ-СОРТ'),widthMm:58,heightMm:40,templateVersion:'tsd-kiz-box-v1'} : null)
       : job.source === 'TSD_RELABEL'
       ? { contentType: 'image/png' as const, imageBase64: job.stickerBase64,
           widthMm: 58, heightMm: 40, templateVersion: 'tsd-relabel-lukin-v1' }
@@ -17901,7 +17902,8 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
       const claimed = await this.prisma.fbsPrintJob.updateMany({ where: { id: job.id, status: 'QUEUED' },
         data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
       if (!claimed.count) return null;
-      return { ...await this.prisma.fbsPrintJob.findUniqueOrThrow({ where: { id: job.id } }), sortingLabel };
+      return { ...await this.prisma.fbsPrintJob.findUniqueOrThrow({ where: { id: job.id } }), sortingLabel,
+        ...(job.source === 'TSD_KIZ_BOX_LABELS' ? {labelCount:job.productName?2:1} : {}) };
     }
     const claimed = await this.prisma.fbsPrintJob.update({ where: { id: job.id }, data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
     return { ...claimed, sortingLabel };
