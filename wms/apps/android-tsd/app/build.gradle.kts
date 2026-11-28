@@ -24,8 +24,8 @@ android {
     productFlavors {
         create("logoff") {
             dimension = "brand"
-            versionCode = 279 // FIX: printing box and pallet labels by KIZ.
-            versionName = "0.1.279-update-install"
+            versionCode = 280 // FIX: pallet recovery counts unique barcode/KIZ pairs.
+            versionName = "0.1.280-pallet-pairs"
             applicationId = "pro.logoff.wms.tsd"
             resValue("string", "app_name", "LOGOFF WMS TSD")
             buildConfigField("String", "BRAND_NAME", "\"LOGOFF ТСД\"")
@@ -112,7 +112,7 @@ dependencies {
 // FIX: the ordinary APK and other brands have independent release channels.
 androidComponents.onVariants(androidComponents.selector().withName("logoffServers")) { variant ->
     variant.outputs.forEach { output ->
-        output.versionCode.set(278)
-        output.versionName.set("0.1.279-update-install")
+        output.versionCode.set(280)
+        output.versionName.set("0.1.280-pallet-pairs")
     }
 }

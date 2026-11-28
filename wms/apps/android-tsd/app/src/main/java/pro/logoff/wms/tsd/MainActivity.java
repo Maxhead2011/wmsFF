@@ -1842,6 +1842,8 @@ public class MainActivity extends Activity {
         });
     }
 
+    private PalletRecoveryPairs recoveryPairs;
+    private PalletRecoveryPairs recoveryPairs(){if(recoveryPairs==null)recoveryPairs=new PalletRecoveryPairs();return recoveryPairs;}
     private void renderStoragePalletRecovery(LinearLayout root) {
         TsdStoragePalletResponse.Recovery recovery = storagePalletAssembly.recovery;
         int total = 0;
@@ -1856,8 +1858,8 @@ public class MainActivity extends Activity {
                 safeText(recovery.boxCode) + "\n" +
                 safeText(recovery.reasonLabel) + "\n" +
                 tr(
-                    "Пропикайте каждый товар обычным ШК. КИЗ и номера коробов не принимаются.",
-                    "Har bir mahsulotni oddiy shtrix-kod bilan skanerlang. KIZ va quti raqamlari qabul qilinmaydi."
+                    "logoff".equals(BuildConfig.FLAVOR)?"Сканируйте каждую единицу парой: ШК товара, затем КИЗ.":"Пропикайте каждый товар обычным ШК. КИЗ и номера коробов не принимаются.",
+                    "logoff".equals(BuildConfig.FLAVOR)?"Har bir birlikni juftlab skanerlang: tovar shtrix-kodi, keyin KIZ.":"Har bir mahsulotni oddiy shtrix-kod bilan skanerlang. KIZ va quti raqamlari qabul qilinmaydi."
                 ),
             BOX_NOT_NEEDED_RED
         ));
@@ -1873,7 +1875,7 @@ public class MainActivity extends Activity {
                 Color.WHITE
             ));
         }
-        storagePalletScanInput = input(tr("ШК товара", "Tovar shtrix-kodi"));
+        storagePalletScanInput = input("logoff".equals(BuildConfig.FLAVOR)&&recoveryPairs().pending()?"КИЗ товара · ШК "+recoveryPairs().barcode:tr("ШК товара", "Tovar shtrix-kodi"));
         storagePalletScanInput.setOnEditorActionListener((view, actionId, event) -> {
             scanStoragePalletRecoveryItem();
             return true;
@@ -1897,6 +1899,15 @@ public class MainActivity extends Activity {
         TsdSession session = safeSession();
         if (session == null || storagePalletAssembly == null || storagePalletAssembly.recovery == null) return;
         String barcode = textValue(storagePalletScanInput);
+        if("logoff".equals(BuildConfig.FLAVOR)){
+            PalletRecoveryPairs pairs=recoveryPairs();
+            if(pairs.lookingUp||pairs.submitted)return;
+            if(pairs.pending()){
+                String skuId=pairs.skuId,code=pairs.barcode,title=pairs.name;
+                try{pairs.accept(barcode);StoragePalletRecoveryItem current=storagePalletRecoveryItems.get(skuId);if(current==null)storagePalletRecoveryItems.put(skuId,new StoragePalletRecoveryItem(skuId,code,title,1));else current.quantity++;statusMessage="Пара ШК + КИЗ добавлена.";}catch(Exception error){statusMessage=error.getMessage();}
+                renderStoragePalletAssemblyScreen();return;
+            }
+        }
         if (barcode.isEmpty()) {
             statusMessage = tr("Пропикайте ШК товара.", "Tovar shtrix-kodini skanerlang.");
             renderStoragePalletAssemblyScreen();
@@ -1915,7 +1926,10 @@ public class MainActivity extends Activity {
         if (pallet == null || pallet.client == null) return;
         statusMessage = tr("Проверяю товар…", "Tovar tekshirilmoqda…");
         renderStoragePalletAssemblyScreen();
+        final String recoveryOperation=storagePalletRecoveryOperationId;
+        if("logoff".equals(BuildConfig.FLAVOR))recoveryPairs().lookingUp=true;
         runBackground(() -> {
+          try{
             Response<TsdSkuInfo> response = WmsApiFactory.create(activeBaseUrl)
                 .findSkuByBarcode(session.authorizationHeader(), pallet.client.id, barcode)
                 .execute();
@@ -1924,6 +1938,8 @@ public class MainActivity extends Activity {
             }
             TsdSkuInfo sku = response.body();
             mainHandler.post(() -> {
+                if(!recoveryOperation.equals(storagePalletRecoveryOperationId))return;
+                if("logoff".equals(BuildConfig.FLAVOR)){recoveryPairs().lookingUp=false;recoveryPairs().product(sku.id,barcode,sku.displayName(barcode));statusMessage="Сканируйте КИЗ этого товара.";renderStoragePalletAssemblyScreen();return;}
                 StoragePalletRecoveryItem current = storagePalletRecoveryItems.get(sku.id);
                 if (current == null) {
                     storagePalletRecoveryItems.put(
@@ -1942,6 +1958,7 @@ public class MainActivity extends Activity {
                 statusMessage = tr("Товар учтён.", "Tovar hisobga olindi.");
                 renderStoragePalletAssemblyScreen();
             });
+          }finally{mainHandler.post(()->{if(recoveryOperation.equals(storagePalletRecoveryOperationId)&&"logoff".equals(BuildConfig.FLAVOR))recoveryPairs().lookingUp=false;});}
         });
     }
 
@@ -1972,6 +1989,7 @@ public class MainActivity extends Activity {
             row.put("quantity", item.quantity);
             items.add(row);
         }
+        if("logoff".equals(BuildConfig.FLAVOR)){try{items=recoveryPairs().payload();}catch(Exception error){statusMessage=error.getMessage();renderStoragePalletAssemblyScreen();return;}}
         request.put("items", items);
         String palletId = storagePalletAssembly.pallet.id;
         statusMessage = tr("Восстанавливаю короб и остатки…", "Quti va qoldiqlar tiklanmoqda…");
@@ -2003,6 +2021,7 @@ public class MainActivity extends Activity {
         if (storagePalletRecoveryOperationId.isEmpty()
             || !sameBox(storagePalletRecoveryBoxCode, boxCode)) {
             storagePalletRecoveryItems.clear();
+            recoveryPairs().clear();
             storagePalletRecoveryOperationId = "tsd-pallet-restore:" + UUID.randomUUID();
             storagePalletRecoveryBoxCode = boxCode;
         }
@@ -2019,6 +2038,7 @@ public class MainActivity extends Activity {
     }
 
     private void clearStoragePalletRecovery() {
+        recoveryPairs().clear();
         storagePalletRecoveryItems.clear();
         storagePalletRecoveryOperationId = "";
         storagePalletRecoveryBoxCode = "";
