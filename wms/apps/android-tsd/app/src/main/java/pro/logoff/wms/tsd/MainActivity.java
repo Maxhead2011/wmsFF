@@ -130,7 +130,8 @@ import retrofit2.Response;
 public class MainActivity extends Activity {
     private static final int CAMERA_PERMISSION_REQUEST = 4201;
     private static final int BLUETOOTH_PRINTER_PERMISSION_REQUEST = 4202;
-    private static final String UPDATE_INSTALL_ACTION = BuildConfig.APPLICATION_ID + ".UPDATE_INSTALL_STATUS";
+    // FIX: derive both callback and receiver action from the installed package, never an inlined build constant.
+    private String updateInstallAction() { return getPackageName() + ".UPDATE_INSTALL_STATUS"; }
     private static final String DEFAULT_BASE_URL = BuildConfig.API_BASE_URL;
     private String activeBaseUrl = DEFAULT_BASE_URL;
     private String serverProfile = ServerSettings.MAIN;
@@ -415,6 +416,7 @@ public class MainActivity extends Activity {
     private final BroadcastReceiver updateInstallReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
+            if (idleUpdateEnabled()) UpdateInstallFeedback.clear(MainActivity.this);
             int status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
             if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
                 Intent confirmation;
@@ -426,6 +428,9 @@ public class MainActivity extends Activity {
                     confirmation = legacyConfirmation;
                 }
                 if (confirmation != null) {
+                    // FIX: Android owns the confirmation UI; do not leave our blocking dialog over it.
+                    releaseUpdateBarrier();
+                    appUpdateBusy = false;
                     confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(confirmation);
                     showUpdateStatus("Android просит подтвердить установку. Нажмите «Обновить» один раз.", false);
@@ -496,7 +501,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         TsdUi.install(this);
-        IntentFilter updateFilter = new IntentFilter(UPDATE_INSTALL_ACTION);
+        IntentFilter updateFilter = new IntentFilter(updateInstallAction());
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(updateInstallReceiver, updateFilter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -551,6 +556,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        UpdateInstallFeedback.clear(this);
         releaseUpdateBarrier();
         mainHandler.removeCallbacks(idleCheck);
         closeAssemblyScanVoice();
@@ -11785,12 +11791,14 @@ public class MainActivity extends Activity {
 
     // FIX: OEM installer reports failures without retrying an ambiguous installation.
     void managedUpdateStatus(String message, boolean failed) {
+        if (failed) UpdateInstallFeedback.clear(this);
         if(failed){appUpdateBusy=false;releaseUpdateBarrier();}
         showUpdateStatus(message, failed);
     }
 
     private void installUpdateApk(File apk) throws Exception {
         if (idleUpdateEnabled() && ManagedApkInstaller.tryInstall(this, apk)) return;
+        if (idleUpdateEnabled()) UpdateInstallFeedback.arm(this);
         PackageInstaller installer = getPackageManager().getPackageInstaller();
         PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL);
         if(idleUpdateEnabled() && Build.VERSION.SDK_INT>=31) params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED);
@@ -11806,7 +11814,7 @@ public class MainActivity extends Activity {
                 }
                 installSession.fsync(output);
             }
-            Intent resultIntent = new Intent(UPDATE_INSTALL_ACTION).setPackage(getPackageName());
+            Intent resultIntent = new Intent(updateInstallAction()).setPackage(getPackageName());
             PendingIntent callback = PendingIntent.getBroadcast(
                 this,
                 sessionId,

@@ -1,0 +1,28 @@
+{
+  "baseline": 278,
+  "cause": "Installer callback action pro.logoff.wms.tsd.UPDATE_INSTALL_STATUS differed from receiver pro.logoff.wms.tsd.servers.UPDATE_INSTALL_STATUS",
+  "oldApkReproduced": true,
+  "oldState": "busy=true, barrier visible; PackageInstaller sessions sealed at0.8, permissions not accepted",
+  "candidate": {
+    "packageId": "pro.logoff.wms.tsd.servers",
+    "versionCode": 279,
+    "versionName": "0.1.279-update-install",
+    "sha256": "bb1833352540e584e3ea217bc4c06f747697d5f237ccfd2e62e134ed9b3e0fd6",
+    "size": 6079513,
+    "baselineSha256": "046d0d2f40f204972862de52d9c50c4bdab2d8fb19cf9bf77199fa976567007b",
+    "certificateSha256": "70715af4c2ea269d393f9cfb15806aeee920445a22aac16248e76d621bede5da",
+    "resourcesPreserved": true
+  },
+  "unitTests": 382,
+  "failures": 0,
+  "fixtureDexMatchesCandidate": true,
+  "emulatorMenuUpgrade": {
+    "fixtureVersionCode": 277,
+    "targetPublishedVersion": 278,
+    "systemPermissionPromptShown": true,
+    "systemConfirmationShown": true,
+    "installationCompleted": true
+  },
+  "physicalInstallationVerified": false,
+  "printingStarted": false
+}
