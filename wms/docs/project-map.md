@@ -1,3 +1,7 @@
+28.11.2026 — [Печать QR короба и паллет-сорта по КИЗ, ТСД277](tsd-kiz-box-print.md). Наша ВМС; штатная озвучка, изолированная очередь без списаний.
+
+28.11.2026: [Операционный разбор Лукина](operations-lukin-20261126-27.md): ProductMark/StockBalance/StockMovement/AuditLog для адресной коррекции №3405; FboAssemblyUnit и STORAGE_PALLET_BOX_RELOCATED для истории четырёх коробов. Общий остаток сохранён, другие КИЗ не изменены. Код и проданная ВМС не затронуты.
+
 Published PR1111: WB FBS disable queues reconciliation. Verified API baseline 2026-11-28-wb-disable-zero.
 
 Published PR1109: LOGOFF server-choice 276, pallet placement scoped to active branch clients. Moscow server verification returned 16 clients and excluded 26 archived records. [APK verification](releases/tsd-placement-276-candidate.json). API baseline 2026-11-27-tsd-placement-276.

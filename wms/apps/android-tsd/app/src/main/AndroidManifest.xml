@@ -16,6 +16,7 @@
         android:hardwareAccelerated="true"
         android:label="LOGOFF WMS TSD"
         android:theme="@style/AppTheme">
+        <activity android:name=".KizBoxPrintActivity" android:exported="false" />
         <activity android:name=".ReturnsActivity" android:exported="false" />
         <activity android:name=".StorageBoxTransferActivity" android:exported="false" />
         <activity

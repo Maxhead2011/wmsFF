@@ -55,6 +55,14 @@ public interface WmsApi {
     @POST("api/v1/tsd/kiz-search/{id}/scan")
     Call<TsdKizSearch.ScanResult> scanKizSearch(@Header("Authorization") String authorization, @Path("id") String id, @Body Map<String, String> request);
     // FIX: read-only administrator lookup; no stock or marketplace mutations.
+    @GET("api/v1/tsd/kiz-box-print/stations")
+    Call<List<TsdPrintStation>> kizBoxPrintStations(@Header("Authorization") String authorization);
+    @POST("api/v1/tsd/kiz-box-print/lookup")
+    Call<Map<String,Object>> kizBoxPrintLookup(@Header("Authorization") String authorization, @Body Map<String,String> body);
+    @POST("api/v1/tsd/kiz-box-print/jobs")
+    Call<Map<String,Object>> kizBoxPrintCreate(@Header("Authorization") String authorization, @Body Map<String,String> body);
+    @GET("api/v1/tsd/kiz-box-print/jobs/{id}")
+    Call<Map<String,Object>> kizBoxPrintStatus(@Header("Authorization") String authorization, @Path("id") String id);
     @POST("api/v1/inventory/kiz-location/check")
     Call<TsdKizLocationResponse> checkKizLocation(@Header("Authorization") String authorization, @Body Map<String, String> request);
     @POST("api/v1/inventory/kiz-location/reviews/{id}/decision")

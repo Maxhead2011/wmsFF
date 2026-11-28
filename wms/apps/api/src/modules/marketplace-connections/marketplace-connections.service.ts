@@ -17886,15 +17886,17 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     const stale = new Date(Date.now() - 120_000);
     const job = await this.prisma.fbsPrintJob.findFirst({ where: { stationId, OR: [{ status: 'QUEUED' },
       // FIX: an uncertain physical relabel print must not automatically print another pair.
-      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { notIn: ['TSD_RELABEL', SOS_POST_PICK] } }] }, orderBy: { createdAt: 'asc' } });
+      { status: 'CLAIMED', claimedAt: { lt: stale }, source: { notIn: ['TSD_RELABEL', 'TSD_KIZ_BOX_LABELS', SOS_POST_PICK] } }] }, orderBy: { createdAt: 'asc' } });
     if (!job) return null;
     // FIX: the existing quiet agent prints both images. A relabel job contains
     // two identical target-product labels instead of an FBS order/sorting pair.
-    const sortingLabel = job.source === 'TSD_RELABEL'
+    const sortingLabel = job.source === 'TSD_KIZ_BOX_LABELS'
+      ? {contentType:'image/png' as const,imageBase64:await require('../tsd/tsd-kiz-box-label').buildKizBoxLabel(job.productName,'ПАЛЛЕТ-СОРТ'),widthMm:58,heightMm:40,templateVersion:'tsd-kiz-box-v1'}
+      : job.source === 'TSD_RELABEL'
       ? { contentType: 'image/png' as const, imageBase64: job.stickerBase64,
           widthMm: 58, heightMm: 40, templateVersion: 'tsd-relabel-lukin-v1' }
       : await buildFbsSortingLabel(job);
-    if (job.source === 'TSD_RELABEL' || job.source === SOS_POST_PICK) {
+    if (job.source === 'TSD_RELABEL' || job.source === 'TSD_KIZ_BOX_LABELS' || job.source === SOS_POST_PICK) {
       // FIX: two agents polling one station cannot both print the same relabel pair.
       const claimed = await this.prisma.fbsPrintJob.updateMany({ where: { id: job.id, status: 'QUEUED' },
         data: { status: 'CLAIMED', claimedAt: new Date(), attempts: { increment: 1 }, errorMessage: null } });
@@ -17905,6 +17907,15 @@ export class MarketplaceConnectionsService implements OnModuleInit, OnModuleDest
     return { ...claimed, sortingLabel };
   }
   async finishFbsPrintJob(id: string, success: boolean, error: unknown, user: AuthUser) {
+    // FIX: warehouse label acknowledgement never enters shipment/billing handlers.
+    const boxJob=process.env.WMS_TSD_KIZ_BOX_PRINT_ENABLED === 'true' ? await this.prisma.fbsPrintJob.findUnique({where:{id}}) : null;
+    if(boxJob?.source==='TSD_KIZ_BOX_LABELS'){
+      await this.prisma.fbsPrintJob.updateMany({where:{id,status:'CLAIMED'},data:success?{status:'PRINTED',printedAt:new Date(),errorMessage:null}:{status:'FAILED',failedAt:new Date(),errorMessage:textValue(error)||'Ошибка печати'}});
+      const saved=await this.prisma.fbsPrintJob.findUniqueOrThrow({where:{id}});
+      await this.prisma.auditLog.create({data:{userId:user.id,action:'TSD_KIZ_BOX_LABELS_'+saved.status,entity:'FbsPrintJob',entityId:id,payload:{stationId:saved.stationId,boxCode:saved.stickerCode,palletCode:saved.productName}}});
+      return saved;
+    }
+
     const data: Prisma.FbsPrintJobUpdateManyMutationInput = success ? { status: 'PRINTED', printedAt: new Date(), errorMessage: null } : { status: 'FAILED', failedAt: new Date(), errorMessage: textValue(error).trim() || 'Ошибка печати' };
     // FIX: a late failed ACK or duplicate success cannot undo the first confirmed print.
     if (wbOrderStockLifecycleEnabled() || fbsActionStatusEnabled()) await this.prisma.fbsPrintJob.updateMany({ where: { id, status: { not: 'PRINTED' } }, data });

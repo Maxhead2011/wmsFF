@@ -325,8 +325,8 @@ export const INTERNAL_API_DEFINITIONS: readonly InternalApiDefinition[] = Object
   {
     id: 'tsd',
     name: 'ТСД',
-    prefixes: ['/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment', '/tsd/requests/:id/fbo/lamoda-relabel'],
-      routeCount: 116, // FIX: placement client list. // FIX: read-only planned packing resolution. // FIX: read/save production fields in the existing Lamoda relabel workflow.
+    prefixes: ['/tsd/kiz-box-print', '/tsd', '/tsd/requests/:id/fbo', '/tsd/requests/:id/fbo/ozon-adjustment', '/tsd/requests/:id/fbo/lamoda-relabel'],
+      routeCount: 120, // FIX: four scoped box-label print routes. // FIX: placement client list. // FIX: read-only planned packing resolution. // FIX: read/save production fields in the existing Lamoda relabel workflow.
     description: 'Приёмка, размещение, сборка FBS/ФБО, перемещения и синхронизация ТСД. Отдельное подтверждение нарезки ФБС при включённом WMS_FBS_FABRIC_CUT_ENABLED.',
     logic: ['Выдаёт следующее действие сборщику.', 'Проверяет паллет-сорт, короб, товар и КИЗ.', 'Печатает два целевых ШК переклейки через станцию и проверяет подтверждение печати.', 'Фиксирует сканы, операции и восстановление сессий устройства.', 'При включённом WMS_FBO_TWO_STAGE_ENABLED ведёт отбор ФБО, упаковку и финальные сканы всех коробов перед файлом WB.'],
     dependencies: ['Основная БД', 'Склад', 'JWT устройства'],

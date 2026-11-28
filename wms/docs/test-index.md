@@ -1,3 +1,7 @@
+28.11.2026 — [Печать QR короба и паллет-сорта по КИЗ, ТСД277](tsd-kiz-box-print.md). Наша ВМС; штатная озвучка, изолированная очередь без списаний.
+
+28.11.2026: [Проверки коррекции №3405 и истории коробов](operations-lukin-20261126-27.md). 26.11: Serializable rollback-проба, сохранение общей численности и исходной приёмки, штатные bindPickedMark/requireIdleBox/FBS availability; повторная проверка после записи с откатом. Физический отбор не выполнялся. 27.11: read-only аудит четырёх коробов. Новые проверки кода для документационной записи не требуются; полные suites не перезапускались.
+
 Pending TSD server-choice271: [persisted FBO checkpoint no longer blocks idle update](tsd-idle-update-checkpoint.md). Queues/commands/receipt safeguards retained; standard270 and sold unchanged.
 
 Published 27.11.2026 PR1104: [Ozon planned packing](ozon-planned-packing.md), exact-unit/box/SKU quotas, durable replay and TSD270 (both own-WMS channels). Read-only production checks: six requests,17 cargoes/438 planned units;3393 picked61/63,3392 awaits finish-picking. API5015/web697/Android363 passed; API203/web2 skipped, unrelated KIZ integration DB unavailable and14 pre-existing API type errors. Exact816 API/3386 web hashes, public controls24/request folds and signed APK emulator flows verified. Physical terminal not tested. Only own-WMS flag enabled; sold and business records untouched by release. Baseline `2026-11-27-ozon-planned-packing`; sourceParityVerified=false. [Proof](releases/ozon-planned-packing-release.json).
