@@ -993,3 +993,8 @@ PostgreSQL: fbo-two-stage.integration.spec.ts проверяет заверше�
 API: payroll-advances.spec.ts и payroll-advances.integration.spec.ts (отдельный PostgreSQL). Web: PayrollAdvances.spec.tsx; scripts/payroll-advances.browser-test.cjs — форма, повтор запроса, сумма к выдаче и точный runtime-кандидат. [Описание](payroll-advances.md).
 
 PR1070 publication: actual PostgreSQL compiled-service scenarios5, browser source/candidate, controls24 before/after, request-fold before, live file/public hashes. Full API4875 plus flag-off unit; web671. Existing KIZ isolated-DB suite and API type diagnostics match base.
+
+Published 28.11.2026 PR1113: [TSD277 box/pallet QR printing by KIZ](tsd-kiz-box-print.md). Both public servers deliver277 with the verified hash. The actual276 updater downloaded and verified277 from main and backup in the emulator. API5030/web697/Android376 passed; API203/web2 skipped, unrelated dedicated KIZ integration DB excluded;14 existing type errors, none added. Synthetic PostgreSQL and signed APK checked. No physical printing or production print jobs. [Publication proof](releases/tsd-kiz-box-print-published.json).
+
+Current baseline `2026-11-28-kiz-print-277-fabric-demand` includes subsequently published PR1114: API `sha256:eadb0f4cef4d0a115d22ef9ba25c580945786a19aa2373a1ce5a292ce17bb305`, web `sha256:4ab84de8b7c0d110dc0aeec4b2beccf4a37e5b8b3874c129f4741ba54f867258`. All six PR1113 modules preserved byte-for-byte. Source parity=false; standard270 and sold unchanged by this release.
+
