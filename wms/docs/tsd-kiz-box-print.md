@@ -1,3 +1,5 @@
+Published 28.11.2026 PR1125: [Missing pallet placeholder](tsd-kiz-box-print.md). API sha256:60e7c712f8113115461315edfe6fdc3fb2afe0638158619bf852bee1befca1fa; baseline 2026-11-28-kiz-pallet-placeholder. API5040 passed/203 skipped. Real unplaced box FFL_NLKB0109_98 lookup and exact runtime PNG verified without printing. Two-label protocol preserved; web, APK279, agent and sold WMS unchanged.
+
 Published28.11.2026 PR1113. [Publication proof](releases/tsd-kiz-box-print-published.json).
 
 28.11.2026 — исправление отсутствующего паллет-сорта: первая этикетка содержит QR и номер короба, вторая — жирный текст «ПАЛЕТ НЕ ОПРЕДЕЛЕН» без QR. При известном размещении остаётся QR паллет-сорта. Сохраняются две этикетки, штатный агент и ТСД279; обновлять установленный агент/ТСД для этого исправления не нужно. Неоднозначные привязки и размещения по-прежнему блокируются. Остатки и задания сборки не меняются. Проверки: placeholder layout, поиск без размещения, повтор запроса, прежние QR и переклейка. Выпуск готовится; физическая печать не запускалась.
