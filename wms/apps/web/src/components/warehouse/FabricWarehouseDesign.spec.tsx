@@ -15,11 +15,12 @@ describe('fabric workspace presentation', () => {
   it('renders colour samples, stock counters and accessible receiving controls', () => {
     fixture.index = 0;
     const names = ['Синий', 'Красный', 'Чёрный', 'Айвори / шампань', 'Белый', 'Зелёный'];
-    fixture.values = [[{ id: 'demo', name: 'Демонстрационный клиент' }], { enabled: true, version: null, groups: names.map((colorName, i) => ({ key: String(i), material: 'SATIN', colorName, whole: i, open: 1, rawMeters: 100 * i + 25, rawLiters: 25, rolls: [], ready: [], fbs: { pieces: 13, meters: 95 }, fbo: { pieces: 0, meters: 0 } })) }, { version: null, colors: [], baseColors: { black: 'Чёрный' }, skus: [] }];
+    fixture.values = [[{ id: 'demo', name: 'Демонстрационный клиент' }], { enabled: true, version: null, groups: names.map((colorName, i) => ({ key: String(i), material: 'SATIN', colorName, whole: i, open: 1, rawMeters: 100 * i + 25, rawLiters: 25, rolls: [], ready: [], required: { fbs: { pieces: 2, meters: 6 }, fbo: { pieces: 1, meters: 5 } }, fbs: { pieces: 13, meters: 95 }, fbo: { pieces: 0, meters: 0 } })) }, { version: null, colors: [], baseColors: { black: 'Чёрный' }, skus: [] }];
     const html = renderToStaticMarkup(<FabricWarehousePanel session={{ accessToken: 'demo', user: { id: 'demo', roleCodes: ['ADMIN'], permissionCodes: ['system:admin'], activeWarehouseId: 'demo' } } as AuthSession} />);
     expect(html.match(/class="fabric-color-swatch"/g)).toHaveLength(7);
     expect(html).toContain('fabric-intake'); expect(html).toContain('Принять рулоны');
-    expect(html).toContain('FBS: 13 отрезов / 95 м'); expect(html).toContain('Готовые отрезы: 0 шт.');
+    expect(html).toContain('Необходимо · FBS: 2 отрезов / 6 м · FBO: 1 отрезов / 5 м');
+    expect(html).toContain('Отгружено · FBS: 13 отрезов / 95 м'); expect(html).toContain('Готовые отрезы: 0 шт.');
     expect(html).toContain('fabric-toolbar');
     if (process.env.FABRIC_PREVIEW) {
       const css = readFileSync(new URL('./fabric-warehouse.css', import.meta.url), 'utf8');
