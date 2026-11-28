@@ -1,3 +1,5 @@
+Published PR1114: open fabric demand and handed-over Ozon accounting. Verified API and web baseline 2026-11-28-fabric-demand.
+
 Сверено 28.11.2026: image ID работающих wms-local-api и wms-local-web совпадают с manifest baseline `2026-11-28-wb-disable-zero` (PR1111). Это сверка image ID, не повторная проверка всех файлов runtime. [Операции по №3405 и история коробов](operations-lukin-20261126-27.md) зарегистрированы отдельно от выпусков кода; исторические состояния не считать текущими остатками.
 
 Published PR1111: WB FBS disable queues reconciliation. Verified API baseline 2026-11-28-wb-disable-zero.
