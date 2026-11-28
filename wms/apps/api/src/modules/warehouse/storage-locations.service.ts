@@ -1,4 +1,5 @@
 import {placementTransaction,placementReceipts,lockPlacementReceipt,recordPlacementAction,assertPlacementReceipt,receiptForPlacementBox,type PlacementReceipt} from './receipt-placement-workflow';
+import {palletRecoveryPairsEnabled,restorePairedPalletBox} from './pallet-recovery-pairs';
 import { receiptPlacementReport } from './receipt-placement-report';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { MovementType, Prisma, StockStatus } from '@prisma/client';
@@ -816,6 +817,12 @@ export class StorageLocationsService {
       body.idempotencyKey,
       'Не указан идентификатор восстановления короба.',
     ).slice(0, 160);
+    // FIX: own-WMS recovery requires unique physical barcode/KIZ pairs.
+    if(palletRecoveryPairsEnabled()){
+      const result=await restorePairedPalletBox(this.prisma,pallet,boxCode,idempotencyKey,body.items,user,this.balances);
+      await this.placeBox(pallet,result.box.code,'TSD',user);
+      return this.tsdPalletResponse(pallet.id,`Короб ${boxCode} восстановлен по парам ШК + КИЗ: ${result.quantity} шт.`,result.alreadyApplied);
+    }
     const items = this.parseRestoreItems(body.items);
 
     const priorMovement = await this.prisma.stockMovement.findFirst({

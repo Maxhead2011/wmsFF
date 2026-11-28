@@ -1,0 +1,30 @@
+// TEST: exact runtime against disposable PostgreSQL, never production stock.
+require('reflect-metadata');const assert=require('node:assert/strict');
+assert.equal(new URL(process.env.DATABASE_URL).hostname,'pallet-pairs-test-pg');
+const {PrismaClient}=require('@prisma/client'),p=new PrismaClient(),d='/app/apps/api/dist/';
+const {restorePairedPalletBox,parseRecoveryPairs}=require(d+'modules/warehouse/pallet-recovery-pairs');
+const {StockBalancesService}=require(d+'modules/stock/stock-balances.service');
+const balances=Object.create(StockBalancesService.prototype);
+(async()=>{
+ const w=await p.warehouse.create({data:{code:'PAIR',name:'Test'}}),c=await p.client.create({data:{code:'PAIR',name:'Test'}}),u=await p.user.create({data:{name:'Worker',email:'pair@test.invalid',passwordHash:'disabled'}});
+ const barcode='4610460840526';const sku=await p.sku.create({data:{clientId:c.id,internalSku:'PAIR',name:'Test',barcodes:{create:{value:barcode}}}});
+ const pallet=await p.storagePallet.create({data:{code:'PALET_SORT_TEST',clientId:c.id,warehouseId:w.id}});
+ const row=(n)=>({skuId:sku.id,barcode,kiz:'0104610460840526215TEST'+n,quantity:1});
+ const run=(box,key,items)=>restorePairedPalletBox(p,pallet,box,key,items,u,balances);
+ await assert.rejects(run('BOX_BAD','bad',[{skuId:sku.id,barcode,quantity:1}]));
+ await assert.rejects(run('BOX_BAD','bad',[row(1),row(1)]));assert.equal(await p.box.count(),0);
+ const result=await run('BOX_ONE','one',[row(1),row(2)]);assert.equal(result.quantity,2);
+ assert.equal((await run('BOX_ONE','one',[row(1),row(2)])).alreadyApplied,true);
+ await assert.rejects(run('BOX_ONE','other-key',[row(3)]));
+ await assert.rejects(run('BOX_TWO','two',[row(1)]));
+ assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,2);
+ assert.equal(await p.stockMovement.count(),1);assert.equal(await p.productMark.count(),2);assert.equal(await p.billingCharge.count(),0);
+ const concurrent=await Promise.allSettled([run('BOX_RACE','race',[row(3)]),run('BOX_RACE','race',[row(3)])]);
+ assert.ok(concurrent.some(r=>r.status==='fulfilled'));assert.equal((await run('BOX_RACE','race',[row(3)])).alreadyApplied,true);
+ assert.equal((await p.stockBalance.aggregate({_sum:{quantity:true}}))._sum.quantity,3);assert.equal(await p.stockMovement.count(),2);
+ const box=await p.box.create({data:{code:'BOX_OLD',clientId:c.id,warehouseId:w.id,status:'archived'}});
+ const mark=await p.productMark.create({data:{value:row(4).kiz,clientId:c.id,skuId:sku.id,boxId:box.id}});
+ await run(box.code,'old',[row(4)]);const after=await p.productMark.findUnique({where:{id:mark.id}});assert.equal(after.id,mark.id);assert.equal(await p.productMark.count(),4);
+ assert.equal(await p.billingCharge.count(),0);assert.equal(await p.fbsPrintJob.count(),0);
+ console.log(JSON.stringify({passed:true,barcodeAloneRejected:true,duplicateRejected:true,concurrentRetry:true,preservedMark:true,noRepeatedStock:true,noBillingOrPrinting:true}));
+})().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>p.$disconnect());

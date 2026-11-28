@@ -1,0 +1,1 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="pro.logoff.test.returns268"><uses-sdk android:minSdkVersion="24" android:targetSdkVersion="28"/><application android:label="Return test"/><instrumentation android:name="pro.logoff.test.returns268.Probe" android:targetPackage="pro.logoff.wms.tsd.servers"/></manifest>

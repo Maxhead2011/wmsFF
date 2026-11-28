@@ -1,3 +1,5 @@
+28.11.2026 — [Восстановление короба по парам ШК + КИЗ, ТСД280](pallet-recovery-pairs.md). Кандидат: количество только после уникального КИЗа, повторное сохранение без повторного прихода.
+
 Published 28.11.2026 PR1125: [Missing pallet placeholder](tsd-kiz-box-print.md). API sha256:60e7c712f8113115461315edfe6fdc3fb2afe0638158619bf852bee1befca1fa; baseline 2026-11-28-kiz-pallet-placeholder. API5040 passed/203 skipped. Real unplaced box FFL_NLKB0109_98 lookup and exact runtime PNG verified without printing. Two-label protocol preserved; web, APK279, agent and sold WMS unchanged.
 
 28.11.2026: [Missing pallet print label](tsd-kiz-box-print.md). Two labels remain: box QR then bold text placeholder without QR when placement is absent. Only lookup and label renderer change; existing agent and APK279 remain compatible.
