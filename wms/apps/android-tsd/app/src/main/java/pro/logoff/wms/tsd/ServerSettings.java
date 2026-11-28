@@ -9,7 +9,7 @@ final class ServerSettings {
     static final String BACKUP = "backup";
     static final String MAIN_URL = "https://wms.logoff.pro/";
     static final String BACKUP_URL = "https://77.37.144.211/";
-    static final String[] NAMES = {"Основной · wms.logoff.pro", "Резервный · 77.37.144.211"};
+    static final String[] NAMES = {"Основной", "Резервный"}; // FIX: labels hide endpoint addresses.
 
     private ServerSettings() {}
 
