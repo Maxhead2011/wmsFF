@@ -1,0 +1,121 @@
+{
+  "published": {
+    "pr": 1127,
+    "images": {
+      "api": "sha256:80a8b7fa1fb2bceda532ff491f5f09759763cc76824f92908a101d3b6509c27f"
+    },
+    "health": true,
+    "otherContainersUnchanged": true,
+    "configurationDelta": [
+      "api.image",
+      "api.environment.WMS_TSD_PALLET_RECOVERY_PAIRS_ENABLED"
+    ]
+  },
+  "apk-published": {
+    "logoff-tsd-server-choice": {
+      "packageId": "pro.logoff.wms.tsd.servers",
+      "versionCode": 280,
+      "versionName": "0.1.280-pallet-pairs",
+      "sha256": "e4dea25299fe2d9e1af6e0bd89e3c01fc628368bbcc67c463fec15920eab2e5f",
+      "size": 6083609,
+      "apkUrl": "https://wms.logoff.pro/downloads/logoff-tsd-servers-pallet-pairs-280.apk",
+      "releasedAt": "2026-11-28T12:48:00.357625+00:00",
+      "releaseNotes": "Pallet recovery requires product barcode then unique KIZ; duplicate scans and saves do not increase stock"
+    }
+  },
+  "api-verified": {
+    "api": "sha256:80a8b7fa1fb2bceda532ff491f5f09759763cc76824f92908a101d3b6509c27f",
+    "pairsEnabled": true
+  },
+  "isolated-proof": {
+    "image": "sha256:80a8b7fa1fb2bceda532ff491f5f09759763cc76824f92908a101d3b6509c27f",
+    "fullNestHealth": true,
+    "result": {
+      "passed": true,
+      "barcodeAloneRejected": true,
+      "duplicateRejected": true,
+      "concurrentRetry": true,
+      "preservedMark": true,
+      "noRepeatedStock": true,
+      "noBillingOrPrinting": true
+    }
+  },
+  "downloads": [
+    {
+      "host": "wms.logoff.pro",
+      "path": "/downloads/logoff-tsd-server-choice.apk",
+      "sha256": "e4dea25299fe2d9e1af6e0bd89e3c01fc628368bbcc67c463fec15920eab2e5f",
+      "size": 6083609
+    },
+    {
+      "host": "wms.logoff.pro",
+      "path": "/downloads/logoff-tsd-servers-pallet-pairs-280.apk",
+      "sha256": "e4dea25299fe2d9e1af6e0bd89e3c01fc628368bbcc67c463fec15920eab2e5f",
+      "size": 6083609
+    },
+    {
+      "host": "77.37.144.211",
+      "path": "/downloads/logoff-tsd-server-choice.apk",
+      "sha256": "e4dea25299fe2d9e1af6e0bd89e3c01fc628368bbcc67c463fec15920eab2e5f",
+      "size": 6083609
+    },
+    {
+      "host": "77.37.144.211",
+      "path": "/downloads/logoff-tsd-servers-pallet-pairs-280.apk",
+      "sha256": "e4dea25299fe2d9e1af6e0bd89e3c01fc628368bbcc67c463fec15920eab2e5f",
+      "size": 6083609
+    }
+  ],
+  "overlay-proof": {
+    "baseline": 279,
+    "target": 280,
+    "methods": [
+      "clearStoragePalletRecovery()V",
+      "completeStoragePalletRecovery()V",
+      "prepareStoragePalletRecovery(Lpro/logoff/wms/tsd/network/TsdStoragePalletResponse;)V",
+      "recoveryPairs()Lpro/logoff/wms/tsd/PalletRecoveryPairs;",
+      "renderStoragePalletRecovery(Landroid/widget/LinearLayout;)V",
+      "scanStoragePalletRecoveryItem()V",
+      "$r8$lambda$oSW9ipWcVchfA5XW6njm3wNf7_Q(Lpro/logoff/wms/tsd/MainActivity;Lpro/logoff/wms/tsd/auth/TsdSession;Lpro/logoff/wms/tsd/network/TsdStoragePalletResponse$Pallet;Ljava/lang/String;Ljava/lang/String;)V",
+      "lambda$scanStoragePalletRecoveryItem$96(Lpro/logoff/wms/tsd/auth/TsdSession;Lpro/logoff/wms/tsd/network/TsdStoragePalletResponse$Pallet;Ljava/lang/String;Ljava/lang/String;)V",
+      "$r8$lambda$3E-UD3jEdQy_MmQ9WK4TkIWQZgI(Lpro/logoff/wms/tsd/MainActivity;Ljava/lang/String;Lpro/logoff/wms/tsd/network/TsdSkuInfo;Ljava/lang/String;)V",
+      "lambda$scanStoragePalletRecoveryItem$94(Ljava/lang/String;Lpro/logoff/wms/tsd/network/TsdSkuInfo;Ljava/lang/String;)V",
+      "$r8$lambda$vcJBtA24eY_HYzvdXCp2iJJY914(Lpro/logoff/wms/tsd/MainActivity;Ljava/lang/String;)V",
+      "lambda$scanStoragePalletRecoveryItem$95(Ljava/lang/String;)V",
+      "$r8$lambda$fxzMuPvI5oNfG72ndIQdXvXwm8g(Lpro/logoff/wms/tsd/MainActivity;Landroid/view/View;)V",
+      "lambda$renderStoragePalletRecovery$91(Landroid/view/View;)V",
+      "$r8$lambda$Im2Juo7Jd5bwk5ktZArHroSgJpo(Lpro/logoff/wms/tsd/MainActivity;Landroid/view/View;)V",
+      "lambda$renderStoragePalletRecovery$93(Landroid/view/View;)V",
+      "$r8$lambda$1roLcfHprgia_fWsKcWkHD9arag(Lpro/logoff/wms/tsd/MainActivity;Landroid/view/View;)V",
+      "lambda$renderStoragePalletRecovery$92(Landroid/view/View;)V",
+      "$r8$lambda$_pE43_reBpMH5KEaqd1DELNigE0(Lpro/logoff/wms/tsd/MainActivity;Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z",
+      "lambda$renderStoragePalletRecovery$90(Landroid/widget/TextView;ILandroid/view/KeyEvent;)Z",
+      "$r8$lambda$LB_Do0EiEMObzUIUgDFxyRYaBV8(Lpro/logoff/wms/tsd/MainActivity;Lpro/logoff/wms/tsd/auth/TsdSession;Ljava/lang/String;Ljava/util/Map;)V",
+      "lambda$completeStoragePalletRecovery$98(Lpro/logoff/wms/tsd/auth/TsdSession;Ljava/lang/String;Ljava/util/Map;)V",
+      "$r8$lambda$p5dW7FH_tbc4E1q-bh83mycx8oY(Lpro/logoff/wms/tsd/MainActivity;Lpro/logoff/wms/tsd/network/TsdStoragePalletResponse;)V",
+      "lambda$completeStoragePalletRecovery$97(Lpro/logoff/wms/tsd/network/TsdStoragePalletResponse;)V"
+    ],
+    "lambdaClasses": [
+      "MainActivity$$PalletPairsLambda406",
+      "MainActivity$$PalletPairsLambda176",
+      "MainActivity$$PalletPairsLambda165",
+      "MainActivity$$PalletPairsLambda473",
+      "MainActivity$$PalletPairsLambda475",
+      "MainActivity$$PalletPairsLambda477",
+      "MainActivity$$PalletPairsLambda474",
+      "MainActivity$$PalletPairsLambda459",
+      "MainActivity$$PalletPairsLambda302"
+    ],
+    "unrelatedMethodsPreserved": 1508
+  },
+  "apiTests": 5050,
+  "apiSkipped": 203,
+  "androidTests": 384,
+  "typecheckExistingErrors": 14,
+  "sourceParityVerified": false,
+  "old279FailedAtBarcode": true,
+  "signed280EmulatorPassed": true,
+  "menu279Downloads280": true,
+  "physicalPrint": false,
+  "productionStockChangedByTests": false
+}
