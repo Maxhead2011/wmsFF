@@ -1059,4 +1059,4 @@ Current baseline `2026-11-28-kiz-print-277-fabric-demand` includes subsequently 
 
 
 
-28.11.2026: [TSD278: Print replaces Phone; server labels; update verification](tsd-print-menu-278.md). Android378 passed; signed APK menu checks passed. Own server-choice only; publication proof to follow.
+28.11.2026: [TSD278: Print replaces Phone; server labels; update verification](tsd-print-menu-278.md). Android378 passed; signed APK menu checks passed. Published PR1117: both servers and actual277 menu update verified; [proof](releases/tsd-print-menu-278-published.json). No physical printing or installation.
