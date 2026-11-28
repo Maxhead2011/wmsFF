@@ -1,3 +1,5 @@
+Published 28.11.2026 PR1123: [Ozon ready-to-ship caption](ozon-ready-shipment-caption.md). Read-only live handler and public component: 3421 green/date, 3487 deadline. Baseline 2026-11-28-ozon-ready-caption; sourceParityVerified=false. API5038/web701 passed; APK279, business data and sold WMS unchanged.
+
 28.11.2026 — [Печать QR короба и паллет-сорта по КИЗ, ТСД277](tsd-kiz-box-print.md). Наша ВМС; штатная озвучка, изолированная очередь без списаний.
 
 28.11.2026: [Проверки коррекции №3405 и истории коробов](operations-lukin-20261126-27.md). 26.11: Serializable rollback-проба, сохранение общей численности и исходной приёмки, штатные bindPickedMark/requireIdleBox/FBS availability; повторная проверка после записи с откатом. Физический отбор не выполнялся. 27.11: read-only аудит четырёх коробов. Новые проверки кода для документационной записи не требуются; полные suites не перезапускались.
