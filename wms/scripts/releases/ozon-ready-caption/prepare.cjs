@@ -1,0 +1,26 @@
+// FIX: preserve the deployed modules; change only the list projection and caption.
+const fs=require('fs'),path=require('path');
+const root=path.resolve(__dirname,'../../..'),work=path.resolve(process.argv[2]);
+const ts=require(path.join(root,'node_modules/typescript'));
+const api=path.join(work,'base-api/modules/client-requests');
+const out=path.join(work,'api-payload/modules/client-requests');fs.mkdirSync(out,{recursive:true});
+const helper=ts.transpileModule(fs.readFileSync(path.join(root,'apps/api/src/modules/client-requests/ozon-shipment-caption.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
+fs.writeFileSync(path.join(out,'ozon-shipment-caption.js'),helper);
+let service=fs.readFileSync(path.join(api,'ozon-fbo-import.service.js'),'utf8');
+const old='(0, deadlinePolicy.supplyOrders)(r.ozonShipment.integration).map(o => ({ orderId: o.orderId, orderNumber: o.orderNumber, editDeadlineAt: o.editDeadlineAt ?? null, checkedAt: o.checkedAt }))';
+if(service.split(old).length!==2)throw Error('API anchor drift');
+service=service.replace(old,'require("./ozon-shipment-caption").ozonShipmentCaptions(r.ozonShipment.integration)');
+fs.writeFileSync(path.join(out,'ozon-fbo-import.service.js'),service);
+for(const f of fs.readdirSync(out))fs.copyFileSync(path.join(out,f),path.join(api,f));
+let web=fs.readFileSync(path.join(work,'ipv4-ui-ozon-deadline-20261102.js'),'utf8');
+const anchor='return s("span",{className:"ozfbo-edit-deadline is-"+o.tone';
+if(web.split(anchor).length!==2)throw Error('Web anchor drift');
+web=web.replace(anchor,'if(e.readyToShip)return s("span",{className:"ozfbo-edit-deadline is-ready",children:[a.length>1&&s("strong",{children:["Ozon №",e.orderNumber]}),d("strong",{children:"Готово к отгрузке"}),s("small",{children:["Дата сдачи: ",e.handoverAt&&Number.isFinite(Date.parse(e.handoverAt))?new Date(e.handoverAt).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"})+" МСК":"не указана в Ozon"]})]},e.orderId);'+anchor);
+const dest=path.join(work,'web-payload');fs.mkdirSync(path.join(dest,'assets'),{recursive:true});
+fs.writeFileSync(path.join(dest,'assets/ozon-ready-caption-20261128.js'),web);
+fs.writeFileSync(path.join(dest,'assets/ozon-ready-caption-20261128.css'),'.ozfbo-edit-deadline.is-ready{color:#14532d;background:#dcfce7;}');
+let html=fs.readFileSync(path.join(work,'index.html'),'utf8');const match=html.match(/<script type="importmap">(.*?)<\/script>/s),map=JSON.parse(match[1]);
+for(const k of Object.keys(map.imports))if(map.imports[k]==='/assets/ipv4-ui-ozon-deadline-20261102.js')map.imports[k]='/assets/ozon-ready-caption-20261128.js';
+map.imports['/assets/ipv4-ui-ozon-deadline-20261102.js']='/assets/ozon-ready-caption-20261128.js';
+html=html.replace(match[1],JSON.stringify(map)).replace('</head>','<link rel="stylesheet" href="/assets/ozon-ready-caption-20261128.css"></head>');fs.writeFileSync(path.join(dest,'index.html'),html);
+console.log('Prepared two API modules and three web files');
