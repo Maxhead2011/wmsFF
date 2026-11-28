@@ -1,4 +1,4 @@
-28.11.2026 — [Восстановление короба по парам ШК + КИЗ, ТСД280](pallet-recovery-pairs.md). Кандидат: количество только после уникального КИЗа, повторное сохранение без повторного прихода.
+Опубликовано 28.11.2026 через PR1127: [восстановление короба по ШК + КИЗ, ТСД280](pallet-recovery-pairs.md). API `80a8b7fa…`, baseline `2026-11-28-pallet-recovery-pairs`; оба сервера отдают подписанный APK280. ШК=0, уникальный КИЗ=1, повтор не увеличивает остаток; сохранение повторяется с тем же ключом. API5050/Android384, PostgreSQL, отрицательная проверка279 и успешная проверка280. Меню обновления279 скачало выпуск и открыло подтверждение Android без зависания. Печать и реальные остатки не затрагивались.
 
 Published 28.11.2026 PR1125: [Missing pallet placeholder](tsd-kiz-box-print.md). API sha256:60e7c712f8113115461315edfe6fdc3fb2afe0638158619bf852bee1befca1fa; baseline 2026-11-28-kiz-pallet-placeholder. API5040 passed/203 skipped. Real unplaced box FFL_NLKB0109_98 lookup and exact runtime PNG verified without printing. Two-label protocol preserved; web, APK279, agent and sold WMS unchanged.
 
