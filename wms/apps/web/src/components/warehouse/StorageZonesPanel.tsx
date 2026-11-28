@@ -31,6 +31,7 @@ import {
   type StorageLayout,
 } from '../../lib/api';
 import './warehouse.css';
+import './storage-zone-statistics.css';
 import { StorageBoxContentsPopover } from './StorageBoxContentsPopover';
 import { useRememberedClientId, validRememberedClientId } from '../../lib/rememberedClient';
 import {

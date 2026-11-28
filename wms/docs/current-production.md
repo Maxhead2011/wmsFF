@@ -1,3 +1,5 @@
+PR1121 web release: zone cards and the Ozon plan button. Verified candidate 2026-11-28-zone-cards-plan-button.
+
 Published 28.11.2026 PR1119: server-choice **279** (`0.1.279-update-install`). Fixed mismatched installer callback action; confirmation releases barrier/busy; missing generic callback times out90s. Android382 passed. Both servers deliver verified279. Same candidate DEX under test version278 exercised menu download of public279, Android confirmation and completed installation279; private test marker preserved. No physical installation or printing. API/web baseline and standard270/sold unchanged. [Proof](releases/tsd-update-install-279-published.json).
 
 Published 28.11.2026 PR1117: server-choice **278** (`0.1.278-print-menu`), Print replaces Phone; server addresses hidden. Both public servers deliver the exact signed APK; actual277 menu button downloaded and SHA-verified278 from both servers, with pending scan blocking installation. Android378 passed. API/web baseline remains `2026-11-28-kiz-print-277-fabric-demand`; standard270 and sold unchanged. No physical printing or installation. [Proof](releases/tsd-print-menu-278-published.json).
